@@ -1,7 +1,7 @@
 ﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './ui/button.jsx';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { IconChevronLeftOutlineRegular, IconChevronRightOutlineRegular, IconLayersOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 import { galleryImages, safeImageUrl } from './image-gallery-model.mjs';
 import { useFeedbackStyle } from './ui/feedback-style.js';
@@ -11,6 +11,13 @@ import css from './image-gallery.css';
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const previewUrl = image => safeImageUrl(image.thumbnailUrl) || safeImageUrl(image.previewUrl) || image.url;
+
+function OriginalImageLink({ image, single }) {
+  if (!single && !image.external) return null;
+  return <Button asChild variant="ghost" size="icon" title="打开原图">
+    <a href={image.url} target="_blank" rel="noopener noreferrer" aria-label="打开原图"><UIIcon name="external" size={16} /></a>
+  </Button>;
+}
 
 /** A wheel notch selects once; small trackpad deltas accumulate without racing ahead. */
 function useImageWheel(rail, { enabled, ready, onStep }) {
@@ -54,7 +61,7 @@ function GalleryPicture({ image, eager = false, interactive = true, preview = fa
     }, () => { if (node.isConnected && version.current === request) setState('error'); });
   };
   return <span className="bg-image-picture" data-state={state} {...layerProps}>
-    <img key={attempt} src={preview ? previewUrl(image) : image.url} alt={image.alt} loading={eager ? 'eager' : 'lazy'} decoding="async" onLoad={loaded} onError={() => setState('error')} />
+    <img key={attempt} src={preview ? previewUrl(image) : image.url} alt={image.alt} loading={eager ? 'eager' : 'lazy'} decoding="async" referrerPolicy="no-referrer" onLoad={loaded} onError={() => setState('error')} />
     {state === 'loading' && <span className="bg-image-status" role="status">正在加载图片</span>}
     {state === 'error' && <span className="bg-image-status" role="alert"><UIIcon name="picture" size={24} /><span>图片加载失败</span>{interactive && <Button variant="ghost" size="sm" aria-label="重试加载图片" onClick={event => { event.stopPropagation(); setState('loading'); setAttempt(value => value + 1); }}>重试</Button>}</span>}
   </span>;
@@ -157,7 +164,7 @@ function ImageViewer({ images, initialUrl, onClose, onClosing, opener, origin })
   useImageWheel(photoRef, { ready: photo, enabled: images.length > 1 && !overview && motion.phase !== 'closing', onStep: step => { keyboard.current = false; select(requestedIndex.current + step, true); } });
   const returnFocus = event => {
     event.preventDefault();
-    const target = opener.current?.isConnected ? opener.current : origin.element()?.closest('.bg-image-gallery')?.querySelector('.bg-image-stack-trigger,.bg-image-open');
+    const target = opener.current?.isConnected ? opener.current : origin.focusTarget();
     target?.focus({ preventScroll: true });
   };
   useLayoutEffect(() => {
@@ -209,16 +216,16 @@ function ImageViewer({ images, initialUrl, onClose, onClosing, opener, origin })
       {[index - 1, index + 1].filter(i => images[i]).map(i => <button key={i < index ? 'prev' : 'next'} type="button" className={`bg-image-viewer-peek bg-image-viewer-peek-${i < index ? 'prev' : 'next'}`} aria-hidden="true" tabIndex={-1} onClick={() => select(i)}><img src={previewUrl(images[i])} alt="" /></button>)}
       <div ref={attachPhoto} className="bg-image-viewer-photo" aria-hidden={overview || undefined} data-frozen={motion.phase === 'closing'}><GalleryPhoto image={image} instant={keyboard.current || overview} frozen={motion.phase === 'closing'} interactive={!overview} onPresented={didPresent} /></div>
       {!overview && images.length > 1 && <><Button className="bg-image-viewer-prev" variant="ghost" size="icon" aria-label="上一张图片" disabled={index === 0} onClick={() => move(-1)}><IconChevronLeftOutlineRegular size={20} /></Button><Button className="bg-image-viewer-next" variant="ghost" size="icon" aria-label="下一张图片" disabled={index === images.length - 1} onClick={() => move(1)}><IconChevronRightOutlineRegular size={20} /></Button></>}
-      {overview && <div className="bg-image-viewer-overview" aria-label="全部图片">{images.map((item, i) => <figure key={item.id || item.url}><div className="bg-image-overview-thumbnail"><button type="button" aria-label={`查看大图 ${i + 1}：${item.alt}`} aria-current={i === index ? 'true' : undefined} onClick={() => select(i)} /><GalleryPicture image={item} preview eager={i < 4} /></div><figcaption><span>{item.alt}</span><FileSaveButton file={item} label={`下载图片 ${i + 1}`} /></figcaption></figure>)}</div>}
+      {overview && <div className="bg-image-viewer-overview" aria-label="全部图片">{images.map((item, i) => <figure key={item.id || item.url}><div className="bg-image-overview-thumbnail"><button type="button" aria-label={`查看大图 ${i + 1}：${item.alt}`} aria-current={i === index ? 'true' : undefined} onClick={() => select(i)} /><GalleryPicture image={item} preview eager={i < 4} /></div><figcaption><span>{item.alt}</span><OriginalImageLink image={item} /><FileSaveButton file={item} label={`下载图片 ${i + 1}`} /></figcaption></figure>)}</div>}
     </div>
     {images.length > 1 && <div className="bg-image-filmstrip"><div ref={strip} className="bg-image-viewer-strip" aria-label="选择图片" {...filmstrip.handlers}>{images.map((item, i) => <FilmstripItem key={item.id || item.url} image={item} index={i} selected={i === index} visible={visible.has(item.url) || Math.abs(i - index) <= 1} onSelect={selectThumbnail} />)}</div></div>}
   </DialogContent></Dialog>;
 }
 
 /** The stack keeps its footprint; one click lifts its cover into the shared album. */
-export function ImageGallery({ images: source = [] }) {
+export function ImageGallery({ images: source = [], allowBlob = false }) {
   useFeedbackStyle('benchgo-image-gallery-styles', css);
-  const images = useMemo(() => galleryImages(source), [source]);
+  const images = useMemo(() => galleryImages(source, allowBlob ? new URL(window.location.href) : undefined), [source, allowBlob]);
   const [selection, setSelection] = useState(null), [coverUrl, setCoverUrl] = useState(null);
   const thumbnail = useRef(null), opener = useRef(null), stack = useRef(null);
   useImageWheel(stack, { enabled: images.length > 1 && !selection, onStep: step => setCoverUrl(previous => {
@@ -232,13 +239,25 @@ export function ImageGallery({ images: source = [] }) {
   const open = event => {
     opener.current = event.currentTarget;
     const image = thumbnail.current.querySelector('img');
-    setSelection({ url: cover.url, origin: { element: () => thumbnail.current, rect: thumbnail.current.getBoundingClientRect(), ratio: image?.naturalWidth && image.naturalHeight ? image.naturalWidth / image.naturalHeight : 4 / 3, animate: event.detail !== 0 && !reducedMotion() } });
+    setSelection({ url: cover.url, origin: {
+      element: () => thumbnail.current,
+      focusTarget: () => stack.current?.querySelector('.bg-image-stack-trigger,.bg-image-open'),
+      rect: thumbnail.current.getBoundingClientRect(),
+      ratio: image?.naturalWidth && image.naturalHeight ? image.naturalWidth / image.naturalHeight : 4 / 3,
+      animate: event.detail !== 0 && !reducedMotion(),
+    } });
   };
   return <section className="bg-image-gallery" data-multiple={multiple} data-expanded={!!selection} aria-label={multiple ? `${images.length} 张图片` : '回复图片'}>
     <div ref={stack} className="bg-image-gallery-deck">
       <div className="bg-image-gallery-cards">{deck.map((image, i) => <figure className="bg-image-gallery-card" key={image.id || image.url} style={{ zIndex: deck.length - i }} aria-hidden={multiple ? true : undefined}>
         <div className="bg-image-tile"><div ref={i === 0 ? thumbnail : undefined} className="bg-image-thumbnail">{!multiple && <button className="bg-image-open" type="button" aria-label={`放大图片 1：${image.alt}`} onClick={open} />}<GalleryPicture key={image.url} image={image} preview eager={i === 0} interactive={!multiple} /><span className="bg-image-magnify" aria-hidden="true"><UIIcon name="search" size={20} /></span></div>
-          {!multiple && <figcaption><span>{image.alt}</span><FileSaveButton file={image} label="下载图片 1" /></figcaption>}
+          {!multiple && <figcaption className="bg-image-single-actions">
+            {image.modelName && <span className="bg-image-model-name" title={image.modelName}>{image.modelName}</span>}
+            <div className="bg-image-action-buttons">
+              <OriginalImageLink image={image} single />
+              <FileSaveButton file={image} label="下载图片 1" title="下载图片" />
+            </div>
+          </figcaption>}
         </div></figure>)}</div>
       {multiple && <button className="bg-image-stack-trigger" type="button" aria-label={`展开 ${images.length} 张图片`} aria-haspopup="dialog" aria-expanded={!!selection} onClick={open}><span className="bg-image-stack-label"><UIIcon name="picture" size={16} /><strong>{images.length} 张图片</strong><span>打开相册</span><IconChevronRightOutlineRegular size={16} /></span></button>}
     </div>

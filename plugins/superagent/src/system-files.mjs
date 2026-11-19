@@ -1,4 +1,4 @@
-import { documentPreview, previewFailure } from '../../benchgo/src/document-preview.mjs';
+import { documentPreview, previewFailure } from '../../base/src/document-preview.mjs';
 import { readdir, lstat, realpath, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { resolve, relative, isAbsolute, join, extname, basename } from 'node:path';

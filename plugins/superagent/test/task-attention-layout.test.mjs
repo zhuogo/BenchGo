@@ -5,13 +5,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 import { officialUiEntries, officialUiLoaders } from '../../link/scripts/official-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const webRequire = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = webRequire('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const captureDir = process.env.BENCHGO_QUESTION_SCREENSHOTS;
 
@@ -22,7 +22,7 @@ async function fixture() {
       import React from 'react';
       import {createRoot} from 'react-dom/client';
       import {TaskAttention} from './plugins/superagent/client/task-attention.jsx';
-      import hostCss from './plugins/benchgo/client/style.css';
+      import hostCss from './plugins/base/client/style.css';
       const root=createRoot(document.getElementById('root'));let serial=0;
       window.renderScenario=(mode='single')=>{
         window.apiCalls=[];window.answerRefreshes=0;
@@ -44,7 +44,7 @@ async function fixture() {
       window.renderScenario();
     ` },
     bundle:true,write:false,outdir:join(root,'artifacts','unused-question-test-output'),format:'iife',jsx:'automatic',
-    nodePaths:[join(root,'plugins/benchgo/node_modules'),join(root,'deepseek-harness/apps/web/node_modules')],
+    nodePaths:[join(root,'plugins/base/node_modules'),join(root,'deepseek-harness/apps/web/node_modules')],
     alias:{...await officialUiEntries(),react:dirname(webRequire.resolve('react/package.json')),'react-dom':dirname(webRequire.resolve('react-dom/package.json'))},
     loader:{...officialUiLoaders,'.css':'text','.svg':'text'},plugins:[sharedUiStyles()],define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent',
   });

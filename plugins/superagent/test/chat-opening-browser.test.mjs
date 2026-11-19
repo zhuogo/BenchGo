@@ -5,12 +5,12 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 async function fixture() {
@@ -20,7 +20,7 @@ async function fixture() {
     import {AssistantConversation} from './plugins/superagent/client/conversation.jsx';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
     import css from './plugins/superagent/client/style.css';
-    import hostCss from './plugins/benchgo/client/style.css';
+    import hostCss from './plugins/base/client/style.css';
     import tokens from './deepseek-harness/packages/client/ui-theme/src/styles/design-platform.css';
     import themeBase from './deepseek-harness/packages/client/ui-theme/src/styles/base.css';
     installIconSprite({effect:fn=>fn(),on(){}},undefined);
@@ -57,7 +57,7 @@ async function fixture() {
     window.chooseAssistantTab=tab=>openAssistantTab(mountedCtx,tab);
     window.leaveAssistant=id=>mountedCtx.layout.selectPanel(id);
   ` }, bundle: true, write: false, format: 'iife', jsx: 'automatic', outdir: join(root, 'artifacts/unused-chat-opening-test'),
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'), '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'), '@deepseek-ai/dsh-api-gateway/client': join(root,'deepseek-harness/packages/api/gateway/lib/client.node.js') },
     plugins: [{ name: 'opening-fixture', setup(build) {
       build.onLoad({filter:/superagent[\\/]client[\\/]index\.jsx$/},async({path})=>({contents:await readFile(path,'utf8')+'\nexport {openAssistantThread,openAssistantTab};',loader:'jsx'}));
@@ -87,8 +87,10 @@ test('main and side chat opening states center in remaining panel height and rel
       };
       for(const thread of ['main','side']){await page.evaluate(thread=>window.renderOpening(thread),thread);await centered(thread==='main'?'正在打开主聊天':'正在打开旁聊');await capture('opening-'+thread);}
       await page.evaluate(()=>window.renderConnection('loading'));await centered('正在连接聊天');await capture('loading');
-      await page.evaluate(()=>window.renderConnection('error'));const error=page.getByRole('alert');await error.getByRole('button',{name:'重新连接'}).waitFor();
-      const box=await error.boundingBox(),main=await page.locator('.ba-main').boundingBox();assert(Math.abs(box.y+box.height/2-main.y-main.height/2)<2);await capture('error');
+      await page.evaluate(()=>window.renderConnection('error'));
+      const bubble=page.getByLabel('聊天记录',{exact:true}).locator('[data-role=assistant]');
+      assert.equal(await bubble.getByRole('alert').innerText(),'聊天暂未连接');
+      await bubble.getByRole('button',{name:'重新连接'}).waitFor();await capture('error');
       await page.evaluate(()=>window.renderConnection('empty'));await page.getByText('开始对话',{exact:true}).waitFor();assert.equal(await page.locator('.ba-resource-initial').count(),0);await capture('empty');
       await page.evaluate(()=>window.renderConnection('data'));await page.getByText('消息 40：聊天内容可以正常滚动。',{exact:true}).waitFor();
       assert(await page.locator('.fixture-feed').evaluate(node=>node.scrollHeight>node.clientHeight));await page.locator('.fixture-feed').evaluate(node=>node.scrollTop=node.scrollHeight);assert(await page.locator('.fixture-feed').evaluate(node=>node.scrollTop>0));

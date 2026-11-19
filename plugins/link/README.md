@@ -23,7 +23,7 @@ scripts/          Web 构建
 test/            配对、TLS、权限边界与会话适配测试
 ```
 
-`dist/web/` 为忽略提交的生成资源。BenchGo 构建把服务打入 `plugins/benchgo/lib/link.mjs`，网页复制到 `lib/link-web/`，安装插件时不依赖同级 Link 源码目录。`reference/` 不参与构建。
+`dist/web/` 为忽略提交的生成资源。BenchGo 构建把服务打入 `plugins/base/lib/link.mjs`，网页复制到 `lib/link-web/`，安装插件时不依赖同级 Link 源码目录。`reference/` 不参与构建。
 
 ## 局域网
 
@@ -77,7 +77,7 @@ Linux 可执行 `node plugins/link/test/lan-offline.mjs`：以两个隔离网络
 
 ```sh
 npm ci --prefix plugins/link
-npm ci --prefix plugins/benchgo
+npm ci --prefix plugins/base
 npm run build:plus
 npm run test:link
 npm run test:commander
@@ -94,11 +94,11 @@ npm run check
 
 移动端设备切换位于对话标题栏侧栏按钮右侧，返回设备列表时保留已打开的工作台页面。浏览器设备中心只接受已挂载工作台 frame 的精确来源消息，确认标题栏导航可用后才隐藏重复顶栏；旧工作台或导航失效保留外层返回入口。Android 使用限定来源、限定主 frame 的独立导航通道，仅允许返回设备列表，不开放设备管理原生桥；离线仍可切换。普通配对工作台没有父设备中心时不显示无效切换按钮。
 
-添加设备 → 安装到服务器：SSH 地址/端口/用户名 → 确认 SHA256 指纹 → 密码/私钥认证 → 检查安装并建立环回隧道，验证 TLS、设备令牌和真实工作台后才保存设备。默认国内镜像，可选直连。支持 Ubuntu/Debian、Linux x64 与 systemd 用户服务；密码私钥仅操作内存使用。服务支持状态、启停、重启、日志、升级；移除连接不卸载服务，常驻需要用户会话 linger，安装结果会提示。
+从「设备中心 → 添加设备 → 添加服务器」登记 SSH 地址和账号。桌面核对指纹并认证后复用已有安装，缺失时下载部署资源。终端、服务管理和手机连接码都在服务器卡片上。登记后可直接在该工作台的对话中使用 SSH 运维。支持 Ubuntu/Debian、Linux x64 与 systemd 用户服务。密码和私钥仅在操作内存中使用，服务常驻依赖用户会话 linger。详见 [SSH 服务器运维](../../docs/01-设备与远程连接/SSH服务器运维.md)。
 
 Node 令牌存私有权限文件，与官方本机凭据提供器一样信任当前 OS 用户；Android 使用 Keystore 加密。代理工作台独立浏览器源，远端禁止访问本机管理接口。接口见 openapi.json，设计见 [设备与远程连接](../../docs/01-设备与远程连接/设计.md)。MCP delegation 不变，不向 Agent 开放设备切换或 SSH 凭据工具。
 
-`npm run build:plus` 生成服务器 seed 和 SHA256 清单；默认完整包直接使用本地资源，经 SSH 上传。显式 online 包在设备中心预取匹配版本的签名资源并缓存，支持实际进度、重试及资源准备阶段取消；残缺或损坏的完整包不静默联网。交付与缓存契约见[更新与发布设计](../../docs/05-更新与发布/设计.md)。新增 Android 原生多设备与 SSH 能力需重新构建客户端。
+`npm run build:plus` 生成服务器 seed 和 SHA256 清单。默认完整包直接使用本地资源，经 SSH 上传。显式 online 包在设备中心预取匹配版本的签名资源并缓存，支持实际进度、重试及资源准备阶段取消。残缺或损坏的完整包会提示修复。交付与缓存契约见[更新与发布设计](../../docs/05-更新与发布/设计.md)。Android 支持扫码配对和本机 SSH 隧道。
 
 SSH 隧道仅供当前客户端访问，不会自动让手机通过公网连接。原有公网直连仍需可达 HTTPS 地址和反代；自有中继采用下述独立出站通道，不提供公共中转。
 
@@ -110,7 +110,7 @@ SSH 隧道仅供当前客户端访问，不会自动让手机通过公网连接�
 
 添加、编辑中继可通过 owner `relay-test`（设备中心 `hostRelayTest`）测试连接，输入 `{url,token}`；编辑可带 `id` 并留空 `token`，服务端复用该节点已保存的私密密钥。返回 `{ok,latencyMs,message}`，不保存输入、不回显密钥。测试使用可信 HTTPS 的 `GET /__link/relay/probe` 和 Bearer 密钥验证，成功响应必须为 `{protocol:"benchgo-link-relay",version:1,authenticated:true}`；不会注册控制通道或替换在线主机。测试成功仅说明中继协议与密钥有效，隧道在线仍看实时连接状态。五秒无响应明确报告超时；旧中继缺少此接口时提示更新中继服务，更新前原有连接仍兼容。自行配置反向代理时须一并转发该只读路径与 Authorization。
 
-当前已提供核心中继通道、显式 IP 证书操作、SSH 一键部署、LAN 自动优先/失败回退、设备/中继双 Tab 和中继池优先级故障转移；真实公网 ACME、服务器 systemd 与端到端公网连接仍需在目标环境验收。旧 SSH 云端部署与直连继续可用。
+当前已提供核心中继通道、显式 IP 证书操作、SSH 一键部署、LAN 自动优先与失败回退、设备和中继两个标签及中继池优先级故障转移。真实公网 ACME、服务器 systemd 与端到端公网连接仍需在目标环境验收。
 
 ### IP 地址证书约束
 
@@ -142,7 +142,7 @@ node scripts/ip-certificate.mjs uninstall-timer
 
 安装只创建 `benchgo-relay-cert-renew.service` 与 `benchgo-relay-cert-renew.timer`；同名文件已存在且不归本工具管理时会拒绝覆盖。卸载只禁用该 timer 并删除校验通过的本工具 unit，不停止或删除 relay 服务。timer 更新证书后只尝试重启固定名称 `benchgo-relay.service`，不会重启其他服务；每日无证书变化时不会中断现有连接。
 
-timer 安装前必须先由同一 OS 用户配置并启动 `benchgo-relay.service`。发布插件包后，工具位于 `plugins/benchgo/lib/relay/`；在源码仓库内开发时，对应文件位于 `plugins/link/scripts/`。
+timer 安装前必须先由同一 OS 用户配置并启动 `benchgo-relay.service`。发布插件包后，工具位于 `plugins/base/lib/relay/`；在源码仓库内开发时，对应文件位于 `plugins/link/scripts/`。
 
 复制 `relay.example.json` 到当前用户的配置目录并填写实际 IP、未占用的高位端口、随机中继密钥，以及证书活动路径。中继 TLS 私钥和配置文件都须保持当前用户所有且权限为 `0600`；随机密钥可用 `openssl rand -hex 32` 生成。
 
@@ -167,7 +167,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node /absolute/path/plugins/benchgo/lib/relay/run-relay-server.cjs --config /home/link/.config/dsh-link/relay.json
+ExecStart=/usr/bin/node /absolute/path/plugins/base/lib/relay/run-relay-server.cjs --config /home/link/.config/dsh-link/relay.json
 Restart=on-failure
 RestartSec=5
 UMask=0077
@@ -189,7 +189,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node /absolute/path/plugins/benchgo/lib/relay/run-relay-server.cjs --config /home/link/.config/dsh-link/relay.json
+ExecStart=/usr/bin/node /absolute/path/plugins/base/lib/relay/run-relay-server.cjs --config /home/link/.config/dsh-link/relay.json
 Restart=on-failure
 RestartSec=5
 UMask=0077
@@ -200,7 +200,7 @@ UNIT
 systemctl --user daemon-reload
 systemctl --user enable --now benchgo-relay.service
 systemctl --user status benchgo-relay.service
-node /absolute/path/plugins/benchgo/lib/relay/ip-certificate.mjs install-timer --state-dir "$HOME/.local/state/dsh-link"
+node /absolute/path/plugins/base/lib/relay/ip-certificate.mjs install-timer --state-dir "$HOME/.local/state/dsh-link"
 ```
 
 上例中 service unit 的 `ExecStart` 路径也须按实际安装目录和用户路径修改。退出登录后仍需常驻时，由服务器管理员按部署策略为该用户启用 linger；证书 timer 和 relay 必须使用同一用户级 systemd manager。

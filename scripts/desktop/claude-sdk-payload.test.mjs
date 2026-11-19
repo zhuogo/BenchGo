@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const requirePlugin = createRequire(new URL('../../plugins/benchgo/package.json', import.meta.url));
+const requirePlugin = createRequire(new URL('../../plugins/base/package.json', import.meta.url));
 const sdkPath = requirePlugin.resolve('@anthropic-ai/claude-agent-sdk');
 let nativeLookups = 0;
 const hooks = registerHooks({ resolve(specifier, context, next) {

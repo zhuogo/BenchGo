@@ -5,10 +5,8 @@ export const deviceRuntime = {
   bootstrap, isNative, scan, contextUri,
   hostCall(action, input = {}) {
     const actions = {
-      relayConfigure: 'hostRelayConfigure',
       relayTest: 'hostRelayTest',
       hostRelayTest: 'hostRelayTest',
-      relayPoolConfigure: 'hostRelayPoolConfigure',
       hostRelayPoolConfigure: 'hostRelayPoolConfigure',
       status: 'hostStatus',
       hostStatus: 'hostStatus',
@@ -28,7 +26,7 @@ export const deviceRuntime = {
     if (isNative()) return nativeDeviceCall(action, args);
     const response = await fetch(new URL('api/devices', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...args, action }) });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok || result.error) throw new Error(result.error || `设备服务返回 HTTP ${response.status}`);
+    if (!response.ok || result.error) throw Object.assign(new Error(result.error || `设备服务返回 HTTP ${response.status}`), { code: result.code });
     return result;
   },
 };

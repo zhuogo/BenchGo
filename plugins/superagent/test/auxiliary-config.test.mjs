@@ -20,14 +20,14 @@ test('auxiliary settings preserve opaque primary and fallback identities across 
     { providerId: 'provider/@aux', modelId: 'Aux: Exact/02', options: { reasoningEffort: 'custom', maxTokens: 500 } },
     { providerId: 'provider/@backup', modelId: 'Backup: Exact/03' },
   ], capabilities: ['summary', 'review'] };
-  await store.updateConfig({ models, auxiliary, image: { providerId: 'images', modelId: 'image' } });
+  await store.updateConfig({ models, auxiliary, asr: { providerId: 'voice', modelId: 'asr' } });
   await store.updateConfig({ auxiliary: { capabilities: ['review'] } });
   store.close();
   const restarted = await open();
   const config = await restarted.getConfig();
   assert.deepEqual(config.models, models);
   assert.deepEqual(config.auxiliary, { ...auxiliary, capabilities: ['review'] });
-  assert.equal(config.image.modelId, 'image');
+  assert.equal(config.asr.modelId, 'asr');
   assert.deepEqual((await restarted.profileExport()).config.auxiliary, config.auxiliary);
   await restarted.updateConfig({ auxiliary: null });
   assert.equal((await restarted.getConfig()).auxiliary, null);
@@ -47,7 +47,7 @@ test('legacy configuration defaults to no auxiliary without changing its revisio
 
 test('removed credential pools are rejected explicitly and never stored', async t => {
   const { store, open } = await fixture(t);
-  const before = await store.updateConfig({ models: [{ providerId: 'opaque/provider-A', modelId: 'Exact/model' }], cardHtml: '<b>Name</b>' });
+  const before = await store.updateConfig({ models: [{ providerId: 'opaque/provider-A', modelId: 'Exact/model' }], workerConcurrency: 3 });
   for (const keyPools of [null, {}, [], [{ providerId: 'one', candidates: ['two'] }]]) {
     await assert.rejects(store.updateConfig({ keyPools }), { code: 'KEY_POOL_REMOVED' });
     assert.deepEqual(await store.getConfig(), before);
@@ -56,7 +56,7 @@ test('removed credential pools are rejected explicitly and never stored', async 
   const saved = await (await open()).getConfig();
   assert.equal(Object.hasOwn(saved, 'keyPools'), false);
   assert.equal(saved.models[0].modelId, 'Exact/model');
-  assert.equal(saved.cardHtml, '<b>Name</b>');
+  assert.equal(saved.workerConcurrency, 3);
 });
 
 test('invalid auxiliary configuration is atomic and cannot silently accept unsupported capabilities or credentials', async t => {

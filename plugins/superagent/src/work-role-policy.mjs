@@ -1,3 +1,5 @@
+import { roleModels } from './routing.mjs';
+
 /** Top-level model overrides are invalid; remote executionConfig has its own catalog contract. */
 export function rejectModelOverride(input) {
   if (input && ['provider', 'model', 'providerId', 'modelId', 'workerModel'].some(key => Object.hasOwn(input, key))) {
@@ -6,7 +8,15 @@ export function rejectModelOverride(input) {
 }
 
 export function configuredWorkModel(policy) {
-  const model = (policy.workerModels || policy.routingConfig?.workerModels || [])[0];
-  if (!model?.providerId || !model?.modelId) throw Object.assign(new Error('尚未配置可用的 Worker 工作角色模型'), { code: 'WORKER_MODEL_NOT_CONFIGURED' });
-  return structuredClone(model);
+  const [model] = roleModels(undefined, policy, 'worker');
+  if (!model) throw Object.assign(new Error('尚未配置可用的 Worker 工作角色模型'), { code: 'WORKER_MODEL_NOT_CONFIGURED' });
+  const harness = policy.workerHarness ?? policy.routingConfig?.workerHarness;
+  return { ...model, ...(harness ? { harness } : {}) };
+}
+
+export function usesExternalWorker(database, task) {
+  const assignment = database.assignments(task.id).at(-1);
+  const run = assignment && database.runs(assignment.id).at(-1);
+  const frozen = run && database.getWorkerExecutionState(run.id)?.models[0]?.harness;
+  return ['codex', 'claude'].includes(task.mandate?.execution?.config?.harness ?? frozen ?? assignment?.model?.harness);
 }

@@ -3,7 +3,7 @@ import { migrateTaskStorage } from './task-storage-migration.mjs';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, existsSync, openSync, fsyncSync, closeSync, lstatSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname, relative, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { notifySettings } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { notifySettings } from '../../base/shared/settings-adapter-utils.mjs';
 
 export const ASSISTANT_DOCUMENTS = Object.freeze(['AGENTS.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'TOOLS.md', 'MEMORY.md', 'PROACTIVE_PREFERENCES.md']);
 // TOOLS remains managed for profile imports and on-demand reading, not injection.

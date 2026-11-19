@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assembleLinuxServer, verifyLinuxSeed, linuxVerification } from './package-linux.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const tar = createRequire(join(root, 'plugins/benchgo/package.json'))('tar');
+const tar = createRequire(join(root, 'plugins/base/package.json'))('tar');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
 async function fixture(t, extra = {}, entryTransform) {
@@ -16,7 +16,7 @@ async function fixture(t, extra = {}, entryTransform) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const seed = join(directory, 'seed'), content = join(directory, 'content');
   await mkdir(seed); await mkdir(content);
-  const plugin = JSON.parse(await readFile(join(root, 'plugins/benchgo/package.json')));
+  const plugin = JSON.parse(await readFile(join(root, 'plugins/base/package.json')));
   const upstream = JSON.parse(await readFile(join(root, 'upstream.json')));
   const worker = Buffer.alloc(64); worker.write('7f454c460201', 0, 'hex'); worker.writeUInt16LE(62, 18);
   const files = {
@@ -52,7 +52,7 @@ test('Linux server package carries verified current seed, real x64 identity, inv
   const source = JSON.parse(await readFile(join(packageRoot, 'release-source.json')));
   assert.equal(source.runtimeIncluded, false); assert.equal(source.arch, 'x64');
   assert.match(await readFile(join(packageRoot, 'README.md'), 'utf8'), /首次安装仍需联网/);
-  assert.match(await readFile(join(packageRoot, 'README.md'), 'utf8'), /设备中心 → 设备 → 添加设备 → 安装到服务器/);
+  assert.match(await readFile(join(packageRoot, 'README.md'), 'utf8'), /设备中心 → 添加设备 → 添加服务器/);
   assert.match(await readFile(join(packageRoot, 'install.sh'), 'utf8'), /uname -m.*x86_64/);
   const bootstrap = await readFile(join(packageRoot, 'bootstrap.mjs'), 'utf8');
   assert.match(bootstrap, /'Type=simple', 'KillMode=mixed'/, 'launcher alone receives graceful systemd signals');

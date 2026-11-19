@@ -18,7 +18,7 @@ const maintenance = { enabled: true, schedulerActive: true, state: 'idle', runni
   nextCheckAt: '2026-11-09T01:00:30.000Z' };
 
 async function officialServerFixture() {
-  const requireBenchgo = createRequire(new URL('../../benchgo/package.json', import.meta.url));
+  const requireBenchgo = createRequire(new URL('../../base/package.json', import.meta.url));
   const requireOfficial = createRequire(new URL('../../../deepseek-harness/packages/host/webserver/package.json', import.meta.url));
   // Worktrees share the installed pnpm root; dependency links belong to its original checkout.
   const installedRoot = dirname(realpathSync(new URL('../../../deepseek-harness/node_modules/', import.meta.url)));

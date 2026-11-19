@@ -71,11 +71,20 @@ test('prepared startup keeps one brand entrance, local eye expressions, live the
     assert.equal(entrance.hasBackgroundPlate, false);
     await snapshot(name + '-entering');
     await page.evaluate(() => document.querySelector('.startup-brand').getAnimations()[0].finish());
-    for (const [theme, background, foreground] of [['light', 'rgb(255, 255, 255)', 'rgb(32, 33, 36)'], ['dark', 'rgb(25, 25, 27)', 'rgb(237, 237, 238)']]) {
+    for (const [theme, background, foreground] of [['light', 'rgb(243, 246, 246)', 'rgb(22, 28, 35)'], ['dark', 'rgb(16, 18, 24)', 'rgb(238, 245, 246)']]) {
       await page.emulateMedia({ colorScheme: theme, reducedMotion: 'no-preference' });
       await page.waitForFunction(expected => getComputedStyle(document.body).backgroundColor === expected && document.documentElement.scrollHeight <= innerHeight && document.documentElement.scrollWidth <= innerWidth, background);
       assert.deepEqual(await surface(), { root: background, body: background, text: foreground, overflow: false });
       await snapshot(name + '-' + theme);
+    }
+    if (name === 'splash.html') {
+      assert.equal(await page.locator('#startup-status').innerText(), '正在准备插件…');
+      await page.locator('#startup-status').evaluate(status => {
+        status.dataset.phase = 'host-starting';
+        status.textContent = '正在启动服务…';
+      });
+      assert.equal((await page.locator('.startup-loading').evaluate(rail => getComputedStyle(rail).getPropertyValue('--stage'))).trim(), '.51');
+      await snapshot('splash-host');
     }
     const eyeScale = await page.evaluate(() => {
       const eyes = document.querySelector('[data-part="eyes"]');
@@ -112,7 +121,7 @@ test('prepared startup keeps one brand entrance, local eye expressions, live the
       await page.getByRole('button', { name: '重试' }).click();
       await page.getByRole('button', { name: '重试' }).waitFor({ state: 'hidden' });
       assert.equal(await page.evaluate(() => window.startupCalls), 2);
-      assert.equal(await page.locator('#startup-status').innerText(), '');
+      assert.equal(await page.locator('#startup-status').innerText(), '正在打开工作台…');
       await snapshot('welcome-ready');
     }
     await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });

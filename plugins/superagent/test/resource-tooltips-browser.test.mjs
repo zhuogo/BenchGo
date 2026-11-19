@@ -4,12 +4,12 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 test('execution summaries and timestamps use keyboard-accessible bubbles without native titles', { skip: !executablePath }, async () => {
@@ -19,7 +19,7 @@ test('execution summaries and timestamps use keyboard-accessible bubbles without
     const summary='正在核对项目来源与构建状态。'.repeat(25);
     createRoot(document.getElementById('root')).render(<TaskExecution taskStatus='running' execution={{observed:true,updatedAt:'2026-11-09T03:00:00Z',worker:{id:'worker',label:'核对项目来源与构建状态',status:'running',activity:summary,updatedAt:'2026-11-09T03:00:00Z'}}}/>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-resource-tooltip-test'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts') },
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   const browser = await chromium.launch({ headless: true, executablePath });

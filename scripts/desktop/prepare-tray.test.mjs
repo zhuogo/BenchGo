@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { prepareTrayInput, prepareApplicationMenuInput, trayLabelsPlugin, prepareDesktopTray, verifyTrayBundle } from './prepare-tray.mjs';
+import { verifyUpdateBridgeBundle } from './prepare-update-bridge.mjs';
 import config, { verifyPackagedEnrollment } from './electron-builder.config.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -73,10 +74,14 @@ test('the actual main bundle preserves show, quit, relabel and disposal through 
   }
   const officialTray = join(engine, 'apps/desktop/lib/types/tray.js');
   const officialMain = join(engine, 'apps/desktop/lib/main.js');
-  const originals = await Promise.all([readFile(officialTray), readFile(officialMain)]);
+  const officialPreload = join(engine, 'apps/desktop/lib/preload-app.cjs');
+  const originals = await Promise.all([readFile(officialTray), readFile(officialMain), readFile(officialPreload)]);
   const built = await prepareDesktopTray(dirname(engine), join(output, 'compiled'));
   const code = await readFile(built, 'utf8');
   verifyTrayBundle(code);
+  const preload = await readFile(join(output, 'compiled/preload-app.cjs'), 'utf8');
+  verifyUpdateBridgeBundle(code);
+  verifyUpdateBridgeBundle(preload, true);
   assert.match(code, /About BenchGo/);
   assert.match(code, /https:\/\/benchgo\.cn/);
   assert.doesNotMatch(code, /messages\.checkUpdatesMenu/);
@@ -105,15 +110,18 @@ test('the actual main bundle preserves show, quit, relabel and disposal through 
   assert.equal(nativeTray.menu[0].label, 'Main Window');
   assert.equal(nativeTray.menu[2].label, 'Quit');
   tray.dispose(); assert.equal(nativeTray.destroyed, true);
-  assert.deepEqual(await Promise.all([readFile(officialTray), readFile(officialMain)]), originals);
+  assert.deepEqual(await Promise.all([readFile(officialTray), readFile(officialMain), readFile(officialPreload)]), originals);
   // Exercise the same staged file mapping and ASAR extraction as the installer.
   const app = join(output, 'app');
   await mkdir(join(app, 'lib'), { recursive: true });
   await writeFile(join(app, 'lib/main.js'), code);
+  await writeFile(join(app, 'lib/preload-app.cjs'), preload);
   const require = createRequire(join(engine, 'apps/desktop/package.json'));
   const { createPackage, extractFile } = createRequire(require.resolve('app-builder-lib'))('@electron/asar');
   await createPackage(app, join(output, 'app.asar'));
   verifyTrayBundle(extractFile(join(output, 'app.asar'), 'lib/main.js').toString('utf8'));
+  verifyUpdateBridgeBundle(extractFile(join(output, 'app.asar'), 'lib/main.js').toString('utf8'));
+  verifyUpdateBridgeBundle(extractFile(join(output, 'app.asar'), 'lib/preload-app.cjs').toString('utf8'), true);
   assert.throws(() => verifyTrayBundle(code.replace('label: id === "zh-CN" ? "主窗口" : "Main Window"', 'label: messages.openApplication')), /missing localized/);
   assert.throws(() => verifyTrayBundle(code.replace('setToolTip("BenchGo")', 'setToolTip(messages.aboutProduct)')), /missing localized/);
 });

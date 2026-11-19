@@ -5,8 +5,9 @@ import {fileAddressFor,resolveWorkspacePath} from '@deepseek-ai/dsh-util-workspa
 import {Tooltip} from '../../shared/client/ui/tooltip.jsx';
 import {Loading} from '../../shared/client/ui/loading.jsx';
 import {Button} from '../../shared/client/ui/button.jsx';
-import {UIIcon} from '../../benchgo/client/iconsax.jsx';
+import {UIIcon} from '../../base/client/iconsax.jsx';
 import {deviceStatus,workbenchUrl} from './device-state.mjs';
+import {observeHostTheme,sendWorkbenchTheme,themedWorkbenchUrl} from './device-theme.mjs';
 import {deviceLauncherMode} from './device-navigation.mjs';
 import {deviceRequest,normalizeScope,scopeDevices,resourceKey,readResourcePages,mergeResourcePage,sortResourceRecents,sessionActionAccess,canRetryResource,resourceRetryDelay,resourceQueryFailure} from './resource-state.mjs';
 
@@ -213,8 +214,10 @@ export function RemoteProjects({navigation:n,filter,onOpen,onDelete,archived,onT
 export function remoteRecentRows(n,filter,archived){return n.remote.flatMap(device=>(n.pages[device.id+'\0recent']?.items||[]).filter(row=>!!row.archived===archived&&(!filter||`${row.title||''} ${row.provider||''} ${row.model||''}`.toLowerCase().includes(filter.toLowerCase()))).map(row=>({...row,device,deviceId:device.id,remote:true})));}
 
 /** The owner retains its original view and draft while a target's existing workbench renders. */
-export function ResourceStage({ target, onClose }) {
+export function ResourceStage({ target, onClose, sessionDevices, onSessionDevice }) {
   const frame = useRef(null), receiverReady = useRef(false);
+  const selectSessionDevice = useRef(onSessionDevice);
+  selectSessionDevice.current = onSessionDevice;
   const [entry, setEntry] = useState(null), [ready, setReady] = useState(false), [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0), [container, setContainer] = useState(null);
   const deviceId = target?.device.id;
@@ -240,10 +243,13 @@ export function ResourceStage({ target, onClose }) {
         throw Error('目标设备身份或授权已变化，请返回原任务核验');
       const next = new URL(workbenchUrl(value.url, location.origin));
       next.hash = new URLSearchParams({ resourceParentOrigin: location.origin }).toString();
-      setEntry({ identity, attempt, url: next.href });
+      setEntry({ identity, attempt, url: themedWorkbenchUrl(next.href) });
     }).catch(reason => { if (!controller.signal.aborted) setError(reason.message); });
     return () => controller.abort();
   }, [identity, attempt]);
+  useEffect(() => {
+    if (url) return observeHostTheme(theme => sendWorkbenchTheme(frame.current, url, theme));
+  }, [url]);
   useEffect(() => {
     if (!url || !target) return;
     setReady(false); setError('');
@@ -271,6 +277,19 @@ export function ResourceStage({ target, onClose }) {
     if (receiverReady.current) send();
     return () => { clearTimeout(timeout); window.removeEventListener('message', receive); };
   }, [url, target]);
+  const newSession = target?.resource.intent === 'newSession';
+  useEffect(() => {
+    if (!url || !target || !ready || error || receiverReady.current?.sessionDevices !== true) return;
+    const child = frame.current?.contentWindow, origin = new URL(url).origin;
+    const devices = newSession ? sessionDevices?.devices : undefined;
+    const receive = event => {
+      if (event.source !== child || event.origin !== origin || event.data?.type !== 'benchgo:resource:session-device') return;
+      if (devices?.some(device => device.id === event.data.deviceId)) selectSessionDevice.current?.(event.data.deviceId);
+    };
+    window.addEventListener('message', receive);
+    child?.postMessage({ type: 'benchgo:resource:session-devices', devices, activeId: deviceId }, origin);
+    return () => window.removeEventListener('message', receive);
+  }, [url, target, ready, error, newSession, sessionDevices, deviceId]);
   useEffect(() => {
     if (!target || !container) return;
     const children = [...container.children].filter(node => !node.classList.contains('cmd-resource-stage'));
@@ -279,17 +298,25 @@ export function ResourceStage({ target, onClose }) {
     return () => children.forEach((node, index) => { if (!prior[index]) node.removeAttribute('inert'); });
   }, [target, container]);
   if (!target || !container) return null;
+  const canReturn = newSession && sessionDevices;
   return createPortal(<div className="cmd-resource-stage" data-owner-task={target.resource.ownerTask ? '' : undefined}>
     {target.resource.ownerTask && <div className="cmd-resource-owner"><Button variant="ghost" type="button" onClick={() => { target.onReturn?.(); onClose(); }}>返回原任务</Button><span>{target.device.name} · 执行会话只读</span></div>}
-    {url && <iframe ref={frame} src={url} title={target.device.name + '的资源'} allow="clipboard-read; clipboard-write; microphone" referrerPolicy="no-referrer" onLoad={() => {
+    {url && <iframe ref={frame} src={url} title={target.device.name + '的资源'} allow="clipboard-read; clipboard-write; microphone" referrerPolicy="no-referrer" onLoad={event => {
       receiverReady.current = false;
+      sendWorkbenchTheme(event.currentTarget, url);
       frame.current?.contentWindow?.postMessage({ type: 'benchgo:resource:probe' }, new URL(url).origin);
     }} />}
-    <div className="cmd-resource-stage-status" hidden={ready && !error}>{error ? <><p role="alert">{error}</p><button type="button" onClick={() => setAttempt(value => value + 1)}>重试</button></> : <Loading label="正在打开远端资源…" />}</div>
+    <div className="cmd-resource-stage-status" hidden={ready && !error}>
+      {error ? <p role="alert">{error}</p> : <Loading compact label="正在打开远端资源…" />}
+      {(error || canReturn) && <div className="cmd-resource-stage-actions">
+        {error && <Button variant="ghost" size="sm" onClick={() => setAttempt(value => value + 1)}>重试</Button>}
+        {canReturn && <Button variant="ghost" size="sm" onClick={() => onSessionDevice?.(sessionDevices.activeId)}>返回本机</Button>}
+      </div>}
+    </div>
   </div>, container);
 }
 
-export function installResourceReceiver(host, { open, newSession, addProject, projectApi, getDefaultProjectId }) {
+export function installResourceReceiver(host, { open, newSession, addProject, projectApi, getDefaultProjectId, onSessionDevices }) {
   const origin = new URLSearchParams(location.hash.slice(1)).get('resourceParentOrigin');
   if (window.parent === window || !origin) return;
   try {
@@ -379,11 +406,19 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
   const ready = () => {
     document.documentElement.setAttribute('data-resource-embedded', '');
     window.parent.postMessage({ type: 'benchgo:resource:ready', projectActions,
-      executionReadOnly: !!(host.conversation?.blocks?.storeFor && host.conversation?.blocks?.set), files: fileWorkspaceAvailable() }, origin);
+      executionReadOnly: !!(host.conversation?.blocks?.storeFor && host.conversation?.blocks?.set), files: fileWorkspaceAvailable(), sessionDevices: typeof onSessionDevices === 'function' }, origin);
   };
   const receive = event => {
     if (event.source !== window.parent || event.origin !== origin) return;
     if (event.data?.type === 'benchgo:resource:probe') { ready(); return; }
+    if (event.data?.type === 'benchgo:resource:session-devices') {
+      const { activeId, devices } = event.data;
+      onSessionDevices?.(Array.isArray(devices) && devices.some(device => device.id === activeId) ? {
+        activeId, devices,
+        select: deviceId => window.parent.postMessage({ type: 'benchgo:resource:session-device', deviceId }, origin),
+      } : null);
+      return;
+    }
     if (event.data?.type === 'benchgo:project:call') {
       const { action, args, requestId } = event.data;
       if (typeof requestId !== 'string' || requestId.length > 200) return;

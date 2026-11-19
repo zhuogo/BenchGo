@@ -1,7 +1,7 @@
 import { open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DataOwner } from '../../benchgo/shared/data-owner.mjs';
+import { DataOwner } from '../../base/shared/data-owner.mjs';
 
 export class Store extends DataOwner {
   constructor(directory) { super(directory); this.writes = Promise.resolve(); }

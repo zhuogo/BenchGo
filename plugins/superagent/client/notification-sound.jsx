@@ -1,17 +1,31 @@
-import React, { useSyncExternalStore } from 'react';
-import { Switch } from '@deepseek-ai/dsh-client-ui-primitives';
+import React, { useId, useSyncExternalStore } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { notificationSound } from './notification-sound.mjs';
 
-export function NotificationSoundSettings({ sound = notificationSound }) {
+export function NotificationSoundToggle({ sound = notificationSound }) {
   const snapshot = useSyncExternalStore(sound.subscribe, sound.getSnapshot);
-  const text = !snapshot.enabled ? '已静音' : ({ locked: '点击试听，启用声音', unlocking: '正在启用…', ready: '已开启', error: '播放失败，请重试' })[snapshot.state];
-  return <section className="ba-notification-sound" aria-label="回复提示音" data-notification-sound-settings>
-    <div className="ba-notification-sound-row">
-      <div className="ba-notification-sound-copy"><h2>回复提示音</h2><p>收到新回复或主动通知时，播放轻提示音。</p></div>
-      <Switch label="播放提示音" checked={snapshot.enabled} onChange={enabled => { sound.setEnabled(enabled); if (enabled) void sound.unlock(); }} />
-    </div>
-    <div className="ba-notification-sound-footer"><span role="status">{text}</span><Button variant="ghost" size="sm" type="button" aria-label="试听提示音" disabled={!snapshot.enabled || snapshot.state === 'unlocking'} onClick={() => void sound.unlock(true)}>试听</Button></div>
-    {snapshot.error && <p className="ba-error" role="alert">{snapshot.error}</p>}
-  </section>;
+  const id = useId();
+  const text = snapshot.enabled ? {
+    locked: '已开启，等待浏览器允许播放', unlocking: '正在启用声音…', ready: '已开启',
+    error: `${snapshot.error || '提示音播放失败'}。关闭后重新开启可重试`,
+  }[snapshot.state] : '已静音';
+  const status = [text, snapshot.preferenceError].filter(Boolean).join('。');
+  function toggle() {
+    const enabled = !sound.getSnapshot().enabled;
+    sound.setEnabled(enabled);
+    if (enabled) void sound.unlock(true);
+  }
+  return <>
+    <Tooltip label={`回复提示音 · ${status}`}>
+      <Button variant="ghost" size="icon" className="ba-sound-toggle" aria-label="回复提示音" aria-pressed={snapshot.enabled}
+        aria-describedby={id} data-notification-sound-settings onClick={toggle}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path className="ba-sound-bell" d="M18 8a6 6 0 0 0-12 0c0 6-2 7-3 9h18c-1-2-3-3-3-9m-8 12a2 2 0 0 0 4 0" />
+          <path className="ba-sound-slash" d="m4 3 16 18" />
+        </svg>
+      </Button>
+    </Tooltip>
+    <span id={id} className="bg:sr-only" role="status">{status}</span>
+  </>;
 }

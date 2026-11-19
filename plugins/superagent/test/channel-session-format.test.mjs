@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createChannelSessionHost, applyChannelSessionSource } from '../src/channel-session.mjs';
 import { channelMessageRecordOf } from '../src/channel-session-record.mjs';
 
-const requireBenchgo = createRequire(new URL('../../benchgo/package.json', import.meta.url));
+const requireBenchgo = createRequire(new URL('../../base/package.json', import.meta.url));
 const { transformSync } = requireBenchgo('esbuild');
 const sourceRoots = ['session-format', 'session-format-v3-to-v4'].map(name => new URL(`../../../deepseek-harness/packages/session/${name}/src/`, import.meta.url).href);
 // Exercise the official public V4 restore validator from the pinned checkout

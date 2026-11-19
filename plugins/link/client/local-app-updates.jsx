@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Select } from '../../shared/client/select.jsx';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { DeviceLoading } from './device-loading.jsx';
 
 /** Only the trusted Android assets page owns this native APK update entry. */

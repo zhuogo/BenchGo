@@ -2,27 +2,28 @@ import { Loading } from '../../shared/client/ui/loading.jsx';
 import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
-import { ImageGallery } from '../../shared/client/image-gallery.jsx';
-import { groupReplyImages } from '../../shared/client/image-gallery-model.mjs';
 import { ModelSettings } from './model-settings.jsx';
 import { retainAssistantSession, assistantBackgroundSessions } from './session-retain.mjs';
 import { identityConfigPatch, validateModelSettings } from './model-settings.mjs';
 import React, { useCallback, useEffect, useRef, useState, useId, useSyncExternalStore } from 'react';
 import { Tooltip, Modal, Menu, IconPinOutlineMedium, IconPinFillMedium, IconArchiveOutlineMedium, IconArchiveOffOutlineMedium, IconEllipsisOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives';
-import { UIIcon as BaseIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon as BaseIcon } from '../../base/client/iconsax.jsx';
 import { BrandLogo } from '../../link/client/brand.jsx';
-import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
+import { readJsonResponse } from '../../base/client/http-response.mjs';
 import { perfTrace } from '../../shared/client/perf-trace.mjs';
 import { structuralShare } from './structural-share.mjs';
-import { assistantModelCatalog } from '../../benchgo/client/model-catalog.mjs';
+import { assistantModelCatalog, pickerCatalog } from '../../base/client/model-catalog.mjs';
+import { providerOption } from '../../base/client/provider-brand-icon.jsx';
+import { prioritizeRouterGo } from '../../base/client/provider-options.mjs';
+import { routerGo } from '../../base/shared/builtin-providers.mjs';
 import css from './style.css';
 import documentsCss from './documents.css';
 import { AssistantCard } from './card.jsx';
 import { PetSettings } from './pet-settings.jsx';
 import { petDesignIntent, petActionForSession, petExpressionForAction } from './pet-state.mjs';
-import { IdentityCardEditor } from './identity-card-editor.jsx';
 import { assistantConfigSync, saveConfigPatch } from './config-sync.mjs';
 import { AssistantConversation, assistantConversationChildren, mountAssistantConversation } from './conversation.jsx';
+import { ChatNoticeFeed } from './chat-notice.jsx';
 import { mountSessionRoleControls } from './session-role-controls.jsx';
 import { ApprovalReview, reviewApprovalChildren, mountApprovalReview } from './approval-review.jsx';
 import { AssistantDocuments } from './documents.jsx';
@@ -45,7 +46,7 @@ import { useDirtyRegistry } from './dirty-registry.mjs';
 import { Connections } from './connections.jsx';
 import { VaultSettingsSection } from '../../shared/client/vault-settings.jsx';
 import { ResourceState } from './resource-state.jsx';
-import { NotificationSoundSettings } from './notification-sound.jsx';
+import { NotificationSoundToggle } from './notification-sound.jsx';
 import { mountReplySound } from './notification-sound-runtime.mjs';
 
 const PANEL = 'benchgo-assistant';
@@ -199,7 +200,7 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
       </div>}
     </div>;
   };
-  return <section className="ba-assistant-section" data-collapsed={!showArchived && !assistantExpanded} aria-label={'\u4e2a\u4eba\u52a9\u7406'}>{!showArchived && <div className="ba-card-row"><div className="ba-assistant-heading"><Hint label={mainLabel}><span className="ba-sidebar-main"><AssistantCard avatarSize={32} pet={config?.pet} name={name} html={config?.cardHtml} motion={config?.cardMotion !== false} action={mainAction} expression={petExpressionForAction(config?.pet, mainAction)} status={mainStatus} ariaLabel={mainLabel} current={panel.activePanelId === PANEL && selected === 'main' && selectedTab === 'chat'} onOpen={() => { setMenu(null); openAssistantThread(ctx, 'main'); }} /></span></Hint><Hint label="资源"><Button variant="ghost" type="button" className="ba-assistant-resources" aria-label="打开资源" aria-current={panel.activePanelId === PANEL && selectedTab === 'resources' ? 'page' : undefined} onClick={() => { setMenu(null); openAssistantTab(ctx, 'resources'); }}><UIIcon name="cube" size={16} /></Button></Hint><Hint label={assistantExpanded ? '\u6536\u8d77\u52a9\u624b' : '\u5c55\u5f00\u52a9\u624b'}><Button variant="ghost" type="button" className="ba-assistant-toggle" aria-label={assistantExpanded ? '\u6536\u8d77\u52a9\u624b' : '\u5c55\u5f00\u52a9\u624b'} aria-expanded={assistantExpanded} aria-controls={assistantBodyId} onClick={toggleAssistant}><UIIcon name="chevronDown" size={16} /></Button></Hint></div></div>}<div id={assistantBodyId} className="ba-assistant-body" hidden={!showArchived && !assistantExpanded}><div className="cmd-section-title ba-sidebar-toolbar">{!showArchived && <div className="ba-sidebar-tabs"><SegmentedControl options={[{ value: 'side', label: '旁聊' }, { value: 'im', label: 'IM' }]} value={sidebarList} onChange={selectList} label="会话列表" tabIdPrefix={sidebarTabsId} panelId={sidebarTabsId + '-panel'} /></div>}{!showArchived && !imList && <Hint label="新旁聊"><Button variant="ghost" type="button" className="ba-section-add" aria-label="新建旁聊" disabled={creating} onClick={createThread}><UIIcon name="plus" size={16} /></Button></Hint>}<Button variant="ghost" type="button" className="cmd-section-toggle" aria-label={showArchived ? `${expanded ? '收起' : '展开'}已归档旁聊` : `${expanded ? '收起' : '展开'}${listLabel}`} aria-expanded={expanded} aria-controls={sidebarBodyId} onClick={() => { setExpanded(!expanded); setMenu(null); }}>{showArchived && <span>已归档旁聊</span>}<UIIcon name="chevronDown" size={14} /></Button></div><div id={sidebarTabsId + '-panel'} role={showArchived ? undefined : 'tabpanel'} aria-labelledby={showArchived ? undefined : `${sidebarTabsId}-${sidebarList}`}><div id={sidebarBodyId} className="cmd-section-body ba-sidebar-body" data-open={expanded} inert={!expanded ? '' : undefined}><div className="cmd-section-inner" aria-busy={(listLoading && !listError) || refreshing}>
+  return <section className="ba-assistant-section" data-collapsed={!showArchived && !assistantExpanded} aria-label={'\u4e2a\u4eba\u52a9\u7406'}>{!showArchived && <div className="ba-card-row"><div className="ba-assistant-heading"><Hint label={mainLabel}><span className="ba-sidebar-main"><AssistantCard avatarSize={32} pet={config?.pet} name={name} action={mainAction} expression={petExpressionForAction(config?.pet, mainAction)} ariaLabel={mainLabel} current={panel.activePanelId === PANEL && selected === 'main' && selectedTab === 'chat'} onOpen={() => { setMenu(null); openAssistantThread(ctx, 'main'); }} /></span></Hint><Hint label="资源"><Button variant="ghost" type="button" className="ba-assistant-resources" aria-label="打开资源" aria-current={panel.activePanelId === PANEL && selectedTab === 'resources' ? 'page' : undefined} onClick={() => { setMenu(null); openAssistantTab(ctx, 'resources'); }}><UIIcon name="cube" size={16} /></Button></Hint><Hint label={assistantExpanded ? '\u6536\u8d77\u52a9\u624b' : '\u5c55\u5f00\u52a9\u624b'}><Button variant="ghost" type="button" className="ba-assistant-toggle" aria-label={assistantExpanded ? '\u6536\u8d77\u52a9\u624b' : '\u5c55\u5f00\u52a9\u624b'} aria-expanded={assistantExpanded} aria-controls={assistantBodyId} onClick={toggleAssistant}><UIIcon name="chevronDown" size={16} /></Button></Hint></div></div>}<div id={assistantBodyId} className="ba-assistant-body" hidden={!showArchived && !assistantExpanded}><div className="cmd-section-title ba-sidebar-toolbar">{!showArchived && <div className="ba-sidebar-tabs"><SegmentedControl options={[{ value: 'side', label: '旁聊' }, { value: 'im', label: 'IM' }]} value={sidebarList} onChange={selectList} label="会话列表" tabIdPrefix={sidebarTabsId} panelId={sidebarTabsId + '-panel'} /></div>}{!showArchived && !imList && <Hint label="新旁聊"><Button variant="ghost" type="button" className="ba-section-add" aria-label="新建旁聊" disabled={creating} onClick={createThread}><UIIcon name="plus" size={16} /></Button></Hint>}<Button variant="ghost" type="button" className="cmd-section-toggle" aria-label={showArchived ? `${expanded ? '收起' : '展开'}已归档旁聊` : `${expanded ? '收起' : '展开'}${listLabel}`} aria-expanded={expanded} aria-controls={sidebarBodyId} onClick={() => { setExpanded(!expanded); setMenu(null); }}>{showArchived && <span>已归档旁聊</span>}<UIIcon name="chevronDown" size={14} /></Button></div><div id={sidebarTabsId + '-panel'} role={showArchived ? undefined : 'tabpanel'} aria-labelledby={showArchived ? undefined : `${sidebarTabsId}-${sidebarList}`}><div id={sidebarBodyId} className="cmd-section-body ba-sidebar-body" data-open={expanded} inert={!expanded ? '' : undefined}><div className="cmd-section-inner" aria-busy={(listLoading && !listError) || refreshing}>
       {visible.map(row)}
       {listLoading && !visible.length && !listError && <Loading label={`正在加载${listLabel}`} compact />}
       {!listLoading && !visible.length && !listError && !error && <div className="ba-sidebar-state" data-kind="empty">{showArchived ? <ResourceState icon="archive" title="暂无归档旁聊" description="归档后的旁聊会保留在这里。" /> : imList ? <ResourceState icon="devices" title={hasConnectedChannels ? '暂无 IM 会话' : '尚未连接渠道'} description={hasConnectedChannels ? '已连接渠道收到消息后，会显示在这里。' : '连接渠道后接收消息，即可在这里查看。'}><Button variant="ghost" type="button" onClick={() => openAssistantTab(ctx, 'connections')}>连接渠道</Button></ResourceState> : <p className="ba-sidebar-quote">“或许你不需要我”</p>}</div>}
@@ -221,7 +222,7 @@ function RetainedPane({ active, children }) {
   if (active) visited.current = true;
   return visited.current ? <div style={{ display: active ? 'contents' : 'none' }} hidden={!active}>{children}</div> : null;
 }
-function Studio({ snapshot, ctx, refresh, threadId, SessionProvider, renderSlot, initialSection = 'identity', initialIdentityTab = 'info', requestedTab, requestedTask, active = true }) {
+function Studio({ snapshot, ctx, refresh, threadId, SessionProvider, renderSlot, initialSection = 'identity', initialIdentityTab = 'info', requestedTab, requestedTask, active = true, loadError, onRetryLoad, onDismissLoadError }) {
   const [confirm, confirmation] = useConfirmation();
   const [section, setSection] = useState(documentTabs[requestedTab] ? 'documents' : initialIdentityTab === 'models' ? 'models' : initialSection), [dirtySections, setDirtySections] = useState([]), [taskTab, setTaskTab] = useState('tasks');
   const [systemPreview, setSystemPreview] = useState(false);
@@ -319,8 +320,9 @@ function Studio({ snapshot, ctx, refresh, threadId, SessionProvider, renderSlot,
       : <div className="ba-studio-nav-group" key={group.id}><span className="ba-studio-nav-group-label">{group.label}</span>{group.items.map(navigationItem)}</div>)}</nav>
   </aside><div className="ba-studio-mobile-nav"><label htmlFor="ba-studio-section">资源分区</label><CustomSelect id="ba-studio-section" aria-label="资源分区" value={section} onChange={choose} options={groups.flatMap(group => group.items.map(([id, label]) => ({ value: id, label: `${group.label} · ${label}${dirtySections.includes(id) ? ' · 未保存' : ''}` })))} /></div>
   <div className="ba-studio-body" ref={body} onScroll={event => { if (!restoringScroll.current) scrollPositions.current.set(section, event.currentTarget.scrollTop); }} data-section={section}>
-    {!['artifacts', 'vault', 'goals'].includes(section) && !(section === 'system-files' && systemPreview) && !(section === 'tasks' && taskTab === 'tasks' && taskDetailOpen) && <header className="ba-studio-heading"><div className="ba-studio-heading-main"><div className="ba-studio-heading-row"><h1>{section === 'tasks' ? taskTab === 'tasks' ? '任务' : '审核' : current[1]}</h1>{section === 'tasks' && taskTabs}</div>{descriptions[section] && <p>{descriptions[section]}</p>}</div>{dirtySections.includes(section) && <span className="ba-studio-draft" role="status"><span aria-hidden="true" />草稿已保留</span>}</header>}
-    <div hidden={section !== 'identity'} style={section !== 'identity' ? { display: 'none' } : undefined}>{(section === 'identity' || dirtySections.includes('identity')) && <Identity snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('identity')} initialTab={initialIdentityTab === 'models' ? 'info' : initialIdentityTab} requestedTab={requestedTab} onDesign={() => { petDesignIntent.request(threadId); openAssistantThread(ctx, threadId); }} />}</div>
+    {!['artifacts', 'vault', 'goals'].includes(section) && !(section === 'system-files' && systemPreview) && !(section === 'tasks' && taskTab === 'tasks' && taskDetailOpen) && <header className="ba-studio-heading"><div className="ba-studio-heading-main"><div className="ba-studio-heading-row"><h1>{section === 'tasks' ? taskTab === 'tasks' ? '任务' : '审核' : current[1]}</h1>{section === 'tasks' && taskTabs}{section === 'identity' && <NotificationSoundToggle />}</div>{descriptions[section] && <p>{descriptions[section]}</p>}</div>{dirtySections.includes(section) && <span className="ba-studio-draft" role="status"><span aria-hidden="true" />草稿已保留</span>}</header>}
+    {loadError && <div className="ba-error" role="alert"><span>{loadError}</span><Button variant="ghost" type="button" onClick={onRetryLoad}>重试加载</Button><IconButton icon="close" label="关闭错误" onClick={onDismissLoadError} /></div>}
+    <div hidden={section !== 'identity'} style={section !== 'identity' ? { display: 'none' } : undefined}>{(section === 'identity' || dirtySections.includes('identity')) && <Identity snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('identity')} active={visible && section === 'identity'} requestedTab={requestedTab} onDesign={kind => { petDesignIntent.request(threadId, kind); openAssistantThread(ctx, threadId); }} />}</div>
     <div hidden={section !== 'models'} style={section !== 'models' ? { display: 'none' } : undefined}>{(section === 'models' || dirtySections.includes('models')) && <Identity modelsOnly snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('models')} />}</div>
     <div hidden={section !== 'documents'} style={section !== 'documents' ? { display: 'none' } : undefined}>{(section === 'documents' || dirtySections.includes('documents')) && <AssistantDocuments api={api} refresh={refresh} onDirtyChange={dirtyEditor('documents')} requestedDocument={documentTabs[requestedTab]} />}</div>
     <div hidden={section !== 'tasks'} style={section !== 'tasks' ? { display: 'none' } : undefined}>{(section === 'tasks' || dirtySections.includes('tasks')) && <section className="ba-group"><div id={taskTabsId + '-panel'} role="tabpanel" aria-labelledby={taskTab === 'tasks' && taskDetailOpen ? undefined : taskTabsId + '-' + taskTab} aria-label={taskTab === 'tasks' && taskDetailOpen ? '任务详情' : undefined}>{taskTab === 'tasks' ? <Tasks api={api} onDetailChange={setTaskDetailOpen} onOpenExecution={execution => openExecutionSession(ctx, execution)} onSchedule={() => ctx.layout.selectPanel('schedules')} requestedTask={requestedTask} onDirtyChange={dirtyEditor('tasks')} /> : (visible ? <ApprovalReview ctx={ctx} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenReminder={id => openAssistantThread(ctx, id)} /> : null)}</div></section>}</div>
@@ -333,20 +335,6 @@ function Studio({ snapshot, ctx, refresh, threadId, SessionProvider, renderSlot,
   </div></div>;
 }
 
-function ModelSetupNotice({ onOpen }) {
-  return <ResourceState icon="atom" title="还没有配置文本模型" description="添加一个可用模型，即可开始与助手对话。" actionLabel="去设置模型" onAction={onOpen} />;
-}
-function HistoryNotice({ history, threadId, onClear }) {
-  const [busy, setBusy] = useState(false);
-  if (!history.error && !(history.failures || []).length) return null;
-  const clear = async () => {
-    if (busy || threadId !== 'main') return;
-    setBusy(true);
-    try { await onClear(); }
-    finally { setBusy(false); }
-  };
-  return <>{history.error && <div className="ba-error" role="alert"><span>本次回复未完成，对话记录已保留。请重试或检查模型连接。</span><Disclosure title={<>诊断详情</>}><pre>{typeof history.error === 'string' ? history.error : history.error.message || '回复失败'}</pre></Disclosure>{threadId === 'main' && <Button variant="ghost" type="button" disabled={busy} onClick={clear}>{busy ? '清理中…' : '清理主聊天记录'}</Button>}</div>}{(history.failures || []).length > 0 && <Disclosure className="ba-model-failure" title={<>模型连接记录</>}>{history.failures.map((failure, index) => <div key={index}>{failure.model?.modelId || '候选模型'}：{failure.reason || failure.message || '暂不可用'}</div>)}</Disclosure>}</>;
-}
 function retainSession(ctx, sessionId, threadId = 'main') {
   const controller = new AbortController();
   let reference;
@@ -406,7 +394,7 @@ async function request(action, args, signal) {
   finally { done(); }
 }
 // Frequent reads leave the state snapshot valid; every other action may change it.
-const STATE_PRESERVING = new Set(['history', 'ensure', 'tasks', 'approvalOrigins', 'executionSessions', 'executionSummaryActivity', 'petCatalog', 'goalList', 'connectionCatalog', 'connectionStatus', 'replyFileSource', 'artifacts']);
+const STATE_PRESERVING = new Set(['history', 'ensure', 'tasks', 'approvalOrigins', 'executionSessions', 'nativeWorkerSession', 'executionSummaryActivity', 'petCatalog', 'goalList', 'connectionCatalog', 'connectionStatus', 'replyFileSource', 'artifacts']);
 const ensuredSessions = new Map();
 let stateEpoch = 0, stateRead = null;
 /** A reader arriving after this point never shares a state read that began before it. */
@@ -468,31 +456,67 @@ function AssistantRenameDialog({ target, onClose, onError }) {
 }
 function IconButton({ icon, label, ...props }) { return <Button variant="ghost" type="button" className="ba-icon" title={label} aria-label={label} {...props}><UIIcon name={icon} size={17} /></Button>; }
 function Field({ label, children }) { return <label className="ba-field"><span>{label}</span>{children}</label>; }
-function Picker({ label, value, options, placeholder = '选择', allowCustom = false, onChange }) {
+function Picker({ label, value, options, placeholder = '选择', allowCustom = false, disabled = false, onChange }) {
   const id = useId();
   const items = options.map(item => typeof item === 'string' ? { value: item, label: item } : item);
-  return <div className="ba-field"><label htmlFor={id}>{label}</label><CustomSelect id={id} aria-label={label} value={value} options={items.map(item => ({ ...item, searchText: item.label + ' ' + item.value }))} placeholder={placeholder} searchable allowCustom={allowCustom} onChange={onChange} /></div>;
+  return <div className="ba-field"><label htmlFor={id}>{label}</label><CustomSelect id={id} aria-label={label} value={value} options={items.map(item => ({ ...item, searchText: item.label + ' ' + item.value }))} placeholder={placeholder} searchable allowCustom={allowCustom} disabled={disabled} onChange={onChange} /></div>;
 }
-function ModelFields({ value = {}, onChange, onStatusChange }) {
+function ModelFields({ value = {}, harness = 'official', onHarnessChange, onChange, onStatusChange }) {
   const [catalog, setCatalog] = useState(() => assistantModelCatalog.peek() || { providers: [], models: [] }), [error, setError] = useState('');
+  const [toolCatalog, setToolCatalog] = useState(() => pickerCatalog.peek()), [toolError, setToolError] = useState('');
   const revision = useSyncExternalStore(assistantModelCatalog.subscribe, assistantModelCatalog.getSnapshot);
+  const toolRevision = useSyncExternalStore(pickerCatalog.subscribe, pickerCatalog.getSnapshot);
   const [loading, setLoading] = useState(() => assistantModelCatalog.peek() === null);
-  useEffect(() => { onStatusChange?.({ loading, error }); }, [loading, error, onStatusChange]);
-  useEffect(() => { let active = true; setLoading(assistantModelCatalog.peek() === null); loadCatalog().then(next => { if (active) { setCatalog(next); setError(''); } }).catch(cause => { if (active) setError(cause.message); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, [revision]);
-  const providers = catalog.providers.map(provider => ({ value: provider.id, label: (provider.name || provider.id) + (provider.available === false ? ' · 不可用' : '') }));
-  const models = catalog.models.filter(model => !value.providerId || model.provider === value.providerId).map(model => ({ value: model.id, label: model.name || model.id }));
-  return <><div className="ba-model-fields"><Picker label="供应商" value={value.providerId || ''} options={providers} placeholder="选择供应商" allowCustom onChange={providerId => onChange({ ...value, providerId })} /><Picker label="模型" value={value.modelId || ''} options={models} placeholder="选择模型" allowCustom onChange={modelId => onChange({ ...value, modelId })} /></div>{loading ? <Loading label="正在读取模型目录" compact /> : error ? <p className="ba-model-feedback" data-error="true" role="alert"><span>模型目录加载失败：{error}。可手动填写完整 ID。</span><Button variant="ghost" type="button" className="ba-quiet" onClick={() => assistantModelCatalog.invalidate()}>重试</Button></p> : !providers.length && <p className="ba-model-feedback" role="status"><UIIcon name="server" size={15} /><span>目录中还没有供应商。可先在模型设置中配置，或填写已有供应商与模型的完整 ID。</span></p>}</>;
+  const errorMessage = harness === 'official' ? error : toolError;
+  useEffect(() => { onStatusChange?.({ loading, error: errorMessage }); }, [loading, errorMessage, onStatusChange]);
+  useEffect(() => {
+    let active = true;
+    setError(''); setToolError('');
+    if (harness !== 'official') {
+      setLoading(pickerCatalog.peek() === null);
+      pickerCatalog.load().then(next => { if (active) setToolCatalog(next); }).catch(cause => { if (active) setToolError(cause.message); }).finally(() => { if (active) setLoading(false); });
+      return () => { active = false; };
+    }
+    setLoading(assistantModelCatalog.peek() === null);
+    loadCatalog().then(next => { if (active) { setCatalog(next); setError(''); } }).catch(cause => { if (active) setError(cause.message); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [revision, toolRevision, harness]);
+  const routes = harness === 'official' ? [] : (toolCatalog?.routes || []).filter(row => row.tool === harness);
+  const allowedProviders = new Set(routes.map(row => row.providerId));
+  const externalProviders = toolCatalog?.providers || [];
+  const modelProviders = new Set(catalog.models.map(model => model.provider));
+  const rows = harness === 'official' ? catalog.providers.filter(provider => !provider.id.startsWith('commander-')) : externalProviders;
+  const providers = rows.flatMap(provider => {
+    const available = harness === 'official' ? provider.available !== false && modelProviders.has(provider.id) : allowedProviders.has(provider.id);
+    if (!available && provider.id !== routerGo.id && provider.id !== value.providerId) return [];
+    return [{ ...provider, disabled: !available, reason: available ? undefined : provider.error || provider.unavailableTools?.[harness] || provider.unavailableReason || '暂无兼容模型' }];
+  });
+  const providerSelected = providers.some(provider => provider.id === value.providerId && !provider.disabled);
+  const unavailable = errorMessage ? '供应商目录读取失败' : loading ? '正在读取供应商目录…' : '当前供应商暂不可用';
+  if (value.providerId && value.providerId !== routerGo.id && !providers.some(provider => provider.id === value.providerId)) providers.push({ id: value.providerId, disabled: true, reason: unavailable });
+  const providerOptions = prioritizeRouterGo(providers, { ...routerGo, disabled: true,
+    reason: loading || errorMessage ? unavailable : '暂无可用模型，请检查模型设置' }).map(provider => {
+    const option = providerOption(provider);
+    return provider.disabled && !loading && !errorMessage ? { ...option, selectedLabel: `${option.label} · 不可用` } : option;
+  });
+  const models = harness === 'official'
+    ? catalog.models.filter(model => providerSelected && model.provider === value.providerId).map(model => ({ value: model.id, label: model.name || model.id }))
+    : routes.filter(row => !value.providerId || row.providerId === value.providerId).map(row => ({ value: row.nativeModelId, label: row.name || row.nativeModelId }));
+  return <><div className="ba-model-fields" data-harness-field={!!onHarnessChange}>
+    {onHarnessChange && <Picker label="执行 Harness" value={harness} options={[
+      { value: 'official', label: '官方 DeepSeek Harness' }, { value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude Code' },
+    ]} onChange={onHarnessChange} />}
+    <Picker label="供应商" value={value.providerId || ''} options={providerOptions} placeholder="选择供应商" onChange={providerId => onChange({ ...value, providerId, ...(providerId !== value.providerId ? { modelId: '' } : {}) })} />
+    <Picker label="模型" value={value.modelId || ''} options={models} placeholder={value.modelId || '选择模型'} allowCustom={harness === 'official' && providerSelected} disabled={!providerSelected} onChange={modelId => onChange({ ...value, modelId })} />
+  </div>{loading ? <Loading label="正在读取模型目录" compact /> : errorMessage ? <p className="ba-model-feedback" data-error="true" role="alert"><span>模型目录加载失败：{errorMessage}。</span><Button variant="ghost" type="button" className="ba-quiet" onClick={() => harness === 'official' ? assistantModelCatalog.invalidate() : pickerCatalog.invalidate()}>重试</Button></p> : providers.every(provider => provider.disabled) && <p className="ba-model-feedback" role="status"><UIIcon name="server" size={15} /><span>{harness === 'official' ? '目录中还没有供应商，可在模型设置中配置。' : toolCatalog?.tools?.find(tool => tool.id === harness)?.routeReason || '当前 Harness 没有可用的 API 模型组合。'}</span></p>}</>;
 }
-function Identity({ snapshot, refresh, onDirtyChange, initialTab = 'info', onDesign, requestedTab, modelsOnly = false }) {
+function Identity({ snapshot, refresh, onDirtyChange, onDesign, requestedTab, active, modelsOnly = false }) {
   const [confirm, confirmation] = useConfirmation();
   const [config, setConfig] = useState(snapshot.config), [baseConfig, setBaseConfig] = useState(snapshot.config);
-  const [busy, setBusy] = useState(false), [saved, setSaved] = useState(''), [tab, setTab] = useState(modelsOnly ? 'models' : initialTab);
-  const tabsId = useId();
-  const [editorReset, setEditorReset] = useState(0);
+  const [busy, setBusy] = useState(false), [saved, setSaved] = useState('');
   const [saveError, setSaveError] = useState(null);
   const errorMessage = useRef(null);
   useEffect(() => { if (saveError) { errorMessage.current?.focus({ preventScroll: true }); errorMessage.current?.scrollIntoView({ block: 'nearest' }); } }, [saveError]);
-  useEffect(() => { if (!modelsOnly && requestedTab === 'pet') setTab('pet'); }, [requestedTab, modelsOnly]);
   const patch = identityConfigPatch(config, baseConfig);
   const dirty = Object.keys(patch).length > 0;
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
@@ -502,7 +526,7 @@ function Identity({ snapshot, refresh, onDirtyChange, initialTab = 'info', onDes
   const change = update => { setConfig(value => ({ ...value, ...update })); setSaved(''); setSaveError(null); };
   async function save(event) {
     event?.preventDefault(); if (busy || !dirty) return;
-    const invalid = (modelsOnly || tab === 'models') && validateModelSettings(config);
+    const invalid = modelsOnly && validateModelSettings(config);
     if (invalid) { setSaveError(invalid); return; }
     setBusy(true); setSaved(''); setSaveError(null);
     try {
@@ -517,29 +541,29 @@ function Identity({ snapshot, refresh, onDirtyChange, initialTab = 'info', onDes
     } catch (cause) { setSaveError({ message: cause.message || '保存未完成，请重试。' }); }
     finally { setBusy(false); }
   }
-  return <form className="ba-identity-pane" onSubmit={save}>{confirmation}{!modelsOnly && <ResourceTabs tabs={[['info', '信息'], ['pet', '形象']]} value={tab} onChange={setTab} label="身份分类" id={tabsId} />}<fieldset disabled={busy} id={tabsId + '-panel'} role={modelsOnly ? undefined : 'tabpanel'} aria-label={modelsOnly ? '模型设置' : undefined} aria-labelledby={modelsOnly ? undefined : tabsId + '-' + tab} className="ba-identity-panel" data-tab={tab}>
-    {tab === 'info' ? <><section className="ba-identity-info"><div className="ba-identity-name"><div className="ba-settings-section-heading"><h2>如何称呼你的助手</h2><p>这个名字会显示在名片和对话中。</p></div><Field label="名字"><input placeholder="未命名（可选）" maxLength={100} value={config.name || ''} onChange={event => change({ name: event.target.value })} /></Field></div><IdentityCardEditor key={`${baseConfig.revision}:${editorReset}`} config={config} onChange={change} defaultName={DEFAULT_NAME} /></section><NotificationSoundSettings /></> : tab === 'pet' ? <PetSettings api={api} config={snapshot.config} onChanged={refresh} onDesign={onDesign} /> : <ModelSettings config={config} validationError={saveError} onChange={change} ModelFields={ModelFields} IconButton={IconButton} />}
+  const identityFields = <Field label="名字"><input placeholder="未命名（可选）" maxLength={100} value={config.name || ''} onChange={event => change({ name: event.target.value })} /></Field>;
+  return <form className="ba-identity-pane" onSubmit={save}>{confirmation}<fieldset disabled={busy} aria-label={modelsOnly ? '模型设置' : '身份配置'} className="ba-identity-panel" data-tab={modelsOnly ? 'models' : 'identity'}>
+    {modelsOnly ? <ModelSettings config={config} validationError={saveError} onChange={change} ModelFields={ModelFields} IconButton={IconButton} /> : (
+      <PetSettings api={api} config={snapshot.config} identityFields={identityFields} onChanged={refresh} onDesign={onDesign} active={active} focusAssets={requestedTab === 'pet'} />
+    )}
   </fieldset>{saveError && <div className="ba-identity-error" role="alert" tabIndex={-1} ref={errorMessage}><UIIcon name="close" size={16} /><span>{saveError.message}</span></div>}
-    {(tab !== 'pet' || dirty) && (dirty || saved || busy || saveError) && <footer className="ba-identity-save" data-dirty={dirty}>
+    {(dirty || saved || busy || saveError) && <footer className="ba-identity-save" data-dirty={dirty}>
       <span role="status"><UIIcon name={busy ? 'refresh' : dirty ? 'edit' : 'check'} size={16} />{busy ? '正在保存…' : saved || '有未保存的修改'}</span>
-      <div className="ba-row-actions">{dirty && <Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={async () => { if (!await confirm({ title: '放弃未保存的修改？', description: '取消后将恢复到已保存的设置。', confirmLabel: '放弃修改', cancelLabel: '继续编辑', destructive: true })) return; const latest = assistantConfigSync.getSnapshot() || snapshot.config; setConfig(latest); setBaseConfig(latest); setEditorReset(value => value + 1); setSaved(''); setSaveError(null); }}>取消修改</Button>}<Button variant="default" type="submit" className="ba-primary" disabled={busy || !dirty}>{busy ? '保存中…' : saveError ? '重试保存' : '保存更改'}</Button></div>
+      <div className="ba-row-actions">{dirty && <Button variant="ghost" type="button" className="ba-quiet" disabled={busy} onClick={async () => { if (!await confirm({ title: '放弃未保存的修改？', description: '取消后将恢复到已保存的设置。', confirmLabel: '放弃修改', cancelLabel: '继续编辑', destructive: true })) return; const latest = assistantConfigSync.getSnapshot() || snapshot.config; setConfig(latest); setBaseConfig(latest); setSaved(''); setSaveError(null); }}>取消修改</Button>}<Button variant="default" type="submit" className="ba-primary" disabled={busy || !dirty}>{busy ? '保存中…' : saveError ? '重试保存' : '保存更改'}</Button></div>
     </footer>}
   </form>;
 }
 
-function Images({ images = [] }) {
-  const groups = groupReplyImages(images);
-  if (!groups.length) return null;
-  return <div className="ba-reply-image-groups">{groups.map(group => <ImageGallery key={group.id} images={group.images} />)}</div>;
-}
 function mergeHistory(previous, incoming, earlier = false) {
   if (!earlier && incoming.sessionId && incoming.sessionId !== previous.sessionId) previous = { messages: [], running: false };
   const unique = values => [...new Map(values.map((value, index) => [value.id || value.url || `${value.role || 'message'}:${value.time || index}:${index}`, value])).values()];
   const stable = (previous.messages || []).filter(message => !message.streaming);
   const messages = earlier ? unique([...(incoming.messages || []), ...(previous.messages || [])]) : unique([...stable, ...(incoming.messages || [])]);
   const pagination = earlier || previous.nextBefore === undefined ? incoming : previous;
+  const mergeFiles = field => unique(earlier ? [...(incoming[field] || []), ...(previous[field] || [])]
+    : [...(previous[field] || []), ...(incoming[field] || [])]);
   return { ...previous, ...(earlier ? {} : incoming), messages,
-    images: unique(earlier ? [...(incoming.images || []), ...(previous.images || [])] : [...(previous.images || []), ...(incoming.images || [])]),
+    images: mergeFiles('images'), media: mergeFiles('media'),
     hasMore: pagination.hasMore, nextBefore: pagination.nextBefore };
 }
 // Background retention follows every session's status and activity. Owning those
@@ -722,11 +746,50 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
     void tick();
     return () => { disposed = true; inFlight?.abort(); clearTimeout(timer); unsubscribe?.(); document.removeEventListener('visibilitychange', wake); document.removeEventListener('benchgo:assistant-changed', wake); window.removeEventListener('online', wake); };
   }, [threadId, tab, ctx]);
-  const select = (id) => { const next = id || 'main'; selectedAssistantThread = next; setTab('chat'); if (current.current === next) return; epoch.current++; current.current = next; setThreadId(next); replaceHistory({ messages: [], running: false }); };
+  const select = (id) => { const next = id || 'main'; selectedAssistantThread = next; setTab('chat'); if (current.current === next) return; epoch.current++; current.current = next; setThreadId(next); replaceHistory({ messages: [], running: false }); loadErrors.current.clear(); setError(''); };
   const threads = snapshot?.state?.threads || [];
   const selected = threads.find(thread => thread.id === threadId);
   const view = tab === 'chat' ? 'chat' : 'studio';
-  return <ActivityProvider><BackgroundSessions ctx={ctx} state={snapshot?.state} selectedSessionId={history.sessionId} /><div className="ba-root"><main className="ba-main"><div className="ba-assistant-content" hidden={!!execution}>{error && snapshot && <div className="ba-error" role="alert"><span>{error}</span><Button variant="ghost" type="button" onClick={retryLoad}>重试加载</Button><IconButton icon="close" label="关闭错误" onClick={() => setError('')} /></div>}{snapshot && <PendingInteractions ctx={ctx} currentSessionId={tab === 'chat' ? history.sessionId : undefined} threads={[...(snapshot.state.mainSessionId && !threads.some(thread => thread.id === 'main') ? [{ id: 'main', title: '主聊天', sessionId: snapshot.state.mainSessionId }] : []), ...threads.filter(thread => thread.sessionId), ...(!threads.some(thread => thread.sessionId === history.sessionId) && history.sessionId ? [{ id: threadId, title: selected?.title, sessionId: history.sessionId }] : [])]} />}{!snapshot ? <div className="ba-resource-initial"><ResourceState kind={error ? 'error' : 'loading'} title={error ? '暂时无法加载助手' : '正在准备助手'} description={error || '正在读取配置与资源，请稍候。'} onAction={error ? retryLoad : undefined} /></div> : <><RetainedPane active={!execution && view === 'studio'}><Studio active={!execution && view === 'studio'} requestedTab={tab} requestedTask={requestedTask} initialSection={['tasks', 'goals', 'memory', 'connections'].includes(tab) ? tab : 'identity'} initialIdentityTab={['models', 'pet'].includes(tab) ? tab : 'info'} snapshot={snapshot} ctx={ctx} refresh={refresh} threadId={threadId} SessionProvider={SessionProvider} renderSlot={renderSlot} /></RetainedPane>{view === 'chat' && <>{!snapshot.config.models?.length && <ModelSetupNotice onOpen={() => { selectedAssistantTab = 'models'; setTab('models'); }} />}<HistoryNotice history={history} threadId={threadId} onClear={clearMain} />{history.sessionId ? <AssistantConversation active={!execution} onOpenExecution={openExecution} key={threadId} ctx={ctx} sessionId={history.sessionId} threadId={threadId} history={history} onLoadEarlier={loadEarlier} onRefresh={onRefresh} SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name} assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={openResources} /> : <div className="ba-resource-initial">{error ? <ResourceState kind="error" title="聊天暂未连接" description={error} actionLabel="重新连接" onAction={retryLoad} /> : <Loading label={`正在打开${threadId === 'main' ? '主聊天' : '旁聊'}`} />}</div>}<Images images={history.images} /></>}</>}</div>{execution && <ExecutionSessionPanel ctx={ctx} execution={execution} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} onClose={() => executionSessionNavigation.close()} onOpenTask={taskId => openAssistantTab(ctx, 'tasks', { taskId })} />}</main>{!execution && snapshot && tab === 'chat' && <ActivityPanel onOpenReminder={id => openAssistantThread(ctx, id)} api={api} ctx={ctx} sessionId={history.sessionId} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenExecution={execution => openExecutionSession(ctx, execution)} assistantConfig={snapshot.config} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} />}</div></ActivityProvider>;
+  const dismissLoadError = () => { loadErrors.current.clear(); setError(''); };
+  const configureModel = () => { selectedAssistantTab = 'models'; setTab('models'); };
+  return <ActivityProvider>
+    <BackgroundSessions ctx={ctx} state={snapshot?.state} selectedSessionId={history.sessionId} />
+    <div className="ba-root"><main className="ba-main">
+      <div className="ba-assistant-content" hidden={!!execution}>
+        {snapshot && <PendingInteractions ctx={ctx} currentSessionId={tab === 'chat' ? history.sessionId : undefined} threads={[
+          ...(snapshot.state.mainSessionId && !threads.some(thread => thread.id === 'main') ? [{ id: 'main', title: '主聊天', sessionId: snapshot.state.mainSessionId }] : []),
+          ...threads.filter(thread => thread.sessionId),
+          ...(!threads.some(thread => thread.sessionId === history.sessionId) && history.sessionId ? [{ id: threadId, title: selected?.title, sessionId: history.sessionId }] : []),
+        ]} />}
+        {!snapshot ? (error
+          ? <ChatNoticeFeed message={`暂时无法加载助手：${error}`} retryLabel="重试加载" onRetry={retryLoad} />
+          : <div className="ba-resource-initial"><ResourceState kind="loading" title="正在准备助手" description="正在读取配置与资源，请稍候。" /></div>)
+          : <>
+            <RetainedPane active={!execution && view === 'studio'}>
+              <Studio active={!execution && view === 'studio'} requestedTab={tab} requestedTask={requestedTask}
+                initialSection={['tasks', 'goals', 'memory', 'connections'].includes(tab) ? tab : 'identity'}
+                initialIdentityTab={['models', 'pet'].includes(tab) ? tab : 'info'} snapshot={snapshot} ctx={ctx} refresh={refresh}
+                threadId={threadId} SessionProvider={SessionProvider} renderSlot={renderSlot}
+                loadError={view === 'studio' ? error : ''} onRetryLoad={retryLoad} onDismissLoadError={dismissLoadError} />
+            </RetainedPane>
+            {view === 'chat' && <>
+              {history.sessionId ? <AssistantConversation key={threadId} active={!execution} ctx={ctx}
+                sessionId={history.sessionId} threadId={threadId} history={history} onLoadEarlier={loadEarlier} onRefresh={onRefresh}
+                SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name}
+                assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={openResources} onOpenExecution={openExecution}
+                loadError={error} onRetryLoad={retryLoad} onDismissLoadError={dismissLoadError}
+                onClear={clearMain} onConfigureModel={!snapshot.config.models?.length ? configureModel : undefined} />
+                : error ? <ChatNoticeFeed message={`聊天暂未连接：${error}`} onRetry={retryLoad} />
+                  : <div className="ba-resource-initial"><Loading label={`正在打开${threadId === 'main' ? '主聊天' : '旁聊'}`} /></div>}
+            </>}
+          </>}
+      </div>
+      {execution && <ExecutionSessionPanel ctx={ctx} execution={execution} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
+        onClose={() => executionSessionNavigation.close()} onOpenTask={taskId => openAssistantTab(ctx, 'tasks', { taskId })} />}
+    </main>{!execution && snapshot && tab === 'chat' && <ActivityPanel onOpenReminder={id => openAssistantThread(ctx, id)} api={api} ctx={ctx}
+      sessionId={history.sessionId} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenExecution={openExecution}
+      assistantConfig={snapshot.config} onOpenResources={(next, selection) => openAssistantTab(ctx, next, selection)} />}</div>
+  </ActivityProvider>;
 }
 export function mountAssistant(ctx) {
   ctx.effect(() => {

@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { officialUiEntries, officialUiLoaders } from '../scripts/official-ui.mjs';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -16,7 +16,7 @@ const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executa
 async function bundles() {
   const options = { bundle: true, write: false, outdir: join(root, 'artifacts/unused-resource-file'), format: 'iife', jsx: 'automatic', target: 'es2022',
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), ...await officialUiEntries() },
-    nodePaths: [join(root, 'plugins/link/node_modules'), join(root, 'plugins/benchgo/node_modules')], plugins: [sharedUiStyles()],
+    nodePaths: [join(root, 'plugins/link/node_modules'), join(root, 'plugins/base/node_modules')], plugins: [sharedUiStyles()],
     loader: { '.css': 'text', '.svg': 'text', ...officialUiLoaders }, define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' };
   const scripts = [
     `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import{ResourceStage}from'./plugins/link/client/resource-navigation.jsx';

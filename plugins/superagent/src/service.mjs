@@ -12,7 +12,7 @@ import { registerNativePromptIngress } from './native-prompt-ingress.mjs';
 import { createScheduleBridge } from './schedule-bridge.mjs';
 import { createScheduleLifecycle } from './schedule-lifecycle.mjs';
 import { createRouterWatchdog } from './router-recovery.mjs';
-import { createAssistantMedia } from './media.mjs';
+import { createAssistantVoice } from './voice.mjs';
 import { createAssistantRuntimeStore } from './runtime-store.mjs';
 import { installExecutionFactsRemote } from './execution-facts-remote.mjs';
 import { createExecutionSummaries } from './execution-summary.mjs';
@@ -23,11 +23,12 @@ import { createTaskRevisionService } from './task-revision-service.mjs';
 import { createGoalChecklist } from './goal-checklist.mjs';
 import { createAssistantReviewWorker } from './review-worker.mjs';
 import { createAssistantDeliveryWorker } from './delivery-worker.mjs';
-import { voiceAvailability } from '../../voice/src/availability.mjs';
-import { protocolDescriptor } from '../../voice/shared/protocol-catalog.mjs';
-import { createVoiceHandlers } from '../../voice/src/web.mjs';
-import { assertSameOrigin } from '../../benchgo/shared/http.mjs';
-import { DataOwner } from '../../benchgo/shared/data-owner.mjs';
+import { voiceAvailability } from '../../media/src/availability.mjs';
+import { protocolDescriptor } from '../../media/shared/protocol-catalog.mjs';
+import { createVoiceHandlers } from '../../media/src/web.mjs';
+import { mediaToolDefinitions } from '../../media/src/generation-tools.mjs';
+import { assertSameOrigin } from '../../base/shared/http.mjs';
+import { DataOwner } from '../../base/shared/data-owner.mjs';
 import { readAdmissionRules } from './admission-rules.mjs';
 import { createFeishuAdapter } from './channels/feishu/index.mjs';
 import { createUnifiedChannelIngress } from './channel-ingress.mjs';
@@ -38,7 +39,7 @@ import { registerAssistantFetchRoute } from './assistant-fetch-route.mjs';
 import { createExternalActionStore } from './external-action-store.mjs';
 import { createExternalActionRegistry, createExternalActionHost, registerChannelExternalActions } from './external-actions.mjs';
 import { createChannelCredentials } from './channel-credentials.mjs';
-import { connectionConfig, channelDefinition, channelIds, loadChannelModules } from './channel-catalog.mjs';
+import { connectionConfig, channelDefinition, channelIds } from './channel-catalog.mjs';
 import { createChannelRuntime, mountChannelCallbacks } from './channel-runtime.mjs';
 import { createFeishuStream } from './channels/feishu/stream.mjs';
 import { createAssessmentRunner } from './assessment-runner.mjs';
@@ -54,7 +55,7 @@ import { createModelActionTaskExecutor } from './model-action-task.mjs';
 import { createAssistantDeviceStatus } from './device-status.mjs';
 import { createAssistantSettingsAdapter } from './settings-adapter.mjs';
 import { createConnectionSettingsAdapter } from './connection-settings-adapter.mjs';
-import { applySettingsOps } from '../../benchgo/src/settings-management.mjs';
+import { applySettingsOps } from '../../base/src/settings-management.mjs';
 import { createManagementHttp } from './management-http.mjs';
 import { createHistorySearch } from './history-search.mjs';
 import { createAssistantArtifacts } from './artifacts.mjs';
@@ -81,7 +82,6 @@ export async function channelVoiceAvailability(voice, providers) {
 }
 
 export async function mountAssistant(ctx, commander, providers) {
-  await loadChannelModules();
   const owner = new DataOwner(resolve(commander.store.directory, 'assistant'));
   await owner.open();
   let store;
@@ -108,14 +108,13 @@ export async function mountAssistant(ctx, commander, providers) {
     halt: [
       () => { clearInterval(watchdogRetryTimer); clearInterval(assessmentTimer); },
       () => shutdown.abort(),
-      () => routerWatchdog?.stop(),
       () => feishuStream?.stop(),
     ],
     // Thunks isolate synchronous throws as well as rejected async disposers.
     stop: [() => executionSessionTitles?.dispose(), () => executionSummaries?.dispose(), () => channels?.dispose(), () => scheduleBridge?.stop(),
       () => orchestrationRuntime?.stop(), () => assessmentRunner?.stop(), () => feishuStream?.dispose(),
       () => deliveryWorker?.stop(), () => reviewWorker?.stop(),
-      () => engine?.dispose(), () => notificationQueue, () => feishu?.dispose()],
+      () => routerWatchdog?.stop(), () => engine?.dispose(), () => notificationQueue, () => feishu?.dispose()],
     detach: [
       ...unregisterSettings.splice(0).map(unregister => () => unregister()),
       () => disposeWatchdogRoute?.(), () => disposeFactsRemote?.(), () => unsubscribeSkills?.(), () => unsubscribeLearning?.(),
@@ -127,6 +126,11 @@ export async function mountAssistant(ctx, commander, providers) {
   });
   try {
   ctx.effect(() => dispose);
+  const generation = () => ctx.get?.('mediaGeneration');
+  ctx.inject(['mediaGeneration'], child => store.migrateGenerationSettings(legacy => child.get('mediaGeneration').importLegacyMedia(legacy))
+    .catch(error => ctx.logger?.warn?.(`媒体配置迁移失败：${error.code || error.name}`)));
+  const mediaTools = mediaToolDefinitions({ generation, attachments: ctx.get?.('attachments') });
+  const mediaByName = new Map(mediaTools.map(definition => [definition.name, definition]));
   historySearch = createHistorySearch({ ctx, store });
   channelCredentials = createChannelCredentials({ credentials: ctx.credentials });
   settings = ctx.get?.('benchgoSettings');
@@ -147,8 +151,8 @@ export async function mountAssistant(ctx, commander, providers) {
   feishu = createFeishuAdapter(feishuOptions);
   feishu.prepareExternalSend = (input, context) => ingress.prepareExternalSend('feishu', input, context);
   feishuStream = createFeishuStream(feishuOptions);
-  const pet = createAssistantPet({ store });
-  const media = createAssistantMedia({ store, providers, credentials: ctx.credentials, shutdown: shutdown.signal });
+  const pet = createAssistantPet({ store, readMediaArtifact: name => generation()?.artifact(name) });
+  const voiceMedia = createAssistantVoice({ store, providers, credentials: ctx.credentials, shutdown: shutdown.signal });
   let voiceStore, voiceHandlers;
   const channelVoice = () => {
     const current = ctx.get?.('voice');
@@ -170,7 +174,15 @@ export async function mountAssistant(ctx, commander, providers) {
   orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels,
     maintainTasks: () => cleanupContinuations?.tick(),
     notifyExecutionInput: input => engine.notifyExecutionInput(input),
-    notifyTaskResult: notice => engine.notifyTaskResult(notice),
+    notifyTaskResult: async notice => {
+      const receipt = await engine.notifyTaskResult(notice);
+      const payload = notice?.payload;
+      if (receipt?.status === 'accepted' && payload?.source?.channel === 'desktop'
+        && store.orchestration.getTask(notice.taskId)?.status === 'completed') {
+        void pet.taskCompleted(`${notice.taskId}:${payload.resultVersion}`, payload.source.threadId || 'main').catch(() => {});
+      }
+      return receipt;
+    },
     onDelivered: outbox => outbox.kind === 'router' ? undefined : channelSessions.onDelivery(outbox), deliverDesktop: async delivery => {
     const task = store.orchestration.getTask(delivery.taskId);
     const event = database.notify({ id: task.id, threadId: task.mandate.source.threadId }, delivery.payload.type,
@@ -221,11 +233,10 @@ export async function mountAssistant(ctx, commander, providers) {
   const modelActions = createModelActionTaskExecutor({
     ctx, database: store.orchestration, workspace: store.paths.workspace,
     readPolicy: () => readAssessmentPolicy(store, ctx.workspaceRegistry),
-    perform: async ({ name, args, exec, actionKey }) => {
+    perform: async ({ name, args, exec, actionKey, sourceMessage }) => {
       if (name === 'assistant_pet') return args.op === 'restore' ? pet.restore(args) : pet.apply(args);
       if (name === 'assistant_profile') return profileDocuments(store, args, { kind: 'conversation', threadId: args.threadId, sessionId: String(exec.agent.session.id), callId: exec.callId });
-      const result = await media.generateImage({ requestId: actionKey, prompt: args.prompt, signal: exec.signal });
-      return { ...result, url: `api/commander/assistant/artifact?file=${encodeURIComponent(result.filename)}` };
+      return mediaByName.get(name).execute(args, exec, { requestId: actionKey, userMessage: sourceMessage });
     },
     verify: async ({ name, args, result }) => {
       if (name === 'assistant_pet') {
@@ -238,11 +249,25 @@ export async function mountAssistant(ctx, commander, providers) {
         if (current.hash !== result.document.hash) throw new Error('Assistant document hash could not be verified');
         return { verified: true, evidence: { kind: 'assistant-document', document: current.name, hash: current.hash, revision: current.revision } };
       }
-      if (typeof result?.filename !== 'string' || !result.filename) throw new Error('Image artifact could not be verified');
-      const artifactResponse = await artifacts.fetch(new Request(`http://localhost/artifact?file=${encodeURIComponent(result.filename)}`));
-      if (!artifactResponse.ok) throw new Error('Image artifact readback failed');
-      const artifactHash = createHash('sha256').update(Buffer.from(await artifactResponse.arrayBuffer())).digest('hex');
-      return { verified: true, evidence: { kind: 'assistant-image', requestId: result.requestId, filename: result.filename, artifactHash } };
+      if (name === 'generate_video' && result?.requestId && result.jobId && !result.filename) {
+        const receipt = await generation()?.videoReceipt(result.requestId);
+        if (!receipt || !['jobId', 'providerId', 'modelId'].every(key => receipt[key] === result[key])) throw new Error('视频任务凭据回读失败');
+        return { verified: true, evidence: { kind: 'video-submission', ...receipt } };
+      }
+      if (name === 'generate_image' && result?.requestId && result.externalUrl) {
+        const receipt = await generation()?.imageReceipt(result.requestId);
+        if (!receipt || result.url !== receipt.externalUrl
+          || !['externalUrl', 'mimeType', 'providerId', 'modelId', 'status'].every(key => receipt[key] === result[key])) {
+          throw new Error('外链图片收据回读失败');
+        }
+        const urlHash = createHash('sha256').update(receipt.externalUrl).digest('hex');
+        return { verified: true, evidence: { kind: 'media-external-image', requestId: receipt.requestId, mimeType: receipt.mimeType, urlHash } };
+      }
+      const artifact = result?.filename && await generation()?.artifact(result.filename);
+      if (!artifact) throw new Error('媒体产物回读失败');
+      const hash = createHash('sha256');
+      for await (const chunk of artifact.stream()) hash.update(chunk);
+      return { verified: true, evidence: { kind: 'media-artifact', requestId: result.requestId, filename: artifact.filename, artifactHash: hash.digest('hex') } };
     },
   });
   let maintenanceEnabled = true;
@@ -328,7 +353,7 @@ export async function mountAssistant(ctx, commander, providers) {
   const artifacts = createAssistantArtifacts({ workspace: store.paths.workspace });
   const auxiliary = createAuxiliaryOperations({ ctx, store, artifacts, shutdown: shutdown.signal });
   const setupTools = createRouterTools({ ctx, commander, store, database, shutdown, historySearch, readLedger, goals, orchestrationRuntime, settings, projectSchedules, pet, desktopDelegation,
-    taskChanges, desktopTasks, taskControl, taskManagement, cleanupContinuations, modelActions, capabilities, deviceStatus, auxiliary, deviceTools,
+    taskChanges, desktopTasks, taskControl, taskManagement, cleanupContinuations, modelActions, mediaTools, capabilities, deviceStatus, auxiliary, deviceTools,
     get engine() { return engine; } });
   engine = await createAssistantEngine({ ctx, store, setupTools, scheduleBridge,
     readTaskCleanupContinuation: id => database.taskCleanupContinuations.get(id),
@@ -362,7 +387,8 @@ export async function mountAssistant(ctx, commander, providers) {
     readPolicy: threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId), wake: () => { void orchestrationRuntime.tick(); } });
   channelSessions = createChannelSessionHost({ ctx, store, engine,
     receiveOwnerMessage });
-  await channels.start();
+  // Channel login can wait on remote networks. Drain it during channel disposal.
+  await channels.start({ waitForConnection: false });
   unregisterExternalActions = registerChannelExternalActions(externalRegistry, {
     channelIds, getAdapter: id => id === 'feishu' ? feishu : channels.get(id),
     getCapabilities: id => channelDefinition(id).capabilities,
@@ -376,21 +402,27 @@ export async function mountAssistant(ctx, commander, providers) {
     scope.effect(() => registerNativePromptIngress(scope, engine));
   });
   routerWatchdog = createRouterWatchdog({ engine, onError: error => ctx.logger?.warn?.(`Router recovery: ${error.message}`) });
-  await routerWatchdog.tick().catch(error => ctx.logger?.warn?.(`Router recovery: ${error.message}`));
+  void routerWatchdog.tick().catch(error => {
+    if (!shutdown.signal.aborted) ctx.logger?.warn?.(`Router recovery: ${error.message}`);
+  });
   routerWatchdog.start();
-  await scheduleBridge.start();
+  void scheduleBridge.start().catch(error => {
+    if (!shutdown.signal.aborted) ctx.logger?.warn?.(`SuperAgent Schedule: ${error.message}`);
+  });
   shutdown.signal.throwIfAborted();
-  await reviewWorker.runOnce();
+  // Maintenance may call a model; its first bounded tick shares the worker's
+  // existing cancellation/cleanup without holding routes behind that request.
+  void reviewWorker.tick();
   reviewWorker.start();
   watchdogRetryTimer = setInterval(() => { engine.retryTaskReplies().catch(error => ctx.logger?.warn?.(`SuperAgent supervision signal: ${error.code || error.name}`)); }, 30_000);
   watchdogRetryTimer.unref?.();
-  const state = async () => ({ config: await store.getConfig(), petExpression: pet.event(), media: { ...await media.availability(), video: { available: false, reason: '当前引擎尚未提供视频生成能力' } }, profile: await store.getProfile(), memories: await store.listMemories(), state: { ...await store.getState(), notifications: database.notifications().events } });
+  const state = async () => ({ config: await store.getConfig(), petExpression: pet.event(), media: await voiceMedia.availability(), profile: await store.getProfile(), memories: await store.listMemories(), state: { ...await store.getState(), notifications: database.notifications().events } });
   const systemFiles = createAssistantSystemFiles({ directory: store.paths.directory, desktop: () => ctx.get?.('sessionController') });
   const dispatch = createAssistantDispatch({ ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, orchestrationRuntime,
     executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state,
     artifacts, auxiliary, systemFiles, skillProvider });
   ctx.effect(() => registerAssistantFetchRoute({ connection: ctx.connection, dispatch }));
-  for (const [name, handler] of [['transcribe', media.handlers.transcribe], ['speech', media.handlers.speech], ['worklet', media.handlers.worklet]]) {
+  for (const [name, handler] of Object.entries(voiceMedia.handlers)) {
     ctx.effect(() => ctx.connection.fetch.register({ path: `/api/commander/assistant/voice/${name}`, methods: [name === 'worklet' ? 'GET' : 'POST'], requestBody: name === 'worklet' ? 'buffered' : 'streaming', async fetch(request) {
       try {
         assertSameOrigin(request);

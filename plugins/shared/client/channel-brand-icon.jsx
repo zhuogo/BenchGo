@@ -1,6 +1,6 @@
 import React from 'react';
 import brands from './assets/channel-brands/catalog.json';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 
 // Vendor-hosted, unmodified marks. Provenance: assets/channel-brands/SOURCE.md.
 // Saved availability controls brand color independently of navigation selection.

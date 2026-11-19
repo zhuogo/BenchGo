@@ -7,11 +7,11 @@ import { createHash } from 'node:crypto';
 import { registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as tar from 'tar';
-import { acquireWorkbenchLease, acquireWorkbenchProfileLock, assertWorkbenchDataAvailable, readWorkbenchLease, registerWorkbenchInstallation } from '../../../plugins/benchgo/shared/workbench-installation.mjs';
+import { acquireWorkbenchLease, acquireWorkbenchProfileLock, assertWorkbenchDataAvailable, readWorkbenchLease, registerWorkbenchInstallation } from '../../../plugins/base/shared/workbench-installation.mjs';
 import { createStopCoordinator } from '../src/host.mjs';
 import { acquirePayload, extractTar, safeArchiveName } from '../src/artifacts.mjs';
 import { discoverOfficialRuntime, installWorkbench, shouldOpenBrowser, openBrowser } from '../src/installer.mjs';
-import { releaseBundleName } from '../../../plugins/benchgo/shared/plugin-install.mjs';
+import { releaseBundleName } from '../../../plugins/base/shared/plugin-install.mjs';
 
 async function temporary(t) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-cli-test-'));
@@ -247,7 +247,9 @@ test('a committed first install retains a retryable registration if startup fail
 
 test('unified benchgo command has one package owner', async () => {
   const cli = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  const plugin = JSON.parse(await readFile(new URL('../../../plugins/benchgo/package.json', import.meta.url), 'utf8'));
+  const plugin = JSON.parse(await readFile(new URL('../../../plugins/base/package.json', import.meta.url), 'utf8'));
   assert.deepEqual(cli.bin, { benchgo: './bin/benchgo.mjs' });
-  assert.deepEqual(plugin.bin, { commander: 'src/cli.mjs' });
+  assert.equal(plugin.name, 'benchgo-plugin');
+  const pluginCommands = typeof plugin.bin === 'string' ? [plugin.name] : Object.keys(plugin.bin ?? {});
+  assert.ok(!pluginCommands.includes('benchgo'));
 });

@@ -22,6 +22,5 @@
 .ba-home-starters{animation:ba-home-arrive 600ms 120ms var(--home-ease) backwards}
 @container(max-width:560px){.ba-home-section header>button,.ba-home-footer>button,.ba-home-rest>button{min-height:40px}}
 @media(prefers-reduced-motion:reduce){.ba-home-starters{animation:none}}
-.ba-home[data-pet-motion=off] .ba-home-mascot{animation:none!important;transition:none!important;transform:none!important}
 
 .ba-home-starters>.bg-ui-button{height:auto;white-space:normal;justify-content:flex-start}

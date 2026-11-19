@@ -1,4 +1,4 @@
-import { auxiliaryModels, canFallback, isTransientFailure } from './routing.mjs';
+import { auxiliaryRoute, canFallback, isTransientFailure } from './routing.mjs';
 const failureDiagnostics = new WeakMap();
 const failureRoutes = new WeakMap();
 const finishKinds = new Set(['stop', 'max-tokens', 'tool-calls', 'blocked', 'error', 'aborted']);
@@ -33,12 +33,11 @@ export const auxiliaryFailureRouting = error => error instanceof Error ? failure
 /** A read-only operation may retry before publishing anything, never replay tools. */
 export async function collectAuxiliaryText({ llm, config, capability, model, request, validate, routePolicy = 'router-fallback' }) {
   const frozen = structuredClone(config), main = structuredClone(model);
-  const auxiliary = frozen.auxiliary?.capabilities?.includes(capability) ? frozen.auxiliary : null;
-  const routes = auxiliaryModels(main, frozen, capability, routePolicy);
+  const { models: routes, auxiliary } = auxiliaryRoute(main, frozen, capability, routePolicy);
   let routeIndex = 0, selected = routes[0], switched = false;
   if (!selected?.providerId || !selected?.modelId) throw Object.assign(new Error('辅助任务模型未配置'), { code: 'AUXILIARY_UNCONFIGURED' });
   const attempts = [];
-  const routing = () => ({ configRevision: frozen.revision ?? null, capability, auxiliary: !!auxiliary, routePolicy,
+  const routing = () => ({ configRevision: frozen.revision ?? null, capability, auxiliary, routePolicy,
     switched: switched, attempts: structuredClone(attempts) });
   for (;;) {
     for (let retry = 0; ; retry++) {
@@ -86,7 +85,7 @@ export async function collectAuxiliaryText({ llm, config, capability, model, req
         if (canFallback(failure) && isTransientFailure(failure) && retry === 0) continue;
         if ((!canFallback(failure) && !['AUXILIARY_QUALITY', 'NO_ADAPTER'].includes(error.code))) throw error;
         const nextIndex = error.code === 'AUXILIARY_QUALITY' && routePolicy !== 'auxiliary-only'
-          ? routes.findIndex(route => route.providerId === main.providerId && route.modelId === main.modelId)
+          ? routes.findIndex(route => route.providerId === main?.providerId && route.modelId === main?.modelId)
           : routeIndex + 1;
         if (nextIndex <= routeIndex || !routes[nextIndex]) throw error;
         routeIndex = nextIndex; selected = routes[routeIndex]; switched = true;

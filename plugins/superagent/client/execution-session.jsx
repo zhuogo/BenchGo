@@ -6,8 +6,45 @@ import { ResourceState } from './resource-state.jsx';
 import { executionSessionNavigation } from './execution-session-navigation.mjs';
 export { openExecutionSession } from './execution-session-navigation.mjs';
 
-/** This is navigation over the official Sessions, not a second transcript store. */
-export function ExecutionSessionPanel({ ctx, execution, api, SessionProvider, renderSlot, onClose, onOpenTask }) {
+export function ExecutionSessionPanel(props) {
+  return props.execution.nativeWorker ? <NativeExecutionSession {...props} /> : <OfficialExecutionSession {...props} />;
+}
+
+function NativeExecutionSession({ execution, api, onClose, onOpenTask }) {
+  const [record, setRecord] = useState(null), [error, setError] = useState(''), [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    let cursor = 0, timer;
+    setRecord(null); setError('');
+    async function load() {
+      try {
+        const next = await api('nativeWorkerSession', { taskId: execution.taskId, sessionId: execution.sessionId, after: cursor }, controller.signal);
+        controller.signal.throwIfAborted();
+        const more = next.cursor > cursor;
+        cursor = next.cursor;
+        setRecord(previous => ({ status: next.status, truncated: !!(next.truncated || previous?.truncated),
+          text: ((previous?.text || '') + next.events.map(event => event.text).join('')).slice(-40_000),
+          summary: next.status === 'completed' ? next.summary : undefined }));
+        setError('');
+        if (more || ['running', 'waiting', 'connecting'].includes(next.status)) timer = setTimeout(load, more ? 0 : 2500);
+      } catch (cause) {
+        if (!controller.signal.aborted) setError(cause.message || '请稍后重试');
+      }
+    }
+    void load();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [api, execution.taskId, execution.sessionId, retry]);
+  return <section className="ba-execution-session" aria-label="外部执行会话">
+    <header className="ba-execution-heading"><Button variant="ghost" type="button" onClick={onClose}>返回</Button><div><h2>{execution.title || '执行会话'}</h2><p>{execution.remote ? execution.deviceName + ' · 只读' : '任务执行记录'}</p></div><Button variant="ghost" type="button" onClick={() => onOpenTask(execution.taskId)}>原任务</Button></header>
+    {error && <ResourceState kind="error" title="无法读取执行记录" description={error} actionLabel="重试" onAction={() => setRetry(value => value + 1)} />}
+    {!error && !record && <ResourceState kind="loading" title="正在读取执行记录" />}
+    {record?.truncated && <p className="ba-execution-note" role="status">仅显示仍可读取的执行输出。</p>}
+    {(record?.summary || record?.text) && <p className="ba-execution-note" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{record.summary || record.text}</p>}
+    {record && !error && !record.text && !record.summary && <ResourceState kind="empty" title="暂无执行输出" description="可从原任务查看当前执行状态。" actionLabel="查看原任务" onAction={() => onOpenTask(execution.taskId)} />}
+  </section>;
+}
+
+function OfficialExecutionSession({ ctx, execution, api, SessionProvider, renderSlot, onClose, onOpenTask }) {
   const [catalog, setCatalog] = useState(null), [error, setError] = useState(''), [retry, setRetry] = useState(0);
   useEffect(() => {
     let disposed = false, timer, controller;

@@ -27,7 +27,7 @@ test('workbench presentation is compiled into the document before boot and fails
   assert.throws(() => verifyWorkbenchLoadingBundle(source), /missing workbench loading/);
 });
 
-test('real upstream boot page shows centered text from its first frame and retains failure/handoff', async t => {
+test('upstream boot page renders the themed progress trace and retains failure and handoff', async t => {
   const { chromium } = require('playwright');
   const executablePath = [process.env.CHROMIUM_EXECUTABLE_PATH, chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(value => value && existsSync(value));
   if (!executablePath) return t.skip('Chromium/Edge is required');
@@ -38,8 +38,7 @@ test('real upstream boot page shows centered text from its first frame and retai
   });
   const upstreamCss = built.outputFiles.find(file => file.path.endsWith('.css')).text;
   const upstreamJs = built.outputFiles.find(file => file.path.endsWith('.js')).text;
-  const loadingCss = await readFile(join(root, 'plugins/shared/client/ui/loading.css'), 'utf8');
-  const markup = workbenchLoadingMarkup(loadingCss);
+  const markup = workbenchLoadingMarkup();
   const browser = await chromium.launch({ executablePath, headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1000, height: 700 }, locale: 'zh-CN' });
@@ -52,23 +51,35 @@ test('real upstream boot page shows centered text from its first frame and retai
   assert.equal(await page.locator('[role=status]').count(), 0, 'empty mount is not given a persistent overlay');
   await shot('empty');
   await page.evaluate(() => { window.boot = new window.BootPage(document.getElementById('root')); });
+  const status = page.getByRole('status', { name: '正在加载工作台…' });
+  const rail = page.locator('.benchgo-boot-rail');
   for (const theme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: theme });
     await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme', dark), theme === 'dark');
-    await page.getByRole('status', { name: '正在加载…' }).waitFor();
+    await status.waitFor();
     assert.equal(await page.getByText('HARNESS', { exact: true }).isVisible(), false);
     assert.equal(await page.getByText('Loading plugins…', { exact: true }).isVisible(), false);
-    const box = await page.getByRole('status').boundingBox();
+    const box = await status.boundingBox();
     assert(Math.abs(box.x + box.width / 2 - 500) < 1);
     assert(Math.abs(box.y + box.height / 2 - 350) < 1);
-    assert.equal(await page.locator('.bg-loading-character').count(), 5);
+    assert.equal(await page.locator('[data-dsh-boot]').evaluate(el => getComputedStyle(el).backgroundColor), theme === 'dark' ? 'rgb(16, 18, 24)' : 'rgb(243, 246, 246)');
     assert.equal(await page.locator('[data-dsh-boot-spinner]').evaluate(el => getComputedStyle(el).animationName), 'none');
-    assert.equal(await page.locator('.bg-loading-character').first().evaluate(el => getComputedStyle(el).animationName), 'bg-loading-hit');
+    assert.equal(await rail.evaluate(el => getComputedStyle(el, '::after').animationName), 'benchgo-boot-signal');
     await shot(theme);
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.evaluate(() => {
+    window.boot.setTotal(2);
+    window.boot.setState('fixture-ready', 'active');
+  });
+  assert.equal(await rail.evaluate(el => getComputedStyle(el, '::before').transform), 'matrix(0.5, 0, 0, 1, 0, 0)');
   assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
   await shot('reduced');
+  await page.setViewportSize({ width: 260, height: 410 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 260);
+  assert.equal(await status.isVisible(), true);
+  await shot('narrow');
+  await page.setViewportSize({ width: 1000, height: 700 });
   await page.evaluate(() => window.boot.setState('fixture-plugin', 'failed'));
   await page.getByText('Failed to load plugins', { exact: true }).waitFor();
   assert.equal(await page.getByText('fixture-plugin', { exact: true }).isVisible(), true);
@@ -76,7 +87,7 @@ test('real upstream boot page shows centered text from its first frame and retai
   assert.equal(await page.getByRole('status').count(), 0);
   await shot('error');
   await page.evaluate(() => window.boot.setState('fixture-plugin', 'active'));
-  await page.getByRole('status', { name: '正在加载…' }).waitFor();
+  await status.waitFor();
   await page.evaluate(() => {
     window.boot.dispose();
     document.getElementById('root').innerHTML = '<main><h1>工作台</h1><button>新会话</button></main>';

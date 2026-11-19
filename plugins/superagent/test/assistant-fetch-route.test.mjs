@@ -9,7 +9,7 @@ import { createAssistantOrchestrationStore } from '../src/orchestration-store.mj
 import { channelSessionKey } from '../src/channel-policy.mjs';
 import { createAssistantDispatch } from '../src/assistant-dispatch.mjs';
 
-const requireBenchgo = createRequire(new URL('../../benchgo/package.json', import.meta.url));
+const requireBenchgo = createRequire(new URL('../../base/package.json', import.meta.url));
 const { transformSync } = requireBenchgo('esbuild');
 const connectionSource = new URL('../../../deepseek-harness/packages/client/connection/src/', import.meta.url).href;
 // Compile the checked-out official module in memory. Do not mock its route/Peer

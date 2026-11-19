@@ -31,7 +31,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             plugins/link/package-lock.json
-            plugins/benchgo/package-lock.json
+            plugins/base/package-lock.json
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -46,7 +46,7 @@ jobs:
         run: |
           npm run setup
           npm ci --prefix plugins/link
-          npm ci --prefix plugins/benchgo
+          npm ci --prefix plugins/base
       - name: Verify portable Linux server seed metadata
         run: node --test scripts/server/package-seed.test.mjs
       - name: Build and verify signed Android release

@@ -23,7 +23,7 @@ test('runner assesses pending intake and promotes the same source only after an 
     },
     assess: async ({ candidates, readSource }) => {
       assert.equal((await readSource({ triggerId })).content, 'Original pending request');
-      return [{ candidateId: candidates[0].candidateId, outcome: 'accept', target: 'Requested result', acceptance: 'Original scope', reason: 'Explicit authorized request' }];
+      return [{ candidateId: candidates[0].candidateId, outcome: 'accept', target: 'Requested result', reason: 'Explicit authorized request' }];
     },
   });
   await runner.tick();
@@ -31,7 +31,9 @@ test('runner assesses pending intake and promotes the same source only after an 
   assert.equal(database.getTrigger(triggerId).intakeStage, 'admitted');
   assert.equal(database.getTrigger(triggerId).content, database.readIntakeEvent(triggerId).content);
   assert.equal(database.listTasks().length, 1);
-  assert.equal(database.listTasks()[0].mandate.triggerId, triggerId);
+  const [task] = database.listTasks();
+  assert.equal(task.mandate.triggerId, triggerId);
+  assert.equal(task.acceptance, '');
 });
 
 test('runner persists stop attention as attachment with the original requested outcome', async t => {
@@ -109,6 +111,7 @@ test('authorized channel admission delivers the same Router reply without anothe
       assert.equal(pending[0].payload.text, replyText);
       assert.equal(pending[0].payload.origin, 'router');
       assert.deepEqual(pending[0].payload.source, source);
+      assert.equal(database.listTasks()[0].acceptance, 'Prices and limits with sources');
     }
   }
 });

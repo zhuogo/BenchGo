@@ -28,10 +28,10 @@
       "input": "用户入口、当前 sessionId、语音配置",
       "output": "采集或朗读请求、通话生命周期",
       "sources": [
-        "plugins/voice/client/controller.mjs",
-        "plugins/voice/client/index.jsx",
-        "plugins/voice/client/call-host.jsx",
-        "plugins/voice/client/call-presentation.mjs",
+        "plugins/media/client/controller.mjs",
+        "plugins/media/client/index.jsx",
+        "plugins/media/client/call-host.jsx",
+        "plugins/media/client/call-presentation.mjs",
         "scripts/desktop/prepare-background.mjs"
       ],
       "note": "独立转录与朗读保留页面边界。桌面后台调度需重新打包并重启生效，插件热加载不更新旧包主进程；真实最小化音频与长通话仍待设备验收。",
@@ -51,9 +51,9 @@
       "input": "麦克风流、静音和播放状态",
       "output": "PCM 分片、说话开始/结束事件",
       "sources": [
-        "plugins/voice/client/media.mjs",
-        "plugins/voice/client/noise.mjs",
-        "plugins/voice/client/audio-worklet.js"
+        "plugins/media/client/media.mjs",
+        "plugins/media/client/noise.mjs",
+        "plugins/media/client/audio-worklet.js"
       ],
       "note": "麦克风需要 HTTPS 或 localhost；降噪初始化失败明确报错。",
       "state": "implemented",
@@ -72,9 +72,9 @@
       "input": "PCM/WAV、ASR 供应商与协议配置",
       "output": "partial 与 final 转录或明确错误",
       "sources": [
-        "plugins/voice/src/protocols/registry.mjs",
-        "plugins/voice/src/realtime.mjs",
-        "plugins/voice/src/protocols/openai/realtime.mjs"
+        "plugins/media/src/protocols/registry.mjs",
+        "plugins/media/src/realtime.mjs",
+        "plugins/media/src/protocols/openai/realtime.mjs"
       ],
       "note": "实时 WebSocket 是 ASR 传输路径，并不是另一个对话 Agent。",
       "state": "implemented",
@@ -93,9 +93,9 @@
       "input": "最终文字、可信会话身份、设备标识",
       "output": "草稿或已绑定的通话模式",
       "sources": [
-        "plugins/voice/src/calls.mjs",
-        "plugins/voice/src/conversations.mjs",
-        "plugins/voice/client/controller.mjs"
+        "plugins/media/src/calls.mjs",
+        "plugins/media/src/conversations.mjs",
+        "plugins/media/client/controller.mjs"
       ],
       "note": "当前通话恢复直接交流，无对话／静默切换，不调用说话对象决策。设置中的决策连接、称呼配置和固定样例测试保留；判断临界点与上下文设计待研讨后再接入。普通通话30分钟，需有效心跳。",
       "state": "implemented",
@@ -114,8 +114,8 @@
       "input": "真实 Session 归属、交互模型配置",
       "output": "native / enhanced / direct 模式",
       "sources": [
-        "plugins/voice/src/conversation-bridge.mjs",
-        "plugins/voice/src/conversations.mjs"
+        "plugins/media/src/conversation-bridge.mjs",
+        "plugins/media/src/conversations.mjs"
       ],
       "note": "不根据标题、模型自述或模块开关猜归属；执行子会话不提供独立交互通话。",
       "state": "implemented",
@@ -134,9 +134,9 @@
       "input": "最终用户原话、标明来源的历史参考、准确 currentModel、工作状态与事件",
       "output": "口头回复；完整任务或关联修订增量",
       "sources": [
-        "plugins/voice/src/conversations.mjs",
-        "plugins/voice/src/conversation-model.mjs",
-        "plugins/voice/src/conversation-prompt.mjs"
+        "plugins/media/src/conversations.mjs",
+        "plugins/media/src/conversation-model.mjs",
+        "plugins/media/src/conversation-prompt.mjs"
       ],
       "note": "精简系统提示仅维护交流、行动、事实与权限，每次回复读取权威 Markdown；预算和参数规则由工具定义与宿主承载，正文不重复。恢复的旧助手发言作为历史资料，不重标为当前模型自述。currentModel 跟随实际路由，交接工具只有 task 参数；真实口吻与任务整理质量待通话验收。SuperAgent 不叠加此模型；细则见实时通话.md与通话表达.md。",
       "state": "implemented",
@@ -155,9 +155,9 @@
       "input": "完整任务、本次用户原话及来源、requestId",
       "output": "正式 prompt / steer 正文为 task；原话 inject；执行回执",
       "sources": [
-        "plugins/voice/src/conversation-bridge.mjs"
+        "plugins/media/src/conversation-bridge.mjs"
       ],
-      "note": "官方 prompt / steer 直接发送 task 纯文本，工作层记录显示任务；不注入任务 JSON 或固定说明。本次原话经官方 inject 随行，来源标记 benchgo-voice-evidence 并带请求标识，标明转录可能有误、仅用于核对、不是额外指令；不转发近期聊天。原话保留语音记录并绑定来源；接受回执后才记为已交接。",
+      "note": "官方 prompt / steer 直接发送 task 纯文本，工作层记录显示任务；不注入任务 JSON 或固定说明。本次原话经官方 inject 随行，来源标记 benchgo-voice-evidence 并带请求标识，标明转录可能有误、仅用于核对、不是额外指令；不转发近期聊天。原话保留语音记录并绑定来源；接受回执后才记为已交接。 手机通过 Link 打开工作台后，媒体仍使用目标的 Link 会话和语音协议。语音交接到工作台会话后可使用该宿主已登记的 SSH 服务器，录音权限沿用现有边界。",
       "state": "implemented",
       "x": 440,
       "y": 450
@@ -174,8 +174,8 @@
       "input": "原始文字、原会话上下文与权限",
       "output": "正式回复、工具与审批事件、执行终态",
       "sources": [
-        "plugins/voice/src/conversation-bridge.mjs",
-        "plugins/voice/client/controller.mjs"
+        "plugins/media/src/conversation-bridge.mjs",
+        "plugins/media/client/controller.mjs"
       ],
       "note": "Voice 插件不硬依赖 Harness 聚合或 SuperAgent，也不另建任务系统。",
       "state": "implemented",
@@ -194,10 +194,10 @@
       "input": "正式 Session 事件、语音插件记录",
       "output": "可分页语音记录、活动摘要与统一正式标题",
       "sources": [
-        "plugins/voice/src/conversation-bridge.mjs",
-        "plugins/voice/src/session-projection.mjs",
-        "plugins/voice/src/session-title.mjs",
-        "plugins/voice/client/conversation-records.mjs"
+        "plugins/media/src/conversation-bridge.mjs",
+        "plugins/media/src/session-projection.mjs",
+        "plugins/media/src/session-title.mjs",
+        "plugins/media/client/conversation-records.mjs"
       ],
       "note": "精确播放范围持久化仍待完善；不能把持久文字当作已播放证明。",
       "state": "partial",
@@ -216,11 +216,11 @@
       "input": "已生成的正式文字、插话和静音事件",
       "output": "有序 TTS 请求与取消信号",
       "sources": [
-        "plugins/voice/client/controller.mjs",
-        "plugins/voice/client/agent-feed.mjs",
-        "plugins/benchgo/shared/public-chat-record.mjs",
-        "plugins/voice/client/speech.mjs",
-        "plugins/voice/client/speech-content.mjs"
+        "plugins/media/client/controller.mjs",
+        "plugins/media/client/agent-feed.mjs",
+        "plugins/base/shared/public-chat-record.mjs",
+        "plugins/media/client/speech.mjs",
+        "plugins/media/client/speech-content.mjs"
       ],
       "note": "阶段成果即时表达尚待完善，不以阶段性推测冒充真实执行结果。 公共分句按250ms首段预算与安全边界释放；三路预合成共用按PCM供给学习储备的播放器（80ms下限），取消协议专属900ms起播提示；分阶段记录最后人声到实际渲染起播。已实现公共供给学习、同批短句合并与逐段缺音归因；冷启动不能预知未来断供，设备听感待验收。细则只在媒体管线.md维护。",
       "state": "partial",
@@ -239,10 +239,10 @@
       "input": "回复文字、TTS 供应商/模型、语速与音色",
       "output": "音频流、协议错误或取消",
       "sources": [
-        "plugins/voice/src/protocols/registry.mjs",
-        "plugins/voice/src/protocols/openai/tts.mjs",
-        "plugins/voice/src/protocols/stepfun/tts-sse.mjs",
-        "plugins/voice/src/protocols/stepfun/tts-websocket.mjs"
+        "plugins/media/src/protocols/registry.mjs",
+        "plugins/media/src/protocols/openai/tts.mjs",
+        "plugins/media/src/protocols/stepfun/tts-sse.mjs",
+        "plugins/media/src/protocols/stepfun/tts-websocket.mjs"
       ],
       "note": "配置可保存不代表供应商流式协议和音色已通过真实请求验证。",
       "state": "implemented",
@@ -261,9 +261,9 @@
       "input": "TTS 音频、用户插话、挂断",
       "output": "扬声器播放、媒体状态与资源释放",
       "sources": [
-        "plugins/voice/client/media.mjs",
-        "plugins/voice/client/call-cues.mjs",
-        "plugins/voice/client/controller.mjs"
+        "plugins/media/client/media.mjs",
+        "plugins/media/client/call-cues.mjs",
+        "plugins/media/client/controller.mjs"
       ],
       "note": "音频接收、播放和用户实际听到是不同事实；设备回声效果需实测。",
       "state": "implemented",
@@ -424,6 +424,11 @@
       "title": "合成播放，插话及时生效",
       "text": "回复按顺序进入 TTS 和播放队列；用户插话清理过时音频。打断播放不代表工作停止，停止执行要等待原 Agent 回执。",
       "edge": 10
+    },
+    {
+      "node": "bridge",
+      "title": "工作台通话沿用现有连接",
+      "text": "手机通过 Link 打开工作台后，媒体仍使用目标的 Link 会话和语音协议。语音交接到工作台会话后可使用该宿主已登记的 SSH 服务器，录音权限沿用现有边界。"
     }
   ],
   "docs": [
@@ -450,6 +455,10 @@
     {
       "label": "说话对象判断",
       "path": "docs/03-实时语音/说话对象判断.md"
+    },
+    {
+      "label": "SSH 服务器运维",
+      "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
   "version": "2026-11-11-1"

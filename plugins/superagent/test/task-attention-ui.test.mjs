@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import * as taskState from '../client/task-state.mjs';
 
-const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const code = transformSync(readFileSync(new URL('../client/task-attention.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
 function harness(overrides = {}, failure) {

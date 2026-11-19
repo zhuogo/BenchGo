@@ -26,12 +26,12 @@ export function createRemoteAssignmentExecutor({ ctx, database, readPolicy, comm
     if (!link?.callDevice) throw fail('LINK_UNAVAILABLE', 'Link 执行连接不可用');
     const signals = [shutdown.signal, ...(signal ? [signal] : []), ...(requestSignal ? [requestSignal] : []), AbortSignal.timeout(requestTimeoutMs)];
     return link.callDevice({ deviceId: remote.deviceId, expectedHostId: remote.hostId,
-      expectedAuthorizationId: remote.authorizationId, input: { action: 'execution', version: 1, ...input },
+      expectedAuthorizationId: remote.authorizationId, input: { action: 'execution', version: remote.protocolVersion, ...input },
       signal: AbortSignal.any(signals) });
   }
   function verify(assignment, response) {
     const remote = remoteOf(assignment), execution = response?.execution, expected = identity(assignment, remote);
-    if (response?.version !== 1 || !execution || (execution.id ?? execution.executionId) !== remote.executionId
+    if (response?.version !== remote.protocolVersion || !execution || (execution.id ?? execution.executionId) !== remote.executionId
       || execution.sessionId !== remote.sessionId || identityKeys.some(key => execution.identity?.[key] !== expected[key])
       || !phases.has(phaseOf(execution.phase)) || !Array.isArray(response.events)
       || !Number.isSafeInteger(response.cursor) || response.cursor < remote.cursor)
@@ -126,7 +126,8 @@ export function createRemoteAssignmentExecutor({ ctx, database, readPolicy, comm
   }
   function enqueueInputs(assignment) {
     const task = database.getTask(assignment.taskId), remote = remoteOf(assignment), pending = database.pendingTaskInputs(task.id);
-    const revisionInputs = pending.filter(row => ['revision', 'authorization'].includes(row.kind));
+    const external = task.mandate.execution.config.harness !== 'official';
+    const revisionInputs = external ? [] : pending.filter(row => ['revision', 'authorization'].includes(row.kind));
     const pendingRevision = database.remoteCommands(assignment.id, { state: 'pending', operation: 'input', limit: 200 })
       .some(row => row.payload.kind === 'revision');
     if (!pendingRevision && revisionInputs.length && task.instructionRevision > (remote.receivedInstructionRevision ?? assignment.instructionRevision)) {
@@ -145,7 +146,7 @@ export function createRemoteAssignmentExecutor({ ctx, database, readPolicy, comm
           instructionRevision: question.instructionRevision, text: JSON.stringify(answers), triggerIds: entries.map(row => row.answerTriggerId) }, `answer:${question.questionId}`);
       }
     }
-    for (const input of pending.filter(row => row.kind === 'context').slice(0, 20)) {
+    for (const input of (external ? [] : pending.filter(row => row.kind === 'context').slice(0, 20))) {
       if (database.remoteCommand(assignment.id, requestKey(remote.executionId, 'input', `context:${input.id}`))) continue;
       const trigger = database.getTrigger(input.triggerId);
       if (trigger?.content?.trim()) command(assignment, 'input', { kind: 'context', instructionRevision: task.instructionRevision,
@@ -236,7 +237,7 @@ export function createRemoteAssignmentExecutor({ ctx, database, readPolicy, comm
     const executionId = randomUUID(), sessionId = randomUUID(), execution = task.mandate.execution;
     const run = database.prepareRun(assignment.id, { ...ownership(assignment), sessionId,
       directory: `remote:${execution.deviceId}:${sessionId}`, ...(task.mandate.project?.path ? { workingDirectory: task.mandate.project.path } : {}) });
-    patch(assignment, { runId: run.id, executionId, sessionId, deviceId: execution.deviceId,
+    patch(assignment, { runId: run.id, executionId, sessionId, deviceId: execution.deviceId, protocolVersion: execution.protocolVersion,
       hostId: execution.hostId, authorizationId: execution.authorizationId, phase: 'prepared', cursor: 0 });
     const snapshot = database.appliedTaskSnapshot(assignment.id);
     const submit = command(assignment, 'submit', { executionId, sessionId, identity: identity(assignment), config: execution.config,

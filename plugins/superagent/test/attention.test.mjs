@@ -28,7 +28,7 @@ test('answered remote Attention never schedules a host official-session continua
   const db = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => db.close());
   db.createThread({ id: 'desktop', source: { type: 'desktop', id: 'owner' } });
-  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-pair', config: { harness: 'official', models: [{ providerId: 'exact', modelId: 'exact/model' }] } };
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-pair', protocolVersion: 2, config: { harness: 'official', models: [{ providerId: 'exact', modelId: 'exact/model' }] } };
   const task = db.createTask({ threadId: 'desktop', target: 'remote work', mandate: { execution,
     actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner-session', messageId: 'original' } } });
   db.createAssignment(task.id, { executor: 'remote', execution });

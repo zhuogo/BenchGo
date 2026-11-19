@@ -7,13 +7,14 @@ test('daily assessment supports bounded answers and clarification without weaken
   const llm = { async *stream({ messages, tools }) {
     assert.deepEqual(tools, []);
     const prompt = messages.filter(message => message.role === 'system').map(message => message.content[0].text).join('\n');
-    assert.match(prompt, /daily general-purpose assistant first/);
-    assert.match(prompt, /Perform read-only intake assessment/);
-    assert.match(prompt, /current information.*use accept/);
-    assert.match(prompt, /Daily requests need no project/);
-    assert.match(prompt, /target faithfully translates the user intent/);
-    assert.match(prompt, /acceptance restates the requested result or explicit user conditions/);
-    assert.match(prompt, /Worker chooses methods, steps and proportionate verification/);
+    assert.match(prompt, /the user's general-purpose assistant/);
+    assert.match(prompt, /This assessment is read-only/);
+    assert.match(prompt, /Use accept when the user clearly asks you to do work/);
+    assert.match(prompt, /For daily work that needs no project, omit projectId/);
+    assert.match(prompt, /The host forwards the original message and its trigger reference/);
+    assert.match(prompt, /Omit acceptance unless the user states a condition the result must meet/);
+    assert.match(prompt, /A hypothetical preference, a discussion, or an unresolved choice does not establish work/);
+    assert.match(prompt, /Similar subjects alone do not establish a continuation/);
     assert.match(prompt, /"modelId":"opaque\/main"/);
     yield { type: 'text-delta', text: JSON.stringify({ decisions: [decision] }) };
     yield { type: 'finish', reason: { kind: 'stop' } };
@@ -35,6 +36,14 @@ test('daily assessment supports bounded answers and clarification without weaken
   assert.equal(titled.title, '当天新闻摘要');
   assert.equal(titled.target, decision.target);
   assert.equal(titled.acceptance, decision.acceptance);
+  const suppliedAcceptance = decision.acceptance;
+  delete decision.acceptance;
+  assert.equal((await assessCandidates(options))[0].acceptance, undefined);
+  decision.acceptance = '  ';
+  assert.equal((await assessCandidates(options))[0].acceptance, '');
+  decision.acceptance = 42;
+  await assert.rejects(assessCandidates(options), /验收条件必须为文字/);
+  decision.acceptance = suppliedAcceptance;
   decision.replyText = '我来查今天的新闻，整理好再告诉你。';
   assert.equal((await assessCandidates(options))[0].replyText, decision.replyText);
   for (const replyText of ['', ' ', null, 123, 'a'.repeat(6001)]) {
@@ -53,7 +62,7 @@ test('Router assessment is tool-free and rejects duplicate candidate decisions',
   response.decisions[0].candidateId = 'unknown';
   await assert.rejects(assessCandidates(options), /未知/);
   response = { decisions: [{ candidateId: 'a', outcome: 'accept', reason: 'ok' }] };
-  await assert.rejects(assessCandidates(options), /验收/);
+  await assert.rejects(assessCandidates(options), /任务受理缺少目标/);
 });
 
 test('opening contract falls back to the complete original request when the Router invents numeric criteria', async () => {
@@ -65,7 +74,7 @@ test('opening contract falls back to the complete original request when the Rout
   const accepted = await assessCandidates({ llm, model: { providerId: 'p', modelId: 'opaque' },
     candidates: [{ candidateId: 'a', trigger: { content: original, truncated: false } }], rules: '' });
   assert.equal(accepted[0].target, original);
-  assert.equal(accepted[0].acceptance, original);
+  assert.equal(accepted[0].acceptance, '');
 });
 
 test('opening contract keeps numeric criteria that are present in the original request', async () => {
@@ -85,7 +94,7 @@ test('intake returns model-authored business acknowledgement without adding a ta
   const llm = { async *stream({ messages, tools }) {
     const prompt = messages.filter(message => message.role === 'system').flatMap(message => message.content).map(block => block.text || '').join('\n');
     assert.match(prompt, /默认省略内部调度、Worker 身份与任务编号/);
-    assert.match(prompt, /identifies the user's concrete work and output/);
+    assert.match(prompt, /Use a short descriptive title of at most 10 Unicode characters/);
     assert.deepEqual(tools, []);
     yield { type: 'text-delta', text: JSON.stringify({ decisions: [decision] }) };
     yield { type: 'finish', reason: { kind: 'stop' } };

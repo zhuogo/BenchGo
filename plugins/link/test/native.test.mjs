@@ -4,13 +4,16 @@ import { createNativeAdapter } from '../src/session/native.mjs';
 
 test('direct native sessions share input receipts and approvals but never control Harness-owned engines', async () => {
   const records = new Map([
-    ['direct', { id: 'direct', ownerSessionId: 'commander-web:project', projectId: 'project', cwd: '/project', provider: 'codex', status: 'running', pendingApprovals: [{ id: 'approval', kind: 'permission' }], events: [{ seq: 1, type: 'input.accepted', data: { text: 'first' } }, { seq: 2, type: 'text.delta', turnId: 'turn', data: { text: 'hello ' } }, { seq: 3, type: 'text.delta', turnId: 'turn', data: { text: 'world' } }] }],
+    ['direct', { id: 'direct', ownerSessionId: 'commander-web:detached:project', projectId: 'project', cwd: '/project', provider: 'codex', status: 'running', pendingApprovals: [{ id: 'approval', kind: 'permission' }], events: [{ seq: 1, type: 'input.accepted', data: { text: 'first' } }, { seq: 2, type: 'text.delta', turnId: 'turn', data: { text: 'hello ' } }, { seq: 3, type: 'text.delta', turnId: 'turn', data: { text: 'world' } }] }],
     ['owned', { id: 'owned', ownerSessionId: 'harness-session', projectId: 'project', cwd: '/project', provider: 'codex' }],
+    ['retired', { id: 'retired', ownerSessionId: 'commander-web:project', projectId: 'project', cwd: '/project', provider: 'codex' }],
   ]);
   const calls = [];
   const commander = { snapshot: id => records.get(id), get: id => records.get(id), list: () => [...records.values()], submit: (...args) => { calls.push(args); return { accepted: true }; }, approve: (...args) => calls.push(args) };
   const adapter = createNativeAdapter({ get: () => commander, workspaceRegistry: { list: () => [{ id: 'project', path: '/project' }] } });
   assert.deepEqual(adapter.list().map(s => s.id), ['native:direct']);
+  await assert.rejects(adapter.dispatch({ action: 'history', id: 'native:retired' }), /Harness/);
+  await assert.rejects(adapter.managementScope('native:retired'), { code: 'NOT_FOUND' });
   const history = await adapter.dispatch({ action: 'history', id: 'native:direct' });
   assert.deepEqual(history.messages.map(m => m.text), ['first', 'hello world']);
   await adapter.dispatch({ action: 'send', id: 'native:direct', text: 'continue', requestId: 'same' });
@@ -23,7 +26,7 @@ test('direct native sessions share input receipts and approvals but never contro
 
 test('native sessions follow Harness module enable, disable and replacement without retaining the runtime', async () => {
   let commander;
-  const session = { id: 'direct', ownerSessionId: 'commander-web:project', projectId: 'project', cwd: '/project', provider: 'codex', status: 'running' };
+  const session = { id: 'direct', ownerSessionId: 'commander-web:detached:project', projectId: 'project', cwd: '/project', provider: 'codex', status: 'running' };
   const calls = [];
   const runtime = label => ({ list: () => [session], snapshot: () => session, submit: () => { calls.push(label); return { accepted: true }; } });
   const adapter = createNativeAdapter({ get: name => name === 'commander' ? commander : undefined, workspaceRegistry: { list: () => [{ id: 'project', path: '/project' }] } });
@@ -47,7 +50,7 @@ test('native sessions follow Harness module enable, disable and replacement with
 });
 
 test('native summaries preserve exact provider, model and status with registry pin identity', () => {
-  const session = { id: 'direct', ownerSessionId: 'commander-web:project', projectId: 'project', cwd: '/project', provider: 'Opaque/Provider', model: 'Model@1', status: 'waiting' };
+  const session = { id: 'direct', ownerSessionId: 'commander-web:detached:project', projectId: 'project', cwd: '/project', provider: 'Opaque/Provider', model: 'Model@1', status: 'waiting' };
   const adapter = createNativeAdapter({ get: () => ({ list: () => [session] }), workspaceRegistry: { list: () => [{ id: 'project', path: '/project' }], pinnedSessionIds: ['direct'] } });
   const row = adapter.list()[0];
   assert.equal(row.id, 'native:direct'); assert.equal(row.provider, 'Opaque/Provider'); assert.equal(row.model, 'Model@1');
@@ -55,7 +58,7 @@ test('native summaries preserve exact provider, model and status with registry p
 });
 
 test('native listing reads one project snapshot and preserves exact ownership, paths and source order', () => {
-  const session = (id, projectId = 'project', cwd = '/project', extra = {}) => ({ id, projectId, cwd, ownerSessionId: 'commander-web:project', provider: 'codex', status: 'running', ...extra });
+  const session = (id, projectId = 'project', cwd = '/project', extra = {}) => ({ id, projectId, cwd, ownerSessionId: 'commander-web:detached:project', provider: 'codex', status: 'running', ...extra });
   const sessions = [
     session('second-path', 'project', '/alternate'),
     session('wrong-project', 'other'),
@@ -80,7 +83,7 @@ test('native listing reads one project snapshot and preserves exact ownership, p
 });
 
 test('native listing accepts a request snapshot while each operation rechecks current projects', async () => {
-  const session = { id: 'direct', projectId: 'project', cwd: '/project', ownerSessionId: 'commander-web:project', provider: 'codex', status: 'running' };
+  const session = { id: 'direct', projectId: 'project', cwd: '/project', ownerSessionId: 'commander-web:detached:project', provider: 'codex', status: 'running' };
   const snapshot = [{ id: 'project', path: '/project' }];
   let projects = snapshot, reads = 0, submissions = 0;
   const adapter = createNativeAdapter({
@@ -112,7 +115,7 @@ test('native listing skips project reads when no direct sessions are candidates'
   assert.deepEqual(adapter.list(), []);
   commander = { list: () => [
     { ownerSessionId: 'harness-session' },
-    { ownerSessionId: 'commander-web:project', archived: true },
+    { ownerSessionId: 'commander-web:detached:project', archived: true },
     undefined,
   ] };
   assert.deepEqual(adapter.list(), []);

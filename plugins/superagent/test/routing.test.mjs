@@ -14,6 +14,9 @@ test('role queues preserve explicit opaque IDs and keep Worker separate from Rou
   assert.deepEqual(roleModels(router, config, 'worker'), [router, worker, backup]);
   assert.deepEqual(roleModels(undefined, { ...config, workerModels: [] }, 'worker'), [router]);
   assert.deepEqual(roleModels(undefined, { models: [router] }, 'worker'), [router]);
+  for (const workerHarness of ['codex', 'claude']) {
+    assert.deepEqual(roleModels(undefined, { models: [router], workerHarness }, 'worker'), []);
+  }
   assert.deepEqual(auxiliaryModels(router, config, 'summary'), [auxiliary, router]);
   assert.deepEqual(auxiliaryModels(router, config, 'review'), [router]);
   const detached = roleModels(undefined, config, 'worker');

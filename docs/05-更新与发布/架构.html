@@ -14,7 +14,7 @@
   "title": "更新与发布",
   "eyebrow": "BUILD / RELEASE",
   "subtitle": "统一安装先发现与复用，生产闭包保留实际依赖，部署资源校验缓存后交付；三平台原生、GUI 交接与公开发行分别验收。",
-  "boundary": "图中机制已有实现，但构建、签名、安装、激活与公网分发必须对当前产物分别验收。插件、桌面应用、Android 与服务器是不同更新边界；源码测试或 artifact 存在不代表已正式发布。  install、instance-reuse、payload-policy、sidebar-closure、deployment-resources 已有对应源码；状态仅表示所述实现范围，不表示三平台原生安装、GUI 交接、真实模型推理或公开发行通过。默认 full 保留完整离线 seed，显式 online 走固定签名资源与缓存；Office/Python/Node/dsh-ops 保留。",
+  "boundary": "公开发行证据见设计正文的 v0.1.5。本轮候选仍须分别验收构建、签名、安装、激活、三平台原生运行、GUI 交接和公网分发。安装发现、实例复用、生产依赖闭包和部署资源已有源码。默认 full 保留完整离线 seed，显式 online 使用固定签名资源与缓存。",
   "nodes": [
     {
       "id": "version",
@@ -29,7 +29,7 @@
       "output": "独立版本和兼容引擎范围",
       "sources": [
         "package.json",
-        "plugins/benchgo/package.json",
+        "plugins/base/package.json",
         "plugins/link/mobile/android/app/build.gradle",
         "upstream.json",
         ".gitmodules"
@@ -51,8 +51,8 @@
       "input": "plugins 内业务源码、共享组件和资源",
       "output": "lib/modules、lib/client.js、lib/link-web",
       "sources": [
-        "plugins/benchgo/scripts/build-modules.mjs",
-        "plugins/benchgo/scripts/build-client.mjs",
+        "plugins/base/scripts/build-modules.mjs",
+        "plugins/base/scripts/build-client.mjs",
         "plugins/link/scripts/build-web.mjs"
       ],
       "note": "lib 是生成产物；开发 reload:plus 不能代替正式发行。",
@@ -74,8 +74,8 @@
       "sources": [
         "scripts/desktop/plugin-bundle.mjs",
         "scripts/desktop/package-plugin-update.mjs",
-        "plugins/benchgo/cordis.patch.yml",
-        "plugins/workbench/scripts/sidebar-runtime.mjs",
+        "plugins/base/cordis.patch.yml",
+        "plugins/base/workbench/scripts/sidebar-runtime.mjs",
         "scripts/desktop/payload-policy.mjs"
       ],
       "note": "唯一安装包是 benchgo-plugin；源码包不是额外安装插件。 复用真实来源去重、平台过滤及总包上限；嵌套 seed 版本/pin/输入摘要/公钥和完整性、分类逻辑体积/条目预算已有门禁。压缩收益及真实功能以当前发行产物另验。",
@@ -96,7 +96,7 @@
       "output": "benchgo-update.json 与独立签名",
       "sources": [
         "scripts/desktop/create-update-manifest.mjs",
-        "plugins/benchgo/shared/update-public-key.pem"
+        "plugins/base/shared/update-public-key.pem"
       ],
       "note": "插件签名不等于 EXE 发行者认证；私钥不进入代码或客户端。",
       "state": "implemented",
@@ -111,7 +111,7 @@
       "sub": "一个公开版本，复用没有变化的组件",
       "symbol": "v<releaseVersion> · plugin-updates · app-updates",
       "plain": "普通 push 保存源码，显式统一发版才通知客户端。",
-      "role": "统一工作流先比较签名发行基线，按需调用功能包、Windows、Android 构建；全部验证后发布不可变资产，再推进原生及签名更新通道。默认只生成计划。",
+      "role": "统一工作流先比较签名发行基线，按需构建功能包、Windows、Android、macOS 双架构及 Linux 服务端。验证后发布不可变资产，再推进更新通道。默认只生成计划。npm 匿名可用性及已验证产物恢复门槛见设计正文。",
       "input": "已签名清单、完整包、显式发布选项",
       "output": "可匿名下载的发行包与更新通道",
       "sources": [
@@ -137,7 +137,7 @@
       "input": "镜像/GitHub/自定义 HTTPS 配置、内置公钥",
       "output": "已验证 Release 与校验后的临时包文件",
       "sources": [
-        "plugins/benchgo/shared/update-feed.mjs"
+        "plugins/base/shared/update-feed.mjs"
       ],
       "note": "默认镜像为 ghfast.top；失败保留选择。404 是通道未就绪，其他校验失败仍是错误。",
       "state": "implemented",
@@ -156,8 +156,8 @@
       "input": "更新动作、当前版本、profile、运行任务状态",
       "output": "真实更新状态或冲突原因",
       "sources": [
-        "plugins/benchgo/src/updates.mjs",
-        "plugins/benchgo/client/updates.jsx"
+        "plugins/base/src/updates.mjs",
+        "plugins/base/client/updates.jsx"
       ],
       "note": "未知版本不显示已最新；远程手机看到的是主机插件状态，不是 APK 状态。",
       "state": "implemented",
@@ -176,7 +176,7 @@
       "input": "已校验压缩包、目标版本、runtime",
       "output": "可供激活的 release 描述与目录",
       "sources": [
-        "plugins/benchgo/shared/plugin-install.mjs"
+        "plugins/base/shared/plugin-install.mjs"
       ],
       "note": "准备目录完成不等于版本已激活，更不等于运行进程已经加载。",
       "state": "implemented",
@@ -195,7 +195,7 @@
       "input": "prepared release、profile、runtime",
       "output": "当前激活指针与待重启状态",
       "sources": [
-        "plugins/benchgo/shared/plugin-install.mjs",
+        "plugins/base/shared/plugin-install.mjs",
         "scripts/desktop/plugin-bundle.mjs"
       ],
       "note": "运行中代码不搬动；用户配置、禁用选择与会话保留。",
@@ -215,8 +215,8 @@
       "input": "已激活 profile 与下一次主机启动",
       "output": "实际加载的插件、五入口和客户端",
       "sources": [
-        "plugins/benchgo/src/updates.mjs",
-        "plugins/benchgo/shared/plugin-install.mjs",
+        "plugins/base/src/updates.mjs",
+        "plugins/base/shared/plugin-install.mjs",
         "scripts/desktop/plugin-bundle.mjs"
       ],
       "note": "必须检查物理包、官方解析入口与客户端，不只检查 manifest 版本。",
@@ -316,9 +316,9 @@
       "sources": [
         "scripts/desktop/plugin-bundle.mjs",
         "scripts/server/bootstrap.mjs",
-        "deepseek-harness/packages/skill/tool-workspace-dependencies/src/index.ts",
+        "https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/skill/tool-workspace-dependencies/src/index.ts",
         "docs/05-更新与发布/设计.md",
-        "plugins/benchgo/shared/workbench-installation.mjs",
+        "plugins/base/shared/workbench-installation.mjs",
         "scripts/desktop/workbench-desktop.mjs",
         "packages/benchgo-cli/src/host.mjs",
         "packages/benchgo-cli/src/installer.mjs"
@@ -340,12 +340,12 @@
       "input": "固定第三方版本、已有适配构建与真实资源引用",
       "output": "可脱离源码运行的侧栏主机、客户端资源及许可证",
       "sources": [
-        "plugins/workbench/scripts/vendor-adapter.mjs",
-        "plugins/workbench/src/plugin.mjs",
-        "plugins/benchgo/scripts/build-client.mjs",
+        "plugins/base/workbench/scripts/vendor-adapter.mjs",
+        "plugins/base/workbench/src/plugin.mjs",
+        "plugins/base/scripts/build-client.mjs",
         "docs/05-更新与发布/设计.md",
-        "plugins/workbench/scripts/sidebar-runtime.mjs",
-        "plugins/workbench/test/sidebar-runtime.test.mjs"
+        "plugins/base/workbench/scripts/sidebar-runtime.mjs",
+        "plugins/base/workbench/test/sidebar-runtime.test.mjs"
       ],
       "state": "implemented",
       "note": "生产闭包源码已有，生成产物脱离源码的真实文件、编辑器、终端、Mermaid、语言、预览及SSH仍按发行物验收。生成目录不手工维护，体积收益不把声明/demo重复计算。"
@@ -367,12 +367,12 @@
         "plugins/link/src/server/manager.mjs",
         "scripts/server/package-seed.mjs",
         "docs/05-更新与发布/设计.md",
-        "plugins/benchgo/shared/server-resources.mjs",
+        "plugins/base/shared/server-resources.mjs",
         "plugins/link/client/device-center.jsx",
         "scripts/desktop/package-plugin-update.mjs"
       ],
       "state": "implemented",
-      "note": "资源服务与UI源码已接线；匹配的在线资源必须真实公开发布，完整包损坏不静默回退网络。缓存命中仍校验，下载取消只清理临时内容；真实首次SSH/离线部署仍需产物验收，Office/Python/Node/dsh-ops保留。"
+      "note": "资源服务与UI源码已接线；匹配的在线资源必须真实公开发布，完整包损坏不静默回退网络。缓存命中仍校验，下载取消只清理临时内容；真实首次SSH/离线部署仍需产物验收，Office/Python/Node/dsh-ops保留。 SSH 核验已装实例及其身份，兼容时复用，缺失时走现有签名资源和部署流程。服务器更新继续按受管交付的版本与验签规则。"
     }
   ],
   "edges": [
@@ -557,6 +557,11 @@
       "node": "deployment-resources",
       "title": "已接线：签名缓存与离线交付",
       "text": "默认完整离线，显式online按固定签名资源取得、校验并原子缓存。预取、进度、资源阶段取消/重试已有入口；未发布匹配资源和失败不冒称可部署。"
+    },
+    {
+      "node": "deployment-resources",
+      "title": "添加服务器时复用兼容实例",
+      "text": "SSH 核验已装实例及其身份，兼容时复用，缺失时走现有签名资源和部署流程。服务器更新继续按受管交付的版本与验签规则。"
     }
   ],
   "docs": [
@@ -571,6 +576,10 @@
     {
       "label": "当前官方引擎锁定",
       "path": "upstream.json"
+    },
+    {
+      "label": "SSH 服务器运维",
+      "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
   "version": "2026-11-16-installation-implementation-1",

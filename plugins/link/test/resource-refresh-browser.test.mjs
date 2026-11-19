@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { officialUiEntries, officialUiLoaders } from '../scripts/official-ui.mjs';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -25,7 +25,7 @@ for (const eventName of ['visibilitychange', 'online']) {
       createRoot(document.getElementById('root')).render(<App/>);
     ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-resource-refresh'), format: 'iife', jsx: 'automatic', target: 'es2022',
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), ...await officialUiEntries() },
-    nodePaths: [join(root, 'plugins/link/node_modules'), join(root, 'plugins/benchgo/node_modules')], plugins: [sharedUiStyles()],
+    nodePaths: [join(root, 'plugins/link/node_modules'), join(root, 'plugins/base/node_modules')], plugins: [sharedUiStyles()],
     loader: { '.css': 'text', '.svg': 'text', ...officialUiLoaders }, define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
     const browser = await chromium.launch({ headless: true, executablePath });
     let releaseRead;

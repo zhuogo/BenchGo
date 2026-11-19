@@ -153,6 +153,20 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
   // Merge before ordering: appending live replies after the user list moves
   // steering above the answer that was already visible when it was submitted.
   for (const reply of replies) if (!rows.some(row => row.key === reply.key)) rows.push(reply);
+  const deliveries = new Map();
+  for (const [field, files] of [['images', history.images], ['files', history.media]]) {
+    for (const file of files || []) {
+      const key = `generated-media:${file.groupId || file.id || file.url}`;
+      let row = deliveries.get(key);
+      if (!row) {
+        row = { key, role: 'assistant', kind: 'generated-media', seq: file.seq, images: [], files: [] };
+        deliveries.set(key, row);
+      }
+      if (!row[field].some(item => item.url === file.url)) row[field].push(file);
+      if (Number.isFinite(file.seq) && (!Number.isFinite(row.seq) || file.seq < row.seq)) row.seq = file.seq;
+    }
+  }
+  rows.push(...deliveries.values());
   return [...new Map(rows.map(row => [row.key, row])).values()]
     .sort(compareRows);
 }

@@ -1,4 +1,4 @@
-import { applySettingsOps, normalizeSettingsOps } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { applySettingsOps, normalizeSettingsOps } from '../../base/shared/settings-adapter-utils.mjs';
 import { validateIdentityName } from './identity.mjs';
 import { ASSISTANT_BLOCKED_PATHS, ASSISTANT_CONFIG_SCHEMA, LEARNING_CONFIG_SCHEMA } from './settings-schema.mjs';
 export function createAssistantSettingsAdapter(store, { applyConfig } = {}) {
@@ -26,9 +26,10 @@ export function createAssistantSettingsAdapter(store, { applyConfig } = {}) {
       if (namespace !== 'superagent') return ops;
       return ops.map(operation => {
         if (operation.op !== 'set') return operation;
-        if (operation.path.length === 1 && operation.path[0] === 'cardHtml' && typeof operation.value === 'string' && !operation.value.trim()) return { ...operation, value: null };
         if (operation.path.length === 1 && operation.path[0] === 'name') return { ...operation, value: validateIdentityName(operation.value) };
-        if (!operation.path.length && operation.value && typeof operation.value === 'object') { const value = { ...operation.value }; if (typeof value.cardHtml === 'string' && !value.cardHtml.trim()) value.cardHtml = null; if (Object.hasOwn(value, 'name')) value.name = validateIdentityName(value.name); return { ...operation, value }; }
+        if (!operation.path.length && operation.value && typeof operation.value === 'object' && Object.hasOwn(operation.value, 'name')) {
+          return { ...operation, value: { ...operation.value, name: validateIdentityName(operation.value.name) } };
+        }
         return operation;
       });
     },

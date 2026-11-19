@@ -5,12 +5,12 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const captureDir = process.env.BENCHGO_WIDTH_SCREENSHOTS;
 
@@ -32,7 +32,7 @@ async function fixture() {
     window.resizeWidth=width=>document.querySelector('.fixture-column').style.width=width+'px';
     window.setPreference=value=>{if(value===null)localStorage.removeItem('dsh.conversation.contentWidth');else localStorage.setItem('dsh.conversation.contentWidth',value);window.dispatchEvent(new StorageEvent('storage',{key:'dsh.conversation.contentWidth'}));};
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-width-test'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts') },
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   const themeRoot = join(root, 'deepseek-harness/packages/client/ui-theme/src/styles');

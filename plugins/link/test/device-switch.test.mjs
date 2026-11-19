@@ -4,14 +4,20 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { connectDeviceSwitch, deviceSwitchFrameMessage, deviceSwitchItems, deviceSwitchState } from '../client/device-switch.mjs';
-import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
+import { readJsonResponse } from '../../base/client/http-response.mjs';
 import { deviceIcon, deviceKind, deviceStatus, workbenchUrl } from '../client/device-state.mjs';
+import { observeHostTheme, sendWorkbenchTheme, themedWorkbenchUrl } from '../client/device-theme.mjs';
 
 const require = createRequire(new URL('../package.json', import.meta.url));
 const source = await readFile(new URL('../client/device-switch.jsx', import.meta.url), 'utf8');
 const code = require('esbuild').transformSync(source, { loader: 'jsx', format: 'cjs' }).code;
 const nodes = value => value && typeof value === 'object' ? [value, ...(value.children || []).flatMap(nodes)] : [];
 const textOf = value => typeof value === 'object' ? (value?.children || []).map(textOf).join('') : String(value ?? '');
+function frameAddress(frame) {
+  const url = new URL(frame.props.src);
+  url.hash = '';
+  return url.href;
+}
 
 test('sidebar switch stays hidden for one device and labels the real active workbench', () => {
   assert.equal(deviceSwitchState({ devices: [] }).multiple, false);
@@ -48,7 +54,7 @@ function fixture(responses) {
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
     setTimeout(fn) { const id = {}; timers.set(id, fn); return id; }, clearTimeout(id) { timers.delete(id); },
     fetch: async (url, input) => { requests.push({ url: String(url), body: input.body }); const next = responses.shift(); if (next instanceof Response) return next; return Response.json(next); },
-    require: id => id === 'react' ? react : id === 'react-dom' ? { createPortal: child => child } : id.includes('ui-primitives') ? { Menu: 'Menu' } : id.includes('http-response') ? { readJsonResponse } : id.includes('device-switch.mjs') ? { deviceSwitchState, connectDeviceSwitch: args => connectDeviceSwitch({ ...args, host }), deviceSwitchFrameMessage } : { deviceIcon, deviceKind, deviceStatus, workbenchUrl },
+    require: id => id === 'react' ? react : id === 'react-dom' ? { createPortal: child => child } : id.includes('ui-primitives') ? { Menu: 'Menu' } : id.includes('http-response') ? { readJsonResponse } : id.includes('device-switch.mjs') ? { deviceSwitchState, connectDeviceSwitch: args => connectDeviceSwitch({ ...args, host }), deviceSwitchFrameMessage } : id.includes('device-theme') ? { observeHostTheme: fn => observeHostTheme(fn, host), sendWorkbenchTheme, themedWorkbenchUrl: url => themedWorkbenchUrl(url, host) } : { deviceIcon, deviceKind, deviceStatus, workbenchUrl },
   });
   const render = () => { dirty = false; cursor = 0; tree = module.exports.DeviceSwitch(); for (const effect of effects.splice(0)) effect(); };
   return { host, requests, document, listeners, windowListeners, timers, expire() { const pending = [...timers.values()]; timers.clear(); pending.forEach(fn => fn()); }, get tree() { return tree; }, nodes: () => nodes(tree), async settle() { for (let i = 0; i < 8; i++) { if (dirty) render(); await new Promise(resolve => setImmediate(resolve)); } }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
@@ -59,14 +65,14 @@ test('unresponsive workbench times out and retry obtains a fresh entry instead o
   const view = fixture([{ devices }, { url: 'http://127.0.0.1:9101/enter?ticket=one' }, { devices }, { url: 'http://127.0.0.1:9101/enter?ticket=two' }, { devices }]);
   await view.settle();
   view.listeners.get('benchgo:device-select')({ detail: { deviceId: 'cloud' } }); await view.settle();
-  assert.equal(view.nodes().find(node => node.type === 'iframe').props.src, 'http://127.0.0.1:9101/enter?ticket=one');
+  assert.equal(frameAddress(view.nodes().find(node => node.type === 'iframe')), 'http://127.0.0.1:9101/enter?ticket=one');
   view.expire(); await view.settle();
   assert(view.nodes().some(node => node.props.role === 'alert' && textOf(node).includes('设备工作台未响应')));
   await view.nodes().find(node => node.type === 'button' && textOf(node) === '重试').props.onClick(); await view.settle();
-  assert.equal(view.nodes().find(node => node.type === 'iframe').props.src, 'http://127.0.0.1:9101/enter?ticket=two');
+  assert.equal(frameAddress(view.nodes().find(node => node.type === 'iframe')), 'http://127.0.0.1:9101/enter?ticket=two');
   assert.equal(view.requests.filter(item => JSON.parse(item.body).action === 'select').length, 2);
   const child = { postMessage() {} }, frame = view.nodes().find(node => node.type === 'iframe');
-  frame.props.ref({ contentWindow: child }); frame.props.onLoad(); await view.settle();
+  frame.props.ref({ contentWindow: child }); frame.props.onLoad({ currentTarget: { contentWindow: child } }); await view.settle();
   view.windowListeners.get('message')({ source: child, origin: 'http://127.0.0.1:9101', data: { type: 'benchgo:device-switch:ready' } }); await view.settle();
   assert.equal(view.nodes().filter(node => node.props.className === 'dsh-device-switch-loading').length, 0);
   assert.equal(view.timers.size, 0);
@@ -80,9 +86,21 @@ test('device center selection refreshes a newly paired target before opening its
   const view = fixture([{ devices: devices.slice(0, 1) }, { devices }, { url: 'http://127.0.0.1:9102/enter?ticket=new' }, { devices }]);
   await view.settle();
   view.listeners.get('benchgo:device-select')({ detail: { deviceId: 'new' } }); await view.settle();
-  assert.equal(view.nodes().find(node => node.type === 'iframe').props.src, 'http://127.0.0.1:9102/enter?ticket=new');
+  assert.equal(frameAddress(view.nodes().find(node => node.type === 'iframe')), 'http://127.0.0.1:9102/enter?ticket=new');
   view.nodes().find(node => node.type === 'iframe').props.onError(); await view.settle();
   assert(view.nodes().some(node => node.props.role === 'alert' && textOf(node).includes('加载失败')));
+  view.unmount();
+});
+
+test('a Windows workbench selection forwards a structured SSH authentication failure to the device center', async () => {
+  const devices = [{ id: 'ssh-server', name: '香港', kind: 'ssh', sshManaged: true }];
+  const response = Response.json({ error: '请重新认证 SSH', code: 'SSH_AUTH_REQUIRED' }, { status: 401 });
+  const view = fixture([{ devices }, response]); await view.settle();
+  const requests = [];
+  view.document.addEventListener('benchgo:device-ssh-auth', event => requests.push(event.detail.deviceId));
+  view.listeners.get('benchgo:device-select')({ detail: { deviceId: 'ssh-server' } }); await view.settle();
+  assert.deepEqual(requests, ['ssh-server']);
+  assert.equal(view.nodes().some(node => node.type === 'iframe'), false);
   view.unmount();
 });
 
@@ -102,7 +120,7 @@ test('Windows sidebar lists saved devices and preserves local and remote pages',
   assert.equal(view.requests[2].url, 'http://127.0.0.1:8000/api/commander-devices');
   assert.equal(JSON.parse(view.requests.find(item => item.body?.includes('"select"')).body).deviceId, 'cloud');
   const frame = view.nodes().find(node => node.type === 'iframe');
-  assert.equal(frame.props.src, 'http://127.0.0.1:9101/s/work/');
+  assert.equal(frameAddress(frame), 'http://127.0.0.1:9101/s/work/');
   assert.equal(frame.props.hidden, false);
   assert.equal(view.nodes().find(node => node.props.className === 'dsh-device-switch-stage').props.hidden, false);
   view.nodes().find(node => node.props['aria-label'] === '当前工作台：dsh.draftgo.cn').props.onClick(); await view.settle();
@@ -179,7 +197,7 @@ test('caption toggle forwards to the active ready remote without changing the lo
   assert.equal(prevented, 0);
   view.listeners.get('benchgo:device-select')({ detail: { deviceId: 'remote' } }); await view.settle();
   const sent = [], child = { postMessage(data, origin) { sent.push({ data, origin }); } };
-  const frame = view.nodes().find(node => node.type === 'iframe'); frame.props.ref({ contentWindow: child }); frame.props.onLoad(); await view.settle();
+  const frame = view.nodes().find(node => node.type === 'iframe'); frame.props.ref({ contentWindow: child }); frame.props.onLoad({ currentTarget: { contentWindow: child } }); await view.settle();
   view.windowListeners.get('message')({ source: child, origin: 'http://127.0.0.1:9101', data: { type: 'benchgo:device-switch:ready' } }); await view.settle();
   assert.equal(sent.find(item => item.data.type === 'benchgo:device-switch:init').data.desktopSidebar, true);
   view.listeners.get('benchgo:sidebar-toggle')({ preventDefault() { prevented++; } });

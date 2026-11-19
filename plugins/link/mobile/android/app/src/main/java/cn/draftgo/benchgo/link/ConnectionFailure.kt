@@ -39,6 +39,8 @@ internal fun connectionFailureMessage(error: Throwable, hostUrl: String, pinned:
         "请确认手机可以访问该 HTTPS 地址，远程主机的 Link 服务已开启；请由管理员检查 HTTPS 反向代理、端口和服务器防火墙。也可重新扫描主机的新配对二维码。"
     }
     return when {
+        error is RouteHttpFailure && (error.status == 401 || error.status == 403) -> "设备授权已失效，请重新配对。"
+        error is RouteHttpFailure || error is RelayRoutesCooling || error is HostIdentityFailure -> error.message.orEmpty()
         causes.any { it is UnknownHostException } -> "找不到主机 $host，请检查配对地址。$networkHelp"
         causes.any { it is SocketTimeoutException } -> "连接主机 $host 超时。$networkHelp"
         causes.any { it is ConnectException || it is NoRouteToHostException } -> "无法连接主机 $host。$networkHelp"

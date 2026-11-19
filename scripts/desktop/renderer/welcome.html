@@ -11,14 +11,17 @@
   <body>
     <div class="drag-region" aria-hidden="true"></div>
     <main>
+      <div class="startup-field" aria-hidden="true"></div>
       <div class="startup-brand">
-        <img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt="BenchGo" width="72" height="72">
+        <img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt="" width="72" height="72">
         <h1>BenchGo</h1>
       </div>
-      <span class="startup-engine">DeepSeek</span>
-      <p id="startup-status" class="startup-status" role="status" aria-live="polite"></p>
-      <div class="startup-loading" role="progressbar" aria-label="正在加载"></div>
-      <button id="startup-retry" type="button" hidden>重试</button>
+      <div class="startup-feedback">
+        <span class="startup-engine">DeepSeek</span>
+        <p id="startup-status" class="startup-status" role="status" aria-live="polite">正在打开工作台…</p>
+        <div class="startup-loading" role="progressbar" aria-label="正在加载"><span aria-hidden="true"></span></div>
+        <button id="startup-retry" type="button" hidden>重试</button>
+      </div>
     </main>
   </body>
 </html>

@@ -102,7 +102,7 @@ test('remote Run recovery never opens a host official session under the peer ses
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.createThread({ id: 'remote-thread', source: { type: 'desktop', id: 'owner' } });
-  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'paired-B', config: { harness: 'official', models: [{ providerId: 'opaque', modelId: 'opaque/model' }] } };
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'paired-B', protocolVersion: 2, config: { harness: 'official', models: [{ providerId: 'opaque', modelId: 'opaque/model' }] } };
   const task = database.createTask({ threadId: 'remote-thread', target: 'remote task', mandate: { execution } });
   database.createAssignment(task.id, { id: 'remote-assignment', executor: 'remote', execution });
   const [assignment] = database.claimAssignments('observer', { validateMandate: () => true });

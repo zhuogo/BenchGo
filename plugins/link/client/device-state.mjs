@@ -1,7 +1,11 @@
-const statuses = { online: '可连接', connected: '已连接', offline: '离线', connecting: '连接中', failed: '连接失败', disconnected: '未连接', unknown: '' };
+const statuses = { online: '可连接', connected: '已连接', offline: '离线', connecting: '连接中', failed: '连接失败', disconnected: '未连接', 'auth-required': '待认证', unknown: '' };
 export function deviceStatus(device) { return statuses[device?.status] || ''; }
+export function sshStatus(device) {
+  if (!device?.sshManaged) return '';
+  return deviceStatus({ status: device.sshStatus }) || '待检查';
+}
 export function deviceIcon(device) {
-  const type = device?.deviceType || device?.kind;
+  const type = device?.sshManaged ? 'server' : device?.deviceType || device?.kind;
   if (['mobile', 'phone', 'android', 'ios', 'tablet'].includes(type)) return 'mobile';
   if (['ssh', 'server'].includes(type)) return 'server';
   if (['local', 'computer', 'desktop', 'laptop'].includes(type)) return 'computer';
@@ -14,7 +18,12 @@ export function sshInput(form) {
   const port = Number(form.port);
   if (!form.host.trim() || !form.username.trim()) throw new Error('请填写服务器地址和用户名');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SSH 端口应为 1–65535');
-  return { host: form.host.trim(), port, username: form.username.trim(), name: form.name.trim() || form.host.trim(), source: form.source, ...(form.auth === 'key' ? { privateKey: form.privateKey, passphrase: form.passphrase } : { password: form.password }) };
+  return { host: form.host.trim(), port, username: form.username.trim(), name: form.name.trim() || form.host.trim(), source: form.source, ...sshCredentials(form) };
+}
+export function sshCredentials(form) {
+  if (form.auth === 'agent') return {};
+  if (form.auth === 'key') return { privateKey: form.privateKey, passphrase: form.passphrase };
+  return { password: form.password };
 }
 /** Only isolated loopback proxies or trusted HTTPS workbenches may be embedded. */
 export function workbenchUrl(value, origin) {

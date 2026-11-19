@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { compareVersions, resolveUpdateUrl, validateReleaseManifest } from '../../plugins/benchgo/shared/update-feed.mjs';
+import { compareVersions, resolveUpdateUrl, validateReleaseManifest } from '../../plugins/base/shared/update-feed.mjs';
 import { github, githubJson, assetBytes, findPreviousRelease, readSignedRelease, releaseKind, sha256 } from './github.mjs';
 import { fileDigest } from './record-artifact.mjs';
 import { immutableArtifact } from './assemble.mjs';
@@ -222,7 +222,7 @@ export async function publishRelease({ plan, directory, recovery }) {
   const output = resolve(directory), raw = await readFile(resolve(output, 'benchgo-update.json'));
   const signatureBytes = await readFile(resolve(output, 'benchgo-update.json.sig'));
   const signature = signatureBytes.toString('utf8');
-  const publicKey = createPublicKey(await readFile(new URL('../../plugins/benchgo/shared/update-public-key.pem', import.meta.url)));
+  const publicKey = createPublicKey(await readFile(new URL('../../plugins/base/shared/update-public-key.pem', import.meta.url)));
   if (!verify(null, raw, publicKey, Buffer.from(signature.trim(), 'base64'))) throw new Error('Cannot publish an invalid signed manifest');
   const manifest = validateReleaseManifest(JSON.parse(raw.toString('utf8'))), source = JSON.parse(await readFile(resolve(output, 'release-source.json'), 'utf8'));
   if (manifest.releaseVersion !== plan.releaseVersion || manifest.sourceSha !== plan.sourceSha || source.kind !== releaseKind

@@ -1,5 +1,6 @@
 import typographyCss from '../../shared/client/chat-typography.css';
 import { Button } from '../../shared/client/ui/button.jsx';
+import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import React, { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { quietChatRows, historyReconcileSeq } from './quiet-chat.mjs';
 import css from './quiet-chat.css';
@@ -7,14 +8,15 @@ import { MessageActions } from './message-actions.jsx';
 import { projectReplyRows, conversationActivity } from './reply-stream.mjs';
 import { ConversationActivity } from './conversation-activity.jsx';
 import { createPortal } from 'react-dom';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { useChatScroll } from './use-chat-scroll.jsx';
 import { TaskAttention } from './task-attention.jsx';
 import { taskSnapshot } from './task-state.mjs';
 import { InlineApproval, useApprovalIndex } from './approval-review.jsx';
 import { approvalReminderNavigation } from './approval-flow.mjs';
-import { sendInteractive } from '../../interactive/client/send.mjs';
-import { AssistantReply } from './reply-images.jsx';
+import { sendInteractive } from '../../base/interactive/client/send.mjs';
+import { AssistantReply, ReplyDeliverables } from './reply-images.jsx';
+import { ChatNotice } from './chat-notice.jsx';
 
 const labels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' };
 const NO_STATUSES = new Map();
@@ -50,13 +52,16 @@ export function QuestionReply({ row }) {
 // Token updates and history polls re-render the transcript container. Each row
 // renders again only when its own data or controls change.
 const ChatRow = memo(function ChatRow({ row, attention, saved, agentReaction, chosen, approvalIndex, busy, running, assistantName, threadId, api, onRefresh, onRun, onChosen, onSubmit, onOpenFile, SessionProvider, renderSlot }) {
+  if (row.kind === 'generated-media') return <article className="ba-chat-message" data-chat-key={row.key} data-role="assistant">
+    <div className="ba-chat-body"><ReplyDeliverables images={row.images} files={row.files} /></div>
+  </article>;
+  if (row.role === 'system') return <ChatNotice noticeKey={row.key} message={<>{row.title && <strong>{row.title} </strong>}<span>{row.text}</span></>}>
+    {row.requestId && onRefresh && <Button variant="link" size="sm" type="button" disabled={busy} onClick={() => onRun(onRefresh)}>重新核实</Button>}
+  </ChatNotice>;
   return <article className="ba-chat-message" data-approval-event={row.approval?.eventKey} data-approval-request={row.approval ? row.requestId : undefined} tabIndex={row.approval ? -1 : undefined} data-chat-key={row.key} data-role={row.role} data-streaming={row.streaming ? 'true' : undefined}>
     <div className="ba-chat-body">
-    {row.role === 'assistant' && row.kind !== 'channel-message' ? <AssistantReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={running || !!row.provisional} onSubmit={onSubmit} onOpenFile={onOpenFile} fileRequestId={row.requestId} assistantName={assistantName || 'BenchGo'} /> : <div className="ba-chat-content" aria-label={row.role === 'system' ? '消息状态' : row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : assistantName || 'BenchGo'}>
-    {row.kind === 'channel-message' ? <div className="ba-chat-user-text">{row.text}</div> : row.kind === 'question-reply' ? <QuestionReply row={row} /> : row.role === 'user' ? <div className="ba-chat-user-text">{row.text}</div> : <div className="ba-chat-status" role="alert">
-      {row.title && <strong>{row.title}</strong>}<span>{row.text}</span>
-      {row.requestId && onRefresh && <Button variant="link" size="sm" className="ba-chat-status-link" type="button" disabled={busy} onClick={() => onRun(onRefresh)}>重新核实</Button>}
-    </div>}
+    {row.role === 'assistant' && row.kind !== 'channel-message' ? <AssistantReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={running || !!row.provisional} onSubmit={onSubmit} onOpenFile={onOpenFile} fileRequestId={row.requestId} assistantName={assistantName || 'BenchGo'} /> : <div className="ba-chat-content" aria-label={row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : assistantName || 'BenchGo'}>
+    {row.kind === 'question-reply' ? <QuestionReply row={row} /> : <div className="ba-chat-user-text">{row.text}</div>}
     {row.role === 'user' && (row.content || []).filter(block => ['image', 'file'].includes(block.type)).map((block, index) => <span className="ba-chat-attachment" key={index}>{block.type === 'image' ? '已附图片' : `已附文件${block.name ? `：${block.name}` : ''}`}</span>)}
     </div>}
     </div><div className="ba-chat-followup">
@@ -64,11 +69,11 @@ const ChatRow = memo(function ChatRow({ row, attention, saved, agentReaction, ch
     {attention && <TaskAttention key={attention.id} api={api} attention={attention} showQuestion={!row.attention} task={{ id: row.taskId, status: row.taskStatus, executionControl: row.currentExecutionControl, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={onRefresh} />}
     {row.notification && row.role !== 'system' && !row.attention && row.eventId && row.options?.length > 0 && <div className="ba-chat-options" aria-label="回复选项（不代表审批）">{row.options.map(option => <Button variant="ghost" type="button" className="ba-quiet" key={option} disabled={busy || running || !!chosen} onClick={() => onRun(async () => { await api('notificationOption', { eventId: row.eventId, threadId, text: option }); onChosen(value => ({ ...value, [row.eventId]: option })); await onRefresh?.(); })}>{option}{chosen === option ? ' · 已发送' : ''}</Button>)}</div>}
     </div>
-    {row.role !== 'system' && row.kind !== 'channel-message' && <MessageActions row={row} saved={saved} agentReaction={agentReaction} assistantName={assistantName} api={api} onRefresh={onRefresh} threadId={threadId} />}
+    {row.kind !== 'channel-message' && <MessageActions row={row} saved={saved} agentReaction={agentReaction} assistantName={assistantName} api={api} onRefresh={onRefresh} threadId={threadId} />}
   </article>;
 });
 
-export function QuietChat({ home, session, chat, inbox, onOpenFile }) {
+export function QuietChat({ home, session, chat, inbox, onOpenFile, petError }) {
   const { history = {}, threadId = 'main', api, onLoadEarlier } = home;
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [chosen, setChosen] = useState({});
   const refresh = useRef(home.onRefresh);
@@ -99,6 +104,8 @@ export function QuietChat({ home, session, chat, inbox, onOpenFile }) {
   const replies = projectReplyRows({ history, chat, sessionId: home.sessionId, running: session.running });
   const projected = quietChatRows(history, threadId, session, chat, inbox, replies);
   const rows = useStableRows(projected);
+  const replyFailure = typeof history.error === 'string' ? history.error : history.error ? history.error.message || '回复失败' : '';
+  const failures = history.failures || [];
   const approvalIndex = useApprovalIndex({ ctx: home.ctx, api, ownerThreadId: threadId,
     enabled: rows.some(row => !!row.approval) });
   const approvalTarget = useSyncExternalStore(approvalReminderNavigation.subscribe, approvalReminderNavigation.getSnapshot);
@@ -163,11 +170,33 @@ export function QuietChat({ home, session, chat, inbox, onOpenFile }) {
         busy={(row.role === 'system' || !!row.notification) && busy} running={(row.role === 'assistant' || !!row.notification) && !!session.running} assistantName={home.assistantName} threadId={threadId} api={api} onRefresh={home.onRefresh}
         onRun={run} onChosen={setChosen} onSubmit={submitInteractive} onOpenFile={onOpenFile} SessionProvider={row.approval ? home.SessionProvider : undefined} renderSlot={row.approval ? home.renderSlot : undefined} />;
     })}
-    {(rows.length > 0 || activity || awaitingChoice) && <div className="ba-chat-tail">
+    {(replyFailure || failures.length > 0) && <ChatNotice noticeKey={replyFailure ? 'notice:reply-failed' : undefined} message={replyFailure ? '本次回复未完成，对话记录已保留。请重试或检查模型连接。' : undefined}>
+      <div className="ba-chat-notice-details">
+        {replyFailure && <Disclosure className="ba-chat-diagnostics" title="诊断详情">
+          <pre tabIndex={0} aria-label="诊断正文">{replyFailure}</pre>
+        </Disclosure>}
+        {failures.length > 0 && <Disclosure className="ba-chat-model-failures" title="模型连接记录">
+          <ul>{failures.map((failure, index) => <li key={index}>
+            <span>{failure.model?.modelId || '候选模型'}</span><span>{failure.reason || failure.message || '暂不可用'}</span>
+          </li>)}</ul>
+        </Disclosure>}
+      </div>
+    </ChatNotice>}
+    {home.loadError && <ChatNotice noticeKey="notice:load-failed" message={home.loadError}>
+      <div className="ba-chat-notice-actions">
+        <Button variant="ghost" type="button" onClick={home.onRetryLoad}>重试加载</Button>
+        <Button variant="ghost" type="button" onClick={home.onDismissLoadError}>关闭错误</Button>
+      </div>
+    </ChatNotice>}
+    {petError && <ChatNotice noticeKey="notice:pet-failed" message={`形象信息：${petError}`} />}
+    {error && <ChatNotice noticeKey="notice:action-failed" message={error} />}
+    {home.onConfigureModel && <ChatNotice message="还没有配置文本模型" alert={false}>
+      <Button variant="ghost" type="button" onClick={home.onConfigureModel}>去设置模型</Button>
+    </ChatNotice>}
+    {(rows.length > 0 || replyFailure || failures.length > 0 || home.loadError || petError || error || activity || awaitingChoice) && <div className="ba-chat-tail">
       {!replies.length && awaitingChoice && <div className="ba-chat-work ba-chat-await" role="status">在下方选项卡中作答后继续</div>}
       {activity && !awaitingChoice && <ConversationActivity activity={activity} />}
     </div>}
-    {error && <p className="ba-error" role="alert">{error}</p>}
   </div>{scroll.host && createPortal(<div className="ba-chat-bottom" data-visible={scroll.visible ? 'true' : 'false'}>
     <Button variant="ghost" type="button" className="ba-chat-bottom-button" onClick={scroll.returnToBottom} aria-label={scroll.unread ? '有新回复，回到最新消息' : '回到底部'} title="回到底部" tabIndex={scroll.visible ? 0 : -1} aria-hidden={!scroll.visible}>
       {scroll.unread && <span>有新回复</span>}<UIIcon name="chevronDown" size={20} />

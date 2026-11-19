@@ -3,7 +3,7 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import css from './system-files.css';
 import { ArtifactPreview } from '../../shared/client/artifact-preview.jsx';
 

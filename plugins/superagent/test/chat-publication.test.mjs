@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { activeChatReply, chatPublicationType, executionInputSource, installChatPublication, projectChatMessages, chatNotificationIdentities } from '../src/chat-publication.mjs';
 import { taskReplySource } from '../src/task-reply.mjs';
-import { chatPublicationRecordOf, hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../benchgo/shared/public-chat-record.mjs';
+import { chatPublicationRecordOf, hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../base/shared/public-chat-record.mjs';
 
 const user = { type: 'user/message', seq: 0, data: { id: 'human-1', source: { kind: 'user' }, content: [{ type: 'text', text: 'question' }] } };
 const reply = (seq, data = {}, extra = {}) => ({ seq, type: chatPublicationType, ignorable: true, data: { kind: 'final', requestId: 'human-1', text: 'answer', ...data }, ...extra });

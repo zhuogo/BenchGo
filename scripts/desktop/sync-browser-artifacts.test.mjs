@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
+import { releaseBundleName } from '../../plugins/base/shared/plugin-install.mjs';
 import { syncDesktopArtifacts, syncDesktopBrowserArtifacts } from './sync-browser-artifacts.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-browser-sync-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const profile = join(root, 'profile'), source = join(root, 'plugins/benchgo');
+  const profile = join(root, 'profile'), source = join(root, 'plugins/base');
   const releaseRoot = join(profile, '.benchgo/releases'), directory = join(releaseRoot, '0.1.1');
   const target = join(directory, 'node_modules/benchgo-plugin'), bundleName = releaseBundleName('0.1.1');
   const wrapper = join(directory, 'node_modules', bundleName);
@@ -38,10 +38,14 @@ async function fixture(t) {
 
 test('browser sync validates the selected release, preserves services and publishes client last', async t => {
   const f = await fixture(t), writes = [];
+  const ssh = join('lib', 'client.ssh.js');
+  await f.put(join(f.source, ssh), 'new:lib/client.ssh.js');
   const before = await readFile(join(f.profile, 'package.json'), 'utf8');
   const result = await syncDesktopBrowserArtifacts({ root: f.root, profile: f.profile, write: async (path, bytes) => { writes.push(path); await writeFile(path, bytes); } });
   assert.equal(result.synced, true);
   assert.equal(writes.at(-1), join(f.target, 'lib/client.js'));
+  assert.equal(writes.at(-2), join(f.target, ssh));
+  assert.equal(await readFile(writes.at(-2), 'utf8'), 'new:lib/client.ssh.js');
   assert.equal(await readFile(writes.at(-1), 'utf8'), 'new:lib/client.js');
   assert.equal(await readFile(join(f.target, 'lib/preview/markdown.js'), 'utf8'), 'new:lib/preview/markdown.js');
   assert.equal(await readFile(join(f.target, 'lib/link-web/index.html'), 'utf8'), 'new:lib/link-web/index.html');

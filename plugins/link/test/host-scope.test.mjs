@@ -5,14 +5,14 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:https';
-import { hostScope } from '../../benchgo/shared/host-scope.mjs';
+import { hostScope } from '../../base/shared/host-scope.mjs';
 import { mountLink } from '../src/index.mjs';
 
 test('host scope survives module replacement without retaining HMR or request identity', async () => {
   const hmr = new AsyncLocalStorage(), identity = new AsyncLocalStorage();
   const root = {};
   const initial = hostScope({ root });
-  const replacement = await hmr.run(true, () => import('../../benchgo/shared/host-scope.mjs?reload-test'));
+  const replacement = await hmr.run(true, () => import('../../base/shared/host-scope.mjs?reload-test'));
   await identity.run('paired-device', async () => {
     await hmr.run(true, async () => {
       const scope = replacement.hostScope({ root });

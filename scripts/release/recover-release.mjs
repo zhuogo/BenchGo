@@ -14,7 +14,7 @@ import { github, githubJson, releaseKind, sha256 } from './github.mjs';
 import { fileDigest } from './record-artifact.mjs';
 import { validateReceipt } from './assemble.mjs';
 import { downloadPlatforms, validatePlatformReceipt, verifyDownloads } from './downloads.mjs';
-import { releaseDownloadUrl, validateReleaseManifest, verifySignedJson } from '../../plugins/benchgo/shared/update-feed.mjs';
+import { releaseDownloadUrl, validateReleaseManifest, verifySignedJson } from '../../plugins/base/shared/update-feed.mjs';
 
 const execute = promisify(execFile);
 const safeName = name => typeof name === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name);
@@ -124,7 +124,13 @@ with zipfile.ZipFile(archive) as z:
   return JSON.parse(stdout);
 }
 
-export async function verifyRecoveryBundle({ plan, directory, inventory, publicKey }) {
+export function recoveryStagingPath(sourcePaths) {
+  const matches = sourcePaths.filter(path => path === 'plugins/base/package.json' || path === 'plugins/benchgo/package.json');
+  if (matches.length !== 1) throw new Error('Original product source must identify one plugin staging path');
+  return matches[0];
+}
+
+export async function verifyRecoveryBundle({ plan, directory, inventory, publicKey, stagingPath }) {
   if (plan.schemaVersion !== 1 || plan.kind !== releaseKind || plan.tag !== `v${plan.releaseVersion}`
     || !sourceSha(plan.sourceSha) || !version(plan.releaseVersion) || Object.values(plan.builds).some(value => value !== true)
     || Object.keys(plan.builds).sort().join(',') !== 'android,plugin,windows') throw new Error('Recovery requires the original complete release plan');
@@ -158,7 +164,8 @@ export async function verifyRecoveryBundle({ plan, directory, inventory, publicK
     accounted.add(file.name);
   };
   for (const component of ['plugin', 'windows', 'android']) {
-    const receiptName = `${component}-source.json`, receipt = validateReceipt(JSON.parse(await bytes(receiptName)), plan, component);
+    const receiptName = `${component}-source.json`;
+    const receipt = validateReceipt(JSON.parse(await bytes(receiptName)), plan, component, { stagingPath });
     accounted.add(receiptName);
     const payload = receipt.files.find(file => file.name === receipt.artifact), artifact = component === 'windows' ? manifest.app : manifest[component];
     if (artifact.version !== receipt.version || artifact.url !== releaseDownloadUrl(payload.name, plan.tag) || artifact.size !== payload.size || artifact.sha256 !== payload.sha256
@@ -197,8 +204,11 @@ export async function verifyRecoveryPublication({ plan, directory, recovery }) {
   if (sha256(planBytes) !== planInventory[0].sha256) throw new Error('Original plan bytes changed');
   assert.deepEqual(JSON.parse(planBytes), plan);
   const inventory = await inspectArchive(recovery.readyArchive);
-  const verified = await verifyRecoveryBundle({ plan, directory, inventory,
-    publicKey: await readFile(new URL('../../plugins/benchgo/shared/update-public-key.pem', import.meta.url)) });
+  const { stdout } = await execute('git', ['ls-tree', '-r', '--name-only', context.productSource, '--', 'plugins/base/package.json', 'plugins/benchgo/package.json'],
+    { cwd: fileURLToPath(new URL('../../', import.meta.url)) });
+  const stagingPath = recoveryStagingPath(stdout.trim().split(/\r?\n/));
+  const verified = await verifyRecoveryBundle({ plan, directory, inventory, stagingPath,
+    publicKey: await readFile(new URL('../../plugins/base/shared/update-public-key.pem', import.meta.url)) });
   const proof = { schemaVersion: 1, runId: context.runId, productSource: context.productSource, publisherSource: context.publisherSource,
     releaseVersion: plan.releaseVersion, originalArtifacts: Object.values(context.artifacts).map(({ id, name, size_in_bytes, digest }) => ({ id, name, size: size_in_bytes, digest })),
     ...verified, rebuilt: false, resigned: false };

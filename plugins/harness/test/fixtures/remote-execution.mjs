@@ -8,6 +8,7 @@ export function remoteExecutionFixture() {
     return invoke(0);
   };
   const services = {
+    commander: { pickerCatalog: { list: async () => ({ routes: [{ tool: 'deepseek', providerId: 'exact-provider', nativeModelId: 'opaque-model/1', name: 'Exact' }] }) } },
     llm: { listProviders: () => [{ id: 'exact-provider' }], listModels: async () => [{ id: 'opaque-model/1', name: 'Exact' }],
       resolveModelInfo: async (provider, id) => ({ provider, id, name: 'Exact' }) },
     workspaceRegistry: { list: () => [] },

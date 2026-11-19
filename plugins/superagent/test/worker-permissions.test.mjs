@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
-import { installWorkerPermissionGate } from '../src/worker-permissions.mjs';
+import { installWorkerFailureConvergence, installWorkerPermissionGate } from '../src/worker-permissions.mjs';
 
 test('desktop tools ignore channel revisions but stop on desktop authority changes', async () => {
   let wrapper, desktopVersion = 'd1', version = 'f1', changeDesktop = false;
@@ -53,6 +53,22 @@ test('cancellation while rereading policy cannot enter tool dispatch', async t =
   await assert.rejects(wrapper({ signal: controller.signal }, () => { dispatched = true; }), /cancelled/);
   assert.equal(renewed, false);
   assert.equal(dispatched, false);
+});
+
+for (const code of ['PROFILE_CONFIG_DIRECT_WRITE', 'PROFILE_CONFIG_RESTORED']) test(`configuration guard failure stops the Worker immediately (${code})`, () => {
+  const listeners = new Map(), agent = {}; let stopped;
+  installWorkerFailureConvergence({ on: (event, fn) => listeners.set(event, fn) }, agent, {
+    database: { getTask: () => ({ instructionRevision: 1 }) }, assignment: { taskId: 'task' }, onStop: value => { stopped = value; },
+  });
+  listeners.get('tools/result')({ agent, callId: 'config-write', name: 'shell' }, {
+    isError: true, error: { code }, content: [{ type: 'text', text: `${code}: direct profile configuration is blocked` }],
+  });
+  let continued = false;
+  const outcome = listeners.get('agent/pre-step')({ messages: [] }, () => { continued = true; });
+  assert.deepEqual(outcome, { kind: 'reject' });
+  assert.equal(continued, false);
+  assert.equal(stopped.code, code);
+  assert.equal(stopped.callId, 'config-write');
 });
 
 for (const nested of [false, true]) test(`interrupted continuation mechanically blocks completed action replay (nested=${nested})`, async () => {

@@ -9,6 +9,7 @@ import { verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyStartupBundle } from './prepare-startup.mjs';
 import { verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
 import { verifyBackgroundBundle } from './prepare-background.mjs';
+import { verifyUpdateBridgeBundle } from './prepare-update-bridge.mjs';
 import { assertSidebarPayload, DESKTOP_ELECTRON_LANGUAGES, inspectPluginPayload } from './payload-policy.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -50,16 +51,22 @@ config.extraResources = config.extraResources.map(resource => resource.to === 'i
 if (!config.files.includes('lib/main.js')) throw new Error('Official desktop main file mapping changed; review tray packaging');
 const desktopMain = `${root}/deepseek-harness/apps/desktop/lib/main.js`;
 const stagedMain = `${root}/.local/desktop/main/main.js`;
-let officialMainBytes;
+const desktopPreload = `${root}/deepseek-harness/apps/desktop/lib/preload-app.cjs`;
+const stagedPreload = `${root}/.local/desktop/main/preload-app.cjs`;
+let officialMainBytes, officialPreloadBytes;
 const officialBeforePack = config.beforePack;
 config.beforePack = async context => {
   officialMainBytes = await readFile(desktopMain);
-  await copyFile(stagedMain, desktopMain);
+  officialPreloadBytes = await readFile(desktopPreload);
   try {
+    await copyFile(stagedMain, desktopMain);
+    await copyFile(stagedPreload, desktopPreload);
     await officialBeforePack?.(context);
   } catch (error) {
     await writeFile(desktopMain, officialMainBytes);
+    await writeFile(desktopPreload, officialPreloadBytes);
     officialMainBytes = undefined;
+    officialPreloadBytes = undefined;
     throw error;
   }
 };
@@ -70,12 +77,15 @@ config.afterAllArtifactBuild = async context => {
     return await officialAfterAll?.(context);
   } finally {
     if (officialMainBytes) await writeFile(desktopMain, officialMainBytes);
+    if (officialPreloadBytes) await writeFile(desktopPreload, officialPreloadBytes);
     officialMainBytes = undefined;
+    officialPreloadBytes = undefined;
   }
 };
 process.once('exit', () => {
   if (!officialMainBytes) return;
   writeFileSync(desktopMain, officialMainBytes);
+  if (officialPreloadBytes) writeFileSync(desktopPreload, officialPreloadBytes);
 });
 config.files.push('!renderer/welcome.html',
   { from: `${brandOutput}/renderer`, to: 'renderer', filter: ['**/*'] });
@@ -85,9 +95,9 @@ config.extraResources.push({ from: `${root}/scripts/desktop/plugin-bundle.mjs`, 
 config.extraResources.push({ from: `${root}/scripts/desktop/workbench-desktop.mjs`, to: 'benchgo/workbench-desktop.mjs' });
 config.extraResources.push({ from: `${root}/scripts/desktop/payload-policy.mjs`, to: 'benchgo/payload-policy.mjs' });
 config.extraResources.push({ from: `${root}/scripts/desktop/install-cleanup.mjs`, to: 'benchgo/install-cleanup.mjs' });
-config.extraResources.push({ from: `${root}/plugins/benchgo/shared/plugin-install.mjs`, to: 'benchgo/shared/plugin-install.mjs' });
-config.extraResources.push({ from: `${root}/plugins/benchgo/shared/update-feed.mjs`, to: 'benchgo/shared/update-feed.mjs' });
-config.extraResources.push({ from: `${root}/plugins/benchgo/shared/workbench-installation.mjs`, to: 'benchgo/shared/workbench-installation.mjs' });
+config.extraResources.push({ from: `${root}/plugins/base/shared/plugin-install.mjs`, to: 'benchgo/shared/plugin-install.mjs' });
+config.extraResources.push({ from: `${root}/plugins/base/shared/update-feed.mjs`, to: 'benchgo/shared/update-feed.mjs' });
+config.extraResources.push({ from: `${root}/plugins/base/shared/workbench-installation.mjs`, to: 'benchgo/shared/workbench-installation.mjs' });
 const pluginSeed = `${root}/deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/plus-seed`;
 config.extraResources.push({ from: pluginSeed, to: 'benchgo/seed', filter: ['**/*'] });
 // Like the official runtime mapping, the seed needs an explicit node_modules
@@ -119,9 +129,9 @@ export async function verifyPackagedEnrollment(resources) {
     ['scripts/desktop/workbench-desktop.mjs', 'benchgo/workbench-desktop.mjs'],
     ['scripts/desktop/payload-policy.mjs', 'benchgo/payload-policy.mjs'],
     ['scripts/desktop/install-cleanup.mjs', 'benchgo/install-cleanup.mjs'],
-    ['plugins/benchgo/shared/plugin-install.mjs', 'benchgo/shared/plugin-install.mjs'],
-    ['plugins/benchgo/shared/update-feed.mjs', 'benchgo/shared/update-feed.mjs'],
-    ['plugins/benchgo/shared/workbench-installation.mjs', 'benchgo/shared/workbench-installation.mjs'],
+    ['plugins/base/shared/plugin-install.mjs', 'benchgo/shared/plugin-install.mjs'],
+    ['plugins/base/shared/update-feed.mjs', 'benchgo/shared/update-feed.mjs'],
+    ['plugins/base/shared/workbench-installation.mjs', 'benchgo/shared/workbench-installation.mjs'],
   ]) {
     const expected = await readFile(join(root, source));
     const actual = await readFile(join(resources, target));
@@ -137,6 +147,8 @@ config.afterPack = async context => {
   verifyStartupBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
   verifyWorkbenchLoadingBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
   verifyBackgroundBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
+  verifyUpdateBridgeBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
+  verifyUpdateBridgeBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/preload-app.cjs').toString('utf8'), true);
   const startupIcon = startupArtwork(await readFile(`${root}/assets/brand/benchgo-mark.svg`, 'utf8'));
   for (const name of ['welcome.html', 'splash.html']) {
     if (!extractFile(`${context.appOutDir}/resources/app.asar`, `renderer/${name}`).toString('utf8').includes(startupIcon)) {

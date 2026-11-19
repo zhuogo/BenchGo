@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const webRequire = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = webRequire('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const captureDir = process.env.BENCHGO_ROLE_SCREENSHOTS;
 
@@ -187,7 +187,7 @@ async function fixture(native = false) {
       createRoot(document.getElementById('root')).render(slots.renderSlot('root',{}));
     ` },
     bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-role-test-output'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: {
       react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'),

@@ -5,6 +5,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { startupWindowPlugin, verifyStartupBundle } from './prepare-startup.mjs';
 import { workbenchLoadingPlugin, verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
 import { backgroundExecutionPlugin, verifyBackgroundBundle } from './prepare-background.mjs';
+import { updateBridgePlugin, verifyUpdateBridgeBundle } from './prepare-update-bridge.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -115,13 +116,20 @@ export async function prepareDesktopTray(repositoryRoot, output) {
   await mkdir(output, { recursive: true });
   await build({
     ...config, config: false, cwd: desktop, entry: [join(desktop, 'lib/types/main.js')],
-    outDir: output, clean: true, plugins: [...config.plugins, trayLabelsPlugin(join(desktop, 'lib/types/tray.js')), applicationMenuPlugin(join(desktop, 'lib/types/main.js')), startupWindowPlugin(join(desktop, 'lib/types/main.js')), backgroundExecutionPlugin(join(desktop, 'lib/types/main.js')), workbenchLoadingPlugin(join(desktop, 'lib/types/web-document.js'))],
+    outDir: output, clean: true, plugins: [...config.plugins, trayLabelsPlugin(join(desktop, 'lib/types/tray.js')), applicationMenuPlugin(join(desktop, 'lib/types/main.js')), startupWindowPlugin(join(desktop, 'lib/types/main.js')), backgroundExecutionPlugin(join(desktop, 'lib/types/main.js')), workbenchLoadingPlugin(join(desktop, 'lib/types/web-document.js')), updateBridgePlugin(join(desktop, 'lib/types/main.js'))],
   });
+  const preload = configs.filter(item => item.entry?.['preload-app'] === 'lib/types/preload-app.js');
+  if (preload.length !== 1) throw new Error('Official desktop preload configuration changed; review update bridge compilation');
+  await build({ ...preload[0], config: false, cwd: desktop,
+    entry: { 'preload-app': join(desktop, 'lib/types/preload-app.js') }, outDir: output, clean: false,
+    plugins: [...preload[0].plugins, updateBridgePlugin(join(desktop, 'lib/types/preload-app.js'), true)] });
   const code = await readFile(join(output, 'main.js'), 'utf8');
   verifyTrayBundle(code);
   verifyStartupBundle(code);
   verifyWorkbenchLoadingBundle(code);
   verifyBackgroundBundle(code);
+  verifyUpdateBridgeBundle(code);
+  verifyUpdateBridgeBundle(await readFile(join(output, 'preload-app.cjs'), 'utf8'), true);
   return join(output, 'main.js');
 }
 

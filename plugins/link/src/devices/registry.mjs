@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, rm, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 const label = value => { if (typeof value !== 'string' || !value.trim() || value.length > 100) throw new Error('设备名称应为 1–100 个字符'); return value.trim(); };
+const routeKey = ({ kind, url, pin, relayId }) => JSON.stringify([kind, url, pin, relayId]);
 export function normalizeTarget(value) {
   const url = new URL(value.url);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || !['', '/'].includes(url.pathname)) throw new Error('设备地址必须是 HTTPS 主机地址');
@@ -44,18 +45,43 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
   try { state = JSON.parse(await readFile(file, 'utf8')); await chmod(file, 0o600); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (state.version !== 1 || !Array.isArray(state.devices)) throw new Error('设备配置格式不受支持');
   // Runtime liveness must be checked again after restarting the local carrier.
-  state.devices.forEach(value => { value.status = 'unknown'; value.lastError = null; value.currentPath = null; });
+  state.devices.forEach(value => { value.status = 'unknown'; value.lastError = null; if (value.kind === 'ssh') value.url = ''; });
+  const activeRoutes = new Map();
   let writes = Promise.resolve();
   const persist = () => {
     const snapshot = JSON.stringify({ ...state, devices: state.devices.map(({ currentPath, ...device }) => device) }, null, 2), temporary = file + '.' + randomUUID() + '.tmp';
     const task = writes.then(async () => { try { await writeFile(temporary, snapshot, { mode: 0o600 }); await rename(temporary, file); } finally { await rm(temporary, { force: true }); } });
     writes = task.catch(() => {}); return task;
   };
+  const oldServers = join(directory, 'servers.json');
+  const legacy = await readFile(oldServers, 'utf8').then(JSON.parse, error => { if (error.code !== 'ENOENT') throw error; });
+  if (legacy !== undefined) {
+    if (!Array.isArray(legacy)) throw new Error('服务器登记格式不受支持');
+    for (const row of legacy) {
+      if (row.kind !== 'ssh' || !row.id || !row.ssh?.host) continue;
+      const existing = state.devices.find(device => device.id === row.id);
+      if (existing) {
+        if (existing.hostId && row.hostId && existing.hostId !== row.hostId) throw new Error('旧服务器登记与设备实例不一致');
+        existing.ssh = row.ssh;
+      } else state.devices.push({ ...row, url: '', status: 'unknown' });
+    }
+  }
+  const retiredAiGrants = state.devices.filter(device => Object.hasOwn(device, 'aiRevision'));
+  for (const device of retiredAiGrants) delete device.aiRevision;
+  if (legacy !== undefined || retiredAiGrants.length) await persist();
+  if (legacy !== undefined) await rm(oldServers);
   const get = id => { const result = state.devices.find(value => value.id === id); if (!result) throw new Error('设备不存在'); return result; };
-  const publicDevice = value => ({ id: value.id, name: value.name, kind: value.kind, url: value.kind === 'ssh' ? value.ssh?.host : value.url, status: value.status || 'unknown', lastError: value.lastError || null, currentPath: value.currentPath ?? null, ...(value.warning ? { warning: value.warning } : {}) });
+  const publicDevice = value => {
+    const route = activeRoutes.get(value.id);
+    return { id: value.id, name: value.name, kind: value.kind, url: value.kind === 'ssh' ? value.ssh?.host : value.url,
+      status: value.status || 'unknown', lastError: value.lastError || null, currentPath: route?.kind ?? null,
+      ...(route?.kind === 'relay' ? { currentRelayId: route.relayId ?? null, currentRelayUrl: route.url } : {}), ...(value.warning ? { warning: value.warning } : {}) };
+  };
   const localDevice = () => ({ id: 'local', name: localName(), kind: 'local', status: 'online' });
   return {
     get, publicDevice,
+    findByHostId(hostId) { return hostId && state.devices.find(value => value.hostId === hostId); },
+    sshRecords() { return state.devices.filter(value => value.ssh?.host).map(value => ({ ...value, kind: 'ssh' })); },
     scope() { return state.resourceScope || { mode: 'current', deviceIds: [] }; },
     async setScope(value) {
       if (!value || !['current','all','selected'].includes(value.mode) || !Array.isArray(value.deviceIds) || value.deviceIds.length > 33 || value.deviceIds.some(id => id !== 'local' && !state.devices.some(row => row.id === id))) throw new Error('资源显示范围无效');
@@ -64,18 +90,41 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
     },
     list() { return { activeId: state.activeId, devices: [localDevice(), ...state.devices.map(publicDevice)] }; },
     async upsert(input) {
-      const target = normalizeTarget(input), routes = normalizeRoutes(input.routes), existing = input.id ? state.devices.find(value => value.id === input.id) : state.devices.find(value => value.kind !== 'ssh' && value.url === target.url && value.pin === target.pin);
+      const target = input.kind === 'ssh' ? { url: '', pin: input.pin } : normalizeTarget(input), routes = normalizeRoutes(input.routes), existing = input.id ? state.devices.find(value => value.id === input.id) : state.devices.find(value => (value.hostId && value.hostId === input.hostId) || (value.kind !== 'ssh' && value.url === target.url && value.pin === target.pin));
       if (state.devices.length >= 32 && !existing) throw new Error('最多保存 32 台设备');
       if (typeof input.token !== 'string' || !input.token || input.token.length > 4096) throw new Error('设备授权无效');
-      const value = { ...existing, ...input, ...target, ...(routes === undefined ? {} : { routes }), id: existing?.id || input.id || randomUUID(), name: label(existing?.alias || input.name || existing?.name || `BenchGo-${randomUUID().slice(0, 6)}`), kind: input.kind === 'ssh' ? 'ssh' : 'computer', status: 'online', lastError: null, currentPath: existing?.currentPath ?? null };
+      const value = { ...existing, ...input, ...target, ...(routes === undefined ? {} : { routes }), id: existing?.id || input.id || randomUUID(), name: label(existing?.alias || input.name || existing?.name || `BenchGo-${randomUUID().slice(0, 6)}`), kind: input.kind === 'ssh' ? 'ssh' : 'computer', status: 'online', lastError: null };
+      if (existing?.kind === 'computer' && input.kind === 'ssh') Object.assign(value, { kind: existing.kind, url: existing.url, pin: existing.pin, token: existing.token, authorizationId: existing.authorizationId });
+      const previous = state.devices;
+      activeRoutes.delete(value.id);
       state.devices = [...state.devices.filter(row => row.id !== value.id), value];
-      await persist(); return publicDevice(value);
+      try { await persist(); } catch (error) { state.devices = previous; throw error; }
+      return publicDevice(value);
     },
     async select(id) { if (id !== 'local') get(id); state.activeId = id; await persist(); return id === 'local' ? localDevice() : publicDevice(get(id)); },
     async rename(id, name) { const value = get(id); value.alias = value.name = label(name); await persist(); return publicDevice(value); },
-    async remove(id) { get(id); state.devices = state.devices.filter(row => row.id !== id); if (state.activeId === id) state.activeId = 'local'; await persist(); },
+    async remove(id) { get(id); activeRoutes.delete(id); state.devices = state.devices.filter(row => row.id !== id); if (state.activeId === id) state.activeId = 'local'; await persist(); },
     mark(id, status, lastError = null) { const value = get(id); value.status = status; value.lastError = lastError; },
-    markRoute(id, kind) { if (kind !== 'direct' && kind !== 'relay') throw new Error('设备连接路线无效'); get(id).currentPath = kind; },
+    markRoute(id, route) {
+      get(id);
+    if (!['direct', 'relay', 'ssh'].includes(route.kind)) throw new Error('设备连接路线无效');
+      activeRoutes.set(id, route);
+    },
+    async updateRoutes(id, expected, routes) {
+      if (get(id) !== expected) throw Object.assign(new Error('设备身份或连接已更新，请重试'), { code: 'IDENTITY_CHANGED', status: 409 });
+      const previous = expected.routes;
+      const old = new Map(previous?.map(route => [routeKey(route), route]));
+      const next = routes.map(({ kind, url, pin, relayId, priority }) => {
+        if (kind === 'direct') return { kind, url, pin };
+        const saved = old.get(routeKey({ kind, url, relayId }));
+        return { kind, url, ...(relayId === undefined ? {} : { relayId }), ...(priority === undefined ? {} : { priority }),
+          ...(saved?.health === undefined ? {} : { health: saved.health }), ...(saved?.cooldownUntil === undefined ? {} : { cooldownUntil: saved.cooldownUntil }),
+          ...(saved?.lastError === undefined ? {} : { lastError: saved.lastError }) };
+      });
+      if (JSON.stringify(previous) === JSON.stringify(next)) return;
+      expected.routes = next;
+      try { await persist(); } catch (error) { if (expected.routes === next) expected.routes = previous; throw error; }
+    },
     async markRouteHealth(id, relayId, health, { cooldownUntil = 0, lastError = null } = {}) {
       if (!['unknown', 'healthy', 'degraded', 'unhealthy'].includes(health)) throw new Error('中继健康状态无效');
       const value = get(id), route = value.routes?.find(item => item.kind === 'relay' && (item.relayId || item.id || item.url) === relayId);

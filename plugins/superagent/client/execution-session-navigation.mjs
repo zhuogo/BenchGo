@@ -22,6 +22,10 @@ export const executionSessionNavigation = {
 /** Open the same persisted execution Session in the official workspace. */
 export async function openExecutionSession(ctx, execution) {
   if (!execution?.available || !execution.sessionId) throw new Error('无法定位执行会话');
+  if (execution.nativeWorker === true) {
+    executionSessionNavigation.select(execution);
+    return;
+  }
   if (execution.remote === true) {
     try {
       await openRemoteResource({ device: { id: execution.deviceId, hostId: execution.hostId, authorizationId: execution.authorizationId },

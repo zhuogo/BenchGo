@@ -16,7 +16,7 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
   return next(specifier, context);
 } });
 try {
-  const require = createRequire(new URL('../../plugins/benchgo/package.json', import.meta.url));
+  const require = createRequire(new URL('../../plugins/base/package.json', import.meta.url));
   const sdkPath = require.resolve('@anthropic-ai/claude-agent-sdk');
   const sdkVersion = JSON.parse(await readFile(join(dirname(sdkPath), 'package.json'), 'utf8')).version;
   const sdk = await import(pathToFileURL(sdkPath).href);

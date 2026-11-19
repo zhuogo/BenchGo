@@ -9,7 +9,7 @@ import { assembleRelease, requiredVerification } from './assemble.mjs';
 import { fileDigest } from './record-artifact.mjs';
 import { readSignedRelease, releaseKind, sha256 } from './github.mjs';
 import { publishRelease } from './publish.mjs';
-import { inspectArchive, recoveryJobs, validateRecoveryContext, verifyArchive, verifyRecoveryBundle, verifyRecoveryRun } from './recover-release.mjs';
+import { inspectArchive, recoveryJobs, recoveryStagingPath, validateRecoveryContext, verifyArchive, verifyRecoveryBundle, verifyRecoveryRun } from './recover-release.mjs';
 
 const source = 'a'.repeat(40), publisher = 'b'.repeat(40), runId = 123;
 const json = value => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
@@ -112,7 +112,7 @@ async function bundle(t) {
     const files = { [artifact]: `verified-${component}` };
     if (component === 'windows') { files[`${artifact}.blockmap`] = 'verified-map'; files['build-source.json'] = json({ schemaVersion: 1, sourceSha: source, version: '1.0.0', verified: requiredVerification.windows }); }
     const receipt = { schemaVersion: 1, component, sourceSha: source, releaseVersion: '1.0.0', version: '1.0.0', ...(component === 'android' ? { versionCode: 1 } : {}),
-      verified: requiredVerification[component], staged: [{ path: 'plugins/benchgo/package.json', field: 'benchgo.releaseVersion', value: '1.0.0' }], artifact, files: await putFiles(folder, files) };
+      verified: requiredVerification[component], staged: [{ path: 'plugins/base/package.json', field: 'benchgo.releaseVersion', value: '1.0.0' }], artifact, files: await putFiles(folder, files) };
     await writeFile(resolve(folder, 'component-source.json'), json(receipt));
   }
   for (const arch of ['arm64', 'x64']) {
@@ -141,6 +141,23 @@ test('complete unchanged signed original bundle recovers; modified bytes and uns
   await rm(path); await assert.rejects(verifyRecoveryBundle({ ...f, inventory }), /Unaccounted/); await writeFile(path, original);
   await writeFile(resolve(f.directory, 'unsigned.exe'), 'unverified'); await f.refreshSums();
   await assert.rejects(verifyRecoveryBundle({ ...f, inventory: await f.inventory() }), /Unsigned or unknown/);
+});
+
+test('recovery accepts historical staging only when the original source used that path', async t => {
+  const f = await bundle(t);
+  const legacy = 'plugins/benchgo/package.json', current = 'plugins/base/package.json';
+  assert.throws(() => recoveryStagingPath([]), /one plugin staging path/);
+  assert.throws(() => recoveryStagingPath([legacy, current]), /one plugin staging path/);
+  for (const component of ['plugin', 'windows', 'android']) {
+    const file = resolve(f.directory, `${component}-source.json`);
+    const receipt = JSON.parse(await readFile(file));
+    receipt.staged[0].path = legacy;
+    await writeFile(file, json(receipt));
+  }
+  await f.refreshSums();
+  const inventory = await f.inventory();
+  assert.equal((await verifyRecoveryBundle({ ...f, inventory, stagingPath: recoveryStagingPath([legacy]) })).signedProductSource, source);
+  await assert.rejects(verifyRecoveryBundle({ ...f, inventory, stagingPath: recoveryStagingPath([current]) }), /Unexpected build staging changes/);
 });
 
 test('a forged receipt, broken signature, wrong source, native checksum, or signed extra catalog entry is refused', async t => {

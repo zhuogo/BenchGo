@@ -8,8 +8,8 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { projectChatMessages } from '../src/chat-publication.mjs';
-import { publicConfig } from '../../voice/src/config.mjs';
-import { createSettingsManagement } from '../../benchgo/src/settings-management.mjs';
+import { publicConfig } from '../../media/src/config.mjs';
+import { createSettingsManagement } from '../../base/src/settings-management.mjs';
 import { installRoleHost, loadRolePackage } from './role-host-fixture.mjs';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
@@ -65,12 +65,22 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     { writeEveryEvents: 200, writeIntervalMs: 5000 });
   const tokenRequire = createRequire(new URL('../../../deepseek-harness/packages/llm/token-meter/package.json', import.meta.url));
   await ctx.plugin((await import(pathToFileURL(tokenRequire.resolve('@deepseek-ai/dsh-token-meter')).href)).default);
-  let duringStream, maintenanceReply;
+  let duringStream, maintenanceReply, startupMaintenance;
   const modelRequests = [];
   class Adapter extends LlmAdapter {
     async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: 131072 } }; }
     async *stream(request) {
       modelRequests.push(request);
+      if (startupMaintenance && request.purpose === 'superagent-relationships') {
+        const held = startupMaintenance;
+        held.started.resolve(request);
+        await new Promise(resolve => {
+          const aborted = () => { held.aborted.resolve(); resolve(); };
+          request.signal.addEventListener('abort', aborted, { once: true });
+          held.release.promise.then(resolve).finally(() => request.signal.removeEventListener('abort', aborted));
+          if (request.signal.aborted) aborted();
+        });
+      }
       const callback = duringStream; duringStream = undefined; if (callback) await callback();
       const text = maintenanceReply?.(request) ?? 'Mounted reply';
       yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text };
@@ -209,7 +219,6 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(systemFile.status, 404);
   let response = await call({ action: 'config', patch: { models: [{ providerId: 'mounted', modelId: 'exact' }], workerModels: [{ providerId: 'mounted', modelId: 'exact' }] }, revision: 0 }); assert.equal(response.status, 200);
   response = await call({ action: 'config', patch: { name: 'conflict' }, revision: 0 }); assert.equal(response.status, 409);
-  response = await call({ action: 'config', patch: { cardHtml: '<b>Service card</b>' } }); assert.equal(response.status, 200); assert.equal((await response.json()).cardHtml, '<b>Service card</b>');
   response = await call({ action: 'ensure' }); const { sessionId } = await response.json(); assert.ok(sessionId);
   const agent = await app.engine.ensureSession();
   const deviceStatusTool = ctx.tools.get('assistant_device_status', agent);
@@ -234,7 +243,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(queried.tasks[0].taskMeta.version, 0);
   assert.equal((await tasksTool.execute({ op: 'get', id: queryTask.id }, { agent })).task.target, 'Query proof');
   app.store.orchestration.cancelTask(queryTask.id);
-  for (const name of ['assistant_projects', 'assistant_settings', 'assistant_task_manage', 'assistant_task_cleanup', 'assistant_generate_image', 'assistant_summarize', 'assistant_analyze_image']) assert.ok(ctx.tools.get(name, agent), name);
+  for (const name of ['assistant_projects', 'assistant_settings', 'assistant_task_manage', 'assistant_task_cleanup', 'generate_image', 'generate_video', 'generate_audio', 'media_video_status', 'assistant_summarize', 'assistant_analyze_image']) assert.ok(ctx.tools.get(name, agent), name);
+  assert.equal(ctx.tools.get('assistant_generate_image', agent), undefined);
   assert.equal(ctx.tools.get('assistant_config', agent), undefined);
   const projectsTool = ctx.tools.get('assistant_projects', agent);
   const projectsResult = await projectsTool.execute({ scope: 'local' }, { signal: new AbortController().signal, agent });
@@ -555,7 +565,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   response = await call({ action: 'memorySave', memory: { content: 'Prefer concise answers' } }); assert.equal(response.status, 200);
   response = await call({ action: 'state' }); const snapshot = await response.json(); assert.equal(snapshot.memories[0].content, 'Prefer concise answers');
   response = await call({ action: 'skillsSearch' }); assert.equal(response.status, 400);
-  for (const kind of ['image', 'asr', 'tts']) { assert.equal(snapshot.media[kind].available, false); assert.ok(snapshot.media[kind].reason); }
+  for (const kind of ['asr', 'tts']) { assert.equal(snapshot.media[kind].available, false); assert.ok(snapshot.media[kind].reason); }
   response = await call({ action: 'catalog' }); const catalog = await response.json(); assert.ok(Array.isArray(catalog.providers)); assert.ok(Array.isArray(catalog.models));
   const settingsTool = ctx.tools.get('assistant_settings', agent);
   assert.deepEqual(settingsTool.output.render({}, { name: 'test' }), [{ type: 'text', text: '{"name":"test"}' }]);
@@ -572,8 +582,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const settingsCatalogResponse = await call({ action: 'settingsCatalog', adapterId: 'superagent' });
   assert.equal(settingsCatalogResponse.status, 200);
   const settingsSchema = (await settingsCatalogResponse.json()).entries.find(row => row.namespace === 'superagent').schema.properties;
-  assert.equal(settingsSchema.cardMotion.type, 'boolean');
-  assert.equal(settingsSchema.cardHtml.maxLength, 16000);
+  assert.equal(Object.hasOwn(settingsSchema, 'cardMotion'), false);
+  assert.equal(Object.hasOwn(settingsSchema, 'cardHtml'), false);
   assert.equal(settingsSchema.models.maxItems, 32);
   assert.equal(settingsSchema.workerModels.maxItems, 32);
   for (const action of ['settingsCatalog', 'settingsRead', 'settingsPrepare', 'settingsCommit', 'settingsHistory', 'settingsRollback']) {
@@ -582,8 +592,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   }
   await assert.rejects(settingsTool.execute({ op: 'read', ...settingsRef }, toolExec), { code: 'MANAGEMENT_OWNER_REQUIRED' });
   const initialConfig = (await settingsRead()).value;
-  assert.equal(initialConfig.cardHtml, '<b>Service card</b>');
-  assert.equal(initialConfig.cardMotion, true);
+  assert.equal(Object.hasOwn(initialConfig, 'cardHtml'), false);
+  assert.equal(Object.hasOwn(initialConfig, 'cardMotion'), false);
   let toolResult, toolReceipt;
   duringStream = async () => { try {
     const discovered = await settingsTool.execute({ op: 'catalog', adapterId: 'superagent' }, toolExec);
@@ -591,7 +601,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     const current = await settingsTool.execute({ op: 'read', ...settingsRef }, toolExec);
     assert.deepEqual(current.value, initialConfig);
     const plan = await settingsTool.execute({ op: 'prepare', ...settingsRef, expectedRevision: current.revision,
-      ops: [{ op: 'set', path: ['cardHtml'], value: '<i>Tool card</i>' }, { op: 'set', path: ['cardMotion'], value: false }], requestId: 'service-tool-settings' }, toolExec);
+      ops: [{ op: 'set', path: ['workerConcurrency'], value: 3 }], requestId: 'service-tool-settings' }, toolExec);
     assert.equal(plan.requiresConfirmation, false);
     toolReceipt = await settingsTool.execute({ op: 'commit', operationId: plan.operationId }, toolExec);
     assert.equal(toolReceipt.verified, true);
@@ -603,10 +613,10 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     assert.equal(history.history[0].id, toolReceipt.historyId);
     assert.equal(history.history[0].actor.sessionId, agent.id);
   } catch (error) { streamFailure = error; } };
-  await call({ action: 'send', text: '把卡片改为斜体 Tool card 并关闭卡片动效，保留其他设置。', requestId: 'service-settings-owner-turn' });
+  await call({ action: 'send', text: '把 Worker 并发改为 3，保留其他设置。', requestId: 'service-settings-owner-turn' });
   await agent.whenIdle();
   if (streamFailure) throw streamFailure;
-  assert.equal(toolResult.cardMotion, false);
+  assert.equal(toolResult.workerConcurrency, 3);
   response = await call({ action: 'state' });
   const savedToolConfig = (await response.json()).config;
   const { schemaVersion: savedSchemaVersion, revision: savedRevision, ...savedToolValue } = savedToolConfig;
@@ -619,30 +629,20 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.deepEqual(settingsHistory.history, settingsManagement.history(settingsRef));
   assert.equal(toolResult.name, initialConfig.name);
   assert.deepEqual(toolResult.models, [{ providerId: 'mounted', modelId: 'exact' }]);
-  for (const cardMotion of [null, 0, 'false', {}]) {
+  for (const cardMotion of [true, false]) {
     response = await call({ action: 'config', patch: { cardMotion } }); assert.equal(response.status, 400);
     const current = await settingsRead();
     await assert.rejects(settingsManagement.prepare({ ...settingsRef, expectedRevision: current.revision,
       ops: [{ op: 'set', path: ['cardMotion'], value: cardMotion }] }, { kind: 'owner', id: 'desktop-owner' }), { code: 'SETTINGS_SCHEMA_REJECTED' });
   }
-  response = await call({ action: 'config', patch: { cardMotion: true }, revision: savedToolConfig.revision });
-  assert.equal(response.status, 200);
-  const motionConfig = await response.json();
-  assert.equal(motionConfig.cardMotion, true);
-  assert.equal(motionConfig.cardHtml, toolResult.cardHtml);
-  assert.equal(motionConfig.name, toolResult.name);
-  assert.deepEqual(motionConfig.models, toolResult.models);
-  for (const cardHtml of [{}, false, 'x'.repeat(16001)]) {
+  for (const cardHtml of ['<b>Old card</b>', null, '']) {
     response = await call({ action: 'config', patch: { cardHtml } }); assert.equal(response.status, 400);
     const current = await settingsRead();
     await assert.rejects(settingsManagement.prepare({ ...settingsRef, expectedRevision: current.revision,
       ops: [{ op: 'set', path: ['cardHtml'], value: cardHtml }] }, { kind: 'owner', id: 'desktop-owner' }), { code: 'SETTINGS_SCHEMA_REJECTED' });
   }
-  response = await call({ action: 'config', patch: { cardHtml: '' }, revision: 1 }); assert.equal(response.status, 409);
-  assert.equal((await settingsRead()).value.cardHtml, '<i>Tool card</i>');
-  response = await call({ action: 'config', patch: { cardHtml: ' \n ' } }); assert.equal(response.status, 200);
-  response = await call({ action: 'state' }); assert.equal((await response.json()).config.cardHtml, null);
-  assert.equal((await settingsRead()).value.cardHtml, null);
+  response = await call({ action: 'state' });
+  assert.deepEqual((await response.json()).config, savedToolConfig);
   for (const keyPools of [[{ providerId: 'pool-main', candidates: ['pool-backup'] }], []]) {
     response = await call({ action: 'config', patch: { keyPools } }); assert.equal(response.status, 400);
     const current = await settingsRead();
@@ -707,6 +707,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.ok(petCatalog.expressions.some(item => item.id === 'happy'));
   const petTool = ctx.tools.get('assistant_pet', agent);
   assert.ok(petTool, 'the Router exposes the same pet service');
+  assert.equal(petTool.parameters.properties.op.enum.includes('export'), false);
   const { config: petBefore } = await (await call({ action: 'state' })).json();
   const petDraftResponse = await call({ action: 'petPreview', pet: { expression: 'happy', decorations: ['scarf'], palette: 'default' } });
   assert.equal(petDraftResponse.status, 200);
@@ -717,7 +718,6 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const petApplied = await petApplyResponse.json();
   assert.equal(petApplied.pet.expression, 'happy');
   assert.equal(petApplied.name, petBefore.name);
-  assert.equal(petApplied.cardHtml, petBefore.cardHtml);
   assert.deepEqual(petApplied.models, petBefore.models);
   assert.notEqual((await call({ action: 'config', patch: { pet: null } })).status, 200, 'plain config cannot bypass appearance validation');
   assert.equal((await call({ action: 'petRestore', revision: petApplied.revision, default: true })).status, 200);
@@ -755,7 +755,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const legacyVoiceReadback = (await settingsRead()).value;
   assert.deepEqual(legacyVoiceReadback.asr, { providerId: 'legacy-asr', modelId: 'Legacy ASR:Opaque/02', protocol: 'transcriptions' });
   assert.deepEqual(legacyVoiceReadback.models, legacyVoiceConfig.models);
-  assert.equal(legacyVoiceReadback.cardMotion, legacyVoiceConfig.cardMotion);
+  assert.equal(legacyVoiceReadback.workerConcurrency, legacyVoiceConfig.workerConcurrency);
   await checkCapabilities({ voiceInput: true, readAloud: true, realtimeVoice: true });
   voiceRoutes.delete('voice-asr');
   await checkCapabilities({ voiceInput: false, readAloud: true, realtimeVoice: false });
@@ -873,6 +873,45 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.notEqual(afterResetAgent.id, beforeResetAgent.id);
   const afterResetGoals = await ctx.tools.get('assistant_goals', afterResetAgent).execute({ op: 'list' }, { agent: afterResetAgent });
   assert.ok(afterResetGoals.goals.some(row => row.id === resetGoal.id && row.objective === '跨主会话保留'));
+  const startupReview = withSkills.store.review.enqueue({ kind: 'maintenance', priority: 100,
+    payload: { task: 'relationships', trigger: 'explicit' }, idempotencyKey: 'startup-review-block' });
   await skillFiber.dispose();
   assert.equal(await ctx.skills.get(candidate.name), undefined);
+  await t.test('a pending startup review leaves APIs ready and is cancelled before disposal releases storage', async () => {
+    startupMaintenance = { started: Promise.withResolvers(), aborted: Promise.withResolvers(), release: Promise.withResolvers() };
+    maintenanceReply = request => request.purpose === 'superagent-relationships' ? '{"entities":[]}' : undefined;
+    let startupFiber, timer;
+    const mounting = new Promise((resolve, reject) => {
+      startupFiber = ctx.inject(assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name)), child => {
+        mountAssistant(child, commander, providers).then(resolve, reject);
+      });
+    });
+    try {
+      const deadline = new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error('startup review blocked API mounting')), 10_000); });
+      const mounted = await Promise.race([mounting, deadline]);
+      const request = await Promise.race([startupMaintenance.started.promise, deadline]);
+      assert.equal(request.signal.aborted, false);
+      assert.equal(mounted.store.review.get(startupReview.id).status, 'running');
+      const state = await call({ action: 'state' });
+      assert.equal(state.status, 200, 'the real owner API responds while the maintenance model is pending');
+      await startupFiber.dispose();
+      await startupMaintenance.aborted.promise;
+      assert.equal(request.signal.aborted, true, 'disposal cancels the first tick through the existing review worker');
+      assert.equal(routes.size, 0);
+      const saved = new DatabaseSync(join(directory, 'assistant', 'assistant.db'), { readOnly: true });
+      try { assert.equal(saved.prepare('SELECT status FROM assistant_review_queue WHERE id=?').get(startupReview.id).status, 'pending'); }
+      finally { saved.close(); }
+      const { DataOwner } = await import('../../base/shared/data-owner.mjs');
+      const successor = new DataOwner(join(directory, 'assistant'));
+      await successor.open();
+      await successor.close();
+    } finally {
+      clearTimeout(timer);
+      startupMaintenance.release.resolve();
+      await mounting.catch(() => {});
+      await startupFiber.dispose();
+      startupMaintenance = undefined;
+      maintenanceReply = undefined;
+    }
+  });
 });

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { initializePluginProfile, stagePluginBundle as stageCompletePluginBundle, officialSourcePackages, assertBrowserPlatformPeer } from './plugin-bundle.mjs';
-import { getInstallState, releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
+import { getInstallState, releaseBundleName } from '../../plugins/base/shared/plugin-install.mjs';
 // These tests isolate dependency/layout fixtures. Public builds retain the
 // default requirement for a validated full or explicitly online resource set.
 const stagePluginBundle = options => stageCompletePluginBundle({ ...options, includeServerResources: false });
@@ -46,7 +46,7 @@ function dependencyFixture(t, dependencies) {
   const result = fixture(t), { put } = result;
   put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files: ['src', 'lib', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies });
   put('plugin/assets/icon.svg', '<svg/>');
-  for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${file}`, 'fixture');
+  for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/media/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${file}`, 'fixture');
   return result;
 }
 
@@ -185,7 +185,7 @@ test('source-only releases never register shell-static browser peers as Host sha
     dsh: { bundle: { patch: './cordis.patch.yml' }, client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-ui-slots'] } },
     peerDependencies: { '@deepseek-ai/dsh-client-ui-primitives': '^0.2.2-rc.1', '@deepseek-ai/dsh-client-ui-slots': '^0.2.2-rc.1' } });
   put('plugin/assets/icon.svg', '<svg/>');
-  for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${file}`, 'fixture');
+  for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/media/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${file}`, 'fixture');
   const staged = stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed') });
   assert.deepEqual(staged.shared, []);
   assert.deepEqual(JSON.parse(readFileSync(join(staged.directory, 'release.json'))).shared, []);
@@ -197,7 +197,7 @@ for (const [kind, name] of [['dependencies', '@deepseek-ai/dsh-client-ui-primiti
     put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files: ['src', 'lib', 'cordis.patch.yml'],
       dsh: { bundle: { patch: './cordis.patch.yml' }, client: { platform: 'web' } }, [kind]: { [name]: '*' } });
     put('plugin/assets/icon.svg', '<svg/>');
-    for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${file}`, 'fixture');
+    for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/media/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${file}`, 'fixture');
     assert.throws(() => stagePluginBundle({ runtime: join(root, 'runtime'), plugin: join(root, 'plugin'), output: join(root, 'seed') }), error => error.message === `Plus bundle: official runtime omits ${name}`);
     assert.equal(existsSync(join(root, 'seed/release.json')), false);
   });
@@ -209,7 +209,7 @@ test('the bundled desktop entry loads shared helpers from packaged resources aft
   put('resources/app.asar/lib/main.mjs', readFileSync(new URL('./plugin-bundle.mjs', import.meta.url), 'utf8'));
   put('resources/benchgo/payload-policy.mjs', readFileSync(new URL('./payload-policy.mjs', import.meta.url), 'utf8'));
   for (const name of ['plugin-install.mjs', 'update-feed.mjs']) {
-    put(`resources/benchgo/shared/${name}`, readFileSync(new URL(`../../plugins/benchgo/shared/${name}`, import.meta.url), 'utf8'));
+    put(`resources/benchgo/shared/${name}`, readFileSync(new URL(`../../plugins/base/shared/${name}`, import.meta.url), 'utf8'));
   }
   const code = `
     import { pathToFileURL } from 'node:url';
@@ -228,7 +228,7 @@ test('published plugin payload excludes development/private files and contains i
   const manifest = { name: 'benchgo-plugin', version: '0.1.0', type: 'module', files: ['src', 'lib', 'cordis.patch.yml', 'assets/icon.svg'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { 'fixture-required': '1.0.0' }, devDependencies: { 'fixture-dev': '1.0.0' }, optionalDependencies: { 'fixture-linux': '1.0.0' } };
   put('plugin/assets/icon.svg', '<svg>BenchGo</svg>');
   put('plugin/package.json', manifest);
-  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
+  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/media/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
   put('plugin/private-credentials.txt', 'do-not-package');
   for (const name of ['fixture-required', 'fixture-dev', 'fixture-linux']) {
     put(`plugin/node_modules/${name}/package.json`, { name, version: '1.0.0', ...(name === 'fixture-linux' ? { os: ['linux'] } : {}) });
@@ -252,11 +252,11 @@ test('published plugin payload excludes development/private files and contains i
   assert.throws(() => stagePluginBundle({ runtime: join(root, 'runtime'), plugin: join(root, 'plugin') }), /already exists/u);
 });
 
-for (const omitted of ['harness', 'superagent', 'voice', 'interactive', 'efficiency', 'workbench']) test(`packaging rejects an allowlist that omits ${omitted}`, t => {
+for (const omitted of ['harness', 'superagent', 'media', 'interactive', 'efficiency', 'workbench']) test(`packaging rejects an allowlist that omits ${omitted}`, t => {
   const { root, put } = fixture(t);
-  const files = ['src', 'lib/client.js', 'lib/link.mjs', 'lib/link-web', 'lib/relay', 'cordis.patch.yml', ...['harness', 'superagent', 'voice', 'interactive', 'efficiency', 'workbench'].filter(name => name !== omitted).map(name => `lib/modules/${name}`)];
+  const files = ['src', 'lib/client.js', 'lib/link.mjs', 'lib/link-web', 'lib/relay', 'cordis.patch.yml', ...['harness', 'superagent', 'media', 'interactive', 'efficiency', 'workbench'].filter(name => name !== omitted).map(name => `lib/modules/${name}`)];
   put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files, dsh: { bundle: { patch: './cordis.patch.yml' } } });
-  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
+  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/media/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put(`plugin/${name}`, 'fixture');
   const required = `lib/modules/${omitted}/src/${omitted === 'interactive' ? 'prompt' : 'plugin'}.mjs`;
   assert.throws(() => stagePluginBundle({ plugin: join(root, 'plugin'), output: join(root, 'seed') }), error => error.message.includes(`missing built file ${required}`));
   assert.equal(existsSync(join(root, 'seed/node_modules/benchgo-plugin')), false);
@@ -267,7 +267,7 @@ test('SSH optional build-machine addons never enter desktop plugin releases', t 
   const { root, put } = fixture(t);
   put('plugin/package.json', { name: 'benchgo-plugin', version: '0.1.0', files: ['src', 'lib', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } }, dependencies: { ssh2: '1.17.0' } });
   put('plugin/assets/icon.svg', '<svg>BenchGo</svg>');
-  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put('plugin/' + name, 'fixture');
+  for (const name of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/media/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) put('plugin/' + name, 'fixture');
   put('plugin/node_modules/ssh2/package.json', { name: 'ssh2', version: '1.17.0', optionalDependencies: { 'cpu-features': '0.0.10' } });
   put('plugin/node_modules/ssh2/lib/index.js', 'module.exports = {};');
   put('plugin/node_modules/ssh2/lib/protocol/crypto.js', 'module.exports = {};');
@@ -328,7 +328,7 @@ function seedFixture(put, prefix, version = '0.1.0', splitModules = true) {
   const bundleName = releaseBundleName(version);
   put(`${prefix}/release.json`, { schemaVersion: 1, version, platform: process.platform, arch: process.arch, shared: [] });
   put(`${prefix}/node_modules/benchgo-plugin/package.json`, { name: 'benchgo-plugin', version, type: 'module', main: './src/plugin.mjs', exports: { '.': './src/plugin.mjs', './client': './lib/client.js', './package.json': './package.json' }, dsh: { bundle: { patch: './cordis.patch.yml' } } });
-  for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs']) put(`${prefix}/node_modules/benchgo-plugin/${file}`, `export const version = ${JSON.stringify(version)}; export default true;`);
+  for (const file of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/media/src/plugin.mjs']) put(`${prefix}/node_modules/benchgo-plugin/${file}`, `export const version = ${JSON.stringify(version)}; export default true;`);
   const rows = [
     { id: 'commander', name: 'benchgo-plugin' },
     ...(splitModules ? ['harness', 'superagent', 'voice'].map(name => ({ id: `commander-${name}`, name: `benchgo-plugin/${name}-plugin` })) : []),

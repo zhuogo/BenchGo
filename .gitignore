@@ -11,11 +11,9 @@ node_modules/
 /benchgo-web/.draftgo/
 /benchgo-web/.agents/
 /benchgo-web/.codex/
-/plugins/workbench/lib/
-/plugins/voice/lib/
-
-# Generated server seed; rebuilt before packaging
-/plugins/benchgo/lib/server/server-seed.tar.gz
-/plugins/benchgo/lib/server/manifest.json
-/plugins/benchgo/lib/server/resources.json
-/plugins/benchgo/lib/server/update-public-key.pem
+/[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
+/工作/
+/协作开发模式.md
+/plugins/base/lib/
+/plugins/base/workbench/lib/
+/plugins/media/lib/

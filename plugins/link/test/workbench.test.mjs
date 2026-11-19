@@ -108,6 +108,26 @@ async function login(f) {
   return header.split(';')[0];
 }
 
+test('the public pairing probe is single-use and pending requests are scoped to their code', async t => {
+  const f = await setup(t), probe = f.store.beginProbe();
+  const path = '/link/api/info?probe=' + probe.id;
+  const response = await f.call(path, { method: 'GET' });
+  assert.deepEqual(response.value, { proof: probe.proof });
+  assert.equal((await f.call(path, { method: 'GET' })).status, 404);
+  const first = f.store.begin(), other = f.store.begin();
+  const one = await f.call('/link/api/pair', { body: { code: first.code, name: 'Current phone' } });
+  const two = await f.call('/link/api/pair', { body: { code: other.code, name: 'Other phone' } });
+  assert.deepEqual(f.store.pending(first.code).map(row => row.id), [one.value.requestId]);
+  assert.deepEqual(f.store.pending(other.code).map(row => row.id), [two.value.requestId]);
+  await f.store.decide(one.value.requestId, true);
+  assert.deepEqual(f.store.pending(first.code), []);
+  const approved = await f.call('/link/api/pair/status', { body: one.value });
+  const workbench = await f.call('/link/api/workbench', { token: approved.value.token });
+  assert.equal(workbench.status, 200);
+  await f.store.revoke(approved.value.deviceId);
+  assert.equal((await f.call('/link/api/workbench', { token: approved.value.token })).status, 401);
+});
+
 test('workbench compresses negotiated text assets without touching HTML, API, ranges or existing encodings', async t => {
   const f = await setup(t), cookie = await login(f), source = 'globalThis.compressed=true;\n'.repeat(2000);
   await writeFile(join(f.root, 'large.js'), source);

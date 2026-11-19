@@ -1,7 +1,7 @@
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import * as nativeRuntime from './api.mjs';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import pairingCss from './pairing.css';
 import { Button, ErrorText, StatusDot, useLinkStyle } from './app.jsx';
 import { BrandLogo } from './brand.jsx';

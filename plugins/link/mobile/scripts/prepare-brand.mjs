@@ -15,8 +15,6 @@ export async function prepareAndroidBrand(root = repositoryRoot) {
     readFile(join(brand, 'benchgo-app.svg')),
     readFile(join(brand, 'benchgo-mark.svg')),
   ]);
-  const background = /<rect\b[^>]*\bfill="(#[\da-f]{6})"/i.exec(app.toString('utf8'))?.[1];
-  if (!background) throw new Error('BenchGo app master must declare its background color');
   const save = async (path, contents) => {
     const target = join(resources, path);
     await mkdir(dirname(target), { recursive: true });
@@ -29,13 +27,13 @@ export async function prepareAndroidBrand(root = repositoryRoot) {
   // A dedicated bitmap prevents <bitmap> from resolving the adaptive mipmap XML.
   await save('drawable-nodpi/ic_benchgo_art.png', await sharp(app).resize(432, 432).png().toBuffer());
 
-  // 108dp layer at xxxhdpi. Keep the complete transparent 840x760 mark at 84dp
-  // wide: its 600px-wide body becomes 60dp and fits the 66dp safe circle.
-  const foreground = await sharp(mark).resize({ width: 336 }).png().toBuffer();
+  // 108dp layer at xxxhdpi. The tightly framed 680x480 mark at 68dp wide
+  // keeps its 600px-wide body at 60dp, inside the 66dp safe circle.
+  const foreground = await sharp(mark).resize({ width: 272 }).png().toBuffer();
   await save('drawable-nodpi/ic_benchgo_foreground_art.png', await sharp({
     create: { width: 432, height: 432, channels: 4, background: '#00000000' },
   }).composite([{ input: foreground, gravity: 'centre' }]).png().toBuffer());
-  await save('values/colors.xml', `<resources>\n    <color name="benchgo_brand_background">${background}</color>\n</resources>\n`);
+  // Android's required adaptive-icon and window backgrounds live in values/colors.xml.
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

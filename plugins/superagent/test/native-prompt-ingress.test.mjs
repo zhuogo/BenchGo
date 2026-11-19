@@ -276,7 +276,7 @@ test('real assistant engine selects image admission models and preserves busy fi
   const peer = new Peer(ctx, { principal: { kind: 'owner' } });
   const dispose = registerNativePromptIngress({ connection: { browserPeer: peer, fetch: { register(value) { route = value; return () => {}; } } }, typertGateway: ctx.typertGateway }, engine);
   t.after(dispose);
-  const send = async (id, content, mode = 'queue') => (await route.fetch(http(envelope(prompt({ sessionId: agent.id, requestId: id, content, mode }), `outer/${id}`)))).json();
+  const send = async (id, content, mode = 'queue', options) => (await route.fetch(http(envelope(prompt({ sessionId: agent.id, requestId: id, content, mode }), `outer/${id}`), options))).json();
   const imageContent = [{ type: 'file', receiptId: 'receipt/image' }, { type: 'text', text: '看图，保持原文 /opaque' }];
   assert.equal(agent.model.current().model, 'text/opaque');
   model = 'vision/opaque';
@@ -303,7 +303,8 @@ test('real assistant engine selects image admission models and preserves busy fi
   const blocked = await send('busy-image-switch', imageContent, 'queue');
   assert.equal(blocked.result.error.details.reason, 'NATIVE_ATTACHMENT_REQUIRES_IDLE');
   const fileContent = [{ type: 'file', receiptId: 'receipt/file' }, { type: 'text', text: '排队处理文件 /original' }];
-  assert.equal((await send('busy-file', fileContent)).result.ok, true, 'ordinary files retain official queue support while running');
+  assert.equal((await send('busy-file', fileContent, 'queue')).result.ok, true, 'ordinary files retain official queue support while running');
+  assert.equal((await send('busy-file', fileContent)).result.ok, true, 'official admission remains idempotent');
   const queued = agent.inbox.nextTurn.find(message => message.source.rpcId === 'busy-file');
   assert.deepEqual(queued.content, [{ type: 'file', attachment: file }, fileContent[1]]);
   release(); await agent.whenIdle();

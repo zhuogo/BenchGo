@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Session, SessionId } from '@deepseek-ai/dsh-session';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { installWorkerVault } from '../src/worker-vault.mjs';
-import { createVault } from '../../benchgo/src/vault.mjs';
+import { createVault } from '../../base/src/vault.mjs';
 
 async function fixture(t, { approve } = {}) {
   const records = new Map(); let policy = { desktopVersion: 'desktop-1', version: 'feishu-1' }, sends = 0, approvals = 0;

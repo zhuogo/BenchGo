@@ -5,7 +5,7 @@ import { CustomSelect } from './custom-select.jsx';
 import { Button } from './ui/button.jsx';
 import { Loading } from './ui/loading.jsx';
 import { FileSaveButton } from './file-save-button.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import css from './artifact-preview.css';
 
 const asset = name => new URL(`api/benchgo/preview-assets/${name}.js`, document.baseURI).href;

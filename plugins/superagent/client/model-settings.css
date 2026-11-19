@@ -25,6 +25,7 @@
 .ba-model-settings .ba-model-card>.ba-row-actions{gap:0;flex:none;flex-wrap:nowrap;min-height:var(--ba-model-control-height);margin-top:calc(var(--ba-model-label-height) + var(--ba-model-field-gap))}
 .ba-model-settings .ba-model-card>.ba-row-actions .ba-icon{width:32px;min-width:32px;height:32px;min-height:32px;padding:5px}
 .ba-model-settings .ba-model-fields{grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:8px}
+.ba-model-settings .ba-model-fields[data-harness-field="true"]{grid-template-columns:repeat(3,minmax(0,1fr))}
 .ba-model-settings .ba-model-fields .ba-field{gap:var(--ba-model-field-gap)}
 .ba-model-settings .ba-model-fields .ba-field>label{font-size:11px;line-height:var(--ba-model-label-height)}
 .ba-model-settings .ba-model-fields .dowork-select{height:var(--ba-model-control-height);min-height:var(--ba-model-control-height);font-size:12px}
@@ -74,5 +75,5 @@
   .ba-model-settings .ba-auxiliary-use+.ba-auxiliary-use{border-top:1px solid var(--ba-line)}
 }
 @container ba-models (max-width:300px){
-  .ba-model-settings .ba-model-fields{grid-template-columns:1fr}
+  .ba-model-settings .ba-model-fields,.ba-model-settings .ba-model-fields[data-harness-field="true"]{grid-template-columns:1fr}
 }

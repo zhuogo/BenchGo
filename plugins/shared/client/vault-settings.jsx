@@ -1,10 +1,10 @@
 import { Loading } from './ui/loading.jsx';
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
+import { readJsonResponse } from '../../base/client/http-response.mjs';
 import css from './vault-settings.css';
 import { Button } from './ui/index.jsx';
 import { ResourceIcon } from './resource-icon.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 
 const credential = () => ({ key: crypto.randomUUID(), name: '' });
 const empty = () => ({ address: '', credentials: [credential()] });

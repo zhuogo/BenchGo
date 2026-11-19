@@ -5,7 +5,7 @@ import css from './memory.css';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { ResourceState } from './resource-state.jsx';
 import { groupByDay } from './time-groups.mjs';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent, Disclosure } from '../../shared/client/ui/collapsible.jsx';

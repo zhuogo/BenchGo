@@ -21,6 +21,17 @@
     }
   ],
   "paths": {
+    "/link/api/info": {
+      "servers": [{ "url": "/" }],
+      "get": {
+        "summary": "设备信息与配对后的选路更新",
+        "description": "公开请求返回现有设备信息。发送已批准设备的 Bearer 凭据时，返回可核对的 hostId、hostName 和最新 routes，客户端在认证通过且身份一致时更新目录。历史单地址配对继续可用。",
+        "responses": {
+          "200": { "description": "设备信息。经认证时 routes 最多 16 条，含直连与按优先级使用的中继。" },
+          "401": { "description": "设备凭据无效或已撤销。" }
+        }
+      }
+    },
     "/link/workbench/api/commander/assistant": {
       "post": {
         "summary": "已配对设备的总助手通知与会话接口",
@@ -53,7 +64,7 @@
         },
         "responses": {
           "200": {
-            "description": "list:{devices,activeId,capabilities}; pair:{requestId,expiresAt}; pairStatus:{status,device?}; select:{device,url}; sshProbe:{fingerprint}; sshConnect/reconnect/update:{jobId}; job:{id,state,steps,device?,error?}; serverAction:{operation,status?,logs?}; hostRelayTest:{ok,latencyMs,message}（只读测试，不保存输入、不抢占在线控制通道；id 节点 token 留空时复用私密配置）"
+            "description": "list:{devices,activeId,capabilities}; pair:{requestId,expiresAt}; pairStatus:{status,device?}; select:{device,url}; sshProbe:{fingerprint}; sshConnect/reconnect/update:{jobId}; job:{id,state,steps,device?,error?}; serverAction:{operation,status?,logs?}; serverTerminal:{id,title}; serverTerminalRead:{output,offset,closed}; serverPairing:{code,expiresAt,mode,url,uri,webUrl}; serverPairingStatus:{pending}; serverPairingConfigure、serverPairingDecide 与终端写入/调整尺寸/关闭返回 {ok:true}。hostRelayTest:{ok,latencyMs,message}（只读测试，不保存输入、不抢占在线控制通道；id 节点 token 留空时复用私密配置）"
           },
           "400": {
             "description": "输入错误或操作失败"
@@ -65,7 +76,7 @@
             "description": "来源未授权"
           }
         },
-        "description": "请求 Origin 必须等于设备中心源。sshProbe 不发送认证，sshConnect 必须包含用户确认的原始 SHA256 fingerprint。select 返回一次性工作台 URL。移除只删除本机连接，不卸载服务器。 Android 原生还支持 closeWorkbench 关闭本机页面；Node 由前端关闭 iframe。Android 任务终态为 completed/failed。 list.capabilities.hostAdmin 表示允许管理当前主机连接；hostStatus/hostConfigure/hostPairing/hostConfirm/hostReject/hostRevoke 为受限 owner 调用。配对 uri 接受完整 dshlink://pair 或 HTTPS /link/#code=...。SSH 任务在 TLS 指纹、设备令牌及真实 HTML 工作台验证成功后才注册设备。 relayProbe/relayDeploy/relayAction 仅支持能力 relayDeploy 的 owner 桌面设备中心；部署成功自动保存并启用主机连接，job.relay 不含密钥。hostRelayConfigure 接收 url/token/enabled，状态不回显 token。relayAction operation 为 status/logs/start/stop/restart/renew/renew-status/diagnose/uninstall；diagnose 返回脱敏诊断日志，renew-status 返回自动续期 timer 状态。已批准配对的 routes 支持 relayId、priority、health、cooldownUntil 和 lastError；连接顺序固定为直连后按中继优先级尝试，冷却节点跳过，证书异常或授权失败不降级，活动请求不重放。历史单地址配对保持兼容，重新配对获取 routes。"
+        "description": "请求 Origin 必须等于设备中心源。sshProbe 不发送认证，sshConnect 必须包含用户确认的原始 SHA256 fingerprint。select 返回一次性工作台 URL。移除只删除本机连接，不卸载服务器。Android 原生还支持 closeWorkbench 关闭本机页面；Node 由前端关闭 iframe。Android 任务终态为 completed/failed。list.capabilities.hostAdmin 表示允许管理当前主机连接；hostStatus/hostConfigure/hostPairing/hostConfirm/hostReject/hostRevoke 为受限 owner 调用。配对 uri 接受完整 dshlink://pair 或 HTTPS /link/#code=...。SSH 任务在 TLS 指纹、设备令牌及真实 HTML 工作台验证成功后才注册设备。relayProbe/relayDeploy/relayAction 仅支持能力 relayDeploy 的 owner 桌面设备中心；部署成功自动保存并启用指定节点，job.relay 不含密钥。hostRelayPoolConfigure 使用 expected.fingerprint，按 id 执行 add/update/remove/prefer，状态不回显 token。hostPairing 的 relayId 可指定生成连接信息的在线中继。relayAction operation 为 status/logs/start/stop/restart/renew/renew-status/diagnose/uninstall；diagnose 返回脱敏诊断日志，renew-status 返回自动续期 timer 状态。已批准配对通过认证的 /link/api/info 同步 routes；连接顺序为直连后按中继优先级尝试，证书异常或授权失败不降级，活动请求不重放。"
       }
     },
     "/api/commander-devices": {
@@ -139,7 +150,7 @@
       ],
       "post": {
         "summary": "Owner Link 管理",
-        "description": "仅官方 owner 通道。status 返回 Link 与中继状态，不返回设备令牌或中继密钥。pairing.mode 支持 relay：仅通道在线时签发中继 HTTPS 配对地址；通过 DSH_LINK_RELAY_URL/TOKEN 配置主机出站连接，密钥不在响应暴露。relay-configure 为 owner 显式保存 url/token/enabled，优先于启动环境变量；token 仅写入 0600 配置，状态返回 relay:{configured,enabled,url,connected,lastError}，不回显 token。部署与中继管理不新增 MCP。",
+        "description": "仅官方 owner 通道。status 返回 Link 与中继状态，不返回设备令牌或中继密钥。pairing.mode 支持 relay，relayId 可指定在线节点。relay-pool-configure 使用 status.relay.fingerprint 并按 id 执行 add/update/remove/prefer。新增、换址或换密钥经可信 HTTPS、中继协议和 HTTP/2 验证；换址须明确提交密钥，停用后可删除。已保存配置优先于启动环境变量 DSH_LINK_RELAY_URL/TOKEN，token 仅写入 0600 配置。中继状态返回 preferredId、selectedId、fingerprint、nodes；各节点含连接状态、错误与 checkedAt。部署与中继管理不新增 MCP。",
         "requestBody": {
           "required": true,
           "content": {
@@ -161,7 +172,6 @@
                           "reject",
                           "revoke",
                           "rename-device",
-                          "relay-configure",
                           "relay-test",
                           "relay-pool-configure", "management-decide"
                         ]
@@ -208,7 +218,9 @@
                       },
                       "operationId": { "type": "string" },
                       "allow": { "type": "boolean" },
-                      "nodes": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+                      "operation": { "enum": ["add", "update", "remove", "prefer"] },
+                      "expected": { "$ref": "#/components/schemas/RelayPoolExpected" },
+                      "relayId": { "type": "string" }
                     },
                     "additionalProperties": false
                   }
@@ -219,7 +231,7 @@
         },
         "responses": {
           "200": {
-            "description": "当前 Link 与中继状态；relay-test 返回 {ok,latencyMs,message}，失败仍返回 200，五秒无响应报告超时；验证可信 HTTPS、中继协议和密钥，不代表隧道或访问端已在线。输入 url/token，编辑可带 id 并留空 token 复用私密配置；不保存输入、不回显密钥。GET /__link/relay/probe 为只读 Bearer 鉴权探测，要求 {protocol:benchgo-link-relay,version:1,authenticated:true}；旧中继无此能力时需升级，普通 HTTP 可达不算成功。"
+            "description": "当前 Link 与中继状态；relay-test 返回 {ok,latencyMs,message}，五秒无响应报告超时。验证可信 HTTPS、中继协议、密钥和 HTTP/2，独立于实际工作台访问。输入 url/token，地址保持一致时可带 id 并留空 token 复用私密配置。测试不保存输入、不回显密钥。"
           },
           "400": {
             "description": "输入无效、配置错误或服务关闭"
@@ -260,6 +272,7 @@
   },
   "components": {
     "schemas": {
+      "RelayPoolExpected": { "type": "object", "required": ["fingerprint"], "properties": { "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }, "additionalProperties": false },
       "ResourceKind": { "enum": ["projects", "sessions", "recent", "models", "capabilities", "tasks"], "description": "tasks需目标真实适配器；当前未提供时明确UNSUPPORTED，不能将错误当空集合。旧目标recent语义不可核实时不回退全会话。" },
       "ResourceScope": {
         "type": "object", "required": ["mode", "deviceIds"], "additionalProperties": false,
@@ -317,21 +330,21 @@
         "type": "object", "required": ["action"],
         "properties": { "action": { "enum": ["state", "models", "create", "history", "send", "cancel", "respond", "resources", "execution", "management", "sessionAction"] }, "id": { "type": "string", "maxLength": 256 }, "native": { "type": "boolean" }, "title": { "type": "string", "maxLength": 200 }, "operation": { "type": "string" }, "requestId": { "type": "string", "maxLength": 200 }, "operationId": { "type": "string" }, "kind": { "anyOf": [{ "$ref": "#/components/schemas/ResourceKind" }, { "enum": ["revision", "context", "answer"] }] }, "namespace": { "enum": ["benchgo-link-relay", "benchgo-link-transport"] }, "expected": { "type": "object", "properties": { "fingerprint": { "type": "string" } } }, "ops": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RelayManagementOp" } } },
         "additionalProperties": true,
-        "description": "有限定向协议，不接受任意HTTP/SSH或owner action。确认配对统一允许目标实际支持的BenchGo能力，撤销token仍拒绝。execution使用RemoteExecutionRequest v1，业务工单留在发起宿主，目标仅持久执行与传输记录且无需SuperAgent；入口必须绑定expectedHostId/expectedAuthorizationId并验证回执身份。management只允许status/relay-test/settings-read/settings-prepare/operation。settings-prepare仅修改relay既有节点priority/enabled并等待目标主人审批。sessionAction按显式native和原始id选择适配器，只支持能力声明的有限操作，requestId绑定完整意图。目标从认证配对记录绑定principal，JSON principal不能扩大权限。"
+        "description": "有限定向协议，不接受任意HTTP/SSH或owner action。确认配对统一允许目标实际支持的BenchGo能力，撤销token仍拒绝。execution使用RemoteExecutionRequest v2，业务工单留在发起宿主，目标仅持久执行与传输记录且无需SuperAgent；入口必须绑定expectedHostId/expectedAuthorizationId并验证回执身份。management只允许status/relay-test/settings-read/settings-prepare/operation。settings-prepare仅修改relay既有节点priority/enabled并等待目标主人审批。sessionAction按显式native和原始id选择适配器，只支持能力声明的有限操作，requestId绑定完整意图。目标从认证配对记录绑定principal，JSON principal不能扩大权限。"
       },
       "RemoteExecutionRequest": {
         "type": "object", "required": ["action", "version", "operation"],
         "properties": {
-          "action": { "const": "execution" }, "version": { "const": 1 },
+          "action": { "const": "execution" }, "version": { "const": 2 },
           "operation": { "enum": ["catalog", "submit", "get", "input", "control", "ack"] },
           "requestId": { "type": "string", "maxLength": 512 }, "executionId": { "type": "string", "maxLength": 512 }, "sessionId": { "type": "string", "maxLength": 512 },
           "identity": { "type": "object", "required": ["ownerHostId", "taskId", "assignmentId", "runId", "fence"], "properties": { "ownerHostId": { "type": "string" }, "taskId": { "type": "string" }, "assignmentId": { "type": "string" }, "runId": { "type": "string" }, "fence": { "type": "integer", "minimum": 1 } } },
-          "config": { "type": "object", "required": ["harness", "models"], "properties": { "harness": { "const": "official" }, "models": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "object", "required": ["providerId", "modelId"], "properties": { "providerId": { "type": "string" }, "modelId": { "type": "string" }, "params": { "type": "object" } } } } } },
+          "config": { "type": "object", "required": ["harness", "models"], "properties": { "harness": { "enum": ["official", "codex", "claude"] }, "models": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "object", "required": ["providerId", "modelId"], "properties": { "providerId": { "type": "string" }, "modelId": { "type": "string" }, "params": { "type": "object" } } } } } },
           "projectId": { "type": "string" }, "text": { "type": "string", "maxLength": 100000 }, "requirements": { "type": "object" },
           "kind": { "enum": ["revision", "context", "answer"] }, "instructionRevision": { "type": "integer", "minimum": 1 }, "questionId": { "type": "string" }, "answers": { "type": "array", "items": { "type": "object" } },
           "control": { "enum": ["pause", "resume", "cancel"] }, "after": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 200 }, "through": { "type": "integer", "minimum": 0 }
         },
-        "description": "submit由业务宿主预生成executionId/sessionId，携带完整identity、要求版本和冻结授权/模型；目标以认证principal一对一绑定ownerHostId，重复requestId只取原回执，改变命令主体冲突，after/limit不属于幂等意图。input初始received不代表应用；官方pre-step后的instruction.applied包含requestId/kind/实际instructionRevision。answer按当前questionId及逐题真实id回传。get按连续事件seq分页；result须含真实官方turn/end完成原因及transcript证据；ack仅确认已持久接收的事件水位，不重跑Worker。"
+        "description": "submit由业务宿主预生成executionId/sessionId，携带完整identity、要求版本和冻结授权/模型；目标以认证principal一对一绑定ownerHostId，重复requestId只取原回执，改变命令主体冲突，after/limit不属于幂等意图。input初始received不代表应用；官方pre-step后的instruction.applied包含requestId/kind/实际instructionRevision。answer按当前questionId及逐题真实id回传。外部Harness只支持answer和cancel，模型参数使用目标设备的Harness配置。get按连续事件seq分页；result以官方turn/end及transcript或外部适配器真实结束事件为依据；ack仅确认已持久接收的事件水位，不重跑Worker。"
       },
       "DeviceRequest": {
         "type": "object",
@@ -354,6 +367,8 @@
               "job",
               "reconnect",
               "serverAction",
+              "serverTerminal", "serverTerminalRead", "serverTerminalWrite", "serverTerminalResize", "serverTerminalClose",
+              "serverPairing", "serverPairingConfigure", "serverPairingStatus", "serverPairingDecide",
               "hostStatus",
               "hostConfigure",
               "hostPairing",
@@ -364,7 +379,6 @@
               "relayProbe",
               "relayDeploy",
               "relayAction",
-              "hostRelayConfigure",
               "hostRelayTest",
               "hostRelayPoolConfigure",
               "devices", "resources", "resourceScope", "setResourceScope", "callDevice", "sessionAction", "hostManagementDecide"
@@ -373,10 +387,14 @@
           "deviceId": {
             "type": "string"
           },
+          "data": { "type": "string", "maxLength": 16384, "description": "SSH 终端输入。" },
+          "rows": { "type": "integer", "minimum": 1, "maximum": 1000 },
+          "cols": { "type": "integer", "minimum": 1, "maximum": 1000 },
+          "decision": { "enum": ["confirm", "reject"] },
           "deviceIds": { "type": "array", "maxItems": 33, "items": { "type": "string" } },
           "kind": { "$ref": "#/components/schemas/ResourceKind" },
           "projectId": { "type": "string" },
-          "offset": { "type": "integer", "minimum": 0, "maximum": 100000 },
+          "offset": { "type": "integer", "minimum": 0, "description": "资源分页上限为 100000。终端读取使用上次返回的 offset。" },
           "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
           "scope": { "$ref": "#/components/schemas/ResourceScope" },
           "resource": { "$ref": "#/components/schemas/OpenResource" },
@@ -385,6 +403,8 @@
           "native": { "type": "boolean" },
           "title": { "type": "string", "maxLength": 200 },
           "operationId": { "type": "string" },
+          "expected": { "$ref": "#/components/schemas/RelayPoolExpected" },
+          "relayId": { "type": "string" },
           "allow": { "type": "boolean", "description": "hostManagementDecide真实主人单次批准或拒绝精确配置差异。" },
           "input": { "$ref": "#/components/schemas/DirectedDeviceInput" },
           "jobId": {
@@ -440,6 +460,7 @@
           "operation": {
             "enum": [
               "pin", "unpin", "archive", "unarchive", "rename", "delete", "fork",
+              "add", "remove", "prefer",
               "status",
               "start",
               "stop",
@@ -608,7 +629,9 @@
             "enum": [
               "unknown",
               "online",
-              "offline"
+              "offline",
+              "failed",
+              "connecting"
             ]
           },
           "lastError": {
@@ -617,6 +640,10 @@
               "null"
             ]
           },
+          "currentRelayId": { "type": ["string", "null"] },
+          "currentRelayUrl": { "type": ["string", "null"] },
+          "sshManaged": { "type": "boolean" },
+          "sshStatus": { "enum": ["connected", "disconnected", "auth-required", "offline", "failed"] },
           "warning": {
             "type": "string"
           }

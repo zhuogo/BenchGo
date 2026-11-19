@@ -5,18 +5,18 @@ import vm from 'node:vm';
 
 const renderer = await readFile(new URL('./renderer/benchgo-startup.js', import.meta.url), 'utf8');
 
-test('desktop startup keeps the app identity and local mascot beside the DeepSeek engine label', async () => {
+test('desktop startup keeps the local BenchGo identity and DeepSeek engine attribution', async () => {
   const html = await readFile(new URL('./renderer/welcome.html', import.meta.url), 'utf8');
   const css = await readFile(new URL('./renderer/benchgo-startup.css', import.meta.url), 'utf8');
   assert.ok(html.includes('<title>BenchGo</title>'));
   assert.ok(html.includes('<h1>BenchGo</h1>'));
   assert.ok(html.indexOf('class="startup-mascot"') < html.indexOf('<h1>BenchGo</h1>'));
   assert.ok(html.indexOf('</div>') < html.indexOf('class="startup-engine"'));
-  assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt="BenchGo"'));
+  assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt=""'));
   assert.doesNotMatch(html, /<svg[\s>]/);
   assert.ok(html.includes('<span class="startup-engine">DeepSeek</span>'));
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
-  assert.ok(css.includes('.startup-brand { display: flex; flex-direction: row;'));
+  assert.ok(html.includes('class="startup-field" aria-hidden="true"'));
   assert.ok(css.includes('animation: startup-scan'));
   assert.ok(css.includes('animation: startup-arrive 240ms'));
   assert.ok(css.includes('[data-part="eyes"]'));
@@ -30,7 +30,7 @@ test('desktop startup keeps the app identity and local mascot beside the DeepSee
 test('native splash falls back after 20 seconds without replacing a native startup phase', async () => {
   const html = await readFile(new URL('./renderer/splash.html', import.meta.url), 'utf8');
   const script = await readFile(new URL('./renderer/splash.js', import.meta.url), 'utf8');
-  assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt="BenchGo"'));
+  assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt=""'));
   assert.ok(html.indexOf('class="startup-mascot"') < html.indexOf('<h1>BenchGo</h1>'));
   assert.ok(html.indexOf('</div>') < html.indexOf('id="startup-status"'));
   assert.doesNotMatch(html, /<svg[\s>]/);

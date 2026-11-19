@@ -70,7 +70,7 @@ function readAsset(name) {
   throw new Error('Missing APK resource: ' + name);
 }
 for (const [asset, file] of [
-  ['assets/updates/update-public-key.pem', 'plugins/benchgo/shared/update-public-key.pem'],
+  ['assets/updates/update-public-key.pem', 'plugins/base/shared/update-public-key.pem'],
   ['assets/app.js', 'plugins/link/dist/web/app.js'],
   ['assets/native-appearance.js', 'plugins/link/mobile/android/app/src/main/assets/native-appearance.js'],
   ['assets/server/server-seed.bundle', 'plugins/link/dist/server/server-seed.tar.gz'],

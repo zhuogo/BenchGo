@@ -7,10 +7,11 @@ const networkErrors = new Set(['OFFLINE', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDO
 /** Reachability is separate from authorization and resource/business failures. */
 export function deviceConnectionFailure(error) {
   const status = error.statusCode ?? error.status;
+  if (error.code === 'SSH_AUTH_REQUIRED') return { code: error.code, status: 'unknown', reason: error.message };
   if (error.code === 'ROUTES_COOLDOWN') return { code: 'ROUTES_COOLDOWN', status: 'connecting', reason: '中继连接正在恢复，请稍后重试或在设备中心检查连接' };
   if (error.code === 'IDENTITY_CHANGED' || error.code === 'ERR_LINK_CERTIFICATE' || /CERT|TLS/.test(error.code || '')) return { code: 'IDENTITY_CHANGED', status: 'failed', reason: '主机身份或证书变化，请在设备中心重新核验' };
   if ([401, 403].includes(status) || error.code === 'UNAUTHORIZED') return { code: 'UNAUTHORIZED', status: 'failed', reason: '授权失效，请在设备中心重新核验' };
-  if (networkErrors.has(error.code) || error.name === 'TimeoutError') return { code: 'OFFLINE', status: 'offline', reason: '设备暂不可达，请检查连接后重试' };
+  if (networkErrors.has(error.code) || error.name === 'TimeoutError' || [502, 503, 504].includes(status)) return { code: 'OFFLINE', status: 'offline', reason: '设备暂不可达，请检查连接后重试' };
   if (error.code === 'UNSUPPORTED' || status === 422) return { code: 'UNSUPPORTED', status: 'online', reason: '目标尚不支持该资源' };
   return { code: 'QUERY_FAILED', status: status >= 400 ? 'online' : null, reason: '设备资源查询失败，请重试' };
 }

@@ -2,7 +2,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { authorizeChannel } from '../connection-authorization.mjs';
 import { beforeDelivery, deliveryFailure } from '../delivery-outcome.mjs';
-const require = createRequire(new URL('../../../../benchgo/package.json', import.meta.url));
+const require = createRequire(new URL('../../../../base/package.json', import.meta.url));
 const field = (key, label, extra = {}) => ({ key, label, type: key.endsWith('SecretRef') ? 'secretRef' : 'text', required: true, ...extra });
 export const channelDefinition = {
   id: 'email', label: 'Email',

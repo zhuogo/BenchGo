@@ -38,7 +38,7 @@ function headersFor(input, target) {
 export function createRelayHost(options) {
   const { relay, target } = validate(options);
   const agent = remoteAgent(target), sockets = new Set(), work = new Set();
-  let closed = false, connected = false, lastError = null, control, retryTimer, retryResolve, heartbeat;
+  let closed = false, connected = false, lastError = null, checkedAt = null, control, retryTimer, retryResolve, heartbeat;
   // Only the authenticated relay control channel supplies this socket address.
   // The local listener signs it so direct clients cannot forge forwarded IPs.
   const sourceHeaders = input => options.relayHeaders && isIP(input.clientAddress ?? '')
@@ -132,14 +132,14 @@ export function createRelayHost(options) {
             currentControl.off('open', onOpen); currentControl.off('error', onError); currentControl.off('close', onClose);
             if (error) reject(error); else resolve();
           };
-          const onOpen = () => { opened = true; connected = true; lastError = null; delay = 1000; finish(); };
+          const onOpen = () => { opened = true; connected = true; lastError = null; checkedAt = Date.now(); delay = 1000; finish(); };
           const onError = error => finish(error);
           const onClose = () => finish(new Error('中继在握手完成前关闭'));
           const timer = setTimeout(() => { finish(new Error('中继连接超时')); currentControl.terminate(); }, 10_000); timer.unref?.();
           currentControl.once('open', onOpen); currentControl.once('error', onError); currentControl.once('close', onClose);
         });
         let lastPong = Date.now();
-        currentControl.on('pong', () => { lastPong = Date.now(); });
+        currentControl.on('pong', () => { lastPong = Date.now(); checkedAt = lastPong; });
         heartbeat = setInterval(() => {
           if (currentControl.readyState !== WebSocket.OPEN) return;
           if (Date.now() - lastPong > 45_000) { currentControl.terminate(); return; }
@@ -151,13 +151,14 @@ export function createRelayHost(options) {
       } catch (error) { if (!closed) { lastError = error.message; options.onError?.(error); } }
       clearInterval(heartbeat);
       connected = false;
+      if (!closed) checkedAt = Date.now();
       if (!closed) await new Promise(resolve => { retryResolve = resolve; retryTimer = setTimeout(() => { retryResolve = undefined; resolve(); }, delay); retryTimer.unref?.(); });
       delay = Math.min(delay * 2, 30_000);
     }
   };
   const running = run(); work.add(running);
   return {
-    status: () => ({ connected, lastError }),
+    status: () => ({ connected, lastError, checkedAt }),
     async close() {
       if (closed) return;
       closed = true; clearTimeout(retryTimer); retryResolve?.(); retryResolve = undefined; connected = false;

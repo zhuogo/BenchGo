@@ -18,8 +18,8 @@ export const PAYLOAD_BUDGET = Object.freeze({ unpackedBytes: 1024 ** 3, entries:
 export const DESKTOP_ELECTRON_LANGUAGES = Object.freeze(['en-US', 'zh-CN', 'ja', 'es', 'fr', 'de', 'ru', 'pt-BR']);
 export const isLinuxX64Elf = bytes => bytes.length >= 20 && bytes.subarray(0, 4).toString('hex') === '7f454c46' && bytes[4] === 2 && bytes[5] === 1 && bytes.readUInt16LE(18) === 62;
 export const SERVER_BUILD_INPUTS = Object.freeze(['upstream.json', 'scripts/server/bootstrap.sh', 'scripts/server/bootstrap.mjs', 'scripts/server/package-seed.mjs',
-  'scripts/desktop/plugin-bundle.mjs', 'scripts/desktop/payload-policy.mjs', 'plugins/benchgo/scripts/build-modules.mjs',
-  'plugins/benchgo/scripts/build-client.mjs', 'plugins/workbench/scripts/vendor-adapter.mjs', 'plugins/workbench/scripts/sidebar-runtime.mjs']);
+  'scripts/desktop/plugin-bundle.mjs', 'scripts/desktop/payload-policy.mjs', 'plugins/base/scripts/build-modules.mjs',
+  'plugins/base/scripts/build-client.mjs', 'plugins/base/workbench/scripts/vendor-adapter.mjs', 'plugins/base/workbench/scripts/sidebar-runtime.mjs']);
 
 export function serverResourceDelivery(value = 'full') {
   if (!['full', 'online'].includes(value)) throw new Error('Server resource delivery must be full or online');
@@ -47,19 +47,19 @@ export function serverInputDigest({ plugin, files = packedPluginFiles(plugin), r
 }
 
 /** CLI prepack may publish the exact online descriptor without rebuilding the Linux archive. */
-export function serverResourceDescriptor({ root = repositoryRoot, plugin = join(root, 'plugins/benchgo'), files, delivery = 'full' } = {}) {
+export function serverResourceDescriptor({ root = repositoryRoot, plugin = join(root, 'plugins/base'), files, delivery = 'full' } = {}) {
   delivery = serverResourceDelivery(delivery);
   const metadata = json(join(plugin, 'package.json')), upstream = json(join(root, 'upstream.json'));
   return { schemaVersion: 1, delivery, releaseVersion: metadata.benchgo?.releaseVersion ?? metadata.version, pluginVersion: metadata.version,
     harnessVersion: upstream.version, harnessCommit: upstream.commit, sourceDigest: serverInputDigest({ plugin, files, root }) };
 }
 
-export function writeServerResourceDescriptor({ output, root = repositoryRoot, plugin = join(root, 'plugins/benchgo'), files, delivery = 'full' } = {}) {
+export function writeServerResourceDescriptor({ output, root = repositoryRoot, plugin = join(root, 'plugins/base'), files, delivery = 'full' } = {}) {
   if (typeof output !== 'string' || !output) throw new Error('Server resource descriptor requires an output directory');
   const descriptor = serverResourceDescriptor({ root, plugin, files, delivery });
   mkdirSync(output, { recursive: true });
   writeFileSync(join(output, 'resources.json'), JSON.stringify(descriptor, null, 2) + '\n');
-  copyFileSync(join(root, 'plugins/benchgo/shared/update-public-key.pem'), join(output, 'update-public-key.pem'));
+  copyFileSync(join(root, 'plugins/base/shared/update-public-key.pem'), join(output, 'update-public-key.pem'));
   return descriptor;
 }
 
@@ -101,7 +101,7 @@ export function assertEmbeddedServerSeed({ plugin, files, root = repositoryRoot,
   if (descriptor.schemaVersion !== 1 || !['full', 'online'].includes(descriptor.delivery) || descriptor.pluginVersion !== metadata.version || descriptor.harnessVersion !== upstream.version
     || descriptor.harnessCommit !== upstream.commit || descriptor.releaseVersion !== (metadata.benchgo?.releaseVersion ?? metadata.version) || !/^[a-f0-9]{64}$/.test(descriptor.sourceDigest))
     throw new Error('Plus bundle: stale server resource descriptor; run the full build:plus release build');
-  if (!readFileSync(join(directory, 'update-public-key.pem')).equals(readFileSync(join(root, 'plugins/benchgo/shared/update-public-key.pem')))) throw new Error('Plus bundle: server resource public key differs from the application trust root');
+  if (!readFileSync(join(directory, 'update-public-key.pem')).equals(readFileSync(join(root, 'plugins/base/shared/update-public-key.pem')))) throw new Error('Plus bundle: server resource public key differs from the application trust root');
   const present = SERVER_PAYLOAD_FILES.filter(file => existsSync(join(directory, file)));
   if (present.length && present.length !== SERVER_PAYLOAD_FILES.length) throw new Error('Plus bundle: incomplete full server payload; rebuild instead of falling back to the network');
   const sourceDigest = serverInputDigest({ plugin, files, root });

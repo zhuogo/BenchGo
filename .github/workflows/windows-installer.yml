@@ -52,7 +52,7 @@ jobs:
         run: |
           npm ci --prefix plugins/link
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm ci --prefix plugins/benchgo
+          npm ci --prefix plugins/base
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build:plus
           exit $LASTEXITCODE
@@ -63,7 +63,7 @@ jobs:
       - name: Verify plugin enrollment, legacy migration and physical install cleanup
         env:
           BENCHGO_TEST_PACKAGED_ROOT: artifacts/windows/win-unpacked
-        run: node --test scripts/desktop/plugin-bundle.test.mjs plugins/benchgo/test/plugin-install.test.mjs scripts/server/package-seed.test.mjs scripts/desktop/install-cleanup.test.mjs scripts/desktop/install-cleanup-electron.test.mjs scripts/desktop/installer-cleanup-native.test.mjs
+        run: node --test scripts/desktop/plugin-bundle.test.mjs plugins/base/test/plugin-install.test.mjs scripts/server/package-seed.test.mjs scripts/desktop/install-cleanup.test.mjs scripts/desktop/install-cleanup-electron.test.mjs scripts/desktop/installer-cleanup-native.test.mjs
       - name: Download previous signed installer for in-place upgrade verification
         env:
           GH_TOKEN: ${{ github.token }}

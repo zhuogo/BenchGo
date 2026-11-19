@@ -7,7 +7,7 @@ import { createAssistantStore } from '../src/store.mjs';
 import { createRouterTools } from '../src/router-tools.mjs';
 
 const skillBody = '## When to Use\nVerify changes.\n## Procedure\nRun checks.\n## Pitfalls\nDo not assume.\n## Verification\nRead results.';
-async function fixture(t, { threadId = 'main', channel } = {}) {
+async function fixture(t, { threadId = 'main', channel, link } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-router-maintenance-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   const tools = new Map(), actions = [];
@@ -15,11 +15,12 @@ async function fixture(t, { threadId = 'main', channel } = {}) {
   let events;
   const message = (text, id = 'message-1') => { events = [{ type: 'turn/start' }, { type: 'user/message', data: { id, source: { kind: 'user' }, content: [{ type: 'text', text }] } }]; };
   message('我喜欢简洁回答。');
-  const ctx = { get: () => undefined, agents: { get: id => id === agent.id ? agent : undefined,
+  const ctx = { get: name => name === 'benchgoLink' ? link : undefined, agents: { get: id => id === agent.id ? agent : undefined,
     currentInitiator: () => agent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } };
   await store.updateState(threadId === 'main' ? { mainSessionId: agent.id } : { threads: [{ id: threadId, sessionId: agent.id, title: 'side', ...(channel ? { source: { channel }, sourceKey: 'external' } : {}) }] });
   const scope = { tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name); } }, systemPrompt: { section() {}, context() {} } };
-  createRouterTools({ ctx, store, shutdown: new AbortController(), modelActions: { execute(input) { actions.push(input); return { legacyAction: true }; } } })(scope, { threadId, agent });
+  createRouterTools({ ctx, store, shutdown: new AbortController(),
+    modelActions: { execute(input) { actions.push(input); return { legacyAction: true }; } } })(scope, { threadId, agent });
   t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
   return { store, tools, actions, agent, events: () => events, message,
     run: (name, args, extra) => tools.get(name).execute(args, { agent, callId: 'call-1', signal: new AbortController().signal, ...extra }) };
@@ -120,4 +121,45 @@ test('maintenance tools reject retained Worker handles, external chats and chang
   const original = f.store.getState;
   f.store.getState = async () => { const state = await original(); f.message('another user message', 'message-2'); return state; };
   await assert.rejects(f.run('assistant_memory', { content: 'x' }), /用户消息已变化/);
+});
+
+const sshArgs = { deviceId: 'server-42', command: 'printf "benchgo\\n"' };
+const sshTarget = { name: '香港', host: 'server.example.test', port: 2200, username: 'operator', revision: 'settings-revision' };
+test('SSH maintenance resolves registered servers and executes directly from a manual conversation', async t => {
+  const commands = [];
+  const link = {
+    devices: async () => ({ devices: [
+      { id: 'linked-only', name: 'Link', sshManaged: false },
+      { id: 'server-42', name: '香港', sshManaged: true, sshStatus: 'disconnected', status: 'offline', token: 'private' },
+    ] }),
+    sshTarget: async ({ deviceId }) => { assert.equal(deviceId, sshArgs.deviceId); return sshTarget; },
+    sshCommand: async input => { commands.push(input); return { exitCode: 0, stdout: 'benchgo\n', stderr: '' }; },
+  };
+  const f = await fixture(t, { threadId: 'manual-side', link });
+  f.message('在香港执行输出检查');
+  assert.deepEqual(await f.run('assistant_server_ssh', {}), { devices: [{ id: 'server-42', name: '香港', sshStatus: 'disconnected' }] });
+  assert.deepEqual(await f.run('assistant_server_ssh', sshArgs), { exitCode: 0, stdout: 'benchgo\n', stderr: '' });
+  assert.equal(commands.length, 1);
+  const { signal, ...submitted } = commands[0];
+  assert.equal(signal.aborted, false);
+  assert.deepEqual(submitted, { ...sshArgs, expectedRevision: sshTarget.revision });
+});
+
+test('SSH maintenance rejects a closed turn and external channel before resolving targets', async t => {
+  const link = { sshTarget: () => assert.fail('Link target accessed'), sshCommand: () => assert.fail('SSH command started') };
+  const f = await fixture(t, { link });
+  f.events().push({ type: 'turn/end' });
+  await assert.rejects(f.run('assistant_server_ssh', sshArgs), /真实用户文字指令/);
+  const external = await fixture(t, { threadId: 'external', channel: 'feishu', link });
+  await assert.rejects(external.run('assistant_server_ssh', sshArgs), { code: 'HISTORY_SCOPE_DENIED' });
+});
+
+test('SSH maintenance rechecks the current instruction and cancellation after resolving the target', async t => {
+  const controller = new AbortController();
+  let onTarget;
+  const f = await fixture(t, { link: { sshTarget: async () => { onTarget(); return sshTarget; }, sshCommand: () => assert.fail('SSH command started') } });
+  onTarget = () => f.message('别执行', 'message-2');
+  await assert.rejects(f.run('assistant_server_ssh', sshArgs), /用户消息已变化/);
+  onTarget = () => controller.abort();
+  await assert.rejects(f.run('assistant_server_ssh', sshArgs, { signal: controller.signal }), { name: 'AbortError' });
 });

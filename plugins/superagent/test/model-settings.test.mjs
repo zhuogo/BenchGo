@@ -17,6 +17,7 @@ test('whole draft validation catches hidden role errors without rewriting opaque
   }
   assert.equal(validateModelSettings({ ...draft, auxiliary: { models: [opaque, { ...opaque }] } }).role, 'auxiliary');
   assert.equal(validateModelSettings({ models: Array.from({ length: 33 }, (_, index) => ({ ...opaque, modelId: `${index}` })) }).role, 'router');
+  assert.equal(validateModelSettings({ ...draft, workerHarness: 'unknown' }).role, 'worker');
   assert.deepEqual(draft.models, [opaque]);
   assert.equal(opaque.providerId, 'Exact/@ Provider');
   assert.equal(opaque.modelId, 'Exact: Model/01');
@@ -29,17 +30,23 @@ test('model editor saves and reloads capability choices and routes opaque model 
   const main = { providerId: 'Main/Exact', modelId: 'Main:opaque', options: { maxTokens: 333 } };
   const aux = { providerId: 'Aux/Exact', modelId: 'Aux:opaque', options: { maxTokens: 222 } };
   const worker = { providerId: 'Worker/Exact', modelId: 'Worker:opaque', options: { maxTokens: 111, reasoningEffort: 'ultra' } };
-  const base = await store.updateConfig({ models: [main], workerModels: [worker], cardHtml: '<b>BenchGo</b>' });
-  let draft = { ...base, ...auxiliaryModelPatch(null, [aux]) };
+  const base = await store.updateConfig({ models: [main], workerModels: [worker], workerConcurrency: 3 });
+  const workerPatch = identityConfigPatch({ ...base, workerHarness: 'codex' }, base);
+  assert.deepEqual(workerPatch, { workerHarness: 'codex' });
+  await store.updateConfig(workerPatch);
+  const afterWorkerChange = await store.getConfig();
+  assert.deepEqual(afterWorkerChange.models, [main]);
+  assert.deepEqual(afterWorkerChange.workerModels, [worker]);
+  let draft = { ...afterWorkerChange, ...auxiliaryModelPatch(null, [aux]) };
   draft = { ...draft, ...auxiliaryCapabilityPatch(draft.auxiliary, 'summary', true) };
-  const patch = identityConfigPatch(draft, base);
+  const patch = identityConfigPatch(draft, afterWorkerChange);
   assert.deepEqual(Object.keys(patch), ['auxiliary']);
-  await store.updateConfig(patch, { revision: base.revision });
+  await store.updateConfig(patch, { revision: afterWorkerChange.revision });
   store.close(); store = await createAssistantStore({ dataDirectory: directory });
   const config = await store.getConfig();
   assert.deepEqual(config.models, [main]);
   assert.deepEqual(config.workerModels, [worker]);
-  assert.equal(config.cardHtml, '<b>BenchGo</b>');
+  assert.equal(config.workerConcurrency, 3);
   assert.deepEqual(config.auxiliary, draft.auxiliary);
   const seen = [];
   const llm = { async *stream(request) { seen.push([request.provider, request.model, request.maxTokens]); yield { type: 'text-delta', text: 'ok' }; yield { type: 'finish', reason: { kind: 'stop' } }; } };
@@ -54,7 +61,7 @@ test('model editor saves and reloads capability choices and routes opaque model 
   assert.equal((await store.getConfig()).auxiliary, null);
 });
 
-test('Worker-only edits survive reload, preserve other roles and reset to Router without legacy credential pools', async t => {
+test('Worker-only edits survive reload and clearing the Worker preserves other roles', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'model-worker-settings-'));
   let store = await createAssistantStore({ dataDirectory: directory });
   t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });

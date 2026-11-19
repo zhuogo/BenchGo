@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { groupByDay } from '../client/time-groups.mjs';
 
-const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const walk = node => node && typeof node === 'object' && node.props ? [node, ...node.children.flatMap(walk)] : [];
 function fixture({ api, refresh = async () => {}, entries = [] }) {
   let cursor = 0, confirmations = 0;

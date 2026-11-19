@@ -27,7 +27,7 @@ const { Peer } = await load('@deepseek-ai/dsh-client-connection');
 const clientGateway = await load('@deepseek-ai/dsh-api-gateway/client');
 const { installExecutionFactsRemote } = await import('../src/execution-facts-remote.mjs');
 const { executionFactsRemoteContribution } = await import('../src/execution-facts-contract.mjs');
-const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 let activityEnvironment;
 function loadActivity(contribution = executionFactsRemoteContribution, events = [], notificationSources = []) {
   const activityModule = { exports: {} };

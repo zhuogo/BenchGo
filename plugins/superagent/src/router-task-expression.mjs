@@ -4,7 +4,7 @@ import { currentTaskReplySignal, taskReplySignal, taskReplySource } from './task
 import { channelSessionKey } from './channel-policy.mjs';
 import { readAssessmentPolicy, validateTaskMandate } from './assessment-policy.mjs';
 import { watchdogRouterSignal, inspectWatchdogRouterSignal, watchdogNoticeCurrent } from './watchdog-router-signal.mjs';
-import { hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../benchgo/shared/public-chat-record.mjs';
+import { hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../base/shared/public-chat-record.mjs';
 import { taskCleanupNoticeKey } from './task-cleanup-continuation.mjs';
 
 /** Admit task facts into the existing Router inbox; replies use ordinary conversation history. */

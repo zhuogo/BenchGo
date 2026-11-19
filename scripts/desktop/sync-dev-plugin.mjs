@@ -1,6 +1,6 @@
 import { cp, mkdir, readFile, readdir, stat, writeFile, realpath, lstat, rm, unlink } from 'node:fs/promises';
 import { isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
-import { releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
+import { releaseBundleName } from '../../plugins/base/shared/plugin-install.mjs';
 import { createRequire } from 'node:module';
 
 async function findPackage(name, from) {
@@ -45,7 +45,7 @@ export async function syncDevelopmentPlugin({ root, enrollment }) {
     if (enrollment?.managed !== true || typeof enrollment.directory !== 'string' || !isAbsolute(enrollment.directory)) {
       throw new Error('登记结果缺少受管插件目录');
     }
-    const source = await realpath(join(root, 'plugins/benchgo'));
+    const source = await realpath(join(root, 'plugins/base'));
     const releaseRoot = await realpath(enrollment.directory);
     const target = join(releaseRoot, 'node_modules/benchgo-plugin');
     if (inside(source, target) || inside(target, source)) throw new Error('开发源码与受管安装目录不得重叠');

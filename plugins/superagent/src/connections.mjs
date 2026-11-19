@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { connectionConfig, channelIds } from './channel-catalog.mjs';
-import { applySettingsOps, assertSettingsExpected, notifySettings, settingsSnapshot } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { applySettingsOps, assertSettingsExpected, notifySettings, settingsSnapshot } from '../../base/shared/settings-adapter-utils.mjs';
 
 /** Owner-only configuration. Secret values belong to the host credential service. */
 export function createAssistantConnections({ directory }) {

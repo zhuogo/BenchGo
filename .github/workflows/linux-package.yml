@@ -36,7 +36,7 @@ jobs:
         run: |
           npm run setup
           npm ci --prefix plugins/link
-          npm ci --prefix plugins/benchgo
+          npm ci --prefix plugins/base
       - name: Build and verify Linux server archive
         run: |
           npm run build:plus

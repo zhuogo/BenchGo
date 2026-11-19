@@ -13,9 +13,12 @@
 .dowork-select-options{min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
 .dowork-select-option{display:flex;align-items:center;gap:8px;min-height:36px;padding:8px 9px;box-sizing:border-box;border-radius:6px;cursor:pointer;line-height:1.4;user-select:none}
 .dowork-select-option>span:not(.dowork-select-check){flex:1;min-width:0;overflow-wrap:anywhere}
+.dowork-select-option-label>small{display:block;color:var(--picker-muted);font-size:11px}
+.dowork-select-option>.cmd-provider-brand{flex:none}
 .dowork-select-option[data-active]{background:var(--picker-hover)}
 .dowork-select-option[aria-selected=true]{color:var(--picker-accent);background:color-mix(in srgb,var(--picker-accent) 9%,var(--picker-paper))}
 .dowork-select-option[aria-disabled=true]{opacity:.4;cursor:default}
+.dowork-select-option[aria-disabled=true]:has(>.cmd-provider-brand){opacity:1;color:var(--picker-muted)}
 .dowork-select-check{flex:none;width:8px;height:4px;margin-right:2px;border-left:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg)}
 .dowork-select-popup input.dowork-select-search{flex:none;width:100%;box-sizing:border-box;min-height:35px;margin:0 0 4px;padding:7px 9px;border:0;border-bottom:1px solid var(--picker-border);border-radius:0;background:transparent;color:var(--picker-ink);outline:none;box-shadow:none;font:inherit;font-size:12px}
 .dowork-select-empty{margin:0;padding:12px 9px;color:var(--picker-muted);font-size:12px}

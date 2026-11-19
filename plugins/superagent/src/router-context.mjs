@@ -48,8 +48,6 @@ export function createRouterContext({ store, sessionId }) {
         palette: config.pet.palette,
         availableExpressions: Object.keys(config.pet.expressions || {}),
       } : { kind: 'default' },
-      ...(/\u540d\u7247|card(?:html|\s+design)?/iu.test(incoming) ? { assistantCardHtml: config.cardHtml ?? null } : {}),
-      assistantCardMotion: config.cardMotion ?? true,
       notificationReply: messages.findLast(message => message.source?.kind === 'user' && message.source.replyContext)?.source.replyContext ?? null,
       documents,
       documentCatalog: profile.map(row => ({ name: row.name })),

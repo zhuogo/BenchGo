@@ -1,14 +1,15 @@
 import { LlmAdapter } from '@deepseek-ai/dsh-llm';
-import { discoverModels } from './models.mjs';
+import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { singleRequestUsage } from './usage.mjs';
-import { decodeRouteModelId } from '../../benchgo/src/picker-catalog.mjs';
+import { decodeRouteModelId } from '../../base/src/picker-catalog.mjs';
+import { mediaResultFile, NATIVE_MEDIA_RESULT } from '../../media/shared/generation-result.mjs';
 
-const providers = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', hermes: 'Hermes', grok: 'Grok Build', mcode: 'MiniMax Code' };
+const providers = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', grok: 'Grok Build', mcode: 'MiniMax Code' };
 const route = provider => `commander-${provider}`;
 const inputPrefix = 'harness-user:';
 
 /** Native agents remain the tool executor; Harness owns the conversation UI and journal. */
-export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover = discoverModels } = {}) {
+export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
   const active = new Set();
   const metadata = new Map();
   const jobs = new Set();
@@ -18,31 +19,8 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
     providerRetryPolicy() { return { mode: 'normal', maxRetries: 0, retryableCodes: [], initialDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 }; }
     async listModels(provider) {
       const native = provider.slice('commander-'.length);
-      if (commander.pickerCatalog) {
-        const models = await commander.pickerCatalog.models(native);
-        for (const model of models) metadata.set(`${provider}/${model.id}`, model);
-        return models;
-      }
-      const directory = cwd ?? ctx.get('workspaceRegistry')?.list()[0]?.path;
-      const models = [{ provider, id: 'native-default', name: `${providers[native]} 默认模型`, inputModalities: ['text'] }];
-      if (directory) {
-        try {
-          const known = await discover(native, commander.providerConfig ? await commander.providerConfig(native) : commander.providers.get(native)?.config ?? {}, directory);
-          // Reuse an existing native connection; discovering a model never creates a session.
-          if (commander.drivers && commander.list) {
-            for (const session of commander.list().filter(row => row.provider === native && row.cwd === directory)) {
-              const driver = commander.drivers.get(session.id);
-              if (driver?.models) known.push(...await driver.models());
-            }
-          }
-          for (const model of known) {
-            if (models.some(value => value.id === model.id)) continue;
-            models.push({ provider, id: model.id, name: model.name, inputModalities: ['text'], ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0 ? { context: { contextWindow: model.contextWindow } } : {}) });
-          }
-        } catch (error) {
-          ctx.logger?.warn?.(`BenchGo ${native} model discovery failed: ${error.message}`);
-        }
-      }
+      if (!commander.pickerCatalog) throw new Error('Harness API model catalog is unavailable');
+      const models = await commander.pickerCatalog.models(native);
       for (const model of models) metadata.set(`${provider}/${model.id}`, model);
       return models;
     }
@@ -52,9 +30,11 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
       const binding = decodeRouteModelId(model);
       if (binding) {
         if (!metadata.has(`${provider}/${model}`) && commander.pickerCatalog) await this.listModels(provider);
-        return metadata.get(`${provider}/${model}`) ?? { provider, id: model, name: binding.model, inputModalities: ['text'] };
+        const result = metadata.get(`${provider}/${model}`);
+        if (!result) throw new Error('所选供应商或模型已不可用');
+        return result;
       }
-      return metadata.get(`${provider}/${model}`) ?? { provider, id: model, name: model === 'native-default' ? `${this.providerInfo(provider).name} 默认模型` : model, inputModalities: ['text'] };
+      throw new Error('请从 API 模型目录选择供应商和模型');
     }
     async *stream(options) {
       if (disposed) throw new Error('BenchGo adapter is disposed');
@@ -69,7 +49,8 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
       const native = options.provider.slice('commander-'.length);
       if (!Object.hasOwn(providers, native)) throw new Error('Unknown BenchGo provider');
       const binding = decodeRouteModelId(options.model);
-      const nativeModel = binding?.model ?? (options.model === 'native-default' ? undefined : options.model);
+      if (!binding) throw new Error('请从 API 模型目录选择供应商和模型');
+      const nativeModel = binding.model;
       const human = options.messages.filter(message => message.role === 'user' && message.source?.kind === 'user');
       if (!human.length) throw new Error('BenchGo requires a durable human message');
       for (const message of human) {
@@ -99,10 +80,8 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
       commander.on('event', notify);
       try {
         const ownedSessions = commander.list().filter(session => !session.archived && (!session.parentId || session.harnessAdopted) && session.ownerSessionId === owner);
-        const existing = ownedSessions.find(session => session.provider === native && session.cwd === directory && (binding
-          ? session.route?.providerId === binding.providerId
-          : !session.route && (session.model ?? 'native-default') === options.model));
-        if (existing && binding && (existing.route?.model !== binding.model || existing.model !== nativeModel)) {
+        const existing = ownedSessions.find(session => session.provider === native && session.cwd === directory && session.route?.providerId === binding.providerId);
+        if (existing && (existing.route?.model !== binding.model || existing.model !== nativeModel)) {
           if (['running', 'waiting', 'connecting'].includes(existing.status)) throw new Error('请等待当前轮次完成后再切换模型');
           if (commander.pickerCatalog) {
             const available = await commander.pickerCatalog.models(native);
@@ -110,11 +89,7 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
           }
           const driver = commander.drivers.get(existing.id);
           if (driver && !driver.setModel) throw new Error(`${native} 当前连接不支持在同一会话中切换模型，请新建聊天`);
-          // Decoding a picker ID recovers identity only. Re-capture the full
-          // binding so reconnects retain validation and this session's settings.
-          const nextRoute = commander.routeService?.capture
-            ? await commander.routeService.capture({ tool: native, ...binding, ...(existing.route?.quickSettings ? { quickSettings: existing.route.quickSettings } : {}) })
-            : binding;
+          const nextRoute = await commander.routeService.capture({ tool: native, ...binding, advancedConfig: existing.route?.advancedConfig ?? {} });
           if (existing.route?.version && !nextRoute.version) throw new Error('会话绑定服务不可用，无法保存模型变更');
           if (existing.route?.version && ['mode', 'baseURL', 'protocol', 'sourceProtocol', 'credentialRef'].some(key => existing.route[key] !== nextRoute[key])) throw new Error('绑定供应商的地址、协议或凭据引用已更改，请新建会话或恢复原配置。');
           await driver?.setModel(nativeModel);
@@ -124,13 +99,12 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
           await commander.persist();
           commander.event(existing.id, 'model.changed', { providerId: binding.providerId, model: binding.model, nativeModel });
         }
-        if (!existing && commander.pickerCatalog) {
+        if (!existing) {
           if (ownedSessions.length) throw new Error('此对话已绑定其他工具或供应商模型；请新建聊天，已有记录与运行配置不会被修改');
-          if (!binding) throw new Error('请选择已绑定供应商的工具模型；本机默认配置不会被自动用于新会话');
           const available = await commander.pickerCatalog.models(native);
           if (!available.some(model => model.id === options.model)) throw new Error('工具供应商或模型已变更，请重新选择模型');
         }
-        const session = existing ?? await commander.create({ provider: native, cwd: directory, ...(nativeModel ? { model: nativeModel } : {}), ...(binding ? { route: binding } : {}), ownerSessionId: owner, title: human.at(-1).content.map(block => block.text).join('\n').slice(0, 120) });
+        const session = existing ?? await commander.create({ provider: native, cwd: directory, route: binding, ownerSessionId: owner, title: human.at(-1).content.map(block => block.text).join('\n').slice(0, 120) });
         id = session.id;
         bindOwner?.(id, agent);
         controller.signal.throwIfAborted();
@@ -166,6 +140,18 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner, cwd, discover =
             } else if (native === 'claude' && event.type === 'message' && event.data.type === 'assistant' && event.data.message?.usage) {
               const message = event.data.message;
               usageSamples.set(message.id ?? 'unidentified:' + event.seq, { usage: message.usage });
+            } else if (event.type === 'media.result') {
+              const file = mediaResultFile(event.data);
+              if (file) {
+                const groupId = `native-turn:${JSON.stringify([id, receipt.turnId])}`;
+                const duplicate = agent.session.snapshotEvents().some(row => row.type === NATIVE_MEDIA_RESULT
+                  && row.data?.groupId === groupId && row.data.url === file.url);
+                if (!duplicate) appendPluginRecord(agent.session, NATIVE_MEDIA_RESULT, {
+                  groupId, url: file.url, mimeType: file.mimeType,
+                  ...(file.external ? { externalUrl: file.url } : { filename: file.name }),
+                  ...(typeof event.data.requestId === 'string' ? { requestId: event.data.requestId } : {}),
+                });
+              }
             } else if (event.type === 'text.delta') {
               if (!started) { started = true; yield { type: 'block-start', index, blockType: 'text' }; }
               result += event.data.text;

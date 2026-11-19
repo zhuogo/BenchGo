@@ -7,9 +7,9 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, utimes, writeFile } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
-import { ensureServerResources, SERVER_RESOURCE_FILES } from '../../benchgo/shared/server-resources.mjs';
+import { ensureServerResources, SERVER_RESOURCE_FILES } from '../../base/shared/server-resources.mjs';
 import { createServerManager } from '../src/server/manager.mjs';
-const tar = createRequire(new URL('../../benchgo/package.json', import.meta.url))('tar');
+const tar = createRequire(new URL('../../base/package.json', import.meta.url))('tar');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const keys = generateKeyPairSync('ed25519');
 const publicKey = keys.publicKey.export({ type: 'spki', format: 'pem' });
@@ -112,6 +112,18 @@ test('a descriptor must explicitly declare full or online delivery', async t => 
     await writeFile(join(f.assetsRoot, 'resources.json'), JSON.stringify({ ...expected, delivery }));
     await assert.rejects(ensureServerResources(f.options), /描述无效/);
   }
+  assert.equal(f.requests.length, 0);
+  await assert.rejects(readdir(f.cacheRoot), { code: 'ENOENT' });
+});
+
+test('missing deployment metadata reports a recoverable installation error without downloading', async t => {
+  const f = await fixture(t);
+  await rm(join(f.assetsRoot, 'resources.json'));
+  await assert.rejects(ensureServerResources(f.options), error => {
+    assert.match(error.message, /部署资源缺失.*更新 BenchGo/);
+    assert.equal(error.message.includes('ENOENT'), false);
+    return true;
+  });
   assert.equal(f.requests.length, 0);
   await assert.rejects(readdir(f.cacheRoot), { code: 'ENOENT' });
 });

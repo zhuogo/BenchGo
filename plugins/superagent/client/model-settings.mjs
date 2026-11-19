@@ -6,6 +6,9 @@ export const auxiliaryCapabilities = Object.freeze([
 ]);
 
 export function validateModelSettings(config) {
+  if (config.workerHarness !== undefined && !['official', 'codex', 'claude'].includes(config.workerHarness)) return { role: 'worker', message: '请选择有效的 Worker Harness。' };
+  if (['codex', 'claude'].includes(config.workerHarness) && config.workerModels?.length !== 1)
+    return { role: 'worker', message: '外部 Worker 需要一个明确的 API 模型。' };
   for (const [role, label, models] of [['router', '身份模型', config.models || []], ['worker', '工作模型', config.workerModels || []], ['auxiliary', '辅助模型', config.auxiliary?.models || []]]) {
     if (!Array.isArray(models) || models.length > 32) return { role, message: `${label}最多配置 32 项。` };
     const seen = new Set();
@@ -16,6 +19,7 @@ export function validateModelSettings(config) {
         if (typeof value !== 'string' || !value.trim()) return { role, message: `${prefix}：请选择或填写${name} ID。` };
         if (value !== value.trim() || value.length > 512 || /[\u0000-\u001f\u007f]/u.test(value)) return { role, message: `${prefix}：${name} ID 不能包含首尾空格或控制字符，且不能超过 512 字符。` };
       }
+      if (model.providerId.startsWith('commander-')) return { role, message: `${prefix}：请选择 API 供应商。` };
       const key = JSON.stringify([model.providerId, model.modelId]);
       if (seen.has(key)) return { role, message: `${prefix}与前面的配置重复，请移除重复项或选择其他模型。` };
       seen.add(key);
@@ -25,7 +29,7 @@ export function validateModelSettings(config) {
 }
 
 export function identityConfigPatch(config, base) {
-  return Object.fromEntries(['name', 'cardHtml', 'cardMotion', 'models', 'workerModels', 'auxiliary']
+  return Object.fromEntries(['name', 'models', 'workerModels', 'workerHarness', 'auxiliary']
     .filter(key => JSON.stringify(config[key]) !== JSON.stringify(base[key]))
     .map(key => [key, config[key]]));
 }

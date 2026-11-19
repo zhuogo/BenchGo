@@ -1,4 +1,4 @@
-import { assertSameOrigin } from '../../benchgo/shared/http.mjs';
+import { assertSameOrigin } from '../../base/shared/http.mjs';
 
 const conflicts = new Set(['ROW_CONFLICT', 'REVISION_CONFLICT', 'HASH_CONFLICT', 'IDEMPOTENCY_CONFLICT',
   'INSTRUCTION_REVISION_CONFLICT', 'EXECUTION_PENDING',

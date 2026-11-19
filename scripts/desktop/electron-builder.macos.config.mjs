@@ -10,6 +10,7 @@ import { verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyStartupBundle } from './prepare-startup.mjs';
 import { verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
 import { verifyBackgroundBundle } from './prepare-background.mjs';
+import { verifyUpdateBridgeBundle } from './prepare-update-bridge.mjs';
 import { assertSidebarPayload, DESKTOP_ELECTRON_LANGUAGES, inspectPluginPayload } from './payload-policy.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -49,28 +50,33 @@ export function createMacOSConfig(arch = process.env.DSH_DESKTOP_TARGET_ARCH ?? 
     ['scripts/desktop/plugin-bundle.mjs', 'benchgo/plugin-bundle.mjs'],
     ['scripts/desktop/workbench-desktop.mjs', 'benchgo/workbench-desktop.mjs'],
     ['scripts/desktop/payload-policy.mjs', 'benchgo/payload-policy.mjs'],
-    ['plugins/benchgo/shared/plugin-install.mjs', 'benchgo/shared/plugin-install.mjs'],
-    ['plugins/benchgo/shared/update-feed.mjs', 'benchgo/shared/update-feed.mjs'],
-    ['plugins/benchgo/shared/workbench-installation.mjs', 'benchgo/shared/workbench-installation.mjs'],
+    ['plugins/base/shared/plugin-install.mjs', 'benchgo/shared/plugin-install.mjs'],
+    ['plugins/base/shared/update-feed.mjs', 'benchgo/shared/update-feed.mjs'],
+    ['plugins/base/shared/workbench-installation.mjs', 'benchgo/shared/workbench-installation.mjs'],
   ];
   for (const [source, destination] of enrollment) config.extraResources.push({ from: join(root, source), to: destination });
   config.extraResources.push({ from: join(root, 'LICENSE'), to: 'benchgo/LICENSE' },
     { from: join(target, 'plus-seed'), to: 'benchgo/seed', filter: ['**/*'] },
     { from: join(target, 'plus-seed/node_modules'), to: 'benchgo/seed/node_modules', filter: ['**/*'] });
 
-  // Mirror the established Windows build overlay. Only generated lib/main.js is swapped;
-  // restore its exact bytes on success, failure and process exit. No upstream source changes.
+  // Overlay generated main/preload bundles and restore their exact bytes on
+  // success, failure and process exit. No upstream source changes.
   const main = join(root, 'deepseek-harness/apps/desktop/lib/main.js');
-  let originalMain;
+  const preload = join(root, 'deepseek-harness/apps/desktop/lib/preload-app.cjs');
+  let originalMain, originalPreload;
   const restore = async () => {
     if (originalMain) await writeFile(main, originalMain);
+    if (originalPreload) await writeFile(preload, originalPreload);
     originalMain = undefined;
+    originalPreload = undefined;
   };
   const beforePack = config.beforePack;
   config.beforePack = async context => {
     originalMain = await readFile(main);
+    originalPreload = await readFile(preload);
     try {
       await copyFile(join(root, '.local/desktop/main/main.js'), main);
+      await copyFile(join(root, '.local/desktop/main/preload-app.cjs'), preload);
       await beforePack?.(context);
     } catch (error) { await restore(); throw error; }
   };
@@ -82,7 +88,7 @@ export function createMacOSConfig(arch = process.env.DSH_DESKTOP_TARGET_ARCH ?? 
       await verifyMacOSPackage(resources, enrollment);
     } finally { await restore(); }
   };
-  process.once('exit', () => { if (originalMain) writeFileSync(main, originalMain); });
+  process.once('exit', () => { if (originalMain) writeFileSync(main, originalMain); if (originalPreload) writeFileSync(preload, originalPreload); });
   return config;
 }
 
@@ -91,6 +97,8 @@ export async function verifyMacOSPackage(resources, enrollment) {
   const { extractFile } = createRequire(require.resolve('app-builder-lib'))('@electron/asar');
   const bundle = extractFile(join(resources, 'app.asar'), 'lib/main.js').toString('utf8');
   for (const verify of [verifyTrayBundle, verifyStartupBundle, verifyWorkbenchLoadingBundle, verifyBackgroundBundle]) verify(bundle);
+  verifyUpdateBridgeBundle(bundle);
+  verifyUpdateBridgeBundle(extractFile(join(resources, 'app.asar'), 'lib/preload-app.cjs').toString('utf8'), true);
   const artwork = startupArtwork(await readFile(join(root, 'assets/brand/benchgo-mark.svg'), 'utf8'));
   for (const name of ['welcome.html', 'splash.html']) {
     if (!extractFile(join(resources, 'app.asar'), `renderer/${name}`).toString('utf8').includes(artwork)) throw new Error(`Packaged BenchGo startup artwork mismatch: ${name}`);

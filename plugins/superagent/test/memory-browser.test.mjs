@@ -1,4 +1,4 @@
-import { officialTooltipSource } from '../../benchgo/test/official-tooltip-source.mjs';
+import { officialTooltipSource } from '../../base/test/official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -6,19 +6,19 @@ import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 async function fixture() {
   const bundle = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
     import React,{useState,useCallback,useRef} from 'react';import {createRoot} from 'react-dom/client';
     import {MemoryPage} from './plugins/superagent/client/memory.jsx';
-    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/benchgo/client/style.css';
+    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/base/client/style.css';
     const root=createRoot(document.getElementById('root'));let serial=0;
     const longText='项目沟通习惯：先说明结论，再补充必要的操作和依据。'+
       '涉及模型配置时，保留供应商原始模型 ID，不根据名称猜测别名。'.repeat(8)+'\\n第二段：这个结尾必须能在展开后完整阅读。';
@@ -58,7 +58,7 @@ async function fixture() {
       root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body' style={{padding:24,maxWidth:1000,margin:'auto',boxSizing:'border-box'}}><Fixture mode={mode}/></main></div>);
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-memory-ui-test'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
     loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles(), officialTooltipSource()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>

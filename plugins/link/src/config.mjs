@@ -51,12 +51,44 @@ export function validateLinkTransport(input, prior) {
 
 export function normalizeLinkRelayPool(nodes, previousNodes = []) {
   if (!Array.isArray(nodes) || nodes.length > 8) throw new Error('中继池节点数量无效');
+  const seenIds = new Set(), seenUrls = new Set();
   return nodes.map((node, index) => {
-    const previous = previousNodes.find(item => item.id === node.id);
-    const url = text(node.url || previous?.url, '中继地址', 2048), token = text(node.token || previous?.token, '中继主机密钥', 256);
+    const id = text(node.id || `relay-${index + 1}`, '中继 ID', 128);
+    const previous = previousNodes.find(item => item.id === id);
+    const url = text(node.url ?? previous?.url, '中继地址', 2048);
     let parsed; try { parsed = new URL(url); } catch { throw new Error('中继地址无效'); }
     if (parsed.protocol !== 'https:' || parsed.origin !== url || parsed.username || parsed.password) throw new Error('中继必须使用独立 HTTPS origin');
+    if (previous && url !== previous.url && (typeof node.token !== 'string' || !node.token.trim())) throw new Error('更换中继地址时请重新输入主机密钥');
+    const token = text(node.token ?? previous?.token, '中继主机密钥', 256);
     if (token.length < 6) throw new Error('中继主机密钥至少需要 6 个字符');
-    return { id: text(node.id || `relay-${index + 1}`, '中继 ID', 128), url, token, priority: Number.isInteger(node.priority) ? node.priority : index, enabled: node.enabled !== false };
+    if (seenIds.has(id)) throw new Error('中继 ID 已存在');
+    if (seenUrls.has(url)) throw new Error('中继地址已存在');
+    if (node.enabled !== undefined && typeof node.enabled !== 'boolean') throw new Error('中继启用状态无效');
+    seenIds.add(id); seenUrls.add(url);
+    return { id, url, token, priority: Number.isSafeInteger(node.priority) ? node.priority : index, enabled: node.enabled !== false };
   });
+}
+
+export function editLinkRelayPool(nodes, { id, operation, url, token, enabled }) {
+  id = text(id, '中继 ID', 128);
+  const current = nodes.find(node => node.id === id);
+  if (operation === 'add') {
+    if (current) throw new Error('中继 ID 已存在');
+    return [...nodes, { id, url, token, enabled, priority: Math.max(-1, ...nodes.map(node => node.priority)) + 1 }];
+  }
+  if (!current) throw new Error('中继不存在，请刷新后重试');
+  if (operation === 'update') {
+    if (url !== undefined && url !== current.url && (typeof token !== 'string' || !token.trim())) throw new Error('更换中继地址时请重新输入主机密钥');
+    return nodes.map(node => node === current ? { ...node, url: url ?? node.url, token: token ?? node.token, enabled: enabled ?? node.enabled } : node);
+  }
+  if (operation === 'remove') {
+    if (current.enabled) throw new Error('请先停用中继，再删除');
+    return nodes.filter(node => node !== current);
+  }
+  if (operation === 'prefer') {
+    if (!current.enabled) throw new Error('请先启用中继，再设为首选');
+    const others = nodes.filter(node => node !== current).sort((a, b) => a.priority - b.priority);
+    return [current, ...others].map((node, priority) => ({ ...node, priority }));
+  }
+  throw new Error('不支持的中继配置操作');
 }

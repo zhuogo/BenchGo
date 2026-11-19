@@ -23,7 +23,7 @@ function fixture(t) {
   for (const file of SERVER_BUILD_INPUTS) put(file, 'build-input');
   put('upstream.json', upstream);
   put('plugin/package.json', metadata); put('plugin/src/plugin.mjs', 'export default {};'); put('plugin/lib/client.js', 'client');
-  put('plugin/package-lock.json', '{}'); put('plugins/benchgo/shared/update-public-key.pem', 'test-public-key');
+  put('plugin/package-lock.json', '{}'); put('plugins/base/shared/update-public-key.pem', 'test-public-key');
   const sourceDigest = serverInputDigest({ plugin, files, root });
   const manifest = { schemaVersion: 1, harnessVersion: upstream.version, harnessCommit: upstream.commit, pluginVersion: metadata.version, sourceDigest, sha256: hash('server-archive') };
   const descriptor = { schemaVersion: 1, delivery: 'full', releaseVersion: '0.1.5', pluginVersion: metadata.version, harnessVersion: upstream.version, harnessCommit: upstream.commit, sourceDigest };

@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createUpdateManifest } from '../desktop/create-update-manifest.mjs';
-import { releaseDownloadUrl, resolveUpdateUrl, DEFAULT_UPDATE_CONFIG, validateReleaseManifest } from '../../plugins/benchgo/shared/update-feed.mjs';
+import { releaseDownloadUrl, resolveUpdateUrl, DEFAULT_UPDATE_CONFIG, validateReleaseManifest } from '../../plugins/base/shared/update-feed.mjs';
 import { fileDigest } from './record-artifact.mjs';
 import { releaseKind, sha256 } from './github.mjs';
 import { assembleDownloads } from './downloads.mjs';
@@ -21,12 +21,12 @@ export function immutableArtifact(artifact) {
   return artifact;
 }
 
-export function validateReceipt(receipt, plan, component) {
+export function validateReceipt(receipt, plan, component, { stagingPath = 'plugins/base/package.json' } = {}) {
   if (!receipt || receipt.schemaVersion !== 1 || receipt.component !== component || receipt.sourceSha !== plan.sourceSha
     || receipt.releaseVersion !== plan.releaseVersion || receipt.version !== plan.versions[component]
     || component === 'android' && receipt.versionCode !== plan.versions.androidVersionCode) throw new Error(`Wrong ${component} artifact source or version`);
   if (!Array.isArray(receipt.verified) || requiredVerification[component].some(item => !receipt.verified.includes(item))) throw new Error(`${component} artifact lacks required completed verification`);
-  if (JSON.stringify(receipt.staged) !== JSON.stringify([{ path: 'plugins/benchgo/package.json', field: 'benchgo.releaseVersion', value: plan.releaseVersion }])) throw new Error('Unexpected build staging changes');
+  if (JSON.stringify(receipt.staged) !== JSON.stringify([{ path: stagingPath, field: 'benchgo.releaseVersion', value: plan.releaseVersion }])) throw new Error('Unexpected build staging changes');
   if (!Array.isArray(receipt.files) || !receipt.files.length || new Set(receipt.files.map(row => row.name)).size !== receipt.files.length) throw new Error('Invalid build inventory');
   for (const row of receipt.files) if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(row.name) || !/^[a-f0-9]{64}$/.test(row.sha256)
     || !Number.isSafeInteger(row.size) || row.size < 1) throw new Error('Invalid artifact inventory entry');

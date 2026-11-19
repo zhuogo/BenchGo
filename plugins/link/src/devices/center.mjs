@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { openDeviceRegistry, normalizeTarget } from './registry.mjs';
 import { remoteJson } from './remote.mjs';
 import { createDeviceResources, deviceConnectionFailure } from './resources.mjs';
-import { selectRoute } from './routes.mjs';
+import { readDeviceRoutes, selectRoute } from './routes.mjs';
 import { createDeviceProxy } from './proxy.mjs';
 import { createServerManager } from '../server/manager.mjs';
 const secret = () => randomBytes(32).toString('base64url');
@@ -36,7 +36,21 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   let renamedLocal;
   const registry = await openDeviceRegistry(directory, { localName: () => localName?.() || renamedLocal || '本机' }), pending = new Map(), proxies = new Map(), tickets = new Map(), sessions = new Map(), parents = new Set(), sockets = new Set();
   let origin, closed = false;
-  const resources = createDeviceResources({ registry, local: localDispatch || (() => { throw fail('本机资源暂不可用'); }) });
+  const selections = new Map();
+  const workbenchRoute = async (target, options = {}) => {
+    if (target.kind !== 'ssh') {
+      try { return await selectRoute(target, options); }
+      catch (error) {
+        if (!manager?.state?.(target.id) || !['OFFLINE', 'ROUTES_COOLDOWN'].includes(deviceConnectionFailure(error).code)) throw error;
+      }
+    }
+    if (!manager?.workbenchTarget) return selectRoute(target, options);
+    const route = await manager.workbenchTarget(target.id);
+    options.signal?.throwIfAborted();
+    await options.accept?.(route, { kind: 'ssh' });
+    return route;
+  };
+  const resources = createDeviceResources({ registry, route: workbenchRoute, local: localDispatch || (() => { throw fail('本机资源暂不可用'); }) });
   const markFailure = (id, target, error) => {
     if (closed) return;
     try {
@@ -45,17 +59,24 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       if (failure.status) registry.mark(id, failure.status, failure.status === 'online' ? null : failure.reason);
     } catch {}
   };
-  const manager = await managerFactory({ directory, onRelay: async value => {
+  const manager = await managerFactory({ directory, registry, onRelay: async value => {
     if (typeof hostAdmin !== 'function') throw fail('此客户端不支持配置主机中继');
     const current = await hostAdmin({ action: 'status' });
     const nodes = Array.isArray(current.relay?.nodes) ? current.relay.nodes : [];
-    await hostAdmin({ action: 'relay-pool-configure', nodes: [...nodes, { id: 'relay-' + Date.now().toString(36), url: value.url, token: value.token, priority: nodes.length, enabled: true }] });
+    const node = nodes.find(item => item.url === value.url);
+    await hostAdmin({ action: 'relay-pool-configure', expected: { fingerprint: current.relay.fingerprint },
+      operation: node ? 'update' : 'add', id: node?.id ?? randomUUID(), url: value.url, token: value.token, enabled: true });
   }, runtimeRoot: new URL('../server/', webRoot), onDevice: async device => {
-    if (device.status === 'offline') { try { registry.mark(device.id, 'offline', device.lastError); } catch {} return; }
+    let saved;
+    try { saved = registry.get(device.id); } catch {}
+    if (device.status === 'offline') { if (saved?.kind === 'ssh') registry.mark(device.id, 'offline', 'SSH 隧道已断开'); return; }
     resources.invalidate(device.id);
     const proxy = proxies.get(device.id); if (proxy) { proxies.delete(device.id); await proxy.close(); }
-    return registry.upsert(device);
   } });
+  await manager?.ready;
+  const serverManagement = !publicOrigin && typeof manager?.sshTarget === 'function';
+  const decorate = device => ({ ...device, ...(serverManagement ? manager.state(device.id) : undefined) });
+  const devices = () => { const data = resources.devices(); return { ...data, devices: data.devices.map(decorate) }; };
   const idOf = input => input.deviceId || input.targetId || input.id;
   const api = async input => {
     if (closed) throw fail('设备中心已关闭', 503);
@@ -66,14 +87,14 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       if (typeof input.deviceId !== 'string' || !input.deviceId) throw fail('请选择会话所属设备');
       return resources.callDevice({ deviceId: input.deviceId, expectedHostId: input.expectedHostId, expectedAuthorizationId: input.expectedAuthorizationId, input: { action: 'sessionAction', id: input.id, native: input.native, operation: input.operation, requestId: input.requestId, ...(input.title === undefined ? {} : { title: input.title }) }, signal: input.signal });
     }
-    if (input.action === 'devices') return resources.devices();
+    if (input.action === 'devices') return devices();
     if (input.action === 'resourceScope') return { scope: registry.scope() };
     if (input.action === 'setResourceScope') return { scope: await registry.setScope(input.scope) };
-    if (input.action === 'list') return { ...registry.list(), relayJob: manager?.activeRelayJob?.() ?? null, capabilities: { ssh: Boolean(manager), relayDeploy: Boolean(manager?.deployRelay) && typeof hostAdmin === 'function', hostAdmin: typeof hostAdmin === 'function' } };
-    const hostActions = { hostRelayTest: 'relay-test', hostRelayConfigure: 'relay-configure', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke', hostRenameDevice: 'rename-device', hostManagementDecide: 'management-decide' };
+    if (input.action === 'list') { const data = registry.list(); return { ...data, devices: data.devices.map(decorate), relayJob: manager?.activeRelayJob?.() ?? null, capabilities: { ssh: Boolean(manager), serverManagement, sshAgent: serverManagement && await manager.agentAvailable(), serverTerminalResize: serverManagement, relayDeploy: Boolean(manager?.deployRelay) && typeof hostAdmin === 'function', hostAdmin: typeof hostAdmin === 'function' } }; }
+    const hostActions = { hostRelayTest: 'relay-test', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke', hostRenameDevice: 'rename-device', hostManagementDecide: 'management-decide' };
     if (Object.hasOwn(hostActions, input.action)) {
       if (typeof hostAdmin !== 'function') throw fail('此客户端不支持本机连接管理，请更新应用');
-      const fields = { hostRelayTest: ['id', 'url', 'token'], hostRelayConfigure: ['url', 'token', 'enabled'], hostRelayPoolConfigure: ['nodes'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl', 'name'], hostPairing: ['mode', 'address'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'], hostRenameDevice: ['id', 'name'], hostManagementDecide: ['operationId','allow'] }[input.action];
+      const fields = { hostRelayTest: ['id', 'url', 'token'], hostRelayPoolConfigure: ['expected', 'operation', 'id', 'url', 'token', 'enabled'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl', 'name'], hostPairing: ['mode', 'address', 'relayId'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'], hostRenameDevice: ['id', 'name'], hostManagementDecide: ['operationId','allow'] }[input.action];
       return hostAdmin({ action: hostActions[input.action], ...Object.fromEntries(fields.filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]])) });
     }
     if (input.action === 'pair') {
@@ -99,27 +120,52 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       if (input.resource && (!['projects','sessions'].includes(input.resource.kind) || typeof input.resource.resourceId !== 'string' || !input.resource.resourceId || input.resource.resourceId.length > 200)) throw fail('资源引用无效');
       if (id === 'local') return { device: await registry.select(id), url: null };
       if (publicOrigin && !workbenchOrigin) throw fail('请先配置独立 HTTPS 工作台域名，云端连接不能使用本机地址', 409);
-      const savedTarget = registry.get(id);
-      try {
-        const target = await selectRoute(savedTarget, { onHealth: (route, health, details) => registry.markRouteHealth(id, route.relayId || route.id || route.url, health, details) });
-        let proxy = proxies.get(id);
-        if (proxy && proxy.routeKey !== `${target.url}|${target.pin || ''}`) { proxies.delete(id); await proxy.close(); proxy = undefined; }
-        if (!proxy) {
-          const published = publicOrigin ? registerProxy() : null;
-          try {
-            proxy = await createDeviceProxy(target, { webRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}), parentOrigin: [origin, publicOrigin, ...parents].filter(Boolean).join(' '), onFailure: error => markFailure(id, savedTarget, error) });
-            proxy.routeKey = `${target.url}|${target.pin || ''}`; published?.attach(proxy); proxies.set(id, proxy);
-          } catch (error) { published?.remove(); throw error; }
+      const connect = async () => {
+        if (closed) throw fail('设备中心已关闭', 503);
+        let savedTarget = registry.get(id);
+        let url, activeRoute, freshRoutes;
+        try {
+          const accept = async (target, route) => {
+              const routes = savedTarget.kind === 'computer' && route?.kind !== 'ssh' ? await readDeviceRoutes(target) : undefined;
+              const previous = proxies.get(id), routeKey = `${target.url}|${target.pin || ''}`;
+              let proxy = previous?.routeKey === routeKey ? previous : undefined;
+              const published = !proxy && publicOrigin ? registerProxy() : null;
+              try {
+                if (!proxy) proxy = await createDeviceProxy(target, { webRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}), parentOrigin: [origin, publicOrigin, ...parents].filter(Boolean).join(' '), onFailure: error => markFailure(id, savedTarget, error) });
+                url = await proxy.enter({ verifyPage: true });
+                if (closed || registry.get(id) !== savedTarget) throw fail('设备连接已更新，请重试', 409);
+                if (proxy !== previous) {
+                  proxy.routeKey = routeKey;
+                  published?.attach(proxy); proxies.set(id, proxy);
+                  await previous?.close();
+                }
+                activeRoute = route ?? { kind: 'direct' };
+                freshRoutes = routes;
+              } catch (error) {
+                if (proxy !== previous) await proxy?.close();
+                published?.remove();
+                throw error;
+              }
+          };
+          await workbenchRoute(savedTarget, {
+            onHealth: (route, health, details) => registry.markRouteHealth(id, route.relayId || route.url, health, { ...details, lastError: details.lastError?.slice(0, 200) }),
+            accept,
+          });
+          if (freshRoutes) await registry.updateRoutes(id, savedTarget, freshRoutes);
+          registry.markRoute(id, activeRoute); registry.mark(id, 'online');
+          return { device: decorate(await registry.select(id)), url, ...(input.resource ? { resource: { deviceId: id, kind: input.resource.kind, resourceId: input.resource.resourceId } } : {}) };
+        } catch (error) {
+          markFailure(id, savedTarget, error);
+          const failure = deviceConnectionFailure(error);
+          if (['OFFLINE', 'UNAUTHORIZED', 'IDENTITY_CHANGED'].includes(failure.code)) {
+            throw Object.assign(new Error(failure.reason), { code: failure.code, status: error.status || 503, cause: error });
+          }
+          throw error;
         }
-        const url = await proxy.enter(); registry.markRoute(id, target.routes?.find(route => route.url === target.url && (route.pin || '') === (target.pin || ''))?.kind || 'direct'); registry.mark(id, 'online'); return { device: await registry.select(id), url, ...(input.resource ? { resource: { deviceId: id, kind: input.resource.kind, resourceId: input.resource.resourceId } } : {}) };
-      } catch (error) {
-        markFailure(id, savedTarget, error);
-        const failure = deviceConnectionFailure(error);
-        if (['OFFLINE', 'UNAUTHORIZED', 'IDENTITY_CHANGED'].includes(failure.code) && error.code !== 'ROUTES_COOLDOWN') {
-          throw Object.assign(new Error(failure.reason), { code: failure.code, status: error.status || 503, cause: error });
-        }
-        throw error;
-      }
+      };
+      const selection = (selections.get(id) ?? Promise.resolve()).catch(() => {}).then(connect);
+      selections.set(id, selection);
+      try { return await selection; } finally { if (selections.get(id) === selection) selections.delete(id); }
     }
     if (input.action === 'rename') {
       if (id !== 'local') return { device: await registry.rename(id, input.name) };
@@ -138,12 +184,34 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     if (input.action === 'relayAction') return manager.manageRelay(input);
     if (input.action === 'relayJobDismiss') return manager.dismissRelayJob(input.jobId);
     if (input.action === 'sshProbe') return manager.probe(input);
-    if (input.action === 'sshConnect') return manager.connect(input);
+    if (input.action === 'sshConnect') {
+      if (input.deviceId) {
+        if (!serverManagement) throw fail('请在本机设备中心补绑 SSH', 403);
+        const device = registry.get(input.deviceId);
+        if (!/^sha256:[A-Za-z0-9+/]{43}=$/.test(device.hostId || '')) throw fail('此设备尚无可核验的实例身份，请先重新配对');
+        return manager.connect({ ...input, device });
+      }
+      return manager.connect({ ...input, device: undefined });
+    }
+    if (serverManagement) {
+      if (input.action === 'serverTerminal') return manager.openTerminal(id);
+      if (input.action === 'serverTerminalRead') return manager.readTerminal(input);
+      if (input.action === 'serverTerminalWrite') return manager.writeTerminal(input);
+      if (input.action === 'serverTerminalResize') return manager.resizeTerminal(input);
+      if (input.action === 'serverTerminalClose') return manager.closeTerminal(input);
+      if (input.action === 'serverPairing') return manager.pairing({ deviceId: id, operation: 'generate' });
+      if (input.action === 'serverPairingConfigure') return manager.pairing({ deviceId: id, operation: 'configure', publicUrl: input.publicUrl });
+      if (input.action === 'serverPairingStatus') return manager.pairing({ deviceId: id, operation: 'status' });
+      if (input.action === 'serverPairingDecide') {
+        if (!['confirm', 'reject'].includes(input.decision)) throw fail('无效配对操作');
+        return manager.pairing({ deviceId: input.deviceId, operation: input.decision, requestId: input.id });
+      }
+    }
     if (input.action === 'serverPrefetch') return manager.prefetch(input);
     if (input.action === 'jobCancel') return manager.cancelJob(input.jobId || input.id);
     if (input.action === 'job') return manager.job(input.jobId || input.id);
-    if (input.action === 'reconnect') return manager.reconnect({ ...input, id, device: registry.get(id) });
-    if (input.action === 'serverAction') return manager.manage({ ...input, id, device: registry.get(id) });
+    if (input.action === 'reconnect') return manager.reconnect({ id, password: input.password, privateKey: input.privateKey, passphrase: input.passphrase });
+    if (input.action === 'serverAction') return manager.manage({ id, operation: input.operation });
     throw fail('不支持的操作');
   };
   const server = createServer(async (req, res) => {
@@ -175,13 +243,15 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       if (file === 'index.html') data = Buffer.from(data.toString().replace('<head>', '<head><script src="./device-config.js"></script>'));
       const policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src " + (publicOrigin ? (workbenchOrigin || "'none'") : 'http://127.0.0.1:*') + "; connect-src 'self'; frame-ancestors " + ([...parents, 'dsh-app:'].join(' ')) + "; base-uri 'none'; form-action 'self'";
       res.writeHead(200, { ...headers, 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8', 'content-security-policy': policy }); res.end(data);
-    } catch (error) { if (!res.headersSent) res.writeHead(error.status || 400, { ...headers, 'content-type': 'application/json' }); res.end(JSON.stringify({ error: error.message })); }
+    } catch (error) { if (!res.headersSent) res.writeHead(error.status || 400, { ...headers, 'content-type': 'application/json' }); res.end(JSON.stringify({ error: error.message, ...(error.code ? { code: error.code } : {}) })); }
   });
   server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   origin = 'http://127.0.0.1:' + server.address().port;
   return {
-    origin, api, ...resources,
+    origin, api, ...resources, devices,
+    sshTarget: input => manager.sshTarget(input),
+    sshCommand: input => manager.sshCommand(input),
     select(deviceId, parentOrigin, resource) { if (parentOrigin) parents.add(parentOrigin); return api({ action: 'select', deviceId, resource }); },
     launch(parentOrigin) { for (const [key, value] of tickets) if (value.expires < Date.now()) tickets.delete(key); const ticket = secret(); tickets.set(ticket, { expires: Date.now() + 60000, parentOrigin }); return { url: (publicOrigin || origin) + (publicOrigin ? '/devices' : '') + '/enter?ticket=' + ticket }; },
     /** Saved names for the sidebar. No tokens, routes or management actions. */

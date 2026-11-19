@@ -1,7 +1,7 @@
 import React, { useRef } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { groupTasks } from './task-board.mjs';
 import css from './task-board.css';
 

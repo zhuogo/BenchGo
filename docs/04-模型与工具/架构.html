@@ -13,8 +13,8 @@
   "id": "04",
   "title": "模型与工具",
   "eyebrow": "MODELS / TOOLS",
-  "subtitle": "供应商配置与模型选择形成按会话固化的路由；官方 Agent 的执行增强、压缩与技能发现继续复用官方服务。",
-  "boundary": "源码已提供供应商目录、路由隔离、工具生命周期、执行增强与技能目录；统一发起原生登录、卸载完整归属复核仍待完善。真实模型请求、原生 CLI 与技能发现需单独验证。",
+  "subtitle": "一份 API 模型目录供工作台和 Worker 使用，Commander 按会话绑定调用原生协议驱动。",
+  "boundary": "共享 API 目录、Harness 工具卡片、隔离工具配置 和 Windows CLI 探测已有实现。本机与跨设备执行的能力由 Worker 启动时校验。真实付费 API 与双设备任务另行验收。",
   "nodes": [
     {
       "id": "settings",
@@ -28,9 +28,9 @@
       "input": "配置草稿、期望版本、字段操作",
       "output": "持久设置与应用结果",
       "sources": [
-        "plugins/benchgo/src/settings-official.mjs",
-        "plugins/benchgo/src/settings-management.mjs",
-        "plugins/benchgo/client/provider-settings.jsx"
+        "plugins/base/src/settings-official.mjs",
+        "plugins/base/src/settings-management.mjs",
+        "plugins/base/client/provider-settings.jsx"
       ],
       "note": "保存、重载与实际请求须分别验证；编辑单项不应丢失其他配置。",
       "state": "implemented",
@@ -42,43 +42,45 @@
       "title": "供应商与模型目录",
       "kicker": "MODEL PROVIDERS",
       "kind": "model",
-      "sub": "原样保存 ID，区分 API 与订阅",
+      "sub": "一份 API 配置，多个 Harness 使用",
       "symbol": "createModelProviders()",
-      "plain": "把真实供应商、模型和认证来源呈现给用户。",
-      "role": "从官方 llm 的可配置供应商目录与 settings 读取配置，经 credentials 解析密钥；对外返回脱敏目录。订阅身份只允许对应原生工具，不转换 API Key。",
+      "plain": "模型页集中维护供应商、凭据引用、协议和模型。",
+      "role": "复用官方设置和凭据服务，API 模型目录供各执行入口查询。添加供应商时配置协议、模型与凭据。",
       "input": "provider ID、配置、凭据引用",
       "output": "供应商、模型目录与认证类型",
       "sources": [
-        "plugins/benchgo/src/model-providers.mjs",
-        "plugins/benchgo/src/provider-access.mjs",
-        "plugins/benchgo/shared/builtin-providers.mjs"
+        "plugins/base/src/model-providers.mjs",
+        "plugins/base/src/provider-access.mjs",
+        "plugins/base/shared/builtin-providers.mjs"
       ],
       "note": "目录可达不证明生成、工具调用或视觉能力可用。RouterGo 使用既有同 ID 配置，不覆盖用户地址。",
       "state": "implemented",
       "x": 440,
-      "y": 160
+      "y": 160,
+      "doc": "docs/04-模型与工具/模型与供应商.md#共享-api-目录与执行选择"
     },
     {
       "id": "picker",
       "title": "统一模型选择",
       "kicker": "MODEL SELECTION",
       "kind": "orchestration",
-      "sub": "按工具、供应商、模型与能力选择",
+      "sub": "Harness → 供应商 → 模型",
       "symbol": "createPickerCatalog()",
       "plain": "只展示实际安装、路由与认证边界允许的选择。",
-      "role": "pickerCatalog 汇合工具安装、官方模型、认证来源与会话路由支持；客户端保留供应商和原生模型原值。公共参数目录仅精确匹配 model_id 并补缺失项。",
+      "role": "工作台与 Worker 使用同一执行目录。按安装、凭据、协议和入口能力筛选，保留原始标识。Router 与辅助模型固定官方 Harness。",
       "input": "工具目录、供应商、模型与显式选择",
       "output": "已选择路由模型 ID 与参数草稿",
       "sources": [
-        "plugins/benchgo/src/picker-catalog.mjs",
-        "plugins/benchgo/client/model-picker.jsx",
-        "plugins/benchgo/client/model-profile-match.mjs",
-        "plugins/benchgo/src/tooling.mjs"
+        "plugins/base/src/picker-catalog.mjs",
+        "plugins/base/client/model-picker.jsx",
+        "plugins/base/shared/model-profile-match.mjs",
+        "plugins/base/src/tooling.mjs"
       ],
-      "note": "模型 ID 是不透明标识；补全不覆盖手动值，失败不阻塞保存。",
+      "note": "每条供应商配置声明一种协议。同一供应商提供多协议时可配置多个路由，模型标识保持原样。",
       "state": "implemented",
       "x": 820,
-      "y": 160
+      "y": 160,
+      "doc": "docs/04-模型与工具/模型与供应商.md#共享-api-目录与执行选择"
     },
     {
       "id": "route",
@@ -88,80 +90,82 @@
       "sub": "捕获选择，恢复时重新核验原绑定",
       "symbol": "createSessionRoutes().capture()",
       "plain": "会话创建时记住用谁的模型，之后不会被默认值悄悄改掉。",
-      "role": "capture 固化 tool、providerId、model、协议、地址、凭据引用与指纹；launch 校验原绑定及当前认证，不匹配时明确失败。",
+      "role": "固化工具、供应商、模型、协议、端点、凭据引用与配置版本。在目标设备启动和恢复时核验绑定。",
       "input": "显式供应商、模型、工具与参数",
       "output": "固化 route、revision 与 fingerprint",
       "sources": [
-        "plugins/benchgo/src/session-routes.mjs",
-        "plugins/benchgo/src/tool-profiles.mjs"
+        "plugins/base/src/session-routes.mjs",
+        "plugins/base/src/runtime-settings.mjs"
       ],
-      "note": "托管会话配置与历史隔离目前仅对 Codex、Claude 声明支持；其他工具使用原生配置模式。",
+      "note": "Codex 与 Claude Code 已接入 API 路由。执行时再次核对供应商端点、协议和凭据引用。",
       "state": "implemented",
       "x": 1200,
-      "y": 160
+      "y": 160,
+      "doc": "docs/04-模型与工具/模型与供应商.md#共享-api-目录与执行选择"
     },
     {
       "id": "launch",
-      "title": "隔离启动与原生执行",
+      "title": "准备原生启动配置",
       "kicker": "ISOLATED LAUNCH",
       "kind": "execution",
-      "sub": "按固化绑定配置进程，不改全局方案",
+      "sub": "隔离配置、API 凭据与 Full access",
       "symbol": "createSessionRoutes().launch()",
       "plain": "每条托管会话使用自己的配置和历史目录。",
-      "role": "Codex 使用 managed-runs 下独立 CODEX_HOME 和会话环境；Claude 使用独立 CLAUDE_CONFIG_DIR 与 settings。订阅模式由对应工具读取本机认证；Commander 启动真实 driver。",
+      "role": "Commander 复用系统可执行入口，为 API 会话注入隔离配置。Codex 使用 CODEX_HOME，Claude Code 使用 CLAUDE_CONFIG_DIR。工作台与本机、跨设备 Worker 统一使用 Full access。",
       "input": "保存的 route、sessionId 与安装路径",
       "output": "隔离进程参数、环境与 managedProfile",
       "sources": [
-        "plugins/benchgo/src/session-routes.mjs",
+        "plugins/base/src/session-routes.mjs",
         "plugins/harness/src/runtime.mjs",
         "plugins/harness/src/isolated-launch.mjs"
       ],
-      "note": "第三方请求使用 API 密钥；订阅不能跨工具使用。恢复失败不会回退当前默认供应商。",
-      "state": "implemented",
+      "note": "凭据在执行设备读取。外部工具的终端配置、账号和历史仍由原工具管理。",
+      "state": "partial",
       "x": 1200,
-      "y": 450
+      "y": 450,
+      "doc": "docs/04-模型与工具/原生工具与会话.md#隔离配置与工具选项"
     },
     {
       "id": "installer",
-      "title": "原生工具生命周期",
+      "title": "Harness 工具卡片",
       "kicker": "TOOL LIFECYCLE",
       "kind": "execution",
-      "sub": "发现、安装、更新、重装、取消与卸载",
+      "sub": "安装、更新、卸载 · 工具选项",
       "symbol": "ToolInstaller / resolveLaunch()",
       "plain": "工具是否已安装、正在运行或能启动，要分别核对。",
-      "role": "ToolInstaller 默认最多并行两个安装任务，同一工具防重入；resolveLaunch 解析系统 PATH 入口。列表核对版本和来源，运行中限制修改，卸载执行前复查真实路径和来源。",
+      "role": "卡片按实际可用性展示版本与操作。后台解析可执行入口及来源，列表、版本探测和进程启动统一使用该解析。",
       "input": "tool ID、安装动作与预览快照",
-      "output": "任务回执、真实可执行路径与状态",
+      "output": "可运行的 CLI、维护回执与目录状态",
       "sources": [
-        "plugins/benchgo/src/tool-install.mjs",
-        "plugins/benchgo/src/tool-catalog.mjs",
-        "plugins/benchgo/src/tooling.mjs"
+        "plugins/base/src/tool-install.mjs",
+        "plugins/base/src/tool-catalog.mjs",
+        "plugins/base/src/tooling.mjs"
       ],
-      "note": "源码提供安装任务和卸载预览；当前执行端复查路径/来源，完整版本与跨环境归属复核仍需按设计补齐，不能由预览推定。安装不等于登录。",
+      "note": "Windows 的 Codex 和 Claude Code 已通过 CLI 版本验证。真实安装、更新、卸载依赖系统包管理器。",
       "state": "partial",
       "x": 820,
-      "y": 450
+      "y": 450,
+      "doc": "docs/04-模型与工具/原生工具与会话.md#工具设置与能力表达"
     },
     {
       "id": "auth",
-      "title": "原生订阅状态",
-      "kicker": "NATIVE AUTH",
+      "title": "隔离工具配置",
+      "kicker": "RUNTIME SETTINGS",
       "kind": "orchestration",
-      "sub": "识别本机登录，失败引导回官方 CLI",
-      "symbol": "createNativeAuth().status()",
-      "plain": "先确认对应工具真的登录，再允许使用它的订阅模型。",
-      "role": "通过工具原生命令核对登录状态并缓存短期结果；供应商访问规则区分 API、subscription 和 unconfigured。统一工作台发起 Codex/Claude 登录仍未完整接通。",
-      "input": "工具 ID、已安装路径与原生命令结果",
-      "output": "订阅状态与真实登录引导",
+      "sub": "协作、上下文与压缩的原生配置",
+      "symbol": "BenchGo-managed JSON",
+      "plain": "每个 Harness 独立保存工具选项，新会话读取该版本。",
+      "role": "适配器校验并转换可配置字段，执行绑定提供模型、凭据、工作目录与权限。高级配置仅写入 BenchGo 管理范围。",
+      "input": "工具 ID、受支持的 JSON 字段",
+      "output": "通过校验的原生启动配置",
       "sources": [
-        "plugins/benchgo/src/native-auth.mjs",
-        "plugins/benchgo/src/provider-access.mjs",
-        "plugins/benchgo/src/model-providers.mjs"
+        "plugins/base/src/runtime-settings.mjs"
       ],
-      "note": "状态识别已有实现；不能把现有识别能力称为统一 OAuth 登录已完成。",
-      "state": "partial",
+      "note": "Codex 提供协作、上下文及压缩字段。Claude Code 提供团队、思考和 Hooks 相关字段。",
+      "state": "implemented",
       "x": 440,
-      "y": 450
+      "y": 450,
+      "doc": "docs/04-模型与工具/原生工具与会话.md#隔离配置与工具选项"
     },
     {
       "id": "efficiency",
@@ -175,8 +179,9 @@
       "input": "官方宿主服务、feature 配置",
       "output": "增强作用域、可用性与会话诊断",
       "sources": [
-        "plugins/efficiency/src/plugin.mjs",
-        "plugins/efficiency/src/settings-adapter.mjs"
+        "plugins/base/efficiency/src/plugin.mjs",
+        "plugins/base/efficiency/src/ops.mjs",
+        "plugins/base/efficiency/src/compaction.mjs"
       ],
       "note": "scope 为 official-harness；Worker 使用当前作用域实际可用的执行增强，Router 仅保留专属产品管理、协调与已装配的上下文工具，能力装配见 SuperAgent 模型与上下文；外部原生 Agent 不因此自动获得新工具。",
       "state": "implemented",
@@ -195,7 +200,7 @@
       "input": "官方 tools、当前会话压缩服务",
       "output": "上下文状态或真实压缩结果",
       "sources": [
-        "plugins/efficiency/src/compaction.mjs"
+        "plugins/base/efficiency/src/compaction.mjs"
       ],
       "note": "safePointRatio=false；宿主已加载不代表每个 Agent 作用域都提供压缩服务。",
       "state": "implemented",
@@ -214,7 +219,7 @@
       "input": "宿主工具、预设和增强配置",
       "output": "按预设生效的执行工具与诊断",
       "sources": [
-        "plugins/efficiency/src/ops.mjs"
+        "plugins/base/efficiency/src/ops.mjs"
       ],
       "note": "replaceOfficial=false，hidePwsh=false，不允许系统 Shell 静默回退。",
       "state": "implemented",
@@ -233,13 +238,13 @@
       "input": "projectId、name、provider 与查询操作",
       "output": "生效技能摘要或所选正文",
       "sources": [
-        "plugins/benchgo/src/skills.mjs",
-        "plugins/benchgo/client/skills-library.jsx"
+        "plugins/base/src/skills.mjs",
+        "plugins/base/client/skills-library.jsx"
       ],
       "note": "不接受任意 cwd；不枚举被覆盖副本，不扫描第三方 CLI 私有目录，不提供任意文件编辑卸载。",
       "state": "implemented",
-      "x": 820,
-      "y": 740
+      "x": 60,
+      "y": 1030
     },
     {
       "id": "deck",
@@ -253,13 +258,57 @@
       "input": "固定清单技能名与安装请求",
       "output": "已安装文件、来源记录与真实发现状态",
       "sources": [
-        "plugins/benchgo/src/skill-deck.mjs",
-        "plugins/benchgo/src/skill-deck-manifest.json",
-        "plugins/benchgo/client/skill-deck.jsx"
+        "plugins/base/src/skill-deck.mjs",
+        "plugins/base/src/skill-deck-manifest.json",
+        "plugins/base/client/skill-deck.jsx"
       ],
       "note": "不覆盖已有文件、不执行模板脚本；写入成功不等于官方发现可用。自建技能管理复用 assistant 服务。",
       "state": "implemented",
+      "x": 440,
+      "y": 1030
+    },
+    {
+      "id": "native-dispatch",
+      "title": "原生会话调度",
+      "kicker": "COMMANDER",
+      "kind": "execution",
+      "sub": "提交与回执、权限与状态、停止与续接",
+      "symbol": "Commander / commander_delegate",
+      "plain": "按项目和会话绑定调用协议驱动，将状态和结果返回发起方。",
+      "role": "工作台普通聊天经官方适配器进入 Commander。原生会话通过委派工具启动同项目子会话。本机和跨设备 Worker 共享原生执行能力，保留各自任务与会话归属。",
+      "input": "会话归属、项目、工具与模型绑定、消息和权限",
+      "output": "原生会话句柄、提交回执、流式事件和执行结果",
+      "sources": [
+        "plugins/harness/src/adapter.mjs",
+        "plugins/harness/src/runtime.mjs",
+        "plugins/harness/src/web.mjs"
+      ],
+      "note": "窗口内普通会话、本机及远端 Worker 复用 Commander。原生委派持久去重，父轮停止传给仍在运行的子执行。 会话工具根据当前用户指令和宿主设备登记执行 SSH 命令。远端账号限定操作范围，本机返回必要输出和退出状态；断线后先核实执行事实。",
+      "state": "partial",
+      "doc": "docs/04-模型与工具/原生工具与会话.md#调度边界",
       "x": 1200,
+      "y": 740
+    },
+    {
+      "id": "native-adapters",
+      "title": "原生协议驱动",
+      "kicker": "NATIVE ADAPTERS",
+      "kind": "execution",
+      "sub": "Codex App Server、Claude Agent SDK、ACP",
+      "symbol": "Codex / Claude / ACP",
+      "plain": "按协议完成启动、发送、续接、事件和权限交互。",
+      "role": "Codex 通过 App Server 的 stdio JSON-RPC 建立或恢复线程。Claude Code 通过 Agent SDK 调用本机 CLI，按原生会话 ID 续接。兼容 ACP 的工具复用 ACP 驱动。各驱动将原生事件交回 Commander，并按实际能力处理打断、审批和问答。",
+      "input": "可执行入口、绑定配置、原生句柄和权限",
+      "output": "可运行的驱动、能力与原生事件",
+      "sources": [
+        "plugins/harness/src/providers/codex.mjs",
+        "plugins/harness/src/providers/claude.mjs",
+        "plugins/harness/src/providers/acp.mjs"
+      ],
+      "note": "Codex 与 Claude Code 为首批外部 Worker 验收对象。Codex 用 Responses，Claude Code 用 Messages。其他编码 CLI 按实际 API 和入口能力开放。",
+      "state": "partial",
+      "doc": "docs/04-模型与工具/原生工具与会话.md#调度边界",
+      "x": 820,
       "y": 740
     }
   ],
@@ -300,19 +349,19 @@
       "to": "l"
     },
     {
-      "a": "providers",
-      "b": "auth",
-      "label": "核对认证来源",
+      "a": "auth",
+      "b": "launch",
+      "label": "工具选项",
       "from": "b",
-      "to": "t",
+      "to": "l",
       "kind": "support"
     },
     {
-      "a": "auth",
-      "b": "installer",
-      "label": "探测对应 CLI",
-      "from": "r",
-      "to": "l"
+      "a": "installer",
+      "b": "picker",
+      "label": "可执行能力",
+      "from": "t",
+      "to": "b"
     },
     {
       "a": "settings",
@@ -350,38 +399,64 @@
       "from": "b",
       "to": "t",
       "kind": "support"
+    },
+    {
+      "a": "launch",
+      "b": "native-dispatch",
+      "label": "会话启动配置",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "native-dispatch",
+      "b": "native-adapters",
+      "label": "按工具调用",
+      "from": "l",
+      "to": "r"
     }
   ],
   "steps": [
     {
       "node": "settings",
       "title": "保存供应商配置",
-      "text": "沿用官方 controller、设置版本和凭据引用。这里编辑一项，其他配置继续保留。",
+      "text": "复用官方设置和凭据服务保存供应商 API、协议和模型。模型页删除「适用工具」勾选。",
       "edge": 0
     },
     {
       "node": "picker",
       "title": "选择工具与真实模型 ID",
-      "text": "明确选定工具、供应商和原生模型；公共目录仅补缺失参数，不猜别名。",
+      "text": "工作台与 Worker 按 Harness、供应商与模型选择。目录根据实际协议和环境能力提供候选。",
       "edge": 1
     },
     {
       "node": "route",
       "title": "创建时固化路由",
-      "text": "托管模式目前支持 Codex 与 Claude。会话把地址、协议和凭据引用一起固化，默认值改变不影响旧会话。",
+      "text": "冻结工具、供应商、模型、协议与凭据引用。恢复沿用原绑定，启动时再次校验。",
       "edge": 2
     },
     {
       "node": "auth",
-      "title": "核对真实认证来源",
-      "text": "API 和官方订阅各走各自通路；未登录或工具不匹配时拒绝启动，引导到对应 CLI。",
+      "title": "按需保存工具选项",
+      "text": "协作、上下文和压缩等选项由各驱动校验并转换，新会话读取已保存版本。",
       "edge": 5
     },
     {
       "node": "launch",
-      "title": "在独立配置中执行",
-      "text": "按原绑定核验后，使用会话专有配置及历史目录启动原生工具；失效时明确失败。",
+      "title": "准备对应的启动配置",
+      "text": "按绑定注入当前设备的 API 凭据，以隔离配置和 Full access 启动外部 Harness。",
       "edge": 3
+    },
+    {
+      "node": "native-dispatch",
+      "title": "Commander 接管原生会话",
+      "text": "Commander 保存执行身份与输入回执。本机和跨设备外部 Worker 均通过同一路径执行。",
+      "edge": 12
+    },
+    {
+      "node": "native-adapters",
+      "title": "通过原生协议执行",
+      "text": "Commander 调用对应的协议驱动。驱动回传文本、审批、工具活动和完成事件，工作台读取事件并呈现状态。",
+      "edge": 13
     },
     {
       "node": "efficiency",
@@ -399,6 +474,11 @@
       "title": "按固定来源安装所选技能",
       "text": "下载所选技能和声明依赖，逐文件校验后写入；只有进入官方目录并可调用才显示可用。",
       "edge": 10
+    },
+    {
+      "node": "native-dispatch",
+      "title": "面向已登记服务器的 SSH 工具",
+      "text": "会话工具根据当前用户指令和宿主设备登记执行 SSH 命令。远端账号限定操作范围，本机返回必要输出和退出状态；断线后先核实执行事实。"
     }
   ],
   "docs": [
@@ -417,7 +497,15 @@
     {
       "label": "统一技能管理",
       "path": "docs/04-模型与工具/统一技能管理.md"
+    },
+    {
+      "label": "SSH 服务器运维",
+      "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
-  "version": "2026-11-11-1"
+  "version": "2026-11-18-external-harness-api-2",
+  "canvas": {
+    "width": 1580,
+    "height": 1240
+  }
 }</script><script src="../_assets/architecture.js"></script></body></html>

@@ -3,6 +3,16 @@ import { createHash } from 'node:crypto';
 import { commandCatalog, compactCommand } from '../commands.mjs';
 import { fullNativePermission, nativePermission } from '../permissions.mjs';
 
+function mediaMcpArguments(delegation) {
+  const server = 'mcp_servers.benchgo_media.';
+  return Object.entries({
+    command: delegation.command,
+    args: [delegation.script, '--media-only'],
+    env_vars: ['COMMANDER_DELEGATE_URL', 'COMMANDER_DELEGATE_TOKEN'],
+    tool_timeout_sec: 240,
+  }).flatMap(([key, value]) => ['-c', server + key + '=' + JSON.stringify(value)]);
+}
+
 export class CodexProvider {
   static capabilities = { stream: true, resume: true, steer: true, approvals: true, discover: true, permissions: true };
   constructor(config = {}) { this.config = config; }
@@ -11,7 +21,10 @@ export class CodexProvider {
     let permission = session.permission ? nativePermission(session.permission) : !session.nativeId ? fullNativePermission : undefined;
     const threadPermission = () => permission ? { approvalPolicy: permission.approval === 'ask' ? 'on-request' : 'never', sandbox: permission.sandbox } : {};
     const turnPermission = () => permission ? { approvalPolicy: permission.approval === 'ask' ? 'on-request' : 'never', sandboxPolicy: permission.sandbox === 'danger-full-access' ? { type: 'dangerFullAccess' } : permission.sandbox === 'read-only' ? { type: 'readOnly' } : { type: 'workspaceWrite', writableRoots: [session.cwd, ...(permission.additionalWritableRoots ?? [])] } } : {};
-    const wire = new LineProcess(this.config.command ?? 'codex', [...(this.config.commandArgs ?? []), 'app-server', '--listen', 'stdio://'], { cwd: session.cwd, env: this.config.env });
+    const media = host.delegation?.media ? host.delegation : undefined;
+    const mediaArgs = media ? mediaMcpArguments(media) : [];
+    const env = media ? { ...this.config.env, COMMANDER_DELEGATE_URL: media.url, COMMANDER_DELEGATE_TOKEN: media.token } : this.config.env;
+    const wire = new LineProcess(this.config.command ?? 'codex', [...(this.config.commandArgs ?? []), ...mediaArgs, 'app-server', '--listen', 'stdio://'], { cwd: session.cwd, env });
     let previousUsage, previousUsageKey;
     const driver = {
       nativeId: session.nativeId,
@@ -121,14 +134,10 @@ export class CodexProvider {
     try {
       await wire.request('initialize', { clientInfo: { name: 'dowork_commander', version: '0.1.0' }, capabilities: { experimentalApi: true } });
       wire.notify('initialized', {});
-      if (this.config.managedProfile?.subscription) {
-        const { account } = await wire.request('account/read', { refreshToken: false });
-        if (account?.type !== 'chatgpt') throw new Error('请先在本机 Codex 中完成 ChatGPT 登录，不能用 API 密钥替代订阅。');
-      }
       const params = { cwd: session.cwd, ...threadPermission(), ...(session.model ? { model: session.model } : {}) };
       const result = await wire.request(session.nativeId ? 'thread/resume' : 'thread/start', {
         ...params, ...(session.nativeId ? { threadId: session.nativeId } : {}),
-        ...(!session.nativeId && host.delegation ? { dynamicTools: [{ name: 'commander_delegate', description: 'Delegate in the same project using provider and text, optionally model. Follows the owning conversation permissions; requires human approval unless Full access is explicit. Returns child result; if pending, call again with operation=result and sessionId. Do not create another child for the same task.', inputSchema: host.delegation.schema }] } : {}),
+        ...(!session.nativeId && host.delegation ? { dynamicTools: [{ name: 'commander_delegate', description: 'Delegate in the same project using the tool provider, API supplier providerId, exact model, and text. If pending, query operation=result with the returned sessionId.', inputSchema: host.delegation.schema }] } : {}),
       });
       if (!result?.thread?.id) throw new Error('Codex returned no native thread identity');
       if (session.nativeId && result.thread.id !== session.nativeId) throw new Error('Codex resumed a different thread');

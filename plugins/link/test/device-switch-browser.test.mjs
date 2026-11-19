@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { officialUiEntries, officialUiLoaders } from '../scripts/official-ui.mjs';
-import { shellUi } from '../../benchgo/scripts/shell-ui.mjs';
+import { shellUi } from '../../base/scripts/shell-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
@@ -35,8 +35,8 @@ async function fixtureAssets() {
     import React,{useState} from 'react';import {createRoot} from 'react-dom/client';
     import {SidebarRoot} from './deepseek-harness/packages/client/ui-sidebar/src/client/SidebarRoot.tsx';
     import {DeviceSwitch} from './plugins/link/client/device-switch.jsx';
-    import {UIIcon} from './plugins/benchgo/client/iconsax.jsx';
-    import css from './plugins/benchgo/client/style.css';
+    import {UIIcon} from './plugins/base/client/iconsax.jsx';
+    import css from './plugins/base/client/style.css';
     import frameCss from './deepseek-harness/packages/client/ui-layout/src/client/AppFrame.module.css';
     import shellBase from './deepseek-harness/packages/client/web/src/base.css';
     import {installThemeStyles} from './deepseek-harness/packages/client/ui-theme/src/client/styles.ts';
@@ -61,10 +61,11 @@ async function fixtureAssets() {
     }createRoot(document.getElementById('root')).render(<App/>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-device-switch'), format: 'iife', jsx: 'automatic', target: 'es2022',
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), ...await officialUiEntries() },
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'plugins/link/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'plugins/link/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     plugins: [shellUi()], loader: { '.css': 'text', '.svg': 'text', ...officialUiLoaders }, logLevel: 'silent',
     define: { 'process.env.NODE_ENV': '"production"', 'process.env.DSH_CLIENT_VERSION': 'undefined', 'process.env.DSH_CLIENT_COMMIT_HASH': 'undefined', 'process.env.DSH_CLIENT_GIT_DIRTY': 'undefined' } });
-  return { script: result.outputFiles.find(file => file.path.endsWith('.js')).text, css: result.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n') };
+  const bridge = await build({ entryPoints: [join(root, 'plugins/link/client/workbench-bridge.mjs')], bundle: true, format: 'iife', write: false });
+  return { script: result.outputFiles.find(file => file.path.endsWith('.js')).text, css: result.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n'), bridge: bridge.outputFiles[0].text };
 }
 
 test('sidebar device selector renders real menus, preserves drafts and remains reachable in remote workbenches', { skip: !executablePath && 'Chromium/Edge is required', timeout: 90_000 }, async () => {
@@ -84,15 +85,16 @@ test('sidebar device selector renders real menus, preserves drafts and remains r
           if (body.action === 'devices') return route.fulfill({ json: { devices: mode === 'empty' ? [] : mode === 'single' ? [devices[0]] : mode === 'unknown' ? devices.map(device => device.kind === 'local' ? device : { ...device, status: 'unknown' }) : devices } });
           if (body.action === 'select') {
             if (holdSelection) await new Promise(resolve => { releaseSelection = resolve; });
-            return route.fulfill(failing ? { status: 503, json: { error: '目标设备暂时无法连接，请重试' } } : { json: { device: devices[1], url: remoteOrigin + '/s/work/?theme=' + theme } });
+            return route.fulfill(failing ? { status: 503, json: { error: '目标设备暂时无法连接，请重试' } } : { json: { device: devices[1], url: remoteOrigin + '/s/work/?theme=' + (theme === 'dark' ? 'light' : 'dark') } });
           }
           return route.fulfill({ status: 400, json: { error: 'Unexpected device action' } });
         }
         if (url.pathname === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: assets.script });
         if (url.pathname === '/app.css') return route.fulfill({ contentType: 'text/css', body: assets.css });
+        if (url.pathname === '/workbench.js') return route.fulfill({ contentType: 'text/javascript', body: assets.bridge });
         const embedded = url.origin === remoteOrigin;
         if (embedded && url.pathname === '/s/work/' && holdWorkbench) await new Promise(resolve => { releaseWorkbench = resolve; });
-        return route.fulfill({ contentType: 'text/html', body: '<!doctype html><html lang="zh-CN"' + (embedded ? '' : ' data-windows-titlebar') + '><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"><style>html{--dsh-windows-titlebar-height:40px}body{margin:0}#root{height:100dvh}main{min-width:0;flex:1;padding:80px 36px}h1{font-size:32px}textarea{display:block;max-width:100%;box-sizing:border-box;width:440px;min-height:110px;margin-top:40px;padding:16px;background:var(--dsw-alias-bg-layer-2);color:inherit;border:1px solid var(--dsw-alias-border-l2);border-radius:14px}main>button{margin-top:16px;color:inherit;background:transparent;border:0;padding:8px}@media(max-width:600px){main{padding:40px 12px}main h1{font-size:24px}}</style></head><body><div id="root"></div><script src="/app.js"></script></body></html>' });
+        return route.fulfill({ contentType: 'text/html', body: '<!doctype html><html lang="zh-CN"' + (embedded ? '' : ' data-windows-titlebar') + '><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + (embedded ? '<script src="/workbench.js"></script>' : '') + '<link rel="stylesheet" href="/app.css"><style>html{--dsh-windows-titlebar-height:40px}body{margin:0}#root{height:100dvh}main{min-width:0;flex:1;padding:80px 36px}h1{font-size:32px}textarea{display:block;max-width:100%;box-sizing:border-box;width:440px;min-height:110px;margin-top:40px;padding:16px;background:var(--dsw-alias-bg-layer-2);color:inherit;border:1px solid var(--dsw-alias-border-l2);border-radius:14px}main>button{margin-top:16px;color:inherit;background:transparent;border:0;padding:8px}@media(max-width:600px){main{padding:40px 12px}main h1{font-size:24px}}</style></head><body><div id="root"></div><script src="/app.js"></script></body></html>' });
       });
       const trigger = page.locator('.dsh-device-switch-trigger'), menu = page.locator('.dsh-device-switch-menu');
       const capture = async label => {
@@ -247,6 +249,26 @@ test('sidebar device selector renders real menus, preserves drafts and remains r
       await capture('remote');
       const remoteFrame = page.frames().find(frame => frame.url().startsWith(remoteOrigin));
       assert(remoteFrame);
+      assert.equal(new URL(remoteFrame.url()).searchParams.get('theme'), theme === 'dark' ? 'light' : 'dark');
+      const expectTheme = async value => {
+        await remote.locator('html[data-dsh-workbench-theme=' + value + ']').waitFor({ state: 'attached' });
+        await remoteFrame.waitForFunction(scheme => document.documentElement.style.colorScheme === scheme
+          && document.body.hasAttribute('data-ds-dark-theme') === (scheme === 'dark'), value);
+      };
+      await expectTheme(theme);
+      const opposite = theme === 'dark' ? 'light' : 'dark';
+      await remoteFrame.evaluate(() => {
+        document.documentElement.style.colorScheme = 'light';
+        document.body.toggleAttribute('data-ds-dark-theme', false);
+      });
+      await remoteFrame.evaluate(wrong => {
+        window.postMessage({ type: 'dsh-devices:theme', theme: wrong }, location.origin);
+      }, opposite);
+      await expectTheme(theme);
+      await page.evaluate(value => { document.documentElement.style.colorScheme = value; }, opposite);
+      await expectTheme(opposite);
+      await page.evaluate(value => { document.documentElement.style.colorScheme = value; }, theme);
+      await expectTheme(theme);
       assert.deepEqual(await alternateSidebarEntrypoints(remoteFrame), ['none', 'none'], 'desktop embedded page hides alternate narrow and mobile sidebar openers');
       assert.equal(await page.locator('.cmd-shell-frame[inert]').count(), 1);
       await captionToggle.click();

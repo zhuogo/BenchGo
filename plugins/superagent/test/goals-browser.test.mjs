@@ -5,18 +5,18 @@ import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 async function fixture() {
   const result = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
     import React from 'react';import {createRoot} from 'react-dom/client';
     import {Goals} from './plugins/superagent/client/goals.jsx';
-    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/benchgo/client/style.css';
+    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/base/client/style.css';
     const root=createRoot(document.getElementById('root'));let serial=0;
     const api=async(action,input)=>{
       window.calls.push({action,input});
@@ -32,7 +32,7 @@ async function fixture() {
     window.remount=()=>root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body'><Goals api={api}/></main></div>);
     window.renderScenario=(mode='data')=>{window.calls=[];window.mode=mode;window.rows=mode==='empty'?[]:[{id:'goal-one',objective:'推进发布准备',status:'active',rowVersion:7}];window.remount();};
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-goals-ui-test'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts') },
     loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });

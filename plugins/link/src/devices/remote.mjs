@@ -2,6 +2,13 @@ import { Agent, request } from 'node:https';
 import { connect } from 'node:tls';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
+// An SSH tunnel changes the socket destination while Link still admits its own HTTP origin.
+export function upstreamOrigin(target) {
+  const tunnel = new URL(target.url);
+  const port = target.ssh?.remotePort;
+  return target.kind === 'ssh' && tunnel.hostname === '127.0.0.1' && Number.isInteger(port) && port > 0 && port <= 65535
+    ? new URL(`https://127.0.0.1:${port}`).origin : tunnel.origin;
+}
 function verifyPinnedPeer(socket, pin) {
   const cert = socket.getPeerCertificate(true), expected = Buffer.from(pin, 'base64');
   if (!cert.pubkey || !Number.isFinite(Date.parse(cert.valid_to)) || !Number.isFinite(Date.parse(cert.valid_from)) || Date.parse(cert.valid_to) <= Date.now() || Date.parse(cert.valid_from) > Date.now()) throw Object.assign(new Error('主机证书无效或已过期'), { code: 'ERR_LINK_CERTIFICATE' });
@@ -25,8 +32,11 @@ export function probeRemote(target, { timeout = 2500, signal } = {}) {
 /** Verify pinned self-signed peers before sending HTTP bytes or credentials. */
 export function remoteAgent(target, { maxSockets = 64, maxFreeSockets = 2 } = {}) {
   const agent = new Agent({ keepAlive: true, maxSockets, maxFreeSockets });
+  const endpoint = new URL(target.url);
+  const tunnel = upstreamOrigin(target) !== endpoint.origin ? endpoint : null;
+  if (tunnel && !target.pin) throw new Error('缺少 SSH 隧道的主机公钥指纹');
   if (target.pin) agent.createConnection = (options, callback) => {
-    const socket = connect({ ...options, rejectUnauthorized: false, servername: undefined });
+    const socket = connect({ ...options, ...(tunnel && { host: tunnel.hostname, port: Number(tunnel.port || 443) }), rejectUnauthorized: false, servername: undefined });
     const error = value => { socket.destroy(); callback(value); };
     socket.once('error', error);
     socket.once('secureConnect', () => {
@@ -39,14 +49,23 @@ export function remoteAgent(target, { maxSockets = 64, maxFreeSockets = 2 } = {}
   };
   return agent;
 }
-export function remoteJson(target, path, input, { agent, token = target.token, signal } = {}) {
+export function remoteJson(target, path, input, { agent, token = target.token, signal, timeout = 20000 } = {}) {
   const own = !agent; agent ??= remoteAgent(target);
   return new Promise((resolve, reject) => {
-    const req = request(new URL(path, target.url), { method: 'POST', agent, signal, timeout: 20000, headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) } }, res => {
-      let body = '', bytes = 0;
-      res.on('data', chunk => { bytes += chunk.length; if (bytes > 1024 * 1024) req.destroy(new Error('主机响应过大')); else body += chunk; });
+    const req = request(new URL(path, upstreamOrigin(target)), { method: input === undefined ? 'GET' : 'POST', agent, signal, timeout, headers: { ...(input === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: 'Bearer ' + token } : {}) } }, res => {
+      const chunks = []; let bytes = 0;
+      res.on('data', chunk => { bytes += chunk.length; if (bytes > 1024 * 1024) req.destroy(new Error('主机响应过大')); else chunks.push(chunk); });
       res.on('error', reject);
-      res.on('end', () => { try { const value = JSON.parse(body); if (res.statusCode >= 400) throw Object.assign(new Error(value.error || '主机返回 HTTP ' + res.statusCode), { statusCode: res.statusCode, status: res.statusCode, code: value.code }); resolve({ value, headers: res.headers }); } catch (reason) { reject(reason); } });
+      res.on('end', () => {
+        let value;
+        try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch (error) { if (res.statusCode < 400) { reject(error); return; } }
+        if (res.statusCode >= 400) {
+          reject(Object.assign(new Error(value?.error || '主机返回 HTTP ' + res.statusCode), { statusCode: res.statusCode, status: res.statusCode, code: value?.code }));
+          return;
+        }
+        resolve({ value, headers: res.headers });
+      });
     });
     req.on('error', reject); req.on('timeout', () => req.destroy(Object.assign(new Error('连接超时，请检查主机是否在线'), { code: 'ETIMEDOUT' })));
     req.end(JSON.stringify(input));

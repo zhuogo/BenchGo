@@ -1,0 +1,326 @@
+import { Loading } from '../../shared/client/ui/loading.jsx';
+import { readJsonResponse } from './http-response.mjs';
+import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import { moduleSource } from './modules.mjs';
+import { pickerCatalog, invalidateModelCatalogs, mountModelCatalogs } from './model-catalog.mjs';
+import { createPortal } from 'react-dom';
+import { UIIcon } from './iconsax.jsx';
+import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
+import { ProviderBrandIcon } from './provider-brand-icon.jsx';
+import { isRouterGo, prioritizeRouterGo } from './provider-options.mjs';
+import { routerGo } from '../shared/builtin-providers.mjs';
+import { ToolBrandIcon } from './tool-brand-icon.jsx';
+import { availableTools, currentToolId, providersForTool, selectionReasoningEffort } from './model-picker-state.mjs';
+import css from './model-picker.css';
+import { ModelEffortSlider } from './model-effort-slider.jsx';
+import { nativeActivityLabel } from './native-activity.mjs';
+import { IconPinOutlineRegular, IconPinFillRegular } from '@deepseek-ai/dsh-client-ui-primitives';
+
+function sameModelBinding(previous, next) {
+  return previous !== null && previous.bound === next.bound && previous.id === next.id
+    && previous.provider === next.provider && previous.model === next.model
+    && previous.route?.providerId === next.route?.providerId && previous.route?.model === next.route?.model;
+}
+
+/** Selection, permissions and persistence stay with the official directory. */
+export function mountModelPicker(ctx) {
+  mountModelCatalogs(ctx);
+  ctx.effect(() => moduleSource.subscribe(invalidateModelCatalogs));
+  const style = document.createElement('style'); style.textContent = css; document.head.append(style);
+  ctx.effect(() => () => style.remove());
+  ctx.slots.inject('conversation.input.model', () => ctx.slots.register({
+    name: 'conversation.input.model', priority: -10,
+    inject: sessionId => {
+      const directory = ctx.modelDirectories.directoryFor(sessionId);
+      return { sessionId, available: ctx.sessions.subagentAddress(sessionId) === undefined, hooks: { directory: directory.store }, load: () => directory.load(), select: selection => directory.select(selection), startNewSession: async () => {
+        const workspace = ctx.workspaces.list.getSnapshot().items.find(item => item.sessionIds.includes(sessionId));
+        const next = await ctx.sessions.create(workspace ? { workspaceId: workspace.workspaceId } : undefined);
+        ctx.uiWorkspace.openSession(next);
+      }, binding: async () => {
+        const response = await fetch(new URL('api/commander', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'binding', harnessSessionId: sessionId }) });
+        const value = await readJsonResponse(response, new URL('api/commander', document.baseURI)); if (value.error) throw Error(value.error || '会话绑定状态读取失败'); return value;
+      } };
+    },
+  }, ModelPicker));
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock', id: 'commander-model-empty', order: -30,
+    inject: sessionId => {
+      const directory = ctx.modelDirectories.directoryFor(sessionId);
+      return { sessionId, available: ctx.sessions.subagentAddress(sessionId) === undefined, hooks: { directory: directory.store }, binding: async () => {
+        const response = await fetch(new URL('api/commander', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'binding', harnessSessionId: sessionId }) });
+        const value = await readJsonResponse(response, new URL('api/commander', document.baseURI)); if (value.error) throw Error(value.error || '会话绑定状态读取失败'); return value;
+      }, openSettingsSection: id => {
+        const shell = ctx.slots.entries('sidebar.settings').find(entry => entry.children?.['settings.section']);
+        const actions = shell?.store?.create().actions;
+        if (!actions?.openSection) throw Error('请从侧栏设置打开对应页面。');
+        actions.openSection(id);
+      } };
+    },
+  }, ModelEmptyBanner));
+}
+
+export function mountNativeActivity(ctx) {
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock', id: 'commander-native-activity', order: -20,
+    inject: sessionId => ({ sessionId }),
+  }, NativeActivity));
+}
+
+function NativeActivity({ sessionId }) {
+  const [activity, setActivity] = useState(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true, timer, nativeId, cursor = 0, events = [];
+    const request = async body => {
+      const response = await fetch(new URL('api/commander', document.baseURI), { method: 'POST', credentials: 'same-origin', signal: controller.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const value = await readJsonResponse(response, new URL('api/commander', document.baseURI)); if (value.error) throw Error(value.error || '读取原生工具活动失败'); return value;
+    };
+    const tick = async () => {
+      try {
+        if (!nativeId) {
+          const binding = await request({ action: 'binding', harnessSessionId: sessionId });
+          if (!active) return;
+          if (!binding.bound) { timer = setTimeout(tick, 2000); return; }
+          nativeId = binding.id; cursor = Math.max(0, (binding.cursor || 0) - 40);
+        }
+        const value = await request({ action: 'events', id: nativeId, after: cursor });
+        if (!active) return;
+        cursor = value.cursor;
+        events = [...events, ...(value.events || [])].slice(-20);
+        const rows = events.map(nativeActivityLabel).filter(Boolean).slice(-8);
+        if (rows.length) setActivity({ provider: value.session.provider, status: value.session.status, rows });
+        if (['running', 'waiting', 'connecting'].includes(value.session.status)) timer = setTimeout(tick, 700);
+        else if (!rows.length) setActivity(null);
+      } catch { if (active) timer = setTimeout(tick, 2500); }
+    };
+    void tick();
+    return () => { active = false; controller.abort(); clearTimeout(timer); };
+  }, [sessionId]);
+  if (!activity) return null;
+  return <section className="cmd-native-activity" aria-label="原生工具活动" aria-live="polite">
+    <header><span>{activity.provider === 'codex' ? 'Codex' : activity.provider} 活动</span><span>{activity.status === 'running' ? '运行中' : activity.status === 'waiting' ? '等待确认' : activity.status === 'connecting' ? '连接中' : '已完成'}</span></header>
+    <ol>{activity.rows.map((row, index) => <li key={index} data-state={row.state}><span>{row.label}</span>{row.detail && <code>{row.detail}</code>}</li>)}</ol>
+  </section>;
+}
+
+function ModelEmptyBanner({ sessionId, available, useDirectory, binding, openSettingsSection }) {
+  const modules = useSyncExternalStore(moduleSource.subscribe, moduleSource.getSnapshot);
+  const state = useDirectory(value => value);
+  const catalogRevision = useSyncExternalStore(pickerCatalog.subscribe, pickerCatalog.getSnapshot);
+  const [catalog, setCatalog] = useState(null), [catalogError, setCatalogError] = useState(''), [sessionBinding, setSessionBinding] = useState(null);
+  const currentTool = currentToolId(state.current?.provider);
+  const harnessUnavailable = !modules.harness && currentTool !== 'deepseek';
+  useEffect(() => {
+    if (!modules.harness) { setSessionBinding({ bound: false }); return; }
+    let active = true, timer;
+    const refreshBinding = async () => {
+      try { const value = await binding(); if (active) setSessionBinding(previous => sameModelBinding(previous, value) ? previous : value); }
+      catch { if (active) setSessionBinding(null); }
+      finally { if (active) timer = setTimeout(refreshBinding, 2000); }
+    };
+    void refreshBinding();
+    return () => { active = false; clearTimeout(timer); };
+  }, [sessionId, modules.harness]);
+  useEffect(() => {
+    let active = true;
+    setCatalogError('');
+    pickerCatalog.load().then(value => { if (active) setCatalog(value); }).catch(reason => { if (active) setCatalogError(reason.message); });
+    return () => { active = false; };
+  }, [catalogRevision, modules.harness]);
+  const configuredProviders = providersForTool(state.groups, catalog, currentTool).filter(entry => catalog?.providers?.some(row => row.id === entry.id) && entry.models.length);
+  const noProvider = available && catalog !== null && !catalogError && !configuredProviders.length && !sessionBinding?.bound;
+  if (!noProvider && !harnessUnavailable) return null;
+  return <div className="cmd-model-empty" role="status"><span>{harnessUnavailable ? 'Harness 聚合未启用，请启用模块或切换模型' : '无模型可用，请先配置模型供应商'}</span>{!harnessUnavailable && <button type="button" aria-label="前往配置模型供应商" onClick={() => { try { openSettingsSection('models'); } catch { /* The model trigger keeps its own error. */ } }}><UIIcon name="external" size={13} />前往</button>}</div>;
+}
+
+function ModelPicker({ sessionId, locked, available, useDirectory, load, select, binding, startNewSession }) {
+  const modules = useSyncExternalStore(moduleSource.subscribe, moduleSource.getSnapshot);
+  const state = useDirectory(value => value);
+  const catalogRevision = useSyncExternalStore(pickerCatalog.subscribe, pickerCatalog.getSnapshot);
+  const [open, setOpen] = useState(false), [tool, setTool] = useState('deepseek'), [provider, setProvider] = useState(null), [query, setQuery] = useState('');
+  const [catalog, setCatalog] = useState(null), [catalogLoading, setCatalogLoading] = useState(false), [revision, setRevision] = useState(0);
+  const [toolsOpen, setToolsOpen] = useState(false), [position, setPosition] = useState(null), [error, setError] = useState(''), [catalogError, setCatalogError] = useState('');
+  const [sessionBinding, setSessionBinding] = useState(null), [bindingError, setBindingError] = useState('');
+  const [effortOptimistic, setEffortOptimistic] = useState(null);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [, renderPins] = useState(0);
+  const pinnedModels = useRef((() => { try { return JSON.parse(localStorage.getItem('commander.pinned-models') || '{}') || {}; } catch { return {}; } })());
+  const trigger = useRef(null), menu = useRef(null), search = useRef(null), selecting = useRef(false), toolTrigger = useRef(null);
+  const id = useId(), currentTool = currentToolId(state.current?.provider);
+  const harnessUnavailable = !modules.harness && currentTool !== 'deepseek';
+  const entries = availableTools(catalog).map(entry => entry.id === 'deepseek' || modules.harness ? entry : { ...entry, routeSupported: false, routeReason: 'Harness 聚合未启用' }), activeTool = entries.find(entry => entry.id === tool);
+  const currentGroup = state.groups.find(group => group.id === state.current?.provider);
+  const currentModel = currentGroup?.models.find(model => model.id === state.current?.model);
+  const busy = state.status === 'selecting', loading = state.status === 'loading' || catalogLoading;
+  useEffect(() => {
+    setEffortOptimistic(null);
+  }, [state.current?.provider, state.current?.model]);
+  useEffect(() => {
+    if (!modules.harness) { setSessionBinding({ bound: false }); setBindingError(''); return; }
+    let active = true;
+    let timer;
+    const refreshBinding = async () => {
+      try { const value = await binding(); if (active) { setSessionBinding(previous => sameModelBinding(previous, value) ? previous : value); setBindingError(''); } }
+      catch (reason) { if (active) setBindingError(reason.message); }
+      finally { if (active) timer = setTimeout(refreshBinding, 2000); }
+    };
+    setSessionBinding(null); setBindingError('');
+    void refreshBinding();
+    return () => { active = false; clearTimeout(timer); };
+  }, [sessionId, modules.harness]);
+  const modelLocked = locked || (typeof binding === 'function' && (sessionBinding === null || !!bindingError || !!sessionBinding?.bound && !sessionBinding?.route?.providerId));
+  const boundTool = sessionBinding?.bound ? sessionBinding.provider : null;
+  const boundProvider = sessionBinding?.bound ? sessionBinding.route?.providerId : null;
+  const toolLocked = modelLocked || !!boundTool;
+  const bindingHint = harnessUnavailable ? 'Harness 聚合未启用，请启用模块或切换模型' : bindingError || (sessionBinding?.bound && !sessionBinding?.route?.providerId ? '此会话没有有效的 API 绑定' : sessionBinding?.bound ? '当前会话可在已选工具和供应商内切换模型' : sessionBinding === null ? '正在确认会话绑定状态…' : '');
+  const close = () => { setOpen(false); setProvider(null); setToolsOpen(false); setQuery(''); };
+  const refresh = (force = true) => { setError(''); if (force) pickerCatalog.invalidate(); setRevision(value => value + 1); void load().catch(reason => setError(reason.message)); };
+  useEffect(() => {
+    let active = true;
+    setCatalogLoading(pickerCatalog.peek() === null); setCatalogError('');
+    pickerCatalog.load().then(value => {
+      if (!active) return;
+      setCatalog(value);
+    }).catch(reason => { if (active) setCatalogError(reason.message); }).finally(() => { if (active) setCatalogLoading(false); });
+    return () => { active = false; };
+  }, [revision, modules.harness, catalogRevision]);
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const rect = trigger.current?.getBoundingClientRect(); if (!rect) return;
+      const width = Math.min(368, window.innerWidth - 24), below = window.innerHeight - rect.bottom, above = window.top ? rect.top : rect.top, topSide = above > below;
+      setPosition({ position: 'fixed', width, left: Math.max(12, Math.min(rect.right - width, window.innerWidth - width - 12)), ...(topSide ? { bottom: window.innerHeight - rect.top + 8 } : { top: rect.bottom + 8 }), maxHeight: Math.max(100, Math.min(520, (topSide ? above : below) - 20)) });
+    };
+    place();
+    const outside = event => { if (!menu.current?.contains(event.target) && !trigger.current?.contains(event.target)) close(); };
+    const key = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (toolsOpen) { setToolsOpen(false); toolTrigger.current?.focus(); } else { close(); trigger.current?.focus(); } } };
+    document.addEventListener('pointerdown', outside); document.addEventListener('keydown', key, true); window.addEventListener('resize', place); window.addEventListener('scroll', place, true);
+    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', key, true); window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+  }, [open, toolsOpen]);
+  useEffect(() => { if (open && !toolsOpen) search.current?.focus(); }, [open, provider, toolsOpen]);
+  useEffect(() => { if (toolsOpen) menu.current?.querySelector('.cmd-model-tool-menu button[aria-checked="true"]')?.focus(); }, [toolsOpen]);
+  const choose = async (group, model, effort, keepOpen = false) => {
+    if (selecting.current || modelLocked || catalogLoading || !catalog || catalogError) return false;
+    if (!modules.harness && currentToolId(group.id) !== 'deepseek') { setError('Harness 聚合未启用'); return false; }
+    selecting.current = true; setError('');
+    try {
+      const route = catalog.routes?.find(row => row.modelId === model.id && 'commander-' + row.tool === group.id);
+      if (currentToolId(group.id) !== 'deepseek' && (!route || route.tool !== currentToolId(group.id))) throw Error('此工具、供应商和模型组合当前不可用，请重新选择');
+      const reasoningEffort = selectionReasoningEffort(group.id, model, state.current, effort);
+      const result = await select({ provider: group.id, model: model.id, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) });
+      if (!result?.ok) throw new Error(result?.error?.message ?? '模型选择不可用');
+      if (!keepOpen) { close(); trigger.current?.focus(); }
+      return true;
+    } catch (reason) { setError(reason.message); return false; } finally { selecting.current = false; }
+  };
+  const modelKey = (group, model) => `${group.id}/${model.id}`;
+  const isPinned = (group, model) => (pinnedModels.current || {})[modelKey(group, model)] === true;
+  const toggleModelPin = (group, model, event) => {
+    event.stopPropagation();
+    pinnedModels.current = { ...(pinnedModels.current || {}), [modelKey(group, model)]: !isPinned(group, model) };
+    try { localStorage.setItem('commander.pinned-models', JSON.stringify(pinnedModels.current)); } catch { /* Storage may be unavailable. */ }
+    renderPins(value => value + 1);
+  };
+  const providerRows = providersForTool(state.groups, catalog, tool);
+  const routerRow = catalog?.providers?.find(row => isRouterGo(row.id));
+  const routerReason = boundProvider && !isRouterGo(boundProvider) ? '当前会话已绑定其他供应商' : catalogError ? '供应商目录读取失败' : loading || !catalog ? '正在读取供应商目录…' : routerRow ? routerRow.unavailableTools?.[tool] || routerRow.unavailableReason || '暂无兼容模型' : '请先在模型设置中配置 RouterGo';
+  const providers = prioritizeRouterGo(providerRows.filter(item => !boundProvider || item.id === boundProvider), { ...routerGo, models: [], reason: routerReason });
+  const selectedProvider = providers.find(item => item.id === provider);
+  const matches = text => text.toLowerCase().includes(query.trim().toLowerCase());
+  const visibleProviders = providers.filter(item => isRouterGo(item.id) || matches(item.name + ' ' + item.id));
+  const models = (selectedProvider?.models || []).filter(({ model, nativeModelId }) => matches(model.name + ' ' + (nativeModelId || model.id))).sort((a, b) => Number(isPinned(b.group, b.model)) - Number(isPinned(a.group, a.model)));
+  const activeEffort = currentModel && selectionReasoningEffort(currentGroup.id, currentModel, state.current);
+  const currentProviderEntry = providersForTool(state.groups, catalog, currentTool).find(entry => entry.models.some(({ group, model }) => group.id === state.current?.provider && model.id === state.current?.model));
+  const currentRoute = catalog?.routes?.find(row => row.modelId === state.current?.model && ('commander-' + row.tool === state.current?.provider || (row.tool === 'deepseek' && state.current?.provider === row.providerId)));
+  const currentProviderId = currentProviderEntry?.id || currentRoute?.providerId || boundProvider || (currentTool === 'deepseek' ? state.current?.provider : undefined);
+  const effortModel = currentModel ? { group: currentGroup, model: currentModel, providerName: currentProviderEntry?.name || currentRoute?.providerName || currentGroup?.name || currentGroup?.id } : null;
+  const effortOptions = effortModel?.model.reasoning?.efforts || [];
+  const effectiveEffortId = effortOptimistic !== null && effortOptions.some(item => item.id === effortOptimistic) ? effortOptimistic : activeEffort;
+  const commitEffortIndex = async index => {
+    const target = effortOptions[index];
+    if (!target || !effortModel) return;
+    setEffortOptimistic(target.id);
+    if (target.id === activeEffort) return;
+    const ok = await choose(effortModel.group, effortModel.model, target.id, true);
+    if (!ok) setEffortOptimistic(null);
+  };
+  const effortName = currentModel?.reasoning?.efforts?.find(effort => effort.id === effectiveEffortId)?.name;
+  const failures = state.failures?.filter(group => tool === 'deepseek' ? !group.id?.startsWith('commander-') : group.id === 'commander-' + tool) || [];
+  const configuredProviders = providersForTool(state.groups, catalog, currentTool).filter(entry => catalog?.providers?.some(row => row.id === entry.id) && entry.models.length);
+  const noProvider = !harnessUnavailable && catalog !== null && !catalogError && !configuredProviders.length && !sessionBinding?.bound;
+  const sendUnavailable = noProvider || harnessUnavailable;
+  const modelLabel = noProvider ? '无模型可用' : currentModel?.name ?? state.current?.model ?? '选择模型';
+  useEffect(() => {
+    if (!sendUnavailable) { delete document.documentElement.dataset.commanderNoProvider; return; }
+    document.documentElement.dataset.commanderNoProvider = 'true';
+    const blockSend = event => {
+      const send = event.target.closest?.('[class*="_primary"], [aria-label="发送消息"]');
+      if (!send || event.target.closest?.('.cmd-model-empty')) return;
+      event.preventDefault(); event.stopPropagation();
+    };
+    const blockEnter = event => {
+      if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+      if (!event.target.closest?.('[data-composer-card]')) return;
+      event.preventDefault(); event.stopPropagation();
+    };
+    document.addEventListener('click', blockSend, true);
+    document.addEventListener('keydown', blockEnter, true);
+    return () => { delete document.documentElement.dataset.commanderNoProvider; document.removeEventListener('click', blockSend, true); document.removeEventListener('keydown', blockEnter, true); };
+  }, [sendUnavailable]);
+  const message = error || catalogError || state.error || failures.map(group => group.message).join('；');
+  const onMenuKey = event => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const scope = toolsOpen ? menu.current.querySelector('.cmd-model-tool-menu') : menu.current;
+    const buttons = [...scope.querySelectorAll('button:not(:disabled),input')], current = buttons.indexOf(document.activeElement), direction = event.key === 'ArrowDown' ? 1 : -1;
+    event.preventDefault(); buttons[(current + direction + buttons.length) % buttons.length]?.focus();
+  };
+  const sliderDisabled = busy || catalogLoading || !catalog || !!catalogError || !modules.harness && currentTool !== 'deepseek';
+  const createNewSession = async () => {
+    setCreatingSession(true);
+    setError('');
+    try { await startNewSession(); close(); }
+    catch (reason) { setError(reason.message); }
+    finally { setCreatingSession(false); }
+  };
+  return <>
+    <Tooltip label={noProvider ? '无模型可用，请先配置模型供应商' : modelLabel + (effortName ? ' · ' + effortName : '') + (bindingHint ? '。' + bindingHint : '')} portal><button ref={trigger} type="button" className="cmd-model-trigger" data-empty={noProvider || undefined} disabled={modelLocked || !available || busy} aria-label={noProvider ? '无模型可用，请先配置模型供应商' : '选择工具与模型，当前 ' + (entries.find(item => item.id === currentTool)?.name ?? currentTool) + ' ' + (currentModel?.name ?? state.current?.model ?? '') + (sessionBinding?.bound ? '。可在当前工具和供应商内切换模型' : bindingHint ? '。' + bindingHint : '')} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => { if (open) close(); else { setTool(currentTool); setProvider(null); setQuery(''); setToolsOpen(false); setOpen(true); refresh(false); } }}>
+      {currentProviderId && !noProvider && <ProviderBrandIcon id={currentProviderId} name={currentProviderEntry?.name || currentRoute?.providerName || currentGroup?.name} declared={currentProviderEntry?.declared} size={16} />}<span className="cmd-model-caption">{modelLabel}{!noProvider && effortName ? ' · ' + effortName : ''}</span><UIIcon name="chevronDown" size={14} />
+    </button></Tooltip>
+    {open && position && createPortal(<div ref={menu} id={id} role="dialog" aria-label="工具与模型" aria-busy={catalogLoading} className="cmd-model-popup" style={position} onKeyDown={onMenuKey}>
+      {catalogLoading && !catalog && <Loading className="cmd-model-loading-overlay" label="正在加载模型目录" />}
+      {catalogLoading && catalog && <p className="cmd-model-refresh-status" role="status">正在更新模型目录…</p>}
+      <div className="cmd-model-provider-card"><header className="cmd-model-header">
+        {provider ? <button type="button" className="cmd-model-back" aria-label="返回供应商列表" disabled={busy} onClick={() => { setProvider(null); setQuery(''); }}><UIIcon name="chevronLeft" size={16} /><span>{selectedProvider?.name || '供应商'}</span></button> : <span className="cmd-model-heading">选择供应商</span>}
+        <Tooltip label={boundTool ? '当前工具为 ' + boundTool + '，只能切换该工具的模型' : '选择 Harness 工具'} portal><button ref={toolTrigger} type="button" className="cmd-model-tool-trigger" aria-label="选择 Harness 工具" aria-haspopup="menu" aria-expanded={toolsOpen} disabled={busy || toolLocked} onClick={() => setToolsOpen(value => !value)}><ToolBrandIcon tool={tool} size={18} muted={!activeTool?.available || !activeTool?.routeSupported} /><span>{activeTool?.name || (catalogLoading ? '识别工具…' : tool)}</span><UIIcon name="chevronDown" size={13} /></button></Tooltip>
+      </header>
+      {toolsOpen && <div className="cmd-model-tool-menu" role="menu" aria-label="Harness 工具">{entries.map(entry => {
+        const unavailable = !entry.routeSupported || !entry.available;
+        const unavailableReason = entry.routeReason || (entry.available === false ? '当前工具不可启动' : '当前没有兼容的 API 路由');
+        return <button key={entry.id} type="button" role="menuitemradio" disabled={toolLocked || unavailable} aria-checked={tool === entry.id} className={tool === entry.id ? 'is-selected' : ''} onClick={() => { setTool(entry.id); setProvider(null); setQuery(''); setToolsOpen(false); }}><ToolBrandIcon tool={entry.id} size={20} muted={entry.installed === false || unavailable} /><span>{entry.name}{unavailable && <small>{unavailableReason}</small>}</span>{tool === entry.id && <UIIcon name="check" size={16} />}</button>;
+      })}<small>{boundTool ? `当前工具为 ${boundTool}，只能切换该工具的模型` : '选择安装并具备兼容 API 路由的工具'}</small></div>}
+      <label className="cmd-model-search"><UIIcon name="search" size={16} /><input ref={search} type="search" autoComplete="off" spellCheck={false} aria-label={provider ? '搜索模型' : '搜索供应商'} placeholder={provider ? '搜索模型' : '搜索供应商'} value={query} onChange={event => setQuery(event.target.value)} /></label>
+
+      <div className="cmd-model-options" key={tool + '/' + (provider || '')}>
+        {!provider ? visibleProviders.map(entry => {
+          const selected = entry.models.some(({ group, model }) => state.current?.provider === group.id && state.current?.model === model.id);
+          return <button type="button" key={entry.id} disabled={busy || catalogLoading || !catalog || !!catalogError || !entry.models.length} className={'cmd-model-provider' + (selected ? ' is-selected' : '')} onClick={() => { setProvider(entry.id); setQuery(''); }}><span className="cmd-model-provider-mark"><ProviderBrandIcon id={entry.id} name={entry.name} declared={entry.declared} size={22} /></span><span className="cmd-model-provider-copy"><span>{isRouterGo(entry.id) ? routerGo.name : entry.name}</span><small>{isRouterGo(entry.id) && (!entry.models.length || catalogError || loading) ? routerReason : entry.reason || entry.models.length + ' 个模型'}</small></span><UIIcon name="chevronLeft" className="cmd-model-next" size={15} /></button>;
+        }) : models.map(({ group, model, nativeModelId }) => {
+          const selected = state.current?.provider === group.id && state.current?.model === model.id;
+          const pinned = isPinned(group, model);
+          return <div key={group.id + '/' + model.id} className={'cmd-model-choice' + (selected ? ' is-selected' : '')}><button type="button" role="menuitemradio" aria-checked={selected} disabled={busy || catalogLoading || !catalog || !!catalogError || !modules.harness && tool !== 'deepseek'} className={selected ? 'is-selected' : ''} onClick={() => void choose(group, model)}><span>{model.name}{nativeModelId && nativeModelId !== model.name && <small>{nativeModelId}</small>}</span>{selected && <UIIcon name="check" size={16} />}</button><button type="button" className={'cmd-model-pin' + (pinned ? ' is-pinned' : '')} aria-label={pinned ? '取消置顶模型' : '置顶模型'} aria-pressed={pinned} onClick={event => toggleModelPin(group, model, event)}>{pinned ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}</button></div>;
+        })}
+        {!(provider ? models : visibleProviders.filter(entry => entry.models.length)).length && <p role="status">{loading ? '正在加载…' : query ? '没有匹配结果' : provider ? '此供应商暂无兼容模型' : tool === 'deepseek' ? '请先在模型设置中添加供应商' : '没有兼容的 API 组合，请检查供应商协议与模型目录'}</p>}
+      </div>
+      </div>
+      {effortModel && <section className="cmd-model-current-card" aria-label="当前模型与推理强度">
+        <div className="cmd-model-current-title">
+          <span>当前模型</span>
+          <strong><em>{effortModel.providerName}</em><i>/</i><b>{effortModel.model.name}</b></strong>
+        </div>
+        {effortOptions.length > 0 && <ModelEffortSlider key={JSON.stringify([effortModel.group.id, effortModel.model.id])} options={effortOptions} value={effectiveEffortId} disabled={sliderDisabled} onCommit={commitEffortIndex} />}
+      </section>}
+      {sessionBinding?.bound && startNewSession && <footer className="cmd-model-footer"><button type="button" disabled={busy || creatingSession} onClick={() => void createNewSession()}>{creatingSession ? '正在新建会话…' : '新建会话切换 Harness 或供应商'}</button></footer>}
+      {message && <footer className="cmd-model-footer"><span role="alert">{message}</span><button type="button" onClick={refresh} disabled={busy || loading}>重试</button></footer>}
+    </div>, document.body)}
+  </>;
+}

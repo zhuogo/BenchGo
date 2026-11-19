@@ -90,6 +90,11 @@ test('ordinary source pages and unsafe destinations remain unchanged', () => {
 test('gallery URL validation and grouping retain their existing safety boundary', () => {
   for (const url of ['javascript:alert(1)', 'data:image/svg+xml;base64,abc', 'file:///E:/image.png', 'E:/image.png', '//example.test/a.png', '/\\example.test/a.png', 'https://user:secret@example.test/a.png', ' https://example.test/a.png']) assert.equal(safeImageUrl(url), null, url);
   assert.equal(galleryImages([{ url: 'javascript:alert(1)' }, { url: '/api/assistant/image/1', name: 'image.png' }]).length, 1);
+  const objectUrl = 'blob:https://benchgo.test/image-id';
+  assert.equal(safeImageUrl(objectUrl), null);
+  assert.equal(safeImageUrl(objectUrl, new URL('https://other.test/')), null);
+  assert.equal(safeImageUrl(objectUrl, new URL('https://benchgo.test/session')), objectUrl);
+  assert.equal(safeImageUrl('blob:null/image-id', new URL('dsh-app://app/')), 'blob:null/image-id');
   const groups = groupReplyImages([{ url: '/a.png', groupId: 'turn:1' }, { url: '/b.png', groupId: 'turn:2' }, { url: '/c.png', groupId: 'turn:1' }, { url: '/d.png' }]);
   assert.deepEqual(groups.map(group => group.images.map(image => image.url)), [['/a.png', '/c.png'], ['/b.png'], ['/d.png']]);
 });

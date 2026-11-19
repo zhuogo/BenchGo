@@ -11,7 +11,7 @@ import { initializeWatchdogProfile, watchdogLaunchSpec, watchdogProfileStatus, s
   WATCHDOG_PROFILE } from '../../../scripts/watchdog/profile.mjs';
 
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
-const { parse: parseYaml } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('yaml');
+const { parse: parseYaml } = createRequire(new URL('../../base/package.json', import.meta.url))('yaml');
 const secret = 'watchdog-fixture-' + '9'.repeat(48);
 
 async function fixture(t, config) {

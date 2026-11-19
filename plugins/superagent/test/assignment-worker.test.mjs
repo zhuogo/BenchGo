@@ -167,7 +167,7 @@ test('a persisted remote handoff releases its slot without committing or finishi
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'paired-B', config: { harness: 'official', models: [{ providerId: 'opaque', modelId: 'opaque/model' }] } };
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'paired-B', protocolVersion: 2, config: { harness: 'official', models: [{ providerId: 'opaque', modelId: 'opaque/model' }] } };
   const remote = database.createTask({ threadId: 'thread', target: 'remote work', mandate: { execution } });
   database.createAssignment(remote.id, { id: 'remote-assignment', executor: 'remote', execution });
   let commits = 0, submissions = 0;

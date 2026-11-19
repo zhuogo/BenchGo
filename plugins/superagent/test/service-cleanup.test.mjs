@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cleanupAssistant } from '../src/service-cleanup.mjs';
-import { DataOwner } from '../../benchgo/shared/data-owner.mjs';
+import { DataOwner } from '../../base/shared/data-owner.mjs';
 import { mountAssistant } from '../src/service.mjs';
 
 async function owned(t) {

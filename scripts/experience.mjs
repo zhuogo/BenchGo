@@ -18,9 +18,9 @@ writeFileSync(hmrPatch, [
   '  config:',
   `    base: ${JSON.stringify(pathToFileURL(root).href)}`,
   '    root:',
-  '      - plugins/benchgo/src',
-  '      - plugins/benchgo/shared',
-  '      - plugins/benchgo/lib',
+  '      - plugins/base/src',
+  '      - plugins/base/shared',
+  '      - plugins/base/lib',
   '    debounce: 300',
   '',
 ].join('\n'), { mode: 0o600 })

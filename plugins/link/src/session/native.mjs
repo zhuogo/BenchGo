@@ -1,19 +1,20 @@
-import { askNativeQuestion } from '../../../benchgo/src/questions.mjs';
+import { askNativeQuestion } from '../../../base/src/questions.mjs';
 import { validateAnswer } from './adapter.mjs';
 import { text } from '../pairing/store.mjs';
 
-/** Direct coding sessions retain their runtime ownership and approval handling. */
+/** Detached delegated sessions retain runtime ownership and approval handling. */
 export function createNativeAdapter(ctx) {
   const requireCommander = () => {
     const commander = ctx.get('commander');
     if (!commander) throw Object.assign(new Error('Harness 聚合模块不可用，请在 BenchGo 插件中启用'), { status: 503 });
     return commander;
   };
-  const candidate = session => session?.ownerSessionId?.startsWith('commander-web:') && !session.archived;
+  const detached = session => session?.ownerSessionId?.startsWith('commander-web:detached:');
+  const candidate = session => detached(session) && !session.archived;
   const visible = session => candidate(session) && ctx.workspaceRegistry.list().some(p => p.id === session.projectId && p.path === session.cwd);
   const wire = (s, pinned) => ({ id: `native:${s.id}`, native: true, projectId: s.projectId, title: s.title || s.provider, running: ['running', 'waiting', 'connecting'].includes(s.status), updatedAt: s.updatedAt, engine: s.provider, provider: s.provider, ...(s.model === undefined ? {} : { model: s.model }), status: s.status, ...(s.archived ? { archived: true } : {}), ...(pinned?.has(s.id) ? { pinned: true } : {}) });
   const list = (availableProjects, { includeArchived = false } = {}) => {
-    const sessions = ctx.get('commander')?.list().filter(session => includeArchived ? session?.ownerSessionId?.startsWith('commander-web:') : candidate(session)) ?? [];
+    const sessions = ctx.get('commander')?.list().filter(session => detached(session) && (includeArchived || !session.archived)) ?? [];
     if (!sessions.length) return [];
     const pathsByProject = new Map();
     for (const project of availableProjects ?? ctx.workspaceRegistry.list()) {
@@ -72,7 +73,7 @@ export function createNativeAdapter(ctx) {
     const raw = id.slice('native:'.length);
     const hidden = new Set(await ctx.get?.('assistant')?.sidebarPrivateSessionIds?.() || []);
     const session = requireCommander().list().find(row => row.id === raw), scope = session ?? (allowDeleted ? prior : undefined);
-    if (!scope || hidden.has(raw) || hidden.has(id) || hidden.has(scope.ownerSessionId) || !scope.ownerSessionId?.startsWith('commander-web:') || !ctx.workspaceRegistry.list().some(project => project.id === scope.projectId && project.path === (scope.cwd ?? scope.path))) throw Object.assign(new Error('会话不属于可用的直接工作区'), { status: 404, code: 'NOT_FOUND' });
+    if (!detached(scope) || hidden.has(raw) || hidden.has(id) || hidden.has(scope.ownerSessionId) || !ctx.workspaceRegistry.list().some(project => project.id === scope.projectId && project.path === (scope.cwd ?? scope.path))) throw Object.assign(new Error('会话不属于可用的直接工作区'), { status: 404, code: 'NOT_FOUND' });
     if (prior && (scope.projectId !== prior.projectId || (scope.cwd ?? scope.path) !== prior.path || scope.ownerSessionId !== prior.ownerSessionId)) throw Object.assign(new Error('会话归属已变化'), { status: 409, code: 'SESSION_SCOPE_CHANGED' });
     return { projectId: scope.projectId, path: scope.cwd ?? scope.path, ownerSessionId: scope.ownerSessionId };
   };

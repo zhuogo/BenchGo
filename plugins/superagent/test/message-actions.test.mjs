@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 
-const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const code = transformSync(readFileSync(new URL('../client/message-actions.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 function render({ panel = '', saved = null, agentReaction = null, role = 'assistant', usage, clipboard = async () => true } = {}) {
   let index = 0;

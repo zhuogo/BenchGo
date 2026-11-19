@@ -5,11 +5,11 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 async function fixture() {
@@ -38,7 +38,7 @@ async function fixture() {
     function App(){const execution=useSyncExternalStore(nav.subscribe,nav.getSnapshot);return<div className='ba-root' style={{height:720,maxWidth:960,margin:'auto'}}><style>{css}</style><main className='ba-main'><div hidden={!!execution} data-main><textarea aria-label='主聊草稿' defaultValue='未发送的主聊草稿'/><p>原主聊仍保留</p></div>{execution&&<ExecutionSessionPanel ctx={ctx} execution={execution} api={api} SessionProvider={SessionProvider} renderSlot={()=><RenderOfficial/>} onClose={()=>nav.close()} onOpenTask={id=>{window.task=id;nav.close()}}/>}</main></div>}
     const root=createRoot(document.getElementById('root'));window.renderScenario=mode=>{scenario=mode;nav.select(entries[0]);root.render(<App key={mode}/>)};
   ` },bundle:true,write:false,outdir:join(root,'artifacts/unused-execution-ui-test'),format:'iife',jsx:'automatic',
-    nodePaths:[join(root,'plugins/benchgo/node_modules'),join(root,'deepseek-harness/apps/web/node_modules')],
+    nodePaths:[join(root,'plugins/base/node_modules'),join(root,'deepseek-harness/apps/web/node_modules')],
     alias:{react:dirname(require.resolve('react/package.json')),'react-dom':dirname(require.resolve('react-dom/package.json')),'@deepseek-ai/dsh-client-ui-primitives':join(root,'deepseek-harness/packages/client/ui-primitives/src/index.ts'),'@deepseek-ai/dsh-util-workspace-path':join(root,'deepseek-harness/packages/util/workspace-path/src/index.ts')},
     loader:{'.css':'text','.module.css':'local-css','.svg':'text','.woff2':'dataurl','.woff':'dataurl','.ttf':'dataurl','.png':'dataurl'},plugins:[{name:'isolated-conversation-surface',setup(build){build.onLoad({filter:/session-surface\.jsx$/},()=>({contents:'export const WORKBENCH_SESSION_CORNER = "benchgo.workbench.session.corner"; export const workbenchSessionSurfaceChildren = {}; export function activateWorkbenchSessionSurface() { return () => {}; }',loader:'js'}));}},sharedUiStyles()],define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent'});
   const script=bundle.outputFiles.find(file=>file.path.endsWith('.js')).text,styles=bundle.outputFiles.filter(file=>file.path.endsWith('.css')).map(file=>file.text).join('\n');

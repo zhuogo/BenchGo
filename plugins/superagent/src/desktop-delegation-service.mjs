@@ -4,6 +4,7 @@ import { assertSpecificTaskDescription, normalizeTaskTitle } from './task-title.
 import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
 import { readQuestionReply } from './question-reply.mjs';
 import { readRemoteExecutionCatalog, selectRemoteExecution } from './execution-catalog.mjs';
+import { assertExternalWorkerModel, assertExternalWorkerTask } from './external-worker.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex');
@@ -75,11 +76,7 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       exec.signal?.throwIfAborted();
       const original = (message.content || []).filter(block => block.type === 'text').map(block => block.text || '').join('\n');
       if (!original.trim()) throw new Error('桌面委派缺少原始用户文字指令');
-      // The original requirements remain an authoritative part of the task
-      // contract even when a model supplies only an abbreviated criterion.
-      // Missing criteria preserve the literal owner request, never invent a
-      // generic file/checkpoint requirement during later review.
-      const taskAcceptance = acceptance.trim() || original.trim();
+      const taskAcceptance = acceptance.trim();
       const policy = structuredClone(await readPolicy());
       const remote = deviceId !== 'local' ? selectRemoteExecution(await readRemoteExecutionCatalog(ctx, deviceId, exec.signal), input) : undefined;
       const project = remote ? remote.project : projectId === undefined ? undefined : policy.projects.find(item => item.id === projectId);
@@ -87,7 +84,10 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       // Router owns the delegation decision; the host binds its real source.
       const { trigger } = database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, source.messageId])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
       const selectedModel = remote ? remote.model : configuredWorkModel(policy);
-      if (!remote) {
+      if (!remote && selectedModel.harness && selectedModel.harness !== 'official') {
+        assertExternalWorkerTask({ target, acceptance: taskAcceptance });
+        await assertExternalWorkerModel(ctx, selectedModel, exec.signal);
+      } else if (!remote) {
         const { providerId, modelId } = selectedModel;
         const info = await ctx.llm.resolveModelInfo(providerId, modelId, exec.signal);
         if (info?.id !== modelId || info?.provider !== providerId) throw new Error('模型解析改变了显式标识，无法委派');
@@ -105,7 +105,7 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       if (current.desktopVersion !== policy.desktopVersion || (!remote && project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('安排任务期间项目或授权规则已变化，请重试');
       if (!remote && digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('安排任务期间工作角色模型已变化，请重试');
       const task = database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, duplicateOfTaskId, model: selectedModel, mandate: {
-        actorId: 'desktop-owner', source, instruction: original, policyVersion: policy.desktopVersion,
+        actorId: 'desktop-owner', source, triggerId: trigger.id, instruction: original, policyVersion: policy.desktopVersion,
         target, acceptance: taskAcceptance,
         admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval',
         ...(project ? { project: remote ? project : { id: project.id, path: project.path } } : {}),

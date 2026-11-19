@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { connectDeviceNavigation, deviceLauncherMode, workbenchNavigationMessage } from '../client/device-navigation.mjs';
-import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
+import { readJsonResponse } from '../../base/client/http-response.mjs';
 import { observeHostTheme, readHostTheme } from '../client/device-theme.mjs';
 
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -21,15 +21,17 @@ function fixture(options = {}) {
   const slots = [], effects = [], requests = [], selected = [];
   const host = Object.assign(eventHost(), { location: new URL(options.url || 'http://localhost:8000/'), ...options.globals });
   host.parent = host;
+  const document = Object.assign(eventHost(), { baseURI: host.location.href, body: {}, documentElement: { hasAttribute: name => options.desktop === true && name === 'data-windows-titlebar' }, dispatchEvent: event => selected.push(event) });
   const react = {
     createElement(type, props, ...children) { return { type, props: props || {}, children: children.flat(Infinity).filter(item => item !== false && item != null) }; },
     useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial; return [slots[i], value => { const next = typeof value === 'function' ? value(slots[i]) : value; if (!Object.is(next, slots[i])) { slots[i] = next; dirty = true; } }]; },
     useRef(initial) { const i = cursor++; return slots[i] ??= { current: initial }; },
+    useCallback(fn, deps) { const i = cursor++, old = slots[i]; if (!old || deps.some((value, j) => !Object.is(value, old.deps[j]))) slots[i] = { fn, deps }; return slots[i].fn; },
     useEffect(fn, deps) { const i = cursor++, old = slots[i]; if (!old || !deps || deps.some((value, j) => !Object.is(value, old.deps[j]))) { slots[i] = { deps, cleanup: old?.cleanup }; effects.push(() => { slots[i].cleanup?.(); slots[i].cleanup = fn(); }); } },
   };
   const module = { exports: {} };
-  runInNewContext(code, { module, exports: module.exports, globalThis: host, window: host, location: host.location, URL,
-    document: { baseURI: host.location.href, body: {}, documentElement: { hasAttribute: name => options.desktop === true && name === 'data-windows-titlebar' }, dispatchEvent: event => selected.push(event) }, CustomEvent,
+  runInNewContext(code, { module, exports: module.exports, globalThis: host, window: host, location: host.location, URL, URLSearchParams,
+    document, CustomEvent,
     fetch: async (url, input) => { requests.push({ url: String(url), input }); return options.response?.() || Response.json({ url: 'http://127.0.0.1:9000/enter?ticket=one' }); },
     require: id => id === 'react' ? react : id === 'react-dom' ? { createPortal: child => child } : id.includes('device-navigation') ? { connectDeviceNavigation: args => connectDeviceNavigation({ ...args, host }), deviceLauncherMode: () => deviceLauncherMode(host) } : id.includes('device-theme') ? { observeHostTheme: listener => observeHostTheme(listener, host), readHostTheme: () => readHostTheme(host) } : id.includes('http-response') ? { readJsonResponse } : {},
   });
@@ -38,7 +40,7 @@ function fixture(options = {}) {
     for (const node of nodes(tree)) if (node.props.ref && !node.props.ref.current) node.props.ref.current = node.type === 'dialog' ? { open: false, showModal() { this.open = true; }, close() { this.open = false; } } : { contentWindow: eventHost() };
     for (const effect of effects.splice(0)) effect();
   };
-  return { host, requests, selected, get tree() { return tree; }, nodes: () => nodes(tree), async settle() { for (let i = 0; i < 8; i++) { if (dirty) render(); await new Promise(resolve => setImmediate(resolve)); } }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
+  return { host, document, requests, selected, get tree() { return tree; }, nodes: () => nodes(tree), async settle() { for (let i = 0; i < 8; i++) { if (dirty) render(); await new Promise(resolve => setImmediate(resolve)); } }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
 }
 
 test('owner capabilities distinguish Desktop, local browser, cloud and paired transports', () => {
@@ -85,7 +87,7 @@ test('desktop centre selection closes its dialog and forwards only its mounted e
   const view = fixture({ desktop: true }); await view.settle();
   await view.nodes().find(node => node.props['aria-label'] === '设备中心').props.onClick(); await view.settle();
   const frame = view.nodes().find(node => node.type === 'iframe');
-  assert.equal(new URL(frame.props.src).searchParams.get('reuseWorkbench'), '1');
+  assert.equal(new URLSearchParams(new URL(frame.props.src).hash.slice(1)).get('reuseWorkbench'), '1');
   const source = frame.props.ref.current.contentWindow, origin = new URL(frame.props.src).origin;
   const data = { type: 'dsh-devices:select', deviceId: 'server/opaque-id' };
   view.host.emit('message', { source: {}, origin, data });
@@ -95,6 +97,23 @@ test('desktop centre selection closes its dialog and forwards only its mounted e
   assert.equal(view.selected.length, 1); assert.equal(view.selected[0].type, 'benchgo:device-select');
   assert.equal(view.selected[0].detail.deviceId, 'server/opaque-id');
   assert.equal(view.nodes().find(node => node.type === 'dialog').props.ref.current.open, false);
+  view.unmount();
+});
+
+test('the Windows center opens for SSH authentication and sends the saved id when its frame is ready', async () => {
+  const view = fixture({ desktop: true }); await view.settle();
+  view.document.emit('benchgo:device-ssh-auth', { detail: { deviceId: 'ssh-server' } }); await view.settle();
+  const frame = view.nodes().find(node => node.type === 'iframe');
+  const source = frame.props.ref.current.contentWindow, origin = new URL(frame.props.src).origin;
+  assert.equal(view.nodes().find(node => node.type === 'dialog').props.ref.current.open, true);
+  const data = { type: 'dsh-devices:actions-ready' };
+  const reconnects = () => source.sent.filter(item => item.data.type === 'dsh-devices:reconnect');
+  view.host.emit('message', { source, origin: 'https://evil.test', data }); await view.settle();
+  assert.equal(reconnects().length, 0);
+  view.host.emit('message', { source, origin, data }); await view.settle();
+  assert.equal(reconnects().length, 1);
+  assert.equal(reconnects()[0].data.deviceId, 'ssh-server');
+  assert.equal(reconnects()[0].origin, origin);
   view.unmount();
 });
 

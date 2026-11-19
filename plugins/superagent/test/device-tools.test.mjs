@@ -8,7 +8,7 @@ function fixture() {
   const calls = [], events = [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'human', source: { kind: 'user' }, content: [{ type: 'text', text: '查看服务器连接状态' }] } }];
   const ownerAgent = { id: 'A-router', status: 'running', session: { header: {}, snapshotEvents: () => events } };
   const model = { providerId: 'opaque/P', modelId: 'opaque:M', params: { maxTokens: 4096, temperature: 0.5 } };
-  const catalog = { version: 1, available: true, hostId: 'sha256:B', models: [model], projects: [] };
+  const catalog = { version: 2, available: true, hostId: 'sha256:B', models: [{ harness: 'official', ...model }], projects: [] };
   const link = { devices: async () => ({ devices: [{ id: 'B', hostId: 'sha256:B', authorizationId: 'paired-A' }] }),
     resources: async input => ({ input }), callDevice: async input => { calls.push(input); return catalog; },
     deviceAction: async input => { calls.push(input); return { accepted: true }; } };
@@ -35,7 +35,7 @@ test('device management retains the real human binding, stable identity and fini
 
 test('execution catalog binds the saved target identity and preserves opaque configuration', async () => {
   const f = fixture(), catalog = await readRemoteExecutionCatalog(f.ctx, 'B');
-  assert.deepEqual(f.calls[0].input, { action: 'execution', version: 1, operation: 'catalog' });
+  assert.deepEqual(f.calls[0].input, { action: 'execution', version: 2, operation: 'catalog' });
   assert.equal(catalog.deviceId, 'B');
   const result = selectRemoteExecution(catalog, { executionConfig: { harness: 'official', models: [{ ...f.model, params: { temperature: 0.5, maxTokens: 4096 } }] } });
   assert.equal(result.execution.authorizationId, 'paired-A');

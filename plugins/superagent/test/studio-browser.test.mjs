@@ -5,7 +5,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
@@ -14,19 +14,24 @@ const checkout = join(root, 'deepseek-harness');
 const official = existsSync(join(checkout, 'packages/api/gateway/lib/client.node.js')) ? checkout : dirname(realpathSync(join(checkout, 'node_modules')));
 const requireOfficial = createRequire(join(official, 'packages/api/gateway/package.json'));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 async function fixture() {
   const bundle = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
     import React,{useState} from 'react';import {createRoot} from 'react-dom/client';
     import {Studio} from './plugins/superagent/client/index.jsx';
+    import {petDesignIntent} from './plugins/superagent/client/pet-state.mjs';
+    import {assistantModelCatalog} from './plugins/base/client/model-catalog.mjs';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
-    import css from './plugins/superagent/client/style.css';import documentCss from './plugins/superagent/client/documents.css';import hostCss from './plugins/benchgo/client/style.css';
+    import css from './plugins/superagent/client/style.css';import documentCss from './plugins/superagent/client/documents.css';import hostCss from './plugins/base/client/style.css';
     import tokens from './deepseek-harness/packages/client/ui-theme/src/styles/design-platform.css';import themeBase from './deepseek-harness/packages/client/ui-theme/src/styles/base.css';
     const initial={revision:1,name:'BenchGo',models:[{providerId:'Provider:Exact',modelId:'Model:First/1'}],workerModels:[],auxiliary:{models:[],capabilities:[]},image:{modelId:'Image:Keep/1'}};
     const memories=Array.from({length:30},(_,index)=>({id:'memory-'+index,content:'协作记录 '+(index+1)+'：保留简洁的操作路径与真实状态。',revision:1,document:'MEMORY.md',updatedAt:'2026-11-08T08:00:00Z'}));
     window.config=initial;
+    window.designNavigation=[];
+    document.addEventListener('benchgo:assistant-thread', event => { window.designNavigation.push({threadId:event.detail, intent:petDesignIntent.getSnapshot()}); });
+    window.invalidateAssistantCatalog=assistantModelCatalog.invalidate;
     installIconSprite({effect:effect=>effect(),on(){}},undefined);
     function App(){
       const [snapshot,setSnapshot]=useState({config:initial,memories});
@@ -37,7 +42,7 @@ async function fixture() {
     }
     createRoot(document.getElementById('root')).render(<App/>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-studio-ui-test'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'),
       '@deepseek-ai/dsh-api-gateway/client': requireOfficial.resolve('@deepseek-ai/dsh-api-gateway/client') },
@@ -52,6 +57,7 @@ async function fixture() {
         export {MarkdownText} from './deepseek-harness/packages/client/ui-primitives/src/markdown/MarkdownText.tsx';
         export {writeClipboard} from './deepseek-harness/packages/client/ui-primitives/src/clipboard.ts';
         export * from './deepseek-harness/packages/client/ui-primitives/src/icons/index.tsx';
+        export {LinkIconRegular} from './deepseek-harness/packages/client/ui-primitives/src/LinkIcon.tsx';
       ` }));
     } }, { name: 'studio-test-export', setup(build) {
       build.onLoad({ filter: /superagent[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => ({ contents: `${await readFile(path, 'utf8')}\nexport { Studio };`, loader: 'jsx', resolveDir: dirname(path) }));
@@ -67,11 +73,11 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
   if (screenshots) await mkdir(screenshots, { recursive: true });
   const file = { id: 'note.md', name: 'note.md', path: 'note.md', type: 'file', url: '/api/files/note.md', bytes: 64, hash: 'one', updatedAt: '2026-11-08T08:00:00Z' };
   try {
-    const html = await fixture(), markdown = await readFile(join(root, 'plugins/benchgo/lib/preview/markdown.js'), 'utf8');
+    const html = await fixture(), markdown = await readFile(join(root, 'plugins/base/lib/preview/markdown.js'), 'utf8');
     for (const width of [1440, 390]) {
       const page = await browser.newPage({ viewport: { width, height: 960 } }), errors = [], calls = [];
       page.setDefaultTimeout(7000); page.on('pageerror', error => errors.push(error.message));
-      let saveFailures = 1;
+      let saveFailures = 1, toolCatalogReads = 0;
       let config = { revision: 1, name: 'BenchGo', models: [{ providerId: 'Provider:Exact', modelId: 'Model:First/1' }], workerModels: [], auxiliary: { models: [], capabilities: [] }, image: { modelId: 'Image:Keep/1' } };
       await page.route('**/*', async route => {
         const url = route.request().url();
@@ -79,6 +85,16 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
         if (url.endsWith('/api/benchgo/preview-assets/markdown.js')) return route.fulfill({ contentType: 'application/javascript', body: markdown });
         if (url.endsWith('/api/files/note.md')) return route.fulfill({ contentType: 'text/markdown; charset=utf-8', body: '# 清晰的文件预览\n\n只保留正文和必要操作。' });
         if (url.endsWith('/api/benchgo/vault')) return route.fulfill({ json: { entries: [] } });
+        if (url.endsWith('/api/commander/tooling')) {
+          assert.deepEqual(route.request().postDataJSON(), { action: 'pickerCatalog' });
+          if (++toolCatalogReads === 1) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+            return route.fulfill({ status: 503, json: { error: '目录暂时不可用' } });
+          }
+          return route.fulfill({ json: { tools: [{ id: 'codex' }, { id: 'claude', routeReason: 'Claude Code 尚无 API 模型' }],
+            providers: [{ id: 'Provider:API', name: '共享供应商' }],
+            routes: [{ tool: 'codex', providerId: 'Provider:API', nativeModelId: 'Exact:Native/1', name: '共享模型' }] } });
+        }
         if (url.endsWith('/api/commander/assistant')) {
           const input = route.request().postDataJSON(); calls.push(input);
           if (input.action === 'catalog') return route.fulfill({ json: { providers: [{ id: 'Provider:Exact', name: '精确供应商', available: true }], models: [{ id: 'Model:First/1', name: '首个模型', provider: 'Provider:Exact' }, { id: 'Model:Second/2', name: '第二模型', provider: 'Provider:Exact' }] } });
@@ -136,6 +152,8 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
       const auxiliaryToggle = page.getByRole('button', { name: /^辅助模型/ });
       assert.equal(await workerToggle.getAttribute('aria-expanded'), 'false');
       assert.equal(await auxiliaryToggle.getAttribute('aria-expanded'), 'false');
+      assert.match(await workerToggle.innerText(), /跟随身份模型 Router/);
+      assert.match(await auxiliaryToggle.innerText(), /跟随身份模型 Router/);
       assert.equal(await page.getByRole('button', { name: '保存更改', exact: true }).count(), 0, 'a clean page has no save bar');
       await checkLayout('models-default');
       await page.getByRole('button', { name: '模型', exact: true }).last().click();
@@ -179,6 +197,33 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
       assert.deepEqual(saved.patch, { models: [{ providerId: 'Provider:Exact', modelId: 'Model:Second/2' }] });
       assert.equal(config.name, 'BenchGo'); assert.deepEqual(config.image, { modelId: 'Image:Keep/1' });
       assert.equal(calls.filter(call => call.action === 'config').length, 2);
+      const router = page.getByRole('region', { name: '身份模型 Router 配置', exact: true });
+      assert.equal(await router.getByRole('button', { name: '执行 Harness', exact: true }).count(), 0);
+      if (await workerToggle.getAttribute('aria-expanded') === 'false') await workerToggle.click();
+      await worker.getByRole('button', { name: '配置工作模型', exact: true }).click();
+      const selectHarness = async name => {
+        await worker.getByRole('button', { name: '执行 Harness', exact: true }).click();
+        await page.getByRole('option', { name, exact: true }).click();
+      };
+      await selectHarness('Codex');
+      await worker.getByText('正在读取模型目录').waitFor();
+      await worker.getByRole('alert').filter({ hasText: '目录暂时不可用' }).waitFor();
+      await checkLayout('worker-catalog-error');
+      await worker.getByRole('button', { name: '重试', exact: true }).click();
+      await selectHarness('Claude Code');
+      await worker.getByText('Claude Code 尚无 API 模型', { exact: true }).waitFor();
+      await checkLayout('worker-catalog-empty');
+      await selectHarness('Codex');
+      await worker.getByRole('button', { name: '供应商', exact: true }).click();
+      await page.getByRole('option', { name: '共享供应商', exact: true }).click();
+      await worker.getByRole('button', { name: '模型', exact: true }).click();
+      await page.getByRole('option', { name: '共享模型', exact: true }).click();
+      await checkLayout('worker-catalog-ready');
+      await page.getByRole('button', { name: '保存更改', exact: true }).click();
+      await page.getByText('已保存', { exact: true }).waitFor();
+      assert.deepEqual(calls.filter(call => call.action === 'config').at(-1).patch, {
+        workerHarness: 'codex', workerModels: [{ providerId: 'Provider:API', modelId: 'Exact:Native/1' }],
+      });
       await choose('身份');
       assert.equal(await page.getByPlaceholder('未命名（可选）').inputValue(), '保留身份草稿');
       await choose('记忆');
@@ -222,6 +267,186 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
   } finally { await browser.close(); }
 });
 
+test('identity page shows a single responsive editor and preserves the identity draft while applying an appearance', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  const screenshots = process.env.BENCHGO_STUDIO_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    const html = await fixture();
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      let config = { revision: 1, name: '', pet: null, cardHtml: '<b>旧侧栏名片</b>' }, draft = null, reads = 0, exportFails = true;
+      const archive = Buffer.from('UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==', 'base64');
+      const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jNV0AAAAASUVORK5CYII=', 'base64');
+      const custom = { kind: 'custom', assetId: '12345678-1234-1234-1234-123456789012.png', expressions: {}, appearance: { name: '单张图片形象' } };
+      const pack = { kind: 'builtin', assetId: 'builtin', expression: 'standard', palette: 'default', decorations: [], appearance: { version: 1, name: '旅行形象', bindings: { focus: 'happy' } } };
+      await page.route('**/*', async route => {
+        if (route.request().url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
+        if (route.request().url().includes('/api/commander/assistant/pet-asset?')) return route.fulfill({ contentType: 'image/png', body: png });
+        if (!route.request().url().endsWith('/api/commander/assistant')) return route.abort();
+        const input = route.request().postDataJSON();
+        if (input.action === 'petCatalog') {
+          if (++reads === 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            return route.fulfill({ status: 503, json: { error: '测试目录暂不可用' } });
+          }
+          return route.fulfill({ json: { expressions: [], palettes: [{ id: 'default', label: '默认配色' }], decorations: [], draft } });
+        }
+        if (input.action === 'petUploadPackage') {
+          if (input.base64 === 'YmFk') return route.fulfill({ status: 400, json: { error: '形象包格式无效' } });
+          draft = { draftId: 'verified-draft', pet: pack, ...(input.base64 === 'YWk=' ? { source: 'ai' } : {}) };
+          return route.fulfill({ json: draft });
+        }
+        if (input.action === 'petExportPackage') {
+          assert.deepEqual(input, { action: 'petExportPackage' });
+          assert.equal(draft.draftId, 'verified-draft');
+          assert.equal(config.pet, null);
+          if (exportFails) { exportFails = false; return route.fulfill({ status: 503, json: { error: '形象包暂时无法导出' } }); }
+          return route.fulfill({ json: { filename: '当前形象.zip', base64: archive.toString('base64') } });
+        }
+        if (input.action === 'petUpload') {
+          assert.equal(input.dataUrl, `data:image/png;base64,${png.toString('base64')}`);
+          assert.equal(input.expression, config.pet?.kind === 'custom' ? 'wink' : undefined);
+          draft = { draftId: 'image-draft', pet: custom };
+          return route.fulfill({ json: draft });
+        }
+        if (input.action === 'petApply') {
+          assert.equal(input.draftId, draft.draftId);
+          config = { ...config, pet: draft.pet, revision: config.revision + 1 }; draft = null;
+          await page.evaluate(value => window.acceptConfig(value), config);
+          return route.fulfill({ json: config });
+        }
+        if (input.action === 'petDiscard') { assert.equal(input.draftId, draft.draftId); draft = null; return route.fulfill({ json: {} }); }
+        if (input.action === 'config') {
+          assert.deepEqual(input.patch, { name: '未保存的名字' });
+          if (input.revision !== config.revision) return route.fulfill({ status: 409, json: { error: '配置已更新' } });
+          config = { ...config, ...input.patch, revision: config.revision + 1 };
+          await page.evaluate(value => window.acceptConfig(value), config);
+          return route.fulfill({ json: config });
+        }
+        if (input.action === 'state') return route.fulfill({ json: { config } });
+        return route.fulfill({ json: {} });
+      });
+      await page.goto('http://localhost/');
+      const saveScreenshot = async state => { if (screenshots) await page.screenshot({ path: join(screenshots, `identity-${width}-${state}.png`) }); };
+      await page.evaluate(value => window.acceptConfig(value), config);
+      const tabs = page.getByRole('tablist', { name: '形象资产分类' });
+      const ai = page.getByRole('button', { name: '生成', exact: true });
+      assert.match(await ai.locator('use').getAttribute('href'), /sparkle/);
+      const importButton = page.getByRole('button', { name: '导入', exact: true });
+      const exportButton = page.getByRole('button', { name: '导出', exact: true });
+      const library = tabs.getByRole('tab', { name: '素材库' });
+      const actions = tabs.getByRole('tab', { name: '工作动作' });
+      const panel = page.locator('.ba-pet-asset-panel');
+      const orientation = width > 760 ? 'vertical' : 'horizontal';
+      const bell = page.getByRole('button', { name: '回复提示音' });
+      assert.equal(await bell.getAttribute('aria-pressed'), 'true');
+      assert(await bell.evaluate(button => button.parentElement.contains(button.closest('.ba-studio-heading-row')?.querySelector('h1'))));
+      await bell.press('Enter');
+      assert.equal(await bell.getAttribute('aria-pressed'), 'false');
+      await bell.press('Space');
+      assert.equal(await bell.getAttribute('aria-pressed'), 'true');
+      assert.equal(await tabs.getAttribute('aria-orientation'), orientation);
+      assert.equal(await tabs.getByRole('tab').count(), 2);
+      assert.equal(await library.getAttribute('aria-selected'), 'true');
+      await page.getByText('正在读取形象资产', { exact: true }).waitFor();
+      await saveScreenshot('loading');
+      await page.getByText('测试目录暂不可用').waitFor(); await saveScreenshot('error');
+      await library.focus(); await library.press(width > 760 ? 'ArrowDown' : 'ArrowRight');
+      assert.equal(await actions.getAttribute('aria-selected'), 'true');
+      assert.equal(await actions.evaluate(element => element === document.activeElement), true);
+      await actions.press('Home'); assert.equal(await library.getAttribute('aria-selected'), 'true');
+      await ai.click();
+      await page.waitForFunction(() => window.designNavigation.some(({threadId, intent}) => threadId === 'main' && intent?.kind === 'design'));
+      await page.getByRole('button', { name: '重试', exact: true }).click();
+      await page.getByText('暂无素材').waitFor(); await saveScreenshot('empty');
+      await page.getByRole('tab', { name: '配色' }).click();
+      await page.getByRole('button', { name: '默认配色' }).waitFor();
+      await saveScreenshot('light-library');
+      await actions.click(); await library.click();
+      assert.equal(await page.getByRole('tab', { name: '配色' }).getAttribute('aria-selected'), 'true');
+      await page.getByRole('tab', { name: '表情' }).click();
+      await page.getByRole('button', { name: '前往导入' }).click();
+      const zipOption = page.getByRole('menuitem', { name: '选择 ZIP 形象包' });
+      await zipOption.waitFor();
+      await page.waitForFunction(() => document.activeElement?.textContent === '选择 ZIP 形象包');
+      await page.keyboard.press('Escape');
+      assert.equal(await importButton.evaluate(element => element === document.activeElement), true);
+      const name = page.getByRole('textbox', { name: '名字' });
+      await name.fill('未保存的名字');
+      assert.equal(await page.getByRole('switch', { name: '形象动效' }).count(), 0);
+      assert.equal(await page.getByText('侧栏名片').count(), 0);
+      assert.equal(await page.locator('iframe[srcdoc]').count(), 0);
+      async function chooseZip(name, buffer) {
+        await importButton.press('ArrowDown');
+        const pendingChooser = page.waitForEvent('filechooser');
+        await zipOption.click();
+        await (await pendingChooser).setFiles({ name, mimeType: 'application/zip', buffer });
+      }
+      await chooseZip('bad.zip', Buffer.from('bad'));
+      await page.getByText('形象包格式无效').waitFor();
+      await chooseZip('valid.zip', Buffer.from('valid'));
+      await page.getByRole('button', { name: '取消预览' }).waitFor();
+      await exportButton.click();
+      await page.getByRole('alert').filter({ hasText: '形象包暂时无法导出' }).waitFor();
+      const pendingDownload = page.waitForEvent('download');
+      await exportButton.click();
+      const download = await pendingDownload;
+      assert.equal(download.suggestedFilename(), '当前形象.zip');
+      assert.deepEqual(await readFile(await download.path()), archive);
+      await page.getByRole('status').filter({ hasText: '已开始下载形象包' }).waitFor();
+      assert.equal(await name.inputValue(), '未保存的名字');
+      await page.getByRole('button', { name: '取消预览' }).click();
+      await page.getByRole('button', { name: '取消预览' }).waitFor({ state: 'hidden' });
+      await chooseZip('ai.zip', Buffer.from('ai'));
+      await page.getByRole('button', { name: '取消预览' }).waitFor();
+      await ai.click();
+      await page.waitForFunction(() => window.designNavigation.some(({threadId, intent}) => threadId === 'main' && intent?.kind === 'refine'));
+      assert.equal(await name.inputValue(), '未保存的名字');
+      await page.getByRole('button', { name: '取消预览' }).click();
+      await page.getByRole('button', { name: '取消预览' }).waitFor({ state: 'hidden' });
+      await chooseZip('valid.zip', Buffer.from('valid'));
+      await library.click();
+      await page.getByRole('button', { name: '应用形象' }).click();
+      await page.getByText('旅行形象', { exact: true }).waitFor();
+      assert.equal(await name.inputValue(), '未保存的名字');
+      assert.equal(await page.getByRole('tablist', { name: '身份分类' }).count(), 0);
+      await actions.click();
+      assert.equal(await page.getByRole('button', { name: '专注', exact: true }).textContent(), '轻跃');
+      assert.equal(await panel.getAttribute('aria-labelledby'), await actions.getAttribute('id'));
+      const [tabRect, panelRect] = await Promise.all([tabs.boundingBox(), panel.boundingBox()]);
+      assert(width > 760 ? tabRect.x + tabRect.width < panelRect.x : tabRect.y + tabRect.height < panelRect.y);
+      const rect = await page.locator('.ba-pet-identity-grid').evaluate(element => [...element.children].map(child => child.getBoundingClientRect().toJSON()));
+      assert.equal(width > 760 ? rect[0].top === rect[1].top : rect[0].bottom <= rect[1].top, true);
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await page.evaluate(() => { document.body.setAttribute('data-ds-dark-theme', ''); document.documentElement.style.colorScheme = 'dark'; });
+      await saveScreenshot('data');
+      await page.getByRole('button', { name: '保存更改' }).click();
+      await page.getByText('已保存', { exact: true }).waitFor();
+      assert.equal(await name.inputValue(), '未保存的名字');
+      const chooseImage = async option => {
+        const pendingChooser = page.waitForEvent('filechooser');
+        await page.getByRole('menuitem', { name: option, exact: true }).click();
+        await (await pendingChooser).setFiles({ name: 'pet.png', mimeType: 'image/png', buffer: png });
+      };
+      await importButton.click();
+      await chooseImage('上传单张图片');
+      await page.getByRole('button', { name: '应用形象' }).click();
+      await page.getByText('单张图片形象', { exact: true }).waitFor();
+      await importButton.click();
+      await page.getByRole('menuitem', { name: '上传表情图' }).press('ArrowRight');
+      await chooseImage('眨眼');
+      await page.getByRole('button', { name: '取消预览' }).click();
+      await page.getByRole('button', { name: '取消预览' }).waitFor({ state: 'hidden' });
+      assert.equal(await name.inputValue(), '未保存的名字');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
 test('model settings keep controls aligned through loading, errors and data, with a clear empty state', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const browser = await chromium.launch({ headless: true, executablePath });
   const screenshots = process.env.BENCHGO_STUDIO_SCREENSHOTS;
@@ -231,14 +456,18 @@ test('model settings keep controls aligned through loading, errors and data, wit
     for (const width of [1440, 390]) {
       const page = await browser.newPage({ viewport: { width, height: 960 } });
       page.setDefaultTimeout(7000);
-      let releaseCatalog, attempts = 0;
+      let releaseCatalog, attempts = 0, connected = true;
       const pending = new Promise(resolve => { releaseCatalog = resolve; });
       await page.route('**/*', async route => {
         if (route.request().url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
         if (route.request().url().endsWith('/api/commander/assistant')) {
           if (route.request().postDataJSON().action === 'catalog') {
             if (++attempts === 1) { await pending; return route.fulfill({ status: 503, json: { error: '供应商暂时无法连接' } }); }
-            return route.fulfill({ json: { providers: [{ id: 'Provider:Exact', name: '精确供应商', available: true }], models: [{ id: 'Model:First/1', name: '首个模型', provider: 'Provider:Exact' }] } });
+            return route.fulfill({ json: {
+              providers: [{ id: 'deepseek-account', name: 'DeepSeek Account', available: true }, { id: 'unreachable', name: '连接失败的供应商', available: false },
+                ...(connected ? [{ id: 'Provider:Exact', name: '精确供应商', available: true }] : [])],
+              models: connected ? [{ id: 'Model:First/1', name: '首个模型', provider: 'Provider:Exact' }] : [],
+            } });
           }
           return route.fulfill({ json: {} });
         }
@@ -278,6 +507,21 @@ test('model settings keep controls aligned through loading, errors and data, wit
       assert(!/编辑|配置/.test(await page.getByRole('button', { name: /工作模型 Worker/ }).innerText()), 'closed headings use the chevron without redundant action text');
       assert(!/编辑|配置/.test(await page.getByRole('button', { name: /^辅助模型/ }).innerText()));
       await check('data');
+      await page.getByRole('button', { name: '供应商', exact: true }).click();
+      await page.getByRole('option', { name: '精确供应商', exact: true }).waitFor();
+      await page.getByRole('combobox', { name: '搜索供应商' }).fill('精确供应商');
+      const firstSupplier = page.getByRole('option').first();
+      assert.match(await firstSupplier.innerText(), /RouterGo.*检查模型设置/s);
+      assert.equal(await firstSupplier.getAttribute('aria-disabled'), 'true');
+      assert.equal(await firstSupplier.locator('[data-provider-brand=routergo] img').count(), 1);
+      assert.equal(await page.getByRole('option', { name: 'DeepSeek Account' }).count(), 0);
+      assert.equal(await page.getByRole('option', { name: '连接失败的供应商' }).count(), 0);
+      await page.keyboard.press('Escape');
+      connected = false;
+      await page.evaluate(() => window.invalidateAssistantCatalog());
+      await page.getByRole('button', { name: '供应商', exact: true }).filter({ hasText: 'Provider:Exact · 不可用' }).waitFor();
+      const boundModel = page.getByRole('button', { name: '模型', exact: true }).filter({ hasText: 'Model:First/1' });
+      assert.equal(await boundModel.isDisabled(), true);
       await page.getByRole('button', { name: '移除模型', exact: true }).click();
       await page.getByText('为助手选择一个模型', { exact: true }).waitFor();
       await check('empty');

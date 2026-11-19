@@ -11,12 +11,15 @@
   <body class="startup-splash">
     <div class="drag-region" aria-hidden="true"></div>
     <main>
+      <div class="startup-field" aria-hidden="true"></div>
       <div class="startup-brand">
-        <img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt="BenchGo" width="64" height="64">
+        <img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt="" width="72" height="72">
         <h1>BenchGo</h1>
       </div>
-      <p id="startup-status" class="startup-status" role="status" aria-live="polite"></p>
-      <div class="startup-loading" role="progressbar" aria-label="正在加载"></div>
+      <div class="startup-feedback">
+        <p id="startup-status" class="startup-status" role="status" aria-live="polite">正在准备插件…</p>
+        <div class="startup-loading" role="progressbar" aria-label="正在加载"><span aria-hidden="true"></span></div>
+      </div>
     </main>
   </body>
 </html>

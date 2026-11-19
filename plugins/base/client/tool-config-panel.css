@@ -1,0 +1,71 @@
+.cmd-tool-config {
+  min-width: 0;
+}
+.cmd-tool-config > p {
+  color: var(--dsw-alias-label-secondary, #777);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0 0 9px;
+}
+.cmd-tool-config form > .cmd-tool-error,
+.cmd-tool-config > .cmd-tool-error {
+  color: var(--dsw-alias-status-error, #bd5353);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.cmd-tool-config form > .cmd-tool-error {
+  margin: 9px 0 0;
+}
+.cmd-tool-config fieldset {
+  border: 0;
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+.cmd-tool-config-field {
+  align-items: center;
+  color: var(--dsw-alias-label-primary, inherit);
+  display: grid;
+  font-size: 12px;
+  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, clamp(96px, 45%, 140px));
+  overflow-wrap: anywhere;
+}
+@container cmd-tool-card (width < 184px) {
+  .cmd-tool-config-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+}
+.cmd-tool-config-field > :is(input, select) {
+  background: var(--dsw-alias-bg-base, transparent);
+  border: 1px solid var(--dsw-alias-border-l1, #8883);
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: inherit;
+  font: inherit;
+  min-height: 32px;
+  min-width: 0;
+  padding: 3px 6px;
+  width: 100%;
+}
+.cmd-tool-config-field > :is(input, select):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4d6bfe) 60%, transparent);
+  outline-offset: 2px;
+}
+.cmd-tool-config-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 9px;
+}
+.cmd-tool-config-notice {
+  color: var(--dsw-alias-status-success, #398361);
+  font-size: 12px;
+  margin: 0 auto 0 0;
+}

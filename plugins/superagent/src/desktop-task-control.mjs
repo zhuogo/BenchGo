@@ -3,6 +3,7 @@ import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 import { ownsDesktopTask } from './desktop-task-owner.mjs';
 import { isDesktopTaskManagementScope } from './desktop-task-management-authority.mjs';
+import { usesExternalWorker } from './work-role-policy.mjs';
 
 /** Same trusted stop/input path for live control and an already authorized continuation. */
 export function stopDesktopTask(database, taskId, triggerId, inputKey = `trigger:${triggerId}:task:${taskId}`) {
@@ -38,6 +39,8 @@ export function createDesktopTaskControl({ ctx, database }) {
         return { operation, taskId: id, attention: answer };
       }
       if (operation === 'supplement' && (task.status === 'completed' || taskStopped(task))) throw new Error('任务已完成或停止；请通过任务修订或关联调整处理新要求');
+      if (operation === 'supplement' && usesExternalWorker(database, task))
+        throw Object.assign(new Error('此外部 Harness 暂无可核实的补充应用边界，请在新任务中提交要求'), { code: 'NATIVE_WORKER_INPUT_UNSUPPORTED' });
       if (operation === 'pause' && (task.status === 'completed' || taskStopped(task))) throw new Error('任务已完成或停止，不能暂停');
       const { trigger } = recordDesktopTrigger(database, { sessionId: ownerAgent.id, threadId, message });
       if (operation === 'resume') return { operation, triggerId: trigger.id, task: database.resumeTask(id) };

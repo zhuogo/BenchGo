@@ -114,6 +114,15 @@ test('successful resource reads recover proxy failures and device lifecycle clos
   const directory = await temp(t), identity = await loadIdentity(directory), rpcSockets = new Map();
   let failPage = false, rpcStatus = 200;
   const server = createServer({ key: identity.key, cert: identity.cert }, (req, res) => {
+    if (req.url === '/link/api/info') {
+      assert.equal(req.headers.authorization, 'Bearer private-a');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ hostId: 'sha256:' + identity.pin, routes: [
+        { kind: 'direct', url: 'https://' + req.headers.host, pin: identity.pin },
+        { kind: 'relay', relayId: 'backup', url: 'https://backup.test', priority: 1 },
+      ] }));
+      return;
+    }
     if (req.url === '/link/api/rpc') {
       rpcSockets.set(req.headers.authorization, req.socket);
       req.resume();
@@ -140,6 +149,8 @@ test('successful resource reads recover proxy failures and device lifecycle clos
   const state = id => center.devices().devices.find(device => device.id === id);
   const read = id => center.resources({ deviceId: id, kind: 'projects' });
   const selected = await center.select(a.id, 'http://127.0.0.1:8080');
+  const reopened = await openDeviceRegistry(join(directory, 'connections'));
+  assert.equal(reopened.get(a.id).routes[1].relayId, 'backup', 'already paired devices persist the refreshed routes');
   failPage = true;
   assert.equal((await fetch(selected.url)).status, 502);
   assert.equal(state(a.id).status, 'offline');
@@ -180,6 +191,7 @@ test('unreachable workbench selection preserves device identity and returns an a
 test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persistent streams', async t => {
   const directory = await temp(t), identity = await loadIdentity(directory); let authenticated = 0;
   const server = createServer({ key: identity.key, cert: identity.cert }, async (req, res) => {
+    if (req.url === '/link/api/info') { assert.equal(req.headers.authorization, 'Bearer private-token'); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"hostName":"Legacy host"}'); return; }
     if (req.url === '/link/api/workbench') { assert.equal(req.headers.authorization, 'Bearer private-token'); authenticated++; res.writeHead(200, { 'set-cookie': 'dsh_link_workbench=private-cookie; HttpOnly; Secure; Path=/link/workbench/' }); res.end(JSON.stringify({ url: '/link/workbench/' })); return; }
     assert.equal(req.headers.cookie, 'dsh_link_workbench=private-cookie'); assert.equal(req.headers.authorization, undefined);
     if (req.url.endsWith('/remote/open')) { res.writeHead(200, { 'content-type': 'application/x-ndjson' }); res.write('{"type":"ready"}\n'); const interval = setInterval(() => res.write('{"type":"heartbeat"}\n'), 200); res.on('close', () => clearInterval(interval)); return; }
@@ -281,13 +293,13 @@ test('voice proxy closes excessive preconnect backlog instead of accumulating au
 test('relay deployment owner callback saves credentials without exposing them in jobs', async t => {
   const directory = await temp(t), calls = [];
   let options;
-  const center = await createDeviceCenter({ directory, webRoot: new URL('../dist/web/', import.meta.url), hostAdmin: async value => { calls.push(value); return { relay: { connected: false } }; }, managerFactory: value => { options = value; return { close: async () => {}, relayProbe: async () => ({ fingerprint: 'SHA256:test' }), deployRelay: async () => { await value.onRelay({ url: 'https://relay.test:24680', token: 'private-relay-secret' }); return { jobId: 'job' }; }, manageRelay: async input => ({ operation: input.operation }) }; } });
+  const center = await createDeviceCenter({ directory, webRoot: new URL('../dist/web/', import.meta.url), hostAdmin: async value => { calls.push(value); return { relay: { connected: false, fingerprint: 'version' } }; }, managerFactory: value => { options = value; return { close: async () => {}, relayProbe: async () => ({ fingerprint: 'SHA256:test' }), deployRelay: async () => { await value.onRelay({ url: 'https://relay.test:24680', token: 'private-relay-secret' }); return { jobId: 'job' }; }, manageRelay: async input => ({ operation: input.operation }) }; } });
   t.after(() => center.close());
   assert.equal((await center.api({ action: 'list' })).capabilities.relayDeploy, true);
   assert.deepEqual(await center.api({ action: 'relayDeploy' }), { jobId: 'job' });
   assert.deepEqual(calls[0], { action: 'status' });
   assert.equal(calls[1].action, 'relay-pool-configure');
-  assert.deepEqual(calls[1].nodes[0], { id: calls[1].nodes[0].id, url: 'https://relay.test:24680', token: 'private-relay-secret', priority: 0, enabled: true });
-  await center.api({ action: 'hostRelayConfigure', enabled: false, operation: 'shell', password: 'discard' });
-  assert.deepEqual(calls[2], { action: 'relay-configure', enabled: false });
+  assert.deepEqual(calls[1], { action: 'relay-pool-configure', expected: { fingerprint: 'version' }, operation: 'add', id: calls[1].id, url: 'https://relay.test:24680', token: 'private-relay-secret', enabled: true });
+  await center.api({ action: 'hostRelayPoolConfigure', enabled: false, operation: 'update', id: calls[1].id, expected: { fingerprint: 'version' }, password: 'discard' });
+  assert.deepEqual(calls[2], { action: 'relay-pool-configure', operation: 'update', id: calls[1].id, expected: { fingerprint: 'version' }, enabled: false });
 });

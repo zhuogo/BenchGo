@@ -17,7 +17,7 @@ export async function recordArtifact({ component, directory, releaseVersion, sou
   if (!['plugin', 'windows', 'android'].includes(component)) throw new Error('Unknown release component');
   const actual = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   if (actual !== sourceSha || process.env.GITHUB_SHA && sourceSha !== process.env.GITHUB_SHA) throw new Error('Artifact source SHA does not match this workflow');
-  const versions = await currentVersions(), plugin = JSON.parse(await readFile('plugins/benchgo/package.json', 'utf8'));
+  const versions = await currentVersions(), plugin = JSON.parse(await readFile('plugins/base/package.json', 'utf8'));
   if (releaseVersion && plugin.benchgo?.releaseVersion !== releaseVersion) throw new Error('Plugin package is missing unified release staging');
   const names = (await readdir(directory)).filter(name => /(?:\.exe|\.blockmap|\.tar\.gz|\.apk|\.sha256|latest\.yml|build-source\.json)$/.test(name)).sort();
   const expected = component === 'plugin' ? `benchgo-${versions.plugin}-plugin.tar.gz` : component === 'windows'
@@ -31,7 +31,7 @@ export async function recordArtifact({ component, directory, releaseVersion, sou
   }
   const receipt = { schemaVersion: 1, component, sourceSha, releaseVersion: releaseVersion ?? null,
     version: versions[component], ...(component === 'android' ? { versionCode: versions.androidVersionCode } : {}),
-    artifact: expected, verified, staged: releaseVersion ? [{ path: 'plugins/benchgo/package.json', field: 'benchgo.releaseVersion', value: releaseVersion }] : [], files };
+    artifact: expected, verified, staged: releaseVersion ? [{ path: 'plugins/base/package.json', field: 'benchgo.releaseVersion', value: releaseVersion }] : [], files };
   await writeFile(resolve(directory, 'component-source.json'), `${JSON.stringify(receipt, null, 2)}\n`);
   return receipt;
 }

@@ -6,7 +6,7 @@ function discordSdk() {
   try { return require('discord.js'); }
   catch (error) {
     if (error.code !== 'MODULE_NOT_FOUND') throw error;
-    return createRequire(new URL('../../../../benchgo/package.json', import.meta.url))('discord.js');
+    return createRequire(new URL('../../../../base/package.json', import.meta.url))('discord.js');
   }
 }
 export const channelDefinition = { setupUrl: 'https://discord.com/developers/applications', id: 'discord', label: 'Discord', defaults: { botTokenRef: '', voiceEnabled: false }, capabilities: { externalActions: ['external-send'], direct: true, text: true, groups: true, topics: true, attachments: false, voice: true }, fields: [{ key: 'botTokenRef', label: 'Bot Token 凭据', type: 'secretRef', required: true }, { key: 'voiceEnabled', label: '启用语音频道', type: 'boolean', advanced: true }] };

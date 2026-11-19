@@ -45,13 +45,13 @@ jobs:
           set -euo pipefail
           npm run setup
           npm ci --prefix plugins/link
-          npm ci --prefix plugins/benchgo
+          npm ci --prefix plugins/base
       - name: Verify update contract and build plugin
         run: |
           set -euo pipefail
-          node --test plugins/benchgo/test/update-feed.test.mjs plugins/benchgo/test/updates.test.mjs plugins/benchgo/test/updates-ui.test.mjs scripts/desktop/packaging-config.test.mjs scripts/desktop/packaged-profile-probe.test.mjs
+          node --test plugins/base/test/update-feed.test.mjs plugins/base/test/updates.test.mjs plugins/base/test/updates-ui.test.mjs scripts/desktop/packaging-config.test.mjs scripts/desktop/packaged-profile-probe.test.mjs
           npm run build:plus
-          node --import ./scripts/source-loader.mjs --test plugins/benchgo/test/package-layout.test.mjs
+          node --import ./scripts/source-loader.mjs --test plugins/base/test/package-layout.test.mjs
           node --test scripts/desktop/plugin-bundle.test.mjs
       - name: Create complete plugin archive
         run: node scripts/desktop/package-plugin-update.mjs --out artifacts/plugins

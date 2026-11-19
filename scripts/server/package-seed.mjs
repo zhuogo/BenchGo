@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { stagePluginBundle } from '../desktop/plugin-bundle.mjs';
 import { isLinuxX64Elf, packedPluginFiles, serverInputDigest, writeServerResourceDescriptor } from '../desktop/payload-policy.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const tar = createRequire(join(root, 'plugins/benchgo/package.json'))('tar');
+const tar = createRequire(join(root, 'plugins/base/package.json'))('tar');
 export const linuxWorkerArchivePath = 'node_modules/benchgo-plugin/node_modules/dsh-ops/runtime/linux-x64/dsh-ops-worker';
 
 /** Optional dependencies are not optional to an offline image when sharp uses them. */
@@ -108,7 +108,7 @@ export async function writeServerSeedArchive({ seed, payload }) {
 }
 
 export async function packageServerSeed({ output = join(root, 'plugins/link/dist/server') } = {}) {
-  const plugin = join(root, 'plugins/benchgo');
+  const plugin = join(root, 'plugins/base');
   const metadata = JSON.parse(await readFile(join(plugin, 'package.json')));
   const upstream = JSON.parse(await readFile(join(root, 'upstream.json')));
   const files = packedPluginFiles(plugin);
@@ -132,7 +132,7 @@ export async function packageServerSeed({ output = join(root, 'plugins/link/dist
     const payload = join(prepared, 'server-seed.tar.gz');
     await writeServerSeedArchive({ seed, payload });
     const sha256 = createHash('sha256').update(await readFile(payload)).digest('hex');
-    const manifest = { schemaVersion: 1, harnessVersion: upstream.version, harnessCommit: upstream.commit, pluginVersion: metadata.version, bundle: staged.bundle, sha256, sourceDigest, targetDependencies };
+    const manifest = { schemaVersion: 1, harnessVersion: upstream.version, harnessCommit: upstream.commit, pluginVersion: metadata.version, bundle: staged.bundle, sha256, sourceDigest, targetDependencies, bootstrapCheck: true };
     await writeFile(join(prepared, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
     const descriptor = writeServerResourceDescriptor({ output: prepared, plugin, files, root });
     if (descriptor.sourceDigest !== sourceDigest || serverInputDigest({ plugin, root }) !== sourceDigest)

@@ -1,4 +1,4 @@
-import { createModelProviders } from '../../benchgo/src/model-providers.mjs';
+import { createModelProviders } from '../../base/src/model-providers.mjs';
 import { mountAssistant } from './service.mjs';
 
 export const name = 'superagent';

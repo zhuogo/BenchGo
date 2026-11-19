@@ -3,7 +3,7 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDirtyRegistry } from './dirty-registry.mjs';
 import { Modal } from '@deepseek-ai/dsh-client-ui-primitives';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import taskCss from './tasks.css';
 import { TaskBoard, TaskViewControls } from './task-board.jsx';

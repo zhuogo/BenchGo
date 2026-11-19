@@ -3,11 +3,12 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { request } from 'node:https';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, createHash } from 'node:crypto';
-import { remoteAgent, remoteJson } from './remote.mjs';
+import { remoteAgent, remoteJson, upstreamOrigin } from './remote.mjs';
 const secret = () => randomBytes(32).toString('base64url');
 /** Each host has its own origin. Remote scripts cannot read the device centre. */
 export async function createDeviceProxy(target, { parentOrigin, onFailure, webRoot, publicOrigin, publicPrefix = '' } = {}) {
   const agent = remoteAgent(target), tickets = new Map(), sessions = new Set(), sockets = new Set();
+  const remoteOrigin = upstreamOrigin(target);
   let origin, remoteCookie, closed = false;
   const upstream = async () => {
     const { headers } = await remoteJson(target, '/link/api/workbench', {}, { agent });
@@ -15,6 +16,19 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
     if (!cookie) throw new Error('主机未签发工作台授权');
     remoteCookie = cookie;
   };
+  const checkPage = () => new Promise((resolve, reject) => {
+    const req = request(new URL('/link/workbench/', remoteOrigin), {
+      agent, method: 'HEAD', timeout: 5000, headers: { cookie: remoteCookie },
+    }, res => {
+      res.resume();
+      const status = res.statusCode;
+      if (status === 200 && res.headers['content-type']?.startsWith('text/html')) { resolve(); return; }
+      reject(Object.assign(new Error('工作台入口暂不可用'), { status }));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(Object.assign(new Error('工作台入口连接超时'), { code: 'ETIMEDOUT' })));
+    req.end();
+  });
   try { await upstream(); }
   catch (error) { agent.destroy(); throw error; }
   const server = createServer(async (req, res) => {
@@ -39,14 +53,14 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
       for (const [key, value] of Object.entries(req.headers)) if (value !== undefined && !['cookie','authorization','host','origin','referer','connection','upgrade','sec-websocket-key','sec-websocket-version'].includes(key)) headers[key] = value;
       // Only static assets pass through unchanged. HTML must remain decodable for path/CSP rewriting.
       const staticAsset = url.pathname.startsWith('/link/workbench/plugins/') || url.pathname.startsWith('/link/workbench/assets/');
-      headers['accept-encoding'] = staticAsset ? req.headers['accept-encoding'] || 'identity' : 'identity'; headers.cookie = remoteCookie; headers.origin = new URL(target.url).origin;
-      const remote = request(new URL(url.pathname + url.search, target.url), { agent, method: req.method, headers }, response => {
+      headers['accept-encoding'] = staticAsset ? req.headers['accept-encoding'] || 'identity' : 'identity'; headers.cookie = remoteCookie; headers.origin = remoteOrigin;
+      const remote = request(new URL(url.pathname + url.search, remoteOrigin), { agent, method: req.method, headers }, response => {
         const outgoing = { ...response.headers, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
         delete outgoing['set-cookie']; delete outgoing['x-frame-options']; delete outgoing['strict-transport-security'];
         if (outgoing['content-security-policy']) outgoing['content-security-policy'] = outgoing['content-security-policy'].replace(/frame-ancestors[^;]*/g, 'frame-ancestors ' + parentOrigin + ' dsh-app:');
         if (response.statusCode >= 300 && response.statusCode < 400) {
-          const location = new URL(response.headers.location || '/', target.url);
-          if (location.origin !== new URL(target.url).origin || !location.pathname.startsWith('/link/workbench/')) {
+          const location = new URL(response.headers.location || '/', remoteOrigin);
+          if (location.origin !== remoteOrigin || !location.pathname.startsWith('/link/workbench/')) {
             response.resume(); res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' }); res.end('设备授权已失效，请返回设备列表重新连接'); return;
           }
           outgoing.location = prefix + location.pathname + location.search;
@@ -69,9 +83,9 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
   const voiceSockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
   const bridgeVoice = ws => {
     activeSockets.add(ws);
-    const endpoint = new URL('/link/workbench/api/voice/realtime', target.url);
+    const endpoint = new URL('/link/workbench/api/voice/realtime', remoteOrigin);
     endpoint.protocol = 'wss:';
-    const remote = new WebSocket(endpoint, { agent, origin: new URL(target.url).origin, headers: { cookie: remoteCookie }, handshakeTimeout: 10000, maxPayload: 64 * 1024, perMessageDeflate: false });
+    const remote = new WebSocket(endpoint, { agent, origin: remoteOrigin, headers: { cookie: remoteCookie }, handshakeTimeout: 10000, maxPayload: 64 * 1024, perMessageDeflate: false });
     const pending = []; let bytes = 0, ended = false;
     const stop = error => {
       if (ended) return;
@@ -112,7 +126,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
           if (typeof input.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(input.id) || requests.has(input.id) || requests.size >= 64) throw new Error('流请求无效');
           const body = JSON.stringify(input.body);
           if (input.type !== 'open' || typeof input.body !== 'object' || body.length > 1024 * 1024) throw new Error('流请求无效');
-          const remote = request(new URL('/link/workbench/remote/open', target.url), { agent, method: 'POST', headers: { cookie: remoteCookie, origin: new URL(target.url).origin, 'content-type': 'application/json' } }, response => {
+          const remote = request(new URL('/link/workbench/remote/open', remoteOrigin), { agent, method: 'POST', headers: { cookie: remoteCookie, origin: remoteOrigin, 'content-type': 'application/json' } }, response => {
             send({ id: input.id, type: 'headers', status: response.statusCode });
             let buffer = '';
             response.setEncoding('utf8');
@@ -135,7 +149,13 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
   origin = 'http://127.0.0.1:' + server.address().port;
   return {
     origin,
-    async enter() { await upstream(); for (const [ticket, expires] of tickets) if (expires < Date.now()) tickets.delete(ticket); const ticket = secret(); tickets.set(ticket, Date.now() + 60000); return (publicOrigin || origin) + publicPrefix + '/enter?ticket=' + ticket; },
+    async enter({ verifyPage = false } = {}) {
+      await upstream();
+      if (verifyPage) await checkPage();
+      for (const [ticket, expires] of tickets) if (expires < Date.now()) tickets.delete(ticket);
+      const ticket = secret(); tickets.set(ticket, Date.now() + 60000);
+      return (publicOrigin || origin) + publicPrefix + '/enter?ticket=' + ticket;
+    },
     async close() { closed = true; for (const ws of activeSockets) ws.terminate(); wss.close(); voiceSockets.close(); tickets.clear(); sessions.clear(); agent.destroy(); const done = new Promise(resolve => server.close(resolve)); for (const socket of sockets) socket.destroy(); await done; },
   };
 }

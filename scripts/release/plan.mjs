@@ -3,7 +3,7 @@ import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { compareVersions, validateReleaseManifest } from '../../plugins/benchgo/shared/update-feed.mjs';
+import { compareVersions, validateReleaseManifest } from '../../plugins/base/shared/update-feed.mjs';
 import { findPreviousRelease, readChannelBaseline, githubJson, sha256, releaseKind } from './github.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -59,7 +59,7 @@ export function createReleasePlan({ releaseVersion, sourceSha, previous = null, 
 
 export async function currentVersions() {
   const app = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
-  const plugin = JSON.parse(await readFile(resolve(root, 'plugins/benchgo/package.json'), 'utf8'));
+  const plugin = JSON.parse(await readFile(resolve(root, 'plugins/base/package.json'), 'utf8'));
   const upstream = JSON.parse(await readFile(resolve(root, 'upstream.json'), 'utf8'));
   const gradle = await readFile(resolve(root, 'plugins/link/mobile/android/app/build.gradle'), 'utf8');
   return { plugin: plugin.version, windows: app.version, android: /versionName\s+['"]([^'"]+)['"]/.exec(gradle)?.[1],

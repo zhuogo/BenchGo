@@ -1,14 +1,27 @@
 import { normalizeRoutes, normalizeTarget } from './registry.mjs';
-import { probeRemote } from './remote.mjs';
+import { probeRemote, remoteJson } from './remote.mjs';
 
 const unreachable = new Set(['ECONNREFUSED', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET']);
 const transient = new Set(['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN']);
+const gatewayUnavailable = new Set([502, 503, 504]);
 const routePriority = (route, index) => Number.isInteger(route.priority) ? route.priority : index;
 const cooling = (route, now) => Number.isInteger(route.cooldownUntil) && route.cooldownUntil > now;
 const loopback = value => {
   const host = new URL(value).hostname;
   return host === 'localhost' || host === '[::1]' || /^127\./.test(host);
 };
+export async function readDeviceRoutes(candidate, { signal } = {}) {
+  const { value } = await remoteJson(candidate, '/link/api/info', undefined, { signal, timeout: 3500 });
+  if (value.routes === undefined && value.hostId === undefined) return undefined;
+  const expected = candidate.hostId || (candidate.pin ? 'sha256:' + candidate.pin : '');
+  if (!expected) return undefined;
+  if (value.hostId !== expected) throw Object.assign(new Error('主机身份变化，请重新核验设备'), { code: 'IDENTITY_CHANGED', status: 409 });
+  const routes = normalizeRoutes(value.routes);
+  if (!routes || routes.some(route => route.kind === 'direct' && 'sha256:' + route.pin !== expected)) {
+    throw Object.assign(new Error('主机提供的连接路线与已配对身份不一致'), { code: 'IDENTITY_CHANGED', status: 409 });
+  }
+  return routes;
+}
 /** Stable route order: direct first, then relays by configured priority. */
 export function orderRoutes(routes, now = Date.now()) {
   const direct = routes.map((route, index) => ({ route, index })).filter(({ route }) => route.kind === 'direct');
@@ -18,10 +31,15 @@ export function orderRoutes(routes, now = Date.now()) {
   return [...direct, ...relay].filter(({ route }) => !cooling(route, now)).map(({ route }) => route);
 }
 /** Choose only among authenticated pairing candidates, before any business request is sent. */
-export async function selectRoute(target, { timeout = 2500, signal, probe = probeRemote, onHealth } = {}) {
+export async function selectRoute(target, { timeout = 2500, signal, probe = probeRemote, accept, onHealth } = {}) {
   const routes = normalizeRoutes(target.routes);
   // Older pairings have one saved endpoint and retain their established trust policy.
-  if (!routes?.length) return { ...target, ...normalizeTarget(target) };
+  if (!routes?.length) {
+    const candidate = { ...target, ...normalizeTarget(target) };
+    if (target.ssh) await probe(candidate, { timeout, signal });
+    await accept?.(candidate);
+    return candidate;
+  }
   // A remote host's loopback names this client after crossing a relay/LAN.
   // Keep it only when pairing explicitly admitted that same local endpoint
   // (including the SSH tunnel); never probe another machine's advertised one.
@@ -41,16 +59,22 @@ export async function selectRoute(target, { timeout = 2500, signal, probe = prob
   for (const route of attempts) {
     signal?.throwIfAborted();
     const candidate = { ...target, url: route.url, pin: route.kind === 'direct' ? route.pin : '' };
-    try { await probe({ url: candidate.url, pin: candidate.pin }, { timeout, signal }); if (route.kind === 'relay') await onHealth?.(route, 'healthy', { cooldownUntil: 0, lastError: null }); return candidate; }
+    try {
+      await probe({ url: candidate.url, pin: candidate.pin }, { timeout, signal });
+      await accept?.(candidate, route);
+    }
     catch (error) {
       signal?.throwIfAborted();
-      if (!unreachable.has(error.code) || [401, 403].includes(error.statusCode ?? error.status)) throw error;
+      const status = error.statusCode ?? error.status;
+      if ([401, 403].includes(status) || !unreachable.has(error.code) && !gatewayUnavailable.has(status)) throw error;
       lastError = error;
-      // Try other admitted routes first, then retry one transient relay TLS probe.
-      // No business request or authorization credentials are sent by this probe.
+      // Try other admitted routes first, then retry one transient connection check.
       if (!retryQueued && route.kind === 'relay' && transient.has(error.code)) { retryQueued = true; attempts.push(route); continue; }
       if (route.kind === 'relay') await onHealth?.(route, 'unhealthy', { cooldownUntil: Date.now() + 10_000, lastError: error.message });
+      continue;
     }
+    if (route.kind === 'relay') await onHealth?.(route, 'healthy', { cooldownUntil: 0, lastError: null });
+    return candidate;
   }
   if (retryAt > Date.now() && Number.isFinite(retryAt)) throw recovering();
   throw lastError;

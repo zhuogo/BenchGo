@@ -1,0 +1,5468 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "BenchGo Harness 工具管理",
+    "version": "2.0.0",
+    "description": "官方 owner 通道的工具生命周期、API 模型目录与 BenchGo 隔离 Harness 配置接口。不通过 MCP 向 Agent 暴露安装或运行配置写入权限。"
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "paths": {
+    "/api/commander/tooling": {
+      "post": {
+        "summary": "管理工具、API 模型目录与 Harness 配置",
+        "description": "请求必须通过官方 owner 通道且 Origin 同源。工具选项仅应用于 BenchGo 隔离 Harness 配置，不写外部工具的用户配置。API 凭据仅由执行服务读取。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "操作结果；安装操作立即返回异步 job，后续使用 job/cancel 查询或取消。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolingResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "输入无效或操作失败；未知 source 拒绝，不静默回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "非同源请求或未获 owner 授权。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "方案冲突、缺少显式本机写入确认或工具仍在运行。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "请求超过 300 KiB。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type 不是 application/json。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/commander": {
+      "post": {
+        "summary": "原生会话与项目侧栏操作",
+        "description": "通过现有 owner 认证 Connection 通道调用。state 返回项目、会话、隐藏记录及可选能力状态；ensureRecent 恢复最近工作区。委派 loopback 监听或字体初始化失败不撤销本接口，capabilities 对应 available=false，并保留 error/code。损坏的用户持久化数据仍报错，不重置。其他会话操作保持既有语义。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "state",
+                      "ensureRecent",
+                      "binding",
+                      "browse",
+                      "clone",
+                      "dismiss",
+                      "doctor",
+                      "project",
+                      "events",
+                      "adopt",
+                      "archive",
+                      "delete"
+                    ]
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "state 返回 SidebarState；ensureRecent 返回 RecentWorkspace；其他操作返回对应结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SidebarState"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RecentWorkspace"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "输入或操作失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "BenchGo 存储或侧栏初始化失败（含数据目录占用、无法确认旧锁持有者或损坏持久状态）；明确报告原因，保留已有数据，不返回空会话或缺失路由 404。修复原因后需重启主机。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "const": "COMMANDER_UNAVAILABLE"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/benchgo/vault": {
+      "post": {
+        "summary": "保险库状态与凭据管理",
+        "description": "同源 owner 通道；凭据由宿主服务加密保存，HTTP 与 Worker 均不返回 secret。请求体上限 64 KiB，响应使用 no-store。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "操作结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            },
+            "x-action-schemas": {
+              "status": {
+                "$ref": "#/components/schemas/VaultStatus"
+              },
+              "list": {
+                "$ref": "#/components/schemas/VaultList"
+              },
+              "save": {
+                "$ref": "#/components/schemas/VaultSaveResult"
+              },
+              "remove": {
+                "type": "object",
+                "required": [
+                  "removed"
+                ],
+                "properties": {
+                  "removed": {
+                    "const": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效"
+          },
+          "403": {
+            "description": "同源或 HTTPS 要求不满足"
+          },
+          "409": {
+            "description": "凭据冲突或数据版本过旧"
+          },
+          "413": {
+            "description": "请求过大"
+          },
+          "503": {
+            "description": "保险库不可用"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant": {
+      "post": {
+        "summary": "SuperAgent 主聊天、旁聊、配置、记忆与任务操作",
+        "description": "Trusted same-origin authenticated owner peer endpoint. Router handles dialogue and delegation; Workers self-check and commit results to the original source. Router does not review content. Background memory review remains independent. Explicit providerId/modelId values are opaque and preserved. Send receipts do not imply task completion; uncertain deliveries require authenticated owner reconciliation without replay.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "操作结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            },
+            "x-action-schemas": {
+              "analyzeImage": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "archiveThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "artifacts": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "bringToMain": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "cancel": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "capabilities": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "catalog": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "compact": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "config": {
+                "$ref": "#/components/schemas/AssistantConfiguration"
+              },
+              "connectionConfigure": {
+                "$ref": "#/components/schemas/ChannelConnection"
+              },
+              "connections": {
+                "$ref": "#/components/schemas/ChannelConnection"
+              },
+              "connectionStatus": {
+                "$ref": "#/components/schemas/ChannelStatus"
+              },
+              "connectionVerify": {
+                "type": "object",
+                "description": "Returns saved configuration and authentication status. Feishu status also includes the current long-connection state and actual receive/send verification; authenticating does not restart a healthy connection.",
+                "additionalProperties": true
+              },
+              "createThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "deleteArchivedThreads": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "deleteThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ensure": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "evaluationDispose": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "evaluationHistory": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "evaluations": {
+                "type": "object",
+                "description": "Unavailable intake assessments. Original pending or rejected source records are exposed as intakeEvent audit data, never as an admitted domain Trigger.",
+                "properties": {
+                  "candidates": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "intakeEvent": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "content": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "type": "object",
+                              "additionalProperties": true
+                            },
+                            "intakeStage": {
+                              "type": "string",
+                              "enum": [
+                                "pending",
+                                "admitted",
+                                "rejected"
+                              ]
+                            }
+                          },
+                          "additionalProperties": true
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "additionalProperties": true
+              },
+              "goalCreate": {
+                "type": "object",
+                "description": "创建清单目标：goal 只含 objective（1–2000 字）与 requestId。不初始化会话、不启动执行、不要求项目。返回 id、objective、status、rowVersion。",
+                "additionalProperties": true
+              },
+              "goalGet": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalList": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "goalUpdate": {
+                "type": "object",
+                "description": "携带 id、当前 rowVersion 和 patch；patch 接受 objective（1–2000 字）、status=active/completed 或 deleted=true。删除后退出列表与上下文。",
+                "additionalProperties": true
+              },
+              "history": {
+                "type": "object",
+                "description": "主聊与旁聊的受控聊天历史：真实用户消息、assistant_reply 显式发布、官方 completed 回合确认的无工具调用终答，以及本来源已审核通知；不返回工具、过程说明或思维链。支持 before/limit 分页。notifications 包含四阶段 schedule.lifecycle 系统事实，以及同来源任务的当前结果、问题和暂停原因；仅当前待答问题可操作。",
+                "properties": {
+                  "activeReply": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "description": "当前运行中、含真实用户消息的回合身份；用于校验官方会话中 assistant_reply 的流式正文，不包含执行过程。",
+                    "properties": {
+                      "requestId": {
+                        "type": "string"
+                      },
+                      "turn": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "requestId",
+                      "turn"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "reactions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "当前会话消息键到用户表情的映射。"
+                  },
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "原会话事件序号，用于与官方即时用户消息关联及分页。"
+                        },
+                        "rpcId": {
+                          "type": "string",
+                          "description": "真实用户消息的发送请求标识，用于去除已持久化的本地回声。"
+                        },
+                        "usage": {
+                          "type": "object",
+                          "description": "最终回复那次模型请求的官方用量，不是任务总量；缺失不补零。",
+                          "additionalProperties": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "notifications": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantNotification"
+                    }
+                  }
+                },
+                "additionalProperties": true
+              },
+              "ledgerRead": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "memoryDelete": {
+                "type": "object",
+                "required": [
+                  "removed"
+                ],
+                "properties": {
+                  "removed": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "直接遗忘单条记忆，同时清理允许遗忘的历史和会话快照；revision 不一致时拒绝。"
+              },
+              "memoryForget": {
+                "type": "object",
+                "required": [
+                  "removed"
+                ],
+                "properties": {
+                  "removed": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "直接遗忘单条记忆，同时清理允许遗忘的历史和会话快照；revision 不一致时拒绝。"
+              },
+              "memoryLearning": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "memorySave": {
+                "$ref": "#/components/schemas/AssistantMemoryEntry",
+                "description": "立即保存或纠正记忆，返回实际正文与版本；无需候选确认。更新时传 revision 以检测冲突。"
+              },
+              "memorySearch": {
+                "type": "object",
+                "required": [
+                  "memories"
+                ],
+                "properties": {
+                  "memories": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantMemoryEntry"
+                    }
+                  }
+                },
+                "additionalProperties": true,
+                "description": "返回符合当前学习排除规则的已保存记忆。"
+              },
+              "notificationAck": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "notificationDelivered": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "notificationRead": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "notifications": {
+                "type": "object",
+                "required": [
+                  "events",
+                  "cursor",
+                  "hasMore",
+                  "resyncRequired"
+                ],
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantNotification"
+                    }
+                  },
+                  "cursor": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "hasMore": {
+                    "type": "boolean"
+                  },
+                  "resyncRequired": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "notificationSync": {
+                "type": "object",
+                "required": [
+                  "events",
+                  "cursor",
+                  "hasMore",
+                  "resyncRequired"
+                ],
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantNotification"
+                    }
+                  },
+                  "cursor": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "hasMore": {
+                    "type": "boolean"
+                  },
+                  "resyncRequired": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "ownedSkillApprove": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkillAudit": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkillPin": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkillReject": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkillRestore": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "ownedSkills": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "pinThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "profileDocuments": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "profileExport": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "profileImport": {
+                "type": "object",
+                "description": "includeMemories=false 时保留目标 Profile 的 MEMORY.md、USER.md、TOOLS.md，不导入这些文档或独立记忆条目。documents 仅列出本次参与导入的文档。",
+                "additionalProperties": true
+              },
+              "profileInfo": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "renameThread": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "resetMain": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "review": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "reviewClaim": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "reviewComplete": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "reviewFail": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "send": {
+                "type": "object",
+                "description": "持久接收消息，Router 运行中仍可排队。返回 threadId/sessionId/requestId/messageId/status 和可选 duplicate；相同 requestId 不重发，内容或 replyContext 不同拒绝。queued/processing 不是任务完成。Router 用户可见 text 通过官方实时流显示，reasoning/工具参数不公开；正式回复成功后持久保存。cancel 取消该会话当前回合及排队请求，不隐含取消已委派任务。",
+                "additionalProperties": true
+              },
+              "requestState": {
+                "type": "array",
+                "description": "指定逻辑聊天的持久 inbox 回执，只读对账，不重放未知请求。",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "sessionSearch": {
+                "type": "object",
+                "required": [
+                  "query",
+                  "results",
+                  "nextCursor",
+                  "truncated",
+                  "source",
+                  "matchMode",
+                  "coverage",
+                  "limitations"
+                ],
+                "properties": {
+                  "query": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "const": "official"
+                  },
+                  "results": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/AssistantHistoryText"
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "snippet",
+                            "title"
+                          ],
+                          "properties": {
+                            "text": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "snippet": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "title": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "nextCursor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 262144
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  },
+                  "limitations": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "matchMode": {
+                    "const": "official-phrase"
+                  },
+                  "coverage": {
+                    "const": "official-message-text"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "state": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "config": {
+                    "$ref": "#/components/schemas/AssistantConfiguration"
+                  },
+                  "memories": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantMemoryEntry"
+                    }
+                  },
+                  "state": {
+                    "type": "object",
+                    "properties": {
+                      "notifications": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/AssistantNotification"
+                        }
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "summarize": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "systemFiles": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "taskAnswer": {
+                "type": "object",
+                "description": "回答明确 attentionId 对应的原问题，需 taskId/instructionRevision/requestId/answer。仅信息、权限、范围问题建立 Attention；答复关联原任务并在原 Assignment/Run/session 续做，不扩大授权。",
+                "additionalProperties": true
+              },
+              "taskPause": {
+                "type": "object",
+                "description": "暂停原任务，执行确认停止及保存检查点前为 pausing。",
+                "additionalProperties": true
+              },
+              "taskResume": {
+                "type": "object",
+                "description": "恢复暂停任务或原任务续做等待。续做必须提供当前 expectedResultVersion（执行未提交时可为0）；不设执行时长或 Goal 额度。版本、停止、撤权、检查点或外部效果未核实时拒绝，返回 queued:false/code 或错误。",
+                "additionalProperties": true
+              },
+              "taskChange": {
+                "$ref": "#/components/schemas/AssistantTask",
+                "description": "进行中的任务使用 revise 更新要求；已完成成果使用 adjustment 创建关联的新任务。adjustmentOfTaskId 指向原任务，新任务 instructionRevision=1/resultVersion=0，原任务及结果保留。"
+              },
+              "tasks": {
+                "type": "object",
+                "description": "任务及结果记录。独立 title 最多10个Unicode字符，target/acceptance保留完整任务要求。Worker 自校验后提交结果，真实缺用户决定为 blocked+Attention。系统故障 publication.origin=system 与 AI 正文分开。普通信息答复不能替代动作审批。",
+                "additionalProperties": true,
+                "properties": {
+                  "tasks": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantTask"
+                    }
+                  }
+                }
+              },
+              "taskStop": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "connectionCredential": {
+                "type": "object",
+                "required": [
+                  "ref"
+                ],
+                "properties": {
+                  "ref": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "connectionCatalog": {
+                "type": "object",
+                "required": [
+                  "channels"
+                ],
+                "properties": {
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "label",
+                        "fields",
+                        "status"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/components/schemas/ChannelId"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "status": {
+                          "$ref": "#/components/schemas/ChannelStatus"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
+              "connectionAction": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "渠道操作响应。飞书 operation=listChats 返回 FeishuChatList；只读取机器人已加入的群，不发送测试消息。",
+                "x-operation-schemas": {
+                  "feishu.listChats": {
+                    "$ref": "#/components/schemas/FeishuChatList"
+                  }
+                }
+              },
+              "petCatalog": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petUpload": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petPreview": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petApply": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petRestore": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petExpress": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "petDiscard": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "notificationOption": {
+                "type": "object",
+                "description": "选项原文作为普通用户意愿发送，不构成审批。校验来源会话和任务结果版本，同一 eventId 的选择使用持久发送幂等键。",
+                "required": [
+                  "threadId",
+                  "sessionId",
+                  "messageId"
+                ],
+                "properties": {
+                  "threadId": {
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "messageId": {
+                    "type": "string"
+                  },
+                  "duplicate": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "messageReaction": {
+                "type": "object",
+                "required": [
+                  "messageKey",
+                  "emoji"
+                ],
+                "properties": {
+                  "messageKey": {
+                    "type": "string"
+                  },
+                  "emoji": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "connectionReplies": {
+                "type": "object",
+                "required": [
+                  "replies"
+                ],
+                "properties": {
+                  "replies": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "triggerId",
+                        "threadId",
+                        "kind",
+                        "text",
+                        "state"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "triggerId": {
+                          "type": "string"
+                        },
+                        "threadId": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "answer",
+                            "ask"
+                          ]
+                        },
+                        "text": {
+                          "type": "string",
+                          "maxLength": 6000
+                        },
+                        "state": {
+                          "enum": [
+                            "queued",
+                            "claimed",
+                            "sent",
+                            "suppressed",
+                            "uncertain"
+                          ]
+                        },
+                        "attempts": {
+                          "type": "integer"
+                        },
+                        "lastError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "receipt": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "description": "Owner-authenticated direct channel reply mailbox. Optional channel and threadId filters; newest 100 entries. No Task is created for answer/ask."
+              },
+              "directReplyReconcile": {
+                "$ref": "#/components/schemas/AssistantDirectReply",
+                "description": "仅 owner；返回原直答记录及持久核实历史，不新建任务。"
+              },
+              "outboxReconcile": {
+                "$ref": "#/components/schemas/AssistantOutboxDelivery",
+                "description": "仅 owner；返回原任务投递。核实历史位于顶层 reconciliations，确认回执位于 receipt；原 payload 保持不变，任务执行与结果不重复。"
+              },
+              "nativeWorkerSession": {
+                "type": "object",
+                "required": ["status", "cursor", "events"],
+                "properties": {
+                  "status": { "type": "string" },
+                  "cursor": { "type": "integer", "minimum": 0 },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["seq", "text"],
+                      "properties": {
+                        "seq": { "type": "integer", "minimum": 0 },
+                        "text": { "type": "string" }
+                      }
+                    }
+                  },
+                  "truncated": { "type": "boolean" },
+                  "summary": { "type": "string" }
+                },
+                "description": "按原工单与执行会话读取外部 Worker 的进度和结果。"
+              },
+              "executionSessions": {
+                "type": "object",
+                "description": "Trusted same-origin authenticated owner peer only. All persisted Worker runs and verified official subagents, including historical and archived sessions. Ordinary forks are excluded.",
+                "additionalProperties": true,
+                "properties": {
+                  "sessions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "sessionId",
+                        "taskId",
+                        "title",
+                        "available"
+                      ],
+                      "properties": {
+                        "sessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "taskId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "available": {
+                          "const": true
+                        },
+                        "role": {
+                          "enum": [
+                            "worker",
+                            "child-worker"
+                          ]
+                        },
+                        "parentSessionId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "status": {
+                          "enum": [
+                            "running",
+                            "waiting",
+                            "completed"
+                          ]
+                        },
+                        "runState": {
+                          "type": "string"
+                        },
+                        "promptable": {
+                          "type": "boolean",
+                          "description": "Presentation only; submission must still pass the live nativePrompt gate."
+                        },
+                        "reason": {
+                          "type": "string",
+                          "description": "Chinese explanation when this execution is read-only."
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "required": [
+                  "sessions"
+                ]
+              },
+              "approvalOrigins": {
+                "type": "object",
+                "description": "Owner-only read-only candidate sessions for the review tab. Official sessionStatus remains the sole PendingApproval source. Does not grant or settle an approval.",
+                "required": [
+                  "origins"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "origins": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "title",
+                        "sourceTitle",
+                        "sessionId",
+                        "ownerSessionId",
+                        "ownerThreadId"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "router",
+                            "worker"
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "sourceTitle": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "ownerSessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "ownerThreadId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "taskId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "assignmentId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": {
+                              "kind": {
+                                "const": "worker"
+                              }
+                            }
+                          },
+                          "then": {
+                            "required": [
+                              "taskId",
+                              "assignmentId",
+                              "runId"
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "sessionHistory": {
+                "type": "object",
+                "required": [
+                  "sessionId",
+                  "events",
+                  "hasMore",
+                  "nextCursor",
+                  "source"
+                ],
+                "properties": {
+                  "sessionId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "events": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "$ref": "#/components/schemas/AssistantHistoryText"
+                    }
+                  },
+                  "nextCursor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 262144
+                  },
+                  "hasMore": {
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "const": "official"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "sessionList": {
+                "type": "object",
+                "required": [
+                  "sessions",
+                  "nextCursor"
+                ],
+                "properties": {
+                  "sessions": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "title",
+                        "createdAt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "title": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "number"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "nextCursor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 262144
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          },
+          "400": {
+            "description": "请求无效；投递核实字段错误返回 INVALID_RECONCILIATION 或 DELIVERY_RECONCILIATION_INVALID。"
+          },
+          "403": {
+            "description": "未获 owner 授权；投递核实要求 principal.kind=owner，否则 OWNER_REQUIRED。"
+          },
+          "404": {
+            "description": "DIRECT_REPLY_NOT_FOUND 或 OUTBOX_NOT_FOUND：指定投递不存在。"
+          },
+          "409": {
+            "description": "版本冲突；投递状态/attempts 已变化或已有成功分片时返回 DELIVERY_RECONCILIATION_CONFLICT / OUTBOX_RECONCILIATION_CONFLICT。"
+          }
+        },
+        "x-tool-input-schemas": {
+          "assistant_delegate": {
+            "$ref": "#/components/schemas/AssistantDelegationInput"
+          },
+          "assistant_task_change": {
+            "$ref": "#/components/schemas/AssistantTaskChangeInput"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant/channels/webhook": {
+      "post": {
+        "summary": "签名事件交给统一 Router",
+        "description": "HMAC-SHA256 密钥来自 signingSecretRef；签名十六进制值覆盖 timestamp + \".\" + 原始请求字节。时间窗为五分钟。requestId 持久去重，身份取配置唯一 ownerIds，输入不可声明身份。结果通过已认证 tasks 查询。",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-BenchGo-Timestamp",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{10}$"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-BenchGo-Signature",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "事件已持久受理；不代表任务完成"
+          },
+          "401": {
+            "description": "签名或时间戳无效"
+          },
+          "413": {
+            "description": "正文超过64KB"
+          },
+          "503": {
+            "description": "尚未持久受理，请用相同requestId重试"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant/channels/feishu": {
+      "post": {
+        "summary": "feishu 官方签名回调",
+        "description": "独立验证平台认证与来源后进入统一准入；不使用浏览器主人身份。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "平台事件已处理"
+          },
+          "401": {
+            "description": "平台验证失败"
+          },
+          "503": {
+            "description": "接收失败，请由平台重试"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant/channels/whatsapp": {
+      "post": {
+        "summary": "whatsapp 官方签名回调",
+        "description": "独立验证平台认证与来源后进入统一准入；不使用浏览器主人身份。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "平台事件已处理"
+          },
+          "401": {
+            "description": "平台验证失败"
+          },
+          "503": {
+            "description": "接收失败，请由平台重试"
+          }
+        }
+      },
+      "get": {
+        "summary": "WhatsApp 回调订阅验证",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hub.mode",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hub.verify_token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hub.challenge",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "验证挑战"
+          },
+          "401": {
+            "description": "验证失败"
+          }
+        }
+      }
+    },
+    "/api/commander/assistant/pet-asset": {
+      "get": {
+        "summary": "Read a normalized private SuperAgent appearance asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raster image; immutable private cache, owner access follows the existing assistant connection."
+          },
+          "404": {
+            "description": "Missing or invalid asset"
+          }
+        }
+      }
+    },
+    "/api/benchgo/skills": {
+      "post": {
+        "summary": "Read unified skills and install reviewed engineering skills on demand",
+        "description": "Owner-only same-origin JSON endpoint. Reads the default Agent preset through a standing scope lease without creating an Agent. Omitted projectId selects global skills; projectId must identify a registered workspace. Uses official registry winners, without enumerating shadowed copies or scanning arbitrary paths. Owned skill management remains on the assistant API; no new MCP tools. Engineering catalog uses mattpocock/skills v1.3.2 at d1478fcb140db0b93c0c8df17bcfd311844749d0. Preview and installation download immutable hash-verified files; installs retain dependencies, license and original invocation policy under the official DSH skills directory, never overwrite existing skills or execute scripts. Installation and actual availability are separate states.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "action"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "list"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "name",
+                      "provider"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "get"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "provider": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action"
+                    ],
+                    "properties": {
+                      "action": {
+                        "const": "deckList"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "name"
+                    ],
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "deckGet",
+                          "deckInstall"
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "list returns available, skills, projects and scope; get returns skill including content. Missing registry returns available:false for list. Responses use no-store. deckList returns source/version/destination and installation status; deckGet returns skill content, files, dependency plan and licenseText; deckInstall returns installed names and alreadyInstalled. A write does not imply the official watcher has discovered the skill.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "skills": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SkillSummary"
+                      }
+                    },
+                    "skill": {
+                      "$ref": "#/components/schemas/SkillSummary"
+                    },
+                    "projects": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "scope": {
+                      "type": "object",
+                      "properties": {
+                        "projectId": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "cwd": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "403": {
+            "description": "Cross-origin request rejected"
+          },
+          "404": {
+            "description": "Project or skill not found"
+          },
+          "409": {
+            "description": "Winning provider changed; refresh the catalog"
+          },
+          "415": {
+            "description": "application/json required"
+          },
+          "502": {
+            "description": "Fixed-version download failed or content hash/size did not match; retry is supported."
+          },
+          "503": {
+            "description": "Skill service unavailable or lookup failed"
+          }
+        }
+      }
+    },
+    "/api/benchgo/workbench/media": {
+      "get": {
+        "summary": "Read built-in document and media preview files",
+        "description": "Authenticated local owner only. Uses the official Session directory and realpath fence. Streams with single Range, If-Range and cancellation support.",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A file inside the actual Session working directory; caller-supplied cwd is ignored."
+          },
+          {
+            "name": "download",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Complete file"
+          },
+          "206": {
+            "description": "Requested byte range"
+          },
+          "403": {
+            "description": "Access boundary rejected"
+          },
+          "404": {
+            "description": "Session or file not found"
+          },
+          "409": {
+            "description": "Session directory unavailable or file changed"
+          },
+          "416": {
+            "description": "Invalid byte range; Content-Range reports file size"
+          }
+        }
+      },
+      "head": {
+        "summary": "Read media response headers",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A file inside the actual Session working directory; caller-supplied cwd is ignored."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File length and type, without a body"
+          },
+          "206": {
+            "description": "Requested byte range headers"
+          }
+        }
+      }
+    },
+    "/api/benchgo/workbench/media/meta": {
+      "get": {
+        "summary": "Read built-in preview file metadata",
+        "description": "Same authentication and workspace boundary as media reads. Returns {ok:true,value:{path,name,size,mime}}.",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A file inside the actual Session working directory; caller-supplied cwd is ignored."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File metadata"
+          },
+          "403": {
+            "description": "Access boundary rejected"
+          },
+          "404": {
+            "description": "Session or file not found"
+          }
+        }
+      },
+      "head": {
+        "summary": "Read metadata response headers",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A file inside the actual Session working directory; caller-supplied cwd is ignored."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata headers without a body"
+          }
+        }
+      }
+    },
+    "/api/benchgo/workbench": {
+      "get": {
+        "summary": "读取工作台与 SSH 状态",
+        "description": "仅限本机已认证主人访问，拒绝代理转发与 Link 请求。",
+        "responses": {
+          "200": {
+            "description": "sidebar?ssh?trustedHosts"
+          },
+          "403": {
+            "description": "请求不满足本机主人访问条件"
+          }
+        }
+      },
+      "post": {
+        "summary": "探测与确认 SSH 主机指纹",
+        "description": "ssh.probe 探测主机指纹并返回两分钟内有效的 challenge；ssh.confirm 校验 challenge 与 fingerprint 后保存主机信任记录。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "ssh.probe",
+                      "ssh.confirm"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "challenge": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "返回指纹探测结果与 challenge，或主机信任确认结果"
+          },
+          "400": {
+            "description": "请求无效、操作不支持或指纹确认已过期"
+          },
+          "403": {
+            "description": "请求不满足本机主人访问条件"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ToolingRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "pickerCatalog",
+              "catalog",
+              "providers",
+              "models",
+              "job",
+              "install",
+              "update",
+              "uninstallPreview",
+              "uninstall",
+              "cancel",
+              "modelProfiles",
+              "modelCapabilities",
+              "saveModelCapabilities",
+              "toolConfig",
+              "saveToolConfig"
+            ]
+          },
+          "tool": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "安装任务 ID（job/cancel）"
+          },
+          "providerId": {
+            "type": "string",
+            "description": "供应商 ID，用于查询 API 模型目录。"
+          },
+          "modelId": {
+            "type": "string",
+            "description": "saveModelCapabilities 使用的供应商原始模型 ID。"
+          },
+          "capabilities": {
+            "type": ["array", "null"],
+            "maxItems": 32,
+            "items": { "type": "string" },
+            "description": "覆盖指定模型的能力标签。null 恢复目录能力，空数组显式清除全部标签。"
+          },
+          "config": {
+            "type": "object",
+            "description": "Harness 在 BenchGo 内使用的结构化工具配置。模型、凭据、工作目录和权限由执行绑定提供。"
+          },
+          "changedFields": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string" },
+            "description": "saveToolConfig 可列出要更新的字段路径。列出的字段在 config 中缺省时恢复工具默认设置，省略 changedFields 时替换整个配置。"
+          },
+          "snapshot": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "实际探测到的安装来源，仅用于卸载任务校验。"
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "action": { "enum": ["models", "modelCapabilities", "saveModelCapabilities"] } } },
+            "then": { "required": ["providerId"] }
+          },
+          {
+            "if": { "properties": { "action": { "const": "saveModelCapabilities" } } },
+            "then": { "required": ["modelId", "capabilities"] }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "install",
+                    "update"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "tool"
+              ],
+              "properties": {}
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "uninstall"
+                }
+              }
+            },
+            "then": {
+              "required": ["tool", "snapshot"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": ["toolConfig", "saveToolConfig"]
+                }
+              }
+            },
+            "then": {
+              "required": ["tool"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "saveToolConfig"
+                }
+              }
+            },
+            "then": {
+              "required": ["config"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "models"
+                }
+              }
+            },
+            "then": {
+              "required": ["providerId"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "job",
+                    "cancel"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "id"
+              ]
+            }
+          }
+        ]
+      },
+      "ToolSummary": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "availabilityReason": {
+            "type": "string"
+          },
+          "version": {
+            "type": ["string", "null"]
+          },
+          "installer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "canInstall": {
+            "type": "boolean"
+          },
+          "canUpdate": {
+            "type": "boolean"
+          },
+          "canUninstall": {
+            "type": "boolean"
+          },
+          "job": {
+            "$ref": "#/components/schemas/InstallJob"
+          }
+        }
+      },
+      "InstallJob": {
+        "type": "object",
+        "required": [
+          "id",
+          "toolId",
+          "action",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "toolId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "install",
+              "update",
+              "uninstall"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "实际探测到的安装来源。"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "当前阶段，如环境准备、工具安装或版本验证。"
+          },
+          "logs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ToolingResponse": {
+        "type": "object",
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "toolConfig 和 saveToolConfig 返回该工具完整的已保存配置。"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolSummary"
+            }
+          },
+          "job": {
+            "$ref": "#/components/schemas/InstallJob"
+          }
+        },
+        "description": "catalog 返回工具卡片目录。pickerCatalog 返回 Harness 和 API 模型选择目录。providers、models 返回供应商或模型目录。toolConfig、saveToolConfig 返回工具配置。安装、更新、卸载、任务查询和取消返回任务回执。uninstallPreview 返回卸载确认信息。"
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "OptionalWebCapability": {
+        "type": "object",
+        "required": [
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string",
+            "description": "初始化失败的实际错误消息，仅不可用时存在。"
+          },
+          "code": {
+            "type": "string",
+            "description": "原始错误码，如 EACCES；原异常未提供时省略。"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SidebarState": {
+        "type": "object",
+        "required": [
+          "projects",
+          "sessions",
+          "deletedHarnessIds",
+          "capabilities"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "deletedHarnessIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "required": [
+              "delegation",
+              "fonts"
+            ],
+            "properties": {
+              "delegation": {
+                "$ref": "#/components/schemas/OptionalWebCapability"
+              },
+              "fonts": {
+                "$ref": "#/components/schemas/OptionalWebCapability"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "RecentWorkspace": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "path"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UninstallPreview": {
+        "type": "object",
+        "required": [
+          "available",
+          "snapshot"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "realpath": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "snapshot": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AssistantRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "analyzeImage",
+              "approvalOrigins",
+              "archiveThread",
+              "artifacts",
+              "bringToMain",
+              "cancel",
+              "capabilities",
+              "catalog",
+              "compact",
+              "config",
+              "connectionAction",
+              "connectionCatalog",
+              "connectionConfigure",
+              "connectionCredential",
+              "connectionReplies",
+              "connectionStatus",
+              "connectionVerify",
+              "connections",
+              "createThread",
+              "deleteArchivedThreads",
+              "deleteThread",
+              "directReplyReconcile",
+              "ensure",
+              "evaluationDispose",
+              "evaluationHistory",
+              "evaluations",
+              "executionSessions",
+              "nativeWorkerSession",
+              "goalCreate",
+              "goalGet",
+              "goalList",
+              "goalUpdate",
+              "history",
+              "ledgerRead",
+              "memoryDelete",
+              "memoryForget",
+              "memoryLearning",
+              "memorySave",
+              "memorySearch",
+              "messageReaction",
+              "notificationAck",
+              "notificationDelivered",
+              "notificationOption",
+              "notificationRead",
+              "notificationSync",
+              "notifications",
+              "outboxReconcile",
+              "ownedSkillApprove",
+              "ownedSkillAudit",
+              "ownedSkillPin",
+              "ownedSkillReject",
+              "ownedSkillRestore",
+              "ownedSkills",
+              "petApply",
+              "petCatalog",
+              "petDiscard",
+              "petExpress",
+              "petPreview",
+              "petRestore",
+              "petUpload",
+              "pinThread",
+              "profileDocuments",
+              "profileExport",
+              "profileImport",
+              "profileInfo",
+              "renameThread",
+              "requestState",
+              "resetMain",
+              "review",
+              "reviewClaim",
+              "reviewComplete",
+              "reviewFail",
+              "send",
+              "sessionSearch",
+              "settingsCatalog",
+              "settingsCommit",
+              "settingsHistory",
+              "settingsPrepare",
+              "settingsRead",
+              "settingsRollback",
+              "state",
+              "summarize",
+              "systemFiles",
+              "taskCleanupCommit",
+              "taskCleanupHistory",
+              "taskCleanupPreview",
+              "taskCleanupRestore",
+              "taskCleanupRestorePreview",
+              "taskAnswer",
+              "taskChange",
+              "taskPause",
+              "taskResume",
+              "taskStop",
+              "tasks",
+              "notificationOption",
+              "messageReaction",
+              "connectionReplies",
+              "directReplyReconcile",
+              "outboxReconcile",
+              "executionSessions",
+              "nativeWorkerSession",
+              "sessionHistory",
+              "sessionList"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedInstructionRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedResultVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedUpdatedAt": {
+            "type": "string",
+            "minLength": 8
+          },
+          "candidateId": {
+            "type": "string"
+          },
+          "choice": {
+            "type": "string"
+          },
+          "versionId": {
+            "type": "string"
+          },
+          "expectedHash": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "previewHash": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string"
+          },
+          "request": {
+            "type": "object"
+          },
+          "patch": {
+            "type": "object",
+            "description": "局部更新，保留未编辑字段。config 操作使用 AssistantConfigurationPatch 的三角色模型契约。",
+            "additionalProperties": true
+          },
+          "goalIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "after": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "channel": {
+            "$ref": "#/components/schemas/ChannelId"
+          },
+          "field": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "guildId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "channelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "actorId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "loginId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536,
+            "writeOnly": true,
+            "description": "仅用于 connectionCredential；响应、配置和模型上下文不含明文。"
+          },
+          "draftId": {
+            "type": "string",
+            "description": "Pet preview ID returned by petUpload/petPreview; required to apply or discard that preview."
+          },
+          "dataUrl": {
+            "type": "string",
+            "description": "petUpload only: PNG/JPEG/WebP base64 data URL; input limited to 8 MiB, decoded and normalized by the server."
+          },
+          "artifactPath": {
+            "type": "string",
+            "description": "petPreview only: relative artifacts/<image> or media/<image> path. Arbitrary host paths and remote URLs are rejected."
+          },
+          "expression": {
+            "type": "string",
+            "description": "An actual catalog expression ID, or a custom expression ID bound to the current appearance."
+          },
+          "pet": {
+            "$ref": "#/components/schemas/AssistantPetAppearance"
+          },
+          "pageToken": {
+            "type": "string",
+            "description": "飞书 listChats 分页游标，原样传回，不解释或改写。"
+          },
+          "eventId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 150
+          },
+          "memory": {
+            "type": "object",
+            "required": [
+              "content"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "source": {
+                "$ref": "#/components/schemas/AssistantMemorySource"
+              },
+              "scope": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "document": {
+                "type": "string",
+                "enum": [
+                  "MEMORY.md",
+                  "USER.md",
+                  "TOOLS.md"
+                ]
+              }
+            },
+            "additionalProperties": true,
+            "description": "memorySave 的记忆正文。缺少 source 时由管理入口补充用户来源；更新已有 id 时可配合顶层 revision 保护并发。"
+          },
+          "origin": {
+            "type": "string",
+            "minLength": 1
+          },
+          "categories": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "login",
+                "private-upload"
+              ]
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "官方原样会话标识；历史搜索与读取仍须复核主聊/手动旁聊范围。"
+          },
+          "toolName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "approvalOrigins: actual PendingApproval tool name; requires sessionId and rechecks current Worker tool scope."
+          },
+          "adapterId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "namespace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "historyId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "digest": {
+            "type": "string",
+            "minLength": 1
+          },
+          "previewId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "manifestHash": {
+            "type": "string",
+            "minLength": 1
+          },
+          "taskIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "selectedTaskIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "ops": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/ManagedSettingOperation"
+            }
+          },
+          "archived": {
+            "type": "boolean",
+            "description": "tasks: filter explicit user-managed archive visibility before limit; omitted keeps both scopes."
+          },
+          "cursor": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "integer",
+                "minimum": 0
+              }
+            ],
+            "description": "历史搜索/消息页为不透明字符串；ledgerRead 的原文字符分页为整数，二者不可互换。"
+          }
+        },
+        "additionalProperties": true,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "taskChange"
+                }
+              }
+            },
+            "then": {
+              "$ref": "#/components/schemas/AssistantTaskChangeInput"
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "evaluationDispose"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "candidateId",
+                "disposition",
+                "expectedRevision",
+                "expectedUpdatedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "summarize"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "analyzeImage"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "file",
+                "question"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "summarize"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "analyzeImage"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "question": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionConfigure"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "revision",
+                "patch"
+              ],
+              "properties": {
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "patch": {
+                  "$ref": "#/components/schemas/ChannelConfig"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionCredential"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "channel",
+                "field",
+                "secret"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionAction"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "channel",
+                "operation"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionAction"
+                },
+                "channel": {
+                  "const": "api"
+                },
+                "operation": {
+                  "const": "submit"
+                }
+              },
+              "required": [
+                "action",
+                "channel",
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "requestId",
+                "conversationId",
+                "text"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32000
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "connectionConfigure"
+                },
+                "channel": {
+                  "const": "feishu"
+                }
+              },
+              "required": [
+                "action",
+                "channel"
+              ]
+            },
+            "then": {
+              "properties": {
+                "patch": {
+                  "$ref": "#/components/schemas/FeishuChannelConfig"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "notificationOption"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "eventId",
+                "threadId",
+                "text"
+              ],
+              "properties": {
+                "threadId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "messageReaction"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "threadId",
+                "messageKey",
+                "emoji"
+              ],
+              "properties": {
+                "threadId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "messageKey": {
+                  "type": "string",
+                  "pattern": "^(message|notification):.+",
+                  "maxLength": 500
+                },
+                "emoji": {
+                  "enum": [
+                    null,
+                    "👍",
+                    "❤️",
+                    "😂",
+                    "🎉",
+                    "🤔",
+                    "👎"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "memorySave"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "memory"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "memoryDelete",
+                    "memoryForget"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "config"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "patch"
+              ],
+              "properties": {
+                "patch": {
+                  "$ref": "#/components/schemas/AssistantConfigurationPatch"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "directReplyReconcile",
+                    "outboxReconcile"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "$ref": "#/components/schemas/AssistantDeliveryReconciliationInput"
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "goalCreate"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "goal": {
+                  "$ref": "#/components/schemas/AssistantGoalInput"
+                }
+              },
+              "required": [
+                "goal"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "tasks"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "taskId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "nativeWorkerSession"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "taskId": { "type": "string", "minLength": 1 },
+                "sessionId": { "type": "string", "minLength": 1 },
+                "after": { "type": "integer", "minimum": 0 }
+              },
+              "required": ["taskId", "sessionId"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "approvalOrigins"
+                }
+              }
+            },
+            "then": {
+              "dependentRequired": {
+                "toolName": [
+                  "sessionId"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "settingsRead"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "adapterId",
+                "namespace"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "settingsPrepare"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "adapterId",
+                "namespace",
+                "ops",
+                "expectedRevision"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "settingsCommit"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "settingsRollback"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "historyId",
+                "expectedRevision"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "taskCleanupCommit",
+                    "taskCleanupRestore"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "previewId",
+                "manifestHash",
+                "selectedTaskIds",
+                "requestId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "taskCleanupRestorePreview"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "taskIds"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "sessionSearch"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "query"
+              ],
+              "properties": {
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 262144
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "query": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "sessionHistory"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "sessionId"
+              ],
+              "properties": {
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 262144
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "before": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "after": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 30
+                },
+                "textLimit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16000
+                },
+                "offset": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "required": [
+                      "seq"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "before": {
+                        "maximum": 30
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "sessionList"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [],
+              "properties": {
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 262144
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "ledgerRead"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                },
+                "cursor": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000
+                }
+              }
+            }
+          }
+        ],
+        "description": "主人管理接口。注册配置通过通用 schema/路径读写，页面与 Router 共用权威存储、CAS、脱敏审计和回滚。高风险确认绑定本次差异；任务清理须先持久预览，再确认精确子集，归档保留墓碑与成果，恢复不重开执行。"
+      },
+      "VaultEntry": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "address": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "integer"
+          },
+          "credentials": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "configured": {
+                  "const": true
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "configured"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "handle",
+          "revision",
+          "address",
+          "updatedAt",
+          "credentials"
+        ],
+        "additionalProperties": false
+      },
+      "VaultStatus": {
+        "type": "object",
+        "required": [
+          "initialized"
+        ],
+        "properties": {
+          "initialized": {
+            "type": "boolean"
+          },
+          "locked": {
+            "const": false
+          }
+        },
+        "additionalProperties": true
+      },
+      "VaultList": {
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultEntry"
+            }
+          },
+          "locked": {
+            "const": false
+          }
+        },
+        "additionalProperties": true
+      },
+      "VaultSaveResult": {
+        "type": "object",
+        "required": [
+          "entry"
+        ],
+        "properties": {
+          "entry": {
+            "$ref": "#/components/schemas/VaultEntry"
+          }
+        },
+        "additionalProperties": false
+      },
+      "VaultRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "status",
+              "list",
+              "save",
+              "remove"
+            ]
+          },
+          "handle": {
+            "type": "string",
+            "minLength": 1
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "credentials": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 16384,
+                  "writeOnly": true
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "not": {
+                      "required": [
+                        "id"
+                      ]
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "value"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "save"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "address",
+                "credentials"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "save",
+                    "remove"
+                  ]
+                }
+              },
+              "required": [
+                "handle"
+              ]
+            },
+            "then": {
+              "required": [
+                "revision"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "remove"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "handle",
+                "revision"
+              ]
+            }
+          }
+        ]
+      },
+      "ChannelId": {
+        "type": "string",
+        "enum": [
+          "feishu",
+          "wecom",
+          "qq",
+          "weixin",
+          "telegram",
+          "discord",
+          "whatsapp",
+          "email",
+          "webhook",
+          "api"
+        ]
+      },
+      "ChannelConfig": {
+        "type": "object",
+        "description": "按渠道的配置；仅包含凭据引用，密钥通过 connectionCredential 单独录入。字段由 connectionCatalog 提供。",
+        "additionalProperties": true
+      },
+      "ChannelConnection": {
+        "type": "object",
+        "required": [
+          "revision",
+          "config"
+        ],
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/ChannelId"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "config": {
+            "$ref": "#/components/schemas/ChannelConfig"
+          }
+        },
+        "additionalProperties": true
+      },
+      "ChannelStatus": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "authentication": {
+            "type": "string"
+          },
+          "events": {
+            "type": "string"
+          },
+          "sending": {
+            "type": "string"
+          },
+          "connection": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          },
+          "voice": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "WebhookEvent": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "conversationId",
+          "text"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "conversationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          }
+        },
+        "additionalProperties": false
+      },
+      "AssistantPetAppearance": {
+        "type": "object",
+        "description": "The same SuperAgent identity appearance. Saved only through preview/apply; null restores the formal default.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "custom"
+            ]
+          },
+          "assetId": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "decorations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "palette": {
+            "type": "string"
+          },
+          "expressions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "FeishuGroupRule": {
+        "type": "object",
+        "required": [
+          "chatId",
+          "mode"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "mentions",
+              "all",
+              "disabled"
+            ],
+            "description": "mentions：仅 @机器人触发；all：另接收讨论作为上下文，不自动创建任务；disabled：停用。"
+          }
+        },
+        "additionalProperties": false
+      },
+      "FeishuChannelConfig": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ChannelConfig"
+          }
+        ],
+        "type": "object",
+        "properties": {
+          "accessMode": {
+            "type": "string",
+            "enum": [
+              "owners",
+              "platform"
+            ],
+            "default": "owners",
+            "description": "owners 保留 ownerOpenIds 范围；platform 允许飞书平台可访问人员请求任务，不授予桌面主人权限。"
+          },
+          "directMessages": {
+            "type": "boolean",
+            "default": true
+          },
+          "groups": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FeishuGroupRule"
+            },
+            "default": null,
+            "description": "null 兼容旧 chatIds；数组按群配置，与私聊独立。"
+          },
+          "otherGroups": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "mentions"
+            ],
+            "default": "disabled"
+          }
+        },
+        "additionalProperties": true
+      },
+      "FeishuChatList": {
+        "type": "object",
+        "required": [
+          "chats"
+        ],
+        "properties": {
+          "chats": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "chatId",
+                "name"
+              ],
+              "properties": {
+                "chatId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "nextPageToken": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SkillSummary": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "source",
+          "provider",
+          "invocation"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "whenToUse": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "invocation": {
+            "type": "object",
+            "properties": {
+              "modelInvocable": {
+                "type": "boolean"
+              },
+              "userInvocable": {
+                "type": "boolean"
+              }
+            }
+          },
+          "resourceBase": {
+            "type": "object"
+          }
+        }
+      },
+      "AssistantMemoryEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "content",
+          "source",
+          "revision",
+          "document"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "content": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AssistantMemorySource"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "document": {
+            "type": "string",
+            "pattern": "^(?:MEMORY\\.md|USER\\.md|TOOLS\\.md|memory/\\d{4}-\\d{2}-\\d{2}\\.md)$"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "score": {
+            "type": "number"
+          },
+          "candidateId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "supersedes": {
+            "$ref": "#/components/schemas/AssistantMemoryVersionReference"
+          },
+          "versionChain": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantMemoryVersionReference"
+            }
+          }
+        },
+        "additionalProperties": true,
+        "description": "已保存记忆。candidateId 为可选的学习来源标识；supersedes 指向上一版，versionChain 累计版本引用，不含历史正文。可选字段缺失时省略。"
+      },
+      "AssistantModelSelection": {
+        "type": "object",
+        "required": [
+          "providerId",
+          "modelId"
+        ],
+        "properties": {
+          "providerId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f])\\S(?:[\\s\\S]*\\S)?$",
+            "maxLength": 512
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f])\\S(?:[\\s\\S]*\\S)?$",
+            "maxLength": 512
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "reasoningEffort": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false
+          },
+          "credentialRef": false
+        },
+        "additionalProperties": true
+      },
+      "AssistantModelQueue": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/AssistantModelSelection"
+        },
+        "maxItems": 32,
+        "uniqueItems": true,
+        "description": "按首选、备用顺序保存；同一 providerId/modelId 不可重复，不按名称猜测别名。"
+      },
+      "AssistantAuxiliaryModels": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "object",
+            "required": [
+              "models",
+              "capabilities"
+            ],
+            "properties": {
+              "models": {
+                "$ref": "#/components/schemas/AssistantModelQueue",
+                "minItems": 1
+              },
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "vision",
+                    "compression",
+                    "summary",
+                    "review"
+                  ]
+                },
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "AssistantConfiguration": {
+        "type": "object",
+        "properties": {
+          "models": {
+            "$ref": "#/components/schemas/AssistantModelQueue"
+          },
+          "workerModels": {
+            "$ref": "#/components/schemas/AssistantModelQueue",
+            "description": "Worker 独立模型队列。外部 Harness 必须配置一个 API 模型。"
+          },
+          "workerHarness": { "$ref": "#/components/schemas/AssistantWorkerHarness" },
+          "auxiliary": {
+            "$ref": "#/components/schemas/AssistantAuxiliaryModels"
+          },
+          "keyPools": false
+        },
+        "additionalProperties": true,
+        "description": "Router 和辅助角色使用官方 Harness。Worker 使用独立模型队列及 workerHarness。显式模型选择优先，providerId/modelId 原样保存。"
+      },
+      "AssistantConfigurationPatch": {
+        "type": "object",
+        "properties": {
+          "models": {
+            "$ref": "#/components/schemas/AssistantModelQueue"
+          },
+          "workerModels": {
+            "$ref": "#/components/schemas/AssistantModelQueue",
+            "description": "Worker 独立模型队列。外部 Harness 必须配置一个 API 模型。"
+          },
+          "workerHarness": { "$ref": "#/components/schemas/AssistantWorkerHarness" },
+          "auxiliary": {
+            "$ref": "#/components/schemas/AssistantAuxiliaryModels"
+          },
+          "keyPools": false
+        },
+        "additionalProperties": true,
+        "description": "局部更新保留未编辑字段。合并后验证 Worker Harness 与模型队列。"
+      },
+      "AssistantWorkerHarness": {
+        "type": "string",
+        "enum": ["official", "codex", "claude"],
+        "default": "official"
+      },
+      "AssistantMemoryVersionReference": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AssistantMemorySource": {
+        "type": "object",
+        "properties": {
+          "excerpt": {
+            "type": "string",
+            "maxLength": 6000,
+            "description": "可核对的原始输入摘录；旧记录缺原文时省略，不补造。"
+          },
+          "excerptTruncated": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantDeliveryReceipt": {
+        "type": "object",
+        "required": [
+          "status",
+          "messageId"
+        ],
+        "properties": {
+          "status": {
+            "const": "accepted"
+          },
+          "messageId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantDeliveryReconciliationInput": {
+        "type": "object",
+        "required": [
+          "id",
+          "attempts",
+          "outcome",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "outcome": {
+            "enum": [
+              "sent",
+              "not_sent",
+              "unknown"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 2000
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/AssistantDeliveryReceipt"
+          }
+        },
+        "additionalProperties": true,
+        "description": "仅 principal.kind=owner；绑定当前 attempts 且仅核实 uncertain。sent 需要原消息确认回执；not_sent 重新排队同一投递；unknown 保持 uncertain。已有成功分片禁止整条重投。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "outcome": {
+                  "const": "sent"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "receipt"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "receipt"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "AssistantDirectReplyReconciliation": {
+        "type": "object",
+        "required": [
+          "attempts",
+          "outcome",
+          "evidence",
+          "receipt",
+          "createdAt"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "outcome": {
+            "enum": [
+              "sent",
+              "not_sent",
+              "unknown"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 2000
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantDeliveryReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantDirectReply": {
+        "type": "object",
+        "required": [
+          "id",
+          "triggerId",
+          "threadId",
+          "kind",
+          "text",
+          "state",
+          "attempts",
+          "reconciliations"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "triggerId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "answer",
+              "ask"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 6000
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "claimed",
+              "sent",
+              "suppressed",
+              "uncertain"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receipt": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "reconciliations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantDirectReplyReconciliation"
+            }
+          }
+        }
+      },
+      "AssistantOutboxDelivery": {
+        "type": "object",
+        "required": [
+          "id",
+          "taskId",
+          "state",
+          "attempts",
+          "payload",
+          "receipt",
+          "reconciliations"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "claimed",
+              "sent",
+              "uncertain",
+              "cancelled"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "receipt": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "原始投递载荷；核实不会改写此载荷或改变其幂等身份。"
+          },
+          "nextAt": {
+            "type": "number"
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "leaseUntil": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "sentAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "reconciliations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "attempts",
+                "outcome",
+                "evidence",
+                "at"
+              ],
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "outcome": {
+                  "enum": [
+                    "sent",
+                    "not_sent",
+                    "unknown"
+                  ]
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "maxLength": 2000
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantSystemState": {
+        "type": "object",
+        "required": [
+          "state",
+          "code",
+          "stage"
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "delivery_wait",
+              "continuation_wait",
+              "action_verified"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_:-]{1,100}$"
+          },
+          "stage": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,64}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AssistantPublication": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "deliver",
+              "ask",
+              "silent"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 12000
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "maxItems": 6
+          },
+          "origin": {
+            "enum": [
+              "system"
+            ]
+          },
+          "systemState": {
+            "$ref": "#/components/schemas/AssistantSystemState"
+          }
+        },
+        "additionalProperties": true,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "deliver",
+                    "ask"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "origin"
+              ],
+              "properties": {
+                "origin": {
+                  "const": "system"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "systemState"
+              ],
+              "properties": {
+                "action": {
+                  "const": "deliver"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "systemState"
+              ]
+            },
+            "then": {
+              "required": [
+                "origin"
+              ],
+              "properties": {
+                "origin": {
+                  "const": "system"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "AssistantScheduleLifecycle": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "phase",
+          "sourceSessionId",
+          "at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 500
+          },
+          "phase": {
+            "enum": [
+              "created",
+              "triggered",
+              "completed",
+              "failed"
+            ]
+          },
+          "sourceSessionId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurrenceAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "enum": [
+                    "triggered",
+                    "completed",
+                    "failed"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "occurrenceAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "enum": [
+                    "completed",
+                    "failed"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "taskId"
+              ]
+            }
+          }
+        ]
+      },
+      "AssistantCurrentResult": {
+        "type": "object",
+        "required": [
+          "version",
+          "instructionRevision"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "instructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": true,
+        "not": {
+          "required": [
+            "review"
+          ]
+        }
+      },
+      "AssistantAttention": {
+        "type": "object",
+        "required": [
+          "id",
+          "taskId",
+          "assignmentId",
+          "sessionId",
+          "callId",
+          "question",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "assignmentId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "callId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "question": {
+            "type": "object"
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "answered"
+            ]
+          },
+          "answerTriggerId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "enum": [
+              "worker"
+            ]
+          },
+          "instructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "resultVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssistantNotification": {
+        "type": "object",
+        "required": [
+          "type",
+          "text"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "task.result",
+              "task.attention",
+              "task.accepted",
+              "schedule.lifecycle"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "origin": {
+            "enum": [
+              "system",
+              "router"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "threadRefs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "publication": {
+            "$ref": "#/components/schemas/AssistantPublication"
+          },
+          "systemState": {
+            "$ref": "#/components/schemas/AssistantSystemState"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/AssistantScheduleLifecycle"
+          },
+          "taskStatus": {
+            "type": "string"
+          },
+          "currentInstructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currentResultVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currentResult": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantCurrentResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currentAttention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantAttention"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currentPauseReason": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "continuationWait": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "attention": {
+            "$ref": "#/components/schemas/AssistantAttention"
+          }
+        },
+        "additionalProperties": true,
+        "description": "正式发布通知；schedule.lifecycle 为宿主系统事实卡。history 对同来源桌面任务投影 currentResult/currentAttention/currentPauseReason，均可为 null；历史正文不改写为当前状态。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "schedule.lifecycle"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "origin",
+                "schedule",
+                "threadId",
+                "threadRefs"
+              ],
+              "properties": {
+                "origin": {
+                  "const": "system"
+                },
+                "threadId": {
+                  "const": "main"
+                },
+                "threadRefs": {
+                  "const": [
+                    "main"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "systemState"
+              ]
+            },
+            "then": {
+              "required": [
+                "origin"
+              ],
+              "properties": {
+                "origin": {
+                  "const": "system"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "AssistantAttentionResolution": {
+        "type": "object",
+        "required": [
+          "assignmentId",
+          "taskId",
+          "sessionId",
+          "callId",
+          "questionId",
+          "instructionRevision",
+          "question",
+          "route",
+          "basis",
+          "createdAt"
+        ],
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "callId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "questionId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "instructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "question": {
+            "type": "object"
+          },
+          "route": {
+            "enum": [
+              "self",
+              "default",
+              "user"
+            ]
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 2000
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 6000
+          },
+          "answer": {
+            "type": "object",
+            "required": [
+              "id",
+              "selected",
+              "custom"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "selected": {
+                "type": "array",
+                "maxItems": 0
+              },
+              "custom": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          "authorization": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "nonBlocking": {
+            "const": true
+          },
+          "systemState": {
+            "enum": [
+              "mandate-unavailable",
+              "model-unavailable",
+              "timeout",
+              "triage-unavailable"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "description": "只读宿主分流证据。self/default 引用主人原指令，不冒充人类答复，不创建 answerTriggerId；权限问题始终交给 user。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "route": {
+                  "enum": [
+                    "self",
+                    "default"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "evidence",
+                "answer"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "route": {
+                  "const": "default"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "authorization",
+                "nonBlocking"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "route": {
+                  "const": "user"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "answer"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "evidence"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "authorization"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "nonBlocking"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "AssistantTask": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "instructionRevision",
+          "resultVersion",
+          "adjustmentOfTaskId",
+          "liveSummary"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "waiting",
+              "completed"
+            ]
+          },
+          "instructionRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "resultVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "adjustmentOfTaskId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "liveSummary": {
+            "type": "object",
+            "required": [
+              "goal",
+              "progress",
+              "blocker",
+              "status",
+              "updatedAt"
+            ],
+            "properties": {
+              "goal": {
+                "type": "string"
+              },
+              "progress": {
+                "type": "string"
+              },
+              "blocker": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "additionalProperties": true
+          },
+          "attentionResolutions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantAttentionResolution"
+            }
+          },
+          "archived": {
+            "type": "boolean",
+            "description": "Explicit user-managed presentation metadata; completing a task never archives it automatically."
+          }
+        },
+        "additionalProperties": true,
+        "description": "进行中的任务使用 revise 更新要求；已完成成果使用 adjustment 创建关联的新任务。adjustmentOfTaskId 指向原任务，新任务 instructionRevision=1/resultVersion=0，原任务及结果保留。"
+      },
+      "AssistantDelegationInput": {
+        "type": "object",
+        "required": [
+          "text",
+          "acceptance"
+        ],
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 100000
+          },
+          "acceptance": {
+            "type": "string",
+            "maxLength": 100000,
+            "description": "保留原验收要求；空字符串由宿主使用当前主人原始指令。"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 200
+          },
+          "duplicateOfTaskId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": true,
+        "description": "assistant_delegate 工具输入；执行仅使用系统工作角色模型队列，创建会话时冻结，不接受单任务 provider/model 覆盖。duplicateOfTaskId 只关联同来源当前在办任务，不扩大授权、不重复创建任务。 请求标识与当前要求版本由宿主根据真实输入持有，模型无需填写。",
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "provider"
+              ]
+            },
+            {
+              "required": [
+                "model"
+              ]
+            },
+            {
+              "required": [
+                "providerId"
+              ]
+            },
+            {
+              "required": [
+                "modelId"
+              ]
+            },
+            {
+              "required": [
+                "workerModel"
+              ]
+            }
+          ]
+        }
+      },
+      "AssistantTaskChangeInput": {
+        "type": "object",
+        "required": [
+          "id",
+          "operation",
+          "reason"
+        ],
+        "properties": {
+          "operation": {
+            "enum": [
+              "revise",
+              "adjustment"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          },
+          "expectedInstructionRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 10000
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 100000
+          },
+          "acceptance": {
+            "type": "string",
+            "maxLength": 100000
+          },
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true,
+        "description": "进行中仅允许 revise，原执行会话在下一工具边界整份应用；终态使用 adjustment 创建关联的新任务，原结果保持不变。模型仅由系统工作角色配置决定，不接受单任务覆盖。 请求标识与当前要求版本由宿主根据真实输入持有，模型无需填写。",
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "provider"
+              ]
+            },
+            {
+              "required": [
+                "model"
+              ]
+            },
+            {
+              "required": [
+                "providerId"
+              ]
+            },
+            {
+              "required": [
+                "modelId"
+              ]
+            },
+            {
+              "required": [
+                "workerModel"
+              ]
+            }
+          ]
+        }
+      },
+      "AssistantGoalInput": {
+        "type": "object",
+        "required": [
+          "objective",
+          "requestId"
+        ],
+        "properties": {
+          "objective": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "网页创建的稳定请求标识；同标识同内容复用原目标，不因主会话重置重新创建。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "清单目标：一句目标文字，跨会话保留，不启动执行。"
+      },
+      "ManagedSettingOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "op",
+          "path"
+        ],
+        "properties": {
+          "op": {
+            "enum": [
+              "set",
+              "unset"
+            ]
+          },
+          "path": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "value": {}
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "op": {
+                  "const": "set"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        ]
+      },
+      "AssistantHistoryText": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "seq",
+          "time",
+          "role",
+          "text",
+          "fullLength",
+          "offset",
+          "nextOffset",
+          "complete",
+          "source"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "time": {
+            "type": "number"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 16000
+          },
+          "fullLength": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "nextOffset": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "source": {
+            "const": "official"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

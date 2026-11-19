@@ -3,15 +3,20 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Context } from '@deepseek-ai/cordis';
 import LlmRuntime from '@deepseek-ai/dsh-llm';
+import { Session, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session';
 import { mountHarnessAdapter } from '../src/adapter.mjs';
-import { encodeRouteModelId } from '../../benchgo/src/picker-catalog.mjs';
-import { createSessionRoutes } from '../../benchgo/src/session-routes.mjs';
+import { mediaResultFile, NATIVE_MEDIA_RESULT } from '../../media/shared/generation-result.mjs';
+import { encodeRouteModelId } from '../../base/src/picker-catalog.mjs';
+import { createSessionRoutes } from '../../base/src/session-routes.mjs';
+import { createRuntimeSettings } from '../../base/src/runtime-settings.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 class Native extends EventEmitter {
+  routeService = { async capture({ providerId, model }) { return { providerId, model }; } };
+  pickerCatalog = { async models() { return [{ provider: 'commander-codex', id: selectedApiModel, name: 'Real model', context: { contextWindow: 131072 }, inputModalities: ['text'] }]; } };
   providers = new Map([['codex', { config: {} }]]);
   records = [];
   sent = [];
@@ -21,7 +26,7 @@ class Native extends EventEmitter {
   snapshot(id) { return this.get(id); }
   get(id) { return this.records.find(record => record.id === id); }
   async create(options) {
-    const record = { ...options, id: `native-${this.records.length}`, status: 'idle', cursor: 0, events: [], receipts: {} };
+    const record = { ...options, model: options.route?.model, id: `native-${this.records.length}`, status: 'idle', cursor: 0, events: [], receipts: {} };
     this.records.push(record); return record;
   }
   async connect(id) { this.get(id).status = 'idle'; this.drivers.set(id, { setModel: async model => { this.get(id).model = model; } }); }
@@ -89,10 +94,12 @@ test('changing models retains a complete reconnectable binding and captured nati
   const s = setup(), directory = await mkdtemp(join(tmpdir(), 'adapter-route-switch-'));
   t.after(async () => { await s.dispose(); await rm(directory, { recursive: true, force: true }); });
   const provider = { baseURL: 'https://router.example/v1', apiKey: 'test-secret', credentialRef: 'router-key', protocol: 'openai-responses' };
-  const routes = createSessionRoutes({ directory, providers: { resolve: async () => provider, describeRoute: async () => provider } });
+  const runtimeSettings = createRuntimeSettings({ directory });
+  const advancedConfig = { config: { model_reasoning_effort: 'high', features: { multi_agent: true } } };
+  const routes = createSessionRoutes({ directory, runtimeSettings, providers: { resolve: async () => provider, describeRoute: async () => provider } });
   s.native.routeService = routes;
   const create = s.native.create.bind(s.native);
-  s.native.create = async options => create({ ...options, route: await routes.capture({ tool: options.provider, ...options.route, quickSettings: { effort: 'high', multiAgent: true } }) });
+  s.native.create = async options => create({ ...options, route: await routes.capture({ tool: options.provider, ...options.route, advancedConfig }) });
   const first = encodeRouteModelId('router', 'vendor/one'), second = encodeRouteModelId('router', 'vendor/two');
   s.native.pickerCatalog = { models: async () => [first, second].map(id => ({ id, provider: 'commander-codex', name: id, inputModalities: ['text'] })) };
   await collect(s.adapter.stream({ ...request([human('one', 'hello')]), model: first }));
@@ -104,7 +111,7 @@ test('changing models retains a complete reconnectable binding and captured nati
   assert.equal(after.mode, before.mode);
   assert.equal(after.baseURL, before.baseURL);
   assert.equal(after.credentialRef, before.credentialRef);
-  assert.deepEqual(after.quickSettings, before.quickSettings);
+  assert.deepEqual(after.advancedConfig, advancedConfig);
   assert.notEqual(after.fingerprint, before.fingerprint);
   const launch = await routes.launch({ tool: 'codex', route: JSON.parse(JSON.stringify(after)), sessionId: randomUUID() });
   assert(launch.commandArgs.includes('model="vendor/two"'));
@@ -121,27 +128,24 @@ test('native adapters reject API effort IDs instead of silently ignoring a saved
   assert.equal(s.native.sent.length, 0);
   await s.dispose();
 });
-test('managed picker refuses unsafe new defaults while preserving legacy native sessions', async () => {
+test('managed picker requires an explicit executable API route', async () => {
   const s = setup(); s.native.pickerCatalog = { models: async () => [] };
-  await assert.rejects(collect(s.adapter.stream(request([human('one', 'hello')]))), /本机默认配置/);
+  await assert.rejects(collect(s.adapter.stream({ ...request([human('one', 'hello')]), model: 'native-default' })), /API 模型目录/);
   await assert.rejects(collect(s.adapter.stream({ ...request([human('one', 'hello')]), model: encodeRouteModelId('removed', 'model') })), /重新选择/);
   assert.equal(s.native.records.length, 0);
-  await s.native.create({ provider: 'codex', cwd: '/project', ownerSessionId: 'harness' });
-  await collect(s.adapter.stream(request([human('one', 'hello')])));
-  assert.equal(s.native.records.length, 1); assert.equal(s.native.records[0].route, undefined);
   await s.dispose();
 });
 const human = (id, text) => ({ role: 'user', id, source: { kind: 'user' }, content: [{ type: 'text', text }] });
-const request = messages => ({ provider: 'commander-codex', model: 'native-default', sessionId: 'harness', messages });
+const selectedApiModel = encodeRouteModelId('test-api', 'real-model');
+const request = messages => ({ provider: 'commander-codex', model: selectedApiModel, sessionId: 'harness', messages });
 async function collect(stream) { const chunks = []; for await (const chunk of stream) chunks.push(chunk); return chunks; }
 
 test('native providers and discovered models enter the official catalog without creating sessions', async () => {
   const s = setup();
-  assert.deepEqual(s.ctx.routes, ['commander-codex', 'commander-claude', 'commander-pi', 'commander-opencode', 'commander-gemini', 'commander-hermes', 'commander-grok', 'commander-mcode']);
-  assert.deepEqual((await s.adapter.listModels('commander-codex')).map(model => model.id), ['native-default', 'real-model']);
-  assert.deepEqual((await s.adapter.resolveModel('commander-codex', 'real-model')).context, { contextWindow: 131072 });
-  assert.equal((await s.adapter.resolveModel('commander-codex', 'native-default')).context, undefined);
-  assert.equal((await s.adapter.resolveModel('commander-codex', 'unknown-model')).context, undefined);
+  assert.deepEqual(s.ctx.routes, ['commander-codex', 'commander-claude', 'commander-pi', 'commander-opencode', 'commander-gemini', 'commander-grok', 'commander-mcode']);
+  assert.deepEqual((await s.adapter.listModels('commander-codex')).map(model => model.id), [selectedApiModel]);
+  assert.deepEqual((await s.adapter.resolveModel('commander-codex', selectedApiModel)).context, { contextWindow: 131072 });
+  await assert.rejects(s.adapter.resolveModel('commander-codex', 'native-default'), /API 模型目录/);
   assert.equal(s.native.records.length, 0);
   assert.equal(s.adapter.providerRetryPolicy().maxRetries, 0);
   await s.dispose(); assert.equal(s.ctx.removed, true);
@@ -163,6 +167,34 @@ test('official text stream forwards only durable human inputs and preserves nati
   assert.equal(s.native.sent.length, 2);
   assert.equal(s.native.listenerCount('event'), 0);
   await s.dispose();
+});
+
+test('official native replay keeps the external media receipt and its original group', async t => {
+  const s = setup(), session = Session.create('harness', undefined, {
+    id: 'harness', version: SESSION_FORMAT_VERSION, cwd: process.cwd(), createdAt: 1, isSeeded: false,
+  });
+  t.after(s.dispose);
+  s.ctx.agents.requireInitiator = () => ({ session });
+  s.native.respond = false;
+  const submit = s.native.submit.bind(s.native);
+  const externalUrl = 'https://images.cdn.com/finished?signature=a%2Fb';
+  s.native.submit = async (...args) => {
+    const receipt = await submit(...args), id = args[0];
+    s.native.event(id, 'media.result', { requestId: receipt.turnId, externalUrl, url: externalUrl, mimeType: 'image/png' }, receipt.turnId);
+    s.native.event(id, 'text.delta', { text: 'native reply' }, receipt.turnId);
+    s.native.event(id, 'turn.completed', { status: 'completed' }, receipt.turnId);
+    return receipt;
+  };
+  const first = human('one', 'Draw spring');
+  const send = (...messages) => collect(s.adapter.stream(request(messages)));
+  const records = () => session.snapshotEvents().filter(row => row.type === NATIVE_MEDIA_RESULT);
+  await send(first);
+  await send(first);
+  assert.equal(records().length, 1);
+  assert.equal(mediaResultFile(records()[0].data).url, externalUrl);
+  await send(first, human('two', 'Draw again'));
+  assert.equal(records().length, 2);
+  assert.notEqual(records()[0].data.groupId, records()[1].data.groupId);
 });
 
 test('auxiliary requests, wrong identities and attachments fail before native side effects', async () => {
@@ -238,7 +270,7 @@ test('actual Harness LlmRuntime routes native text and rejects attachments befor
     await ctx.plugin(LlmRuntime);
     const fiber = ctx.plugin({ name: 'adapter-test', inject: ['llm', 'agents'], apply(scope) { mountHarnessAdapter(scope, native, { discover: async () => [] }); } });
     await fiber;
-    assert.equal(ctx.llm.listProviders().length, 8);
+    assert.equal(ctx.llm.listProviders().length, 7);
     const chunks = await collect(ctx.llm.stream(request([human('one', 'hello')])));
     assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } });
     const attachment = human('two', 'look'); attachment.content.push({ type: 'image', attachment: {} });
@@ -251,7 +283,7 @@ test('actual Harness LlmRuntime routes native text and rejects attachments befor
 
 test('a child explicitly adopted into its own Harness conversation reuses its native context', async () => {
   const s = setup();
-  const child = await s.native.create({ provider: 'codex', cwd: '/project', ownerSessionId: 'harness', parentId: 'parent', harnessAdopted: true });
+  const child = await s.native.create({ provider: 'codex', cwd: '/project', ownerSessionId: 'harness', parentId: 'parent', harnessAdopted: true, route: { providerId: 'test-api', model: 'real-model' } });
   await collect(s.adapter.stream(request([human('one', 'continue child')])));
   assert.equal(s.native.records.length, 1);
   assert.equal(s.owners.at(-1)[0], child.id);

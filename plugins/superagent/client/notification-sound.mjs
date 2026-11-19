@@ -3,7 +3,7 @@ export const notificationSoundStorageKey = 'benchgo.assistant.notificationSound'
 /** Local device preference; browser permission is always reported separately. */
 export function createNotificationSound(environment = globalThis) {
   const listeners = new Set();
-  let enabled = true, context, disposed = false, unlocking = false, lastPlayed = -Infinity;
+  let enabled = true, context, disposed = false, unlocking = false, previewPending = false, lastPlayed = -Infinity;
   const nodes = new Set(), seen = new Set();
   try { enabled = environment.localStorage?.getItem(notificationSoundStorageKey) !== 'false'; } catch {}
   let snapshot = { enabled, state: 'locked', error: '' };
@@ -30,7 +30,9 @@ export function createNotificationSound(environment = globalThis) {
     } catch (cause) { publish({ state: 'error', error: cause.message || '声音播放失败，请重试' }); return false; }
   };
   async function unlock(preview = false) {
-    if (disposed || !snapshot.enabled || unlocking) return false;
+    if (disposed || !snapshot.enabled) return false;
+    if (preview) previewPending = true;
+    if (unlocking) return false;
     unlocking = true;
     try {
       const Audio = environment.AudioContext || environment.webkitAudioContext;
@@ -39,21 +41,23 @@ export function createNotificationSound(environment = globalThis) {
       publish({ state: 'unlocking', error: '' });
       // Called directly from trusted user gestures. Never queue a missed notification.
       let timer;
-      await Promise.race([context.resume(), new Promise((_, reject) => { timer = environment.setTimeout(() => reject(new Error('浏览器尚未允许播放，请点击试听重试')), 1500); })]).finally(() => environment.clearTimeout(timer));
+      await Promise.race([context.resume(), new Promise((_, reject) => { timer = environment.setTimeout(() => reject(new Error('浏览器尚未允许播放提示音')), 1500); })]).finally(() => environment.clearTimeout(timer));
       if (disposed) return false;
-      if (context.state !== 'running') throw new Error('浏览器尚未允许播放，请点击试听重试');
+      if (context.state !== 'running') throw new Error('浏览器尚未允许播放提示音');
       publish({ state: 'ready', error: '' });
-      return preview ? tone() : true;
+      return previewPending ? tone() : true;
     } catch (cause) { if (!disposed) publish({ state: 'error', error: cause.message || '声音不可用，请重试' }); return false; }
-    finally { unlocking = false; }
+    finally { unlocking = false; previewPending = false; }
   }
   return {
     getSnapshot: () => snapshot,
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     unlock,
     setEnabled(value) {
-      publish({ enabled: !!value }); if (!value) stop();
-      try { environment.localStorage?.setItem(notificationSoundStorageKey, String(!!value)); } catch { publish({ error: '浏览器未允许保存偏好，本次设置仅在当前页面有效' }); }
+      if (!value) { previewPending = false; stop(); }
+      let preferenceError = '';
+      try { environment.localStorage?.setItem(notificationSoundStorageKey, String(!!value)); } catch { preferenceError = '浏览器未允许保存偏好，本次设置仅在当前页面有效'; }
+      publish({ enabled: !!value, preferenceError });
     },
     notify(keys) {
       if (!keys.length || !remember(keys)) return false;

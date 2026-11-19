@@ -1,7 +1,8 @@
 import React, { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
-import { InteractiveReply } from '../../interactive/client/reply.jsx';
+import { InteractiveReply } from '../../base/interactive/client/reply.jsx';
 import { ImageGallery } from '../../shared/client/image-gallery.jsx';
+import { ConversationMediaFile, conversationMediaKind } from '../../shared/client/conversation-media.jsx';
 import { ArtifactPreview } from '../../shared/client/artifact-preview.jsx';
 import { FileSaveButton } from '../../shared/client/file-save-button.jsx';
 import { fileUrl, previewKind } from '../../shared/client/preview-model.mjs';
@@ -14,7 +15,7 @@ import css from './reply-deliverables.css';
 function previewable(file) {
   if (file.local) return false;
   try { fileUrl(file.url); } catch { return false; }
-  return /\.(?:pdf|docx|xlsx?|csv|tsv|pptx|md|markdown|txt|json|html?|mp3|wav|ogg|m4a|flac|mp4|webm|mov)(?:$|[?#])/i.test(file.filename || file.name);
+  return /\.(?:pdf|docx|xlsx?|csv|tsv|pptx|md|markdown|txt|json|html?)(?:$|[?#])/i.test(file.filename || file.name);
 }
 
 function ReplyFile({ file, onPreview, onOpenFile, fileRequestId }) {
@@ -48,7 +49,9 @@ export function ReplyDeliverables({ images = [], files = [], onOpenFile, fileReq
   if (!images.length && !files.length) return null;
   return <section className="ba-reply-deliverables" aria-label="交付文件"><style>{css}</style>
     {!!images.length && <ImageGallery images={images} />}
-    {!!files.length && <div className="ba-reply-files">{files.map(file => <ReplyFile key={file.url} file={file} onPreview={setSelected} onOpenFile={onOpenFile} fileRequestId={fileRequestId} />)}</div>}
+    {!!files.length && <div className="ba-reply-files">{files.map(file => !file.local && conversationMediaKind(file)
+      ? <ConversationMediaFile key={file.url} file={file} />
+      : <ReplyFile key={file.url} file={file} onPreview={setSelected} onOpenFile={onOpenFile} fileRequestId={fileRequestId} />)}</div>}
     {selected && <ArtifactPreview file={{ ...selected, pdfUrl: false }} onClose={() => setSelected(null)} />}
   </section>;
 }

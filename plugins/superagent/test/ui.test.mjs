@@ -1,5 +1,4 @@
-import { groupReplyImages } from '../../shared/client/image-gallery-model.mjs';
-import { createModelCatalogLoader } from '../../benchgo/client/model-catalog.mjs';
+import { createModelCatalogLoader } from '../../base/client/model-catalog.mjs';
 import { retainAssistantSession, assistantBackgroundSessions } from '../client/session-retain.mjs';
 import { executionSessionNavigation } from '../client/execution-session-navigation.mjs';
 import test from 'node:test';
@@ -13,8 +12,8 @@ import * as modelSettings from '../client/model-settings.mjs';
 import { petActionForSession, petExpressionForAction } from '../client/pet-state.mjs';
 import { createConfigSync, saveConfigPatch } from '../client/config-sync.mjs';
 import { structuralShare } from '../client/structural-share.mjs';
-const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
-const code = transformSync(readFileSync(new URL('../client/index.jsx', import.meta.url), 'utf8') + '\nexport { mergeHistory, Images, loadCatalog, messageText, HistoryNotice, retainSession, PendingCard, PendingInteractions, UIIcon, Identity, Studio, ResourceTabs, RetainedPane, api, BackgroundSessions };', { loader: 'jsx', format: 'cjs' }).code;
+const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
+const code = transformSync(readFileSync(new URL('../client/index.jsx', import.meta.url), 'utf8') + '\nexport { mergeHistory, loadCatalog, messageText, retainSession, PendingCard, PendingInteractions, UIIcon, Identity, Studio, ResourceTabs, RetainedPane, api, BackgroundSessions };', { loader: 'jsx', format: 'cjs' }).code;
 const settingsCode = transformSync(readFileSync(new URL('../client/model-settings.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 function harness(options = {}) {
   let cursor = 0, refCursor = 0; const state = [...(options.state || [])], refs = [], effects = [], calls = [];
@@ -40,7 +39,7 @@ test('model edits preserve opaque IDs and unrelated hidden configuration across 
   const config = { revision: 8, name: 'A', models, auxiliary, image: { modelId: 'Image:01' } };
   const changed = [...models].reverse();
   const h = harness({ response: { ...config, models: changed, revision: 9 } });
-  const props = { initialTab: 'models', snapshot: { config }, execute: operation => operation(), refresh: async () => {} };
+  const props = { modelsOnly: true, snapshot: { config }, refresh: async () => {} };
   let nodes = walk(h.render('Identity', props));
   assert.equal(nodes.some(node => ['AuxiliaryModels', 'KeyPools'].includes(node.type?.name)), false);
   nodes.find(node => node.props.label === '提高优先级' && !node.props.disabled).props.onClick();
@@ -58,7 +57,7 @@ test('auxiliary capability switch saves independently on the same model page', a
   const config = { revision: 12, name: 'BenchGo', models: [{ providerId: 'main', modelId: 'Main/Exact' }], auxiliary: { models: [{ providerId: 'aux', modelId: 'Aux/Exact' }], capabilities: [] } };
   const next = { ...config, revision: 13, auxiliary: { ...config.auxiliary, capabilities: ['vision'] } };
   const h = harness({ response: next });
-  const props = { initialTab: 'models', snapshot: { config }, execute: operation => operation(), refresh: async () => {} };
+  const props = { modelsOnly: true, snapshot: { config }, refresh: async () => {} };
   let nodes = walk(h.render('Identity', props));
   const boxes = nodes.filter(node => node.type === 'Switch');
   assert.equal(boxes.length, 4);
@@ -69,7 +68,8 @@ test('auxiliary capability switch saves independently on the same model page', a
   await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [{ action: 'config', revision: 12, patch: { auxiliary: next.auxiliary } }]);
   const empty = walk(harness().render('Identity', { ...props, snapshot: { config: { ...config, auxiliary: null } } }));
-  assert(empty.filter(node => node.type === 'Switch').every(node => node.props.disabled));
+  assert.equal(empty.filter(node => node.type === 'Switch').length, 0);
+  assert.ok(empty.some(node => node.type === 'Disclosure' && node.props.description === '跟随身份模型 Router' && walk(node).some(child => child.props['aria-label'] === '辅助模型配置')));
 });
 
 test('Worker queue edits save independently and removing all entries visibly restores Router inheritance', async () => {
@@ -78,7 +78,7 @@ test('Worker queue edits save independently and removing all entries visibly res
     auxiliary: { models: [{ providerId: 'Aux/@', modelId: 'Exact: Aux/4' }], capabilities: ['review'] } };
   const reversed = [...config.workerModels].reverse();
   const h = harness({ response: { ...config, workerModels: reversed, revision: 21 } });
-  const props = { initialTab: 'models', snapshot: { config }, execute: operation => operation(), refresh: async () => {} };
+  const props = { modelsOnly: true, snapshot: { config }, refresh: async () => {} };
   let nodes = walk(h.render('Identity', props));
   const workerSection = nodes.find(node => node.props['aria-label'] === '工作模型 Worker 配置');
   walk(workerSection).find(node => node.props.label === '提高优先级' && !node.props.disabled).props.onClick();
@@ -269,7 +269,7 @@ test('sidebar collapse state and chevron structure follow shared rotation styles
   const css = readFileSync(new URL('../client/style.css', import.meta.url), 'utf8');
   assert.match(css, /\.ba-assistant-section\{[^}]*border-radius:12px;/);
   assert.match(readFileSync(new URL('../client/card.css', import.meta.url), 'utf8'), /\.ba-card-name\{[^}]*white-space:nowrap;/);
-  assert.match(readFileSync(new URL('../../benchgo/client/style.css', import.meta.url), 'utf8'), /\.cmd-section-toggle\[aria-expanded="false"\] > \.cmd-ui-icon \{ transform: rotate\(-90deg\);/);
+  assert.match(readFileSync(new URL('../../base/client/style.css', import.meta.url), 'utf8'), /\.cmd-section-toggle\[aria-expanded="false"\] > \.cmd-ui-icon \{ transform: rotate\(-90deg\);/);
 });
 
 test('assistant collapse keeps main chat and resources accessible and restores its local preference', () => {
@@ -342,15 +342,16 @@ test('sidebar selection follows chat and resource events without waiting for a p
   cleanups.forEach(dispose => dispose());
   assert.equal(h.documentListeners.has('benchgo:assistant-tab'), false);
 });
-test('resetting a custom name card preserves the rest of the settings draft', () => {
+test('identity keeps the edited name in its own draft', () => {
   const h = harness();
   const config = { name: 'A', cardHtml: '<b>A</b>', models: [], image: null, tts: null, asr: null };
   const props = { snapshot: { config } };
-  let nodes = walk(h.render('Identity', props));
-  nodes.find(node => node.props.defaultName).props.onChange({ cardHtml: null });
-  nodes = walk(h.render('Identity', props));
-  assert.equal(nodes.find(node => node.props.defaultName).props.config.cardHtml, null);
-  assert.equal(nodes.find(node => node.type === 'input' && node.props.value === 'A').props.value, 'A');
+  const fields = () => walk(walk(h.render('Identity', props)).find(node => node.props.identityFields).props.identityFields);
+  let nodes = fields();
+  nodes.find(node => node.type === 'input').props.onChange({ target: { value: 'Draft' } });
+  nodes = fields();
+  assert.equal(nodes.some(node => node.props.label === '形象动效'), false);
+  assert.equal(nodes.find(node => node.type === 'input').props.value, 'Draft');
 });
 test('history keeps earlier and middle pages across polling and send refreshes', () => {
   const { mergeHistory } = harness().exports;
@@ -390,23 +391,16 @@ test('catalog fetch is shared across model fields', async () => {
   const h = harness(); await Promise.all([h.exports.loadCatalog(), h.exports.loadCatalog(), h.exports.loadCatalog()]);
   assert.equal(h.calls.length, 1);
 });
-test('image previews reject executable URL schemes and expose download', () => {
-  const h = harness(); const nodes = walk(h.render('Images', { images: [{ url: 'javascript:alert(1)' }, { url: '/api/assistant/image/1', name: 'picture.png' }] }));
-  const galleries = nodes.filter(node => node.type === 'ImageGallery');
-  assert.equal(galleries.length, 1);
-  assert.equal(galleries[0].props.images[0].name, 'picture.png');
-  assert.equal(galleries[0].props.images[0].url, '/api/assistant/image/1');
-});
-test('identity saves only changed card fields and never overwrites media or USER.md', async () => {
-  const config = { revision: 1, name: 'A', cardHtml: '<b>A</b>', models: [{ providerId: 'cloud', modelId: 'Opaque:09' }], image: { modelId: 'Exact Image:01' }, video: { modelId: 'Exact Video:03' }, asr: { modelId: 'Exact ASR:07' }, tts: { modelId: 'Exact TTS:09' } };
-  const h = harness({ response: { ...config, revision: 2, cardHtml: null } });
+test('identity saves only the changed name with an old motion preference present', async () => {
+  const config = { revision: 1, name: 'A', cardHtml: '<b>A</b>', cardMotion: false, models: [{ providerId: 'cloud', modelId: 'Opaque:09' }], image: { modelId: 'Exact Image:01' }, video: { modelId: 'Exact Video:03' }, asr: { modelId: 'Exact ASR:07' }, tts: { modelId: 'Exact TTS:09' } };
+  const h = harness({ response: { ...config, revision: 2, name: 'B' } });
   const props = { snapshot: { config, profile: { identity: '协作原则', user: '保留 USER.md' } }, execute: operation => operation(), refresh: async () => {} };
   let nodes = walk(h.render('Identity', props));
   assert.equal(nodes.filter(node => node.type === 'textarea').length, 0);
-  nodes.find(node => node.props.defaultName).props.onChange({ cardHtml: null });
+  walk(nodes.find(node => node.props.identityFields).props.identityFields).find(node => node.type === 'input').props.onChange({ target: { value: 'B' } });
   nodes = walk(h.render('Identity', props));
   await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
-  assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [{ action: 'config', patch: { cardHtml: null }, revision: 1 }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [{ action: 'config', patch: { name: 'B' }, revision: 1 }]);
   assert.equal(config.models[0].modelId, 'Opaque:09');
 });
 test('resource navigation includes vault and system files last without settings or automation switch', () => {
@@ -468,10 +462,10 @@ test('identity body is edited only through documents; model priority remains exa
   const h = harness({ response: { ...config, revision: 5 } }), props = { snapshot: { config, profile: { identity: 'old' } }, execute: operation => operation(), refresh: async () => {} };
   let nodes = walk(h.render('Identity', props));
   assert.equal(nodes.some(node => node.type === 'textarea'), false);
-  nodes.find(node => node.type === h.exports.ResourceTabs).props.onChange('models');
-  nodes = walk(h.render('Identity', props));
+  const modelsProps = { ...props, modelsOnly: true };
+  nodes = walk(h.render('Identity', modelsProps));
   nodes.find(node => node.props.label === '提高优先级' && !node.props.disabled).props.onClick();
-  nodes = walk(h.render('Identity', props));
+  nodes = walk(h.render('Identity', modelsProps));
   await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
   assert.deepEqual(h.calls[0].patch.models.map(model => model.modelId), ['Exact:Second', 'Exact:First']);
   assert.equal(h.calls[0].revision, 4);
@@ -483,11 +477,6 @@ test('message rendering never passes content block objects to React', () => {
   assert.equal(messageText({ text: '', content: [{ type: 'tool-call', name: 'tool' }] }), '');
   assert.equal(messageText({ content: [{ type: 'text', text: 'hello' }, { type: 'image' }, { type: 'text', text: 'world' }] }), 'hello\nworld');
   assert.equal(messageText({ content: {} }), '');
-});
-test('backend errors and fallback reasons are visible', () => {
-  const h = harness(); const nodes = walk(h.render('HistoryNotice', { history: { error: 'All models unavailable', failures: [{ model: { modelId: 'exact-id' }, reason: 'Rate limited' }] } }));
-  assert.ok(nodes.some(node => node.props.role === 'alert' && walk(node).some(child => child.children.includes('All models unavailable'))));
-  assert.ok(nodes.some(node => node.children.includes('exact-id') && node.children.includes('Rate limited')));
 });
 test('legacy pending cards never answer high-risk approval outside the review page', async () => {
   const h = harness(), answers = [];
@@ -801,7 +790,7 @@ test('clear is a main-chat slash action that resets once and opens the new sessi
   assert.deepEqual(h.calls.map(call => call.action), ['resetMain', 'state', 'ensure', 'history']);
   const nodes = walk(h.render('AssistantPage', { ctx }));
   assert.ok(nodes.some(node => node.props.sessionId === 'main-new'));
-  const nextHistory = nodes.find(node => node.type === h.exports.HistoryNotice).props.history;
+  const nextHistory = nodes.find(node => node.props.history?.sessionId === 'main-new').props.history;
   assert.equal(nextHistory.messages.length, 0);
   assert.equal(nextHistory.images.length, 0);
   assert.equal(nextHistory.error, undefined);
@@ -817,11 +806,11 @@ test('clear failure preserves the main session and remains retryable', async () 
   const h = harness({ state: [snapshot, '', 'chat', 'main', history], response: () => { throw new Error('请先停止正在运行的主聊天'); } });
   const props = { ctx: {} };
   let nodes = walk(h.render('AssistantPage', props));
-  await nodes.find(node => node.type === h.exports.HistoryNotice).props.onClear();
+  await nodes.find(node => node.props.onClear).props.onClear();
   nodes = walk(h.render('AssistantPage', props));
-  assert.ok(nodes.some(node => node.children.includes('请先停止正在运行的主聊天')));
-  assert.equal(nodes.find(node => node.type === h.exports.HistoryNotice).props.history, history);
-  await nodes.find(node => node.type === h.exports.HistoryNotice).props.onClear();
+  assert.ok(nodes.some(node => node.props.loadError === '请先停止正在运行的主聊天'));
+  assert.equal(nodes.find(node => node.props.onClear).props.history, history);
+  await nodes.find(node => node.props.onClear).props.onClear();
   assert.deepEqual(h.calls.map(call => call.action), ['resetMain', 'resetMain']);
 });
 
@@ -846,13 +835,10 @@ test('clear success remains committed when opening the new chat needs a retry', 
   } });
   const props = { ctx: {} };
   let nodes = walk(h.render('AssistantPage', props));
-  await nodes.find(node => node.type === h.exports.HistoryNotice).props.onClear();
+  await nodes.find(node => node.props.onClear).props.onClear();
   nodes = walk(h.render('AssistantPage', props));
-  assert.ok(nodes.some(node => node.children.includes('主聊天已清理，重新加载失败：连接中断')));
-  const nextHistory = nodes.find(node => node.type === h.exports.HistoryNotice).props.history;
-  assert.equal(nextHistory.sessionId, undefined);
-  assert.equal(nextHistory.messages.length, 0);
-  assert.equal(nextHistory.images, undefined);
+  assert.ok(nodes.some(node => node.props.message?.includes('主聊天已清理，重新加载失败：连接中断')));
+  assert.ok(!nodes.some(node => node.props.history?.sessionId === 'main-old'));
   assert.equal(nodes.find(node => node.type === h.exports.PendingInteractions).props.threads.length, 0);
   assert.deepEqual(h.calls.map(call => call.action), ['resetMain', 'state']);
 });
@@ -897,19 +883,4 @@ test('resources mount lazily and remain mounted while hidden behind chat', () =>
   assert.equal(hidden.props.hidden, true);
   assert.equal(hidden.props.style.display, 'none');
   assert.deepEqual(hidden.children, ['draft']);
-});
-
-test('identity category switching retains edits and saving still requires explicit submission', () => {
-  const h = harness();
-  const props = { snapshot: { config: { revision: 1, name: 'Original' } }, execute: operation => operation(), refresh: async () => {} };
-  let nodes = walk(h.render('Identity', props));
-  nodes.find(node => node.type === 'input' && node.props.maxLength === 100).props.onChange({ target: { value: 'Draft' } });
-  nodes = walk(h.render('Identity', props));
-  nodes.find(node => node.type?.name === 'ResourceTabs').props.onChange('pet');
-  nodes = walk(h.render('Identity', props));
-  assert.ok(nodes.find(node => node.type === 'button' && node.props.type === 'submit' && !node.props.disabled));
-  nodes.find(node => node.type?.name === 'ResourceTabs').props.onChange('info');
-  nodes = walk(h.render('Identity', props));
-  assert.equal(nodes.find(node => node.type === 'input' && node.props.maxLength === 100).props.value, 'Draft');
-  assert.equal(h.calls.length, 0);
 });

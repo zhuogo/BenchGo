@@ -197,6 +197,27 @@ test('an explicit request coalesces and model failure preserves the visible stat
   await h.close();
 });
 
+test('execution summary uses the host Router queue when a dedicated summary route is missing or disabled', async () => {
+  const router = { providerId: 'Router/@', modelId: 'Exact: Router/1', options: { maxTokens: 400 } };
+  const backup = { providerId: 'Backup/@', modelId: 'Exact: Router/2', options: { reasoningEffort: 'low' } };
+  const summary = { providerId: 'Summary/@', modelId: 'Exact: Summary/1' };
+  for (const auxiliary of [null, { models: [], capabilities: ['summary'] }, { models: [summary], capabilities: ['review'] }]) {
+    const requests = [];
+    const request = createExecutionAuxiliaryRequester({ getConfig: async () => ({ models: [router, backup], auxiliary }), llm: { async *stream(options) {
+      requests.push([options.provider, options.model, options.maxTokens, options.reasoningEffort, options.tools]);
+      if (options.provider === router.providerId) throw Object.assign(new Error('offline'), { status: 401 });
+      yield { type: 'text-delta', text: 'valid' };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    } } });
+    const result = await request({ purpose: 'summary', instructions: 'Summarize', input: {} });
+    assert.equal(result.text, 'valid');
+    assert.equal(result.routing.auxiliary, false);
+    assert.deepEqual(requests, [[router.providerId, router.modelId, 400, undefined, []], [backup.providerId, backup.modelId, 768, 'low', []]]);
+  }
+  const unconfigured = createExecutionAuxiliaryRequester({ getConfig: async () => ({ models: [] }), llm: { stream: () => assert.fail('unexpected request') } });
+  await assert.rejects(unconfigured({ purpose: 'summary', instructions: 'Summarize', input: {} }), { code: 'AUXILIARY_UNCONFIGURED' });
+});
+
 test('explicit model text cannot overwrite a newer paused revision', async () => {
   let resolve;
   const h = harness({ requestText: () => new Promise(done => { resolve = done; }) });

@@ -1,1 +1,1 @@
-export { channelMessageRecordType, channelMessageRecordOf } from '../../benchgo/shared/public-chat-record.mjs';
+export { channelMessageRecordType, channelMessageRecordOf } from '../../base/shared/public-chat-record.mjs';

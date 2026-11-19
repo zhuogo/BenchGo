@@ -17,7 +17,7 @@ export async function readAssessmentPolicy(store, workspaceRegistry, threadId) {
   const selected = connections.find(row => row.channel === channel) || connection;
   const enabled = new Set(selected.config.enabledRuleIds || []);
   const writtenRules = readAdmissionRules(document.content).filter(rule => enabled.has(rule.id));
-  return { version, desktopVersion, connections: Object.fromEntries(connections.map(row => [row.channel, { ...row, enabledRuleIds: readAdmissionRules(document.content).filter(rule => (row.config.enabledRuleIds || []).includes(rule.id)).map(rule => rule.id) }])), projects, model: roleModels(undefined, config, 'router')[0], models: roleModels(undefined, config, 'router'), workerModels: roleModels(undefined, config, 'worker'), routingConfig: { revision: config.revision, auxiliary: config.auxiliary, models: config.models, workerModels: config.workerModels }, rules: document.content + '\nEnabled admission rules (exact IDs):\n' + JSON.stringify(writtenRules), connection: connection.config, mode: selected.config.admissionMode || 'manual', enabledRuleIds: writtenRules.map(rule => rule.id) };
+  return { version, desktopVersion, connections: Object.fromEntries(connections.map(row => [row.channel, { ...row, enabledRuleIds: readAdmissionRules(document.content).filter(rule => (row.config.enabledRuleIds || []).includes(rule.id)).map(rule => rule.id) }])), projects, model: roleModels(undefined, config, 'router')[0], models: roleModels(undefined, config, 'router'), workerHarness: config.workerHarness, workerModels: config.workerModels, routingConfig: { revision: config.revision, auxiliary: config.auxiliary, models: config.models, workerHarness: config.workerHarness, workerModels: config.workerModels }, rules: document.content + '\nEnabled admission rules (exact IDs):\n' + JSON.stringify(writtenRules), connection: connection.config, mode: selected.config.admissionMode || 'manual', enabledRuleIds: writtenRules.map(rule => rule.id) };
 }
 
 /** Admission records a trusted instruction; it does not preapprove controlled actions. */
@@ -70,9 +70,10 @@ export function validateTaskMandate(mandate, { policy }) {
   // against their own adapter's current policy.
   if (desktop && mandate.policyVersion !== policy.desktopVersion) return false;
   if (mandate.execution) {
-    const { deviceId, hostId, authorizationId, config } = mandate.execution;
+    const { deviceId, hostId, authorizationId, config, protocolVersion } = mandate.execution;
     if (!desktop || [deviceId, hostId, authorizationId].some(value => typeof value !== 'string' || !value)
-      || deviceId === 'local' || config?.harness !== 'official' || !Array.isArray(config.models) || config.models.length !== 1
+      || deviceId === 'local' || protocolVersion !== 2 || !['official', 'codex', 'claude'].includes(config?.harness)
+      || !Array.isArray(config.models) || config.models.length !== 1
       || config.models.some(model => typeof model?.providerId !== 'string' || !model.providerId || typeof model?.modelId !== 'string' || !model.modelId)
       || mandate.project && (mandate.project.deviceId !== deviceId || mandate.project.hostId !== hostId
         || typeof mandate.project.id !== 'string' || !mandate.project.id || typeof mandate.project.path !== 'string' || !mandate.project.path)) return false;

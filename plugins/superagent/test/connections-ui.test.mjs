@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
-const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const code = transformSync(readFileSync(new URL('../client/connections.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 const walk = node => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(walk)] : [];
 test('channel brand color is driven by saved availability, including fallback icons', () => {

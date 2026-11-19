@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { documentHash, isAssistantDocument } from './documents.mjs';
-import { applySettingsOps, assertSettingsExpected, settingsSnapshot } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { applySettingsOps, assertSettingsExpected, settingsSnapshot } from '../../base/shared/settings-adapter-utils.mjs';
 import { LEARNING_CONFIG_SCHEMA } from './settings-schema.mjs';
 
 const now = () => new Date().toISOString();

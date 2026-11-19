@@ -4,22 +4,23 @@ import { createAssistantOrchestrationStore } from '../src/orchestration-store.mj
 import { createRemoteAssignmentExecutor } from '../src/remote-assignment-executor.mjs';
 import { commitWorkerResult } from '../src/result-commit.mjs';
 
-const execution = { deviceId: 'B-device', hostId: 'B-host', authorizationId: 'B-auth',
+const execution = { deviceId: 'B-device', hostId: 'B-host', authorizationId: 'B-auth', protocolVersion: 2,
   config: { harness: 'official', models: [{ providerId: 'opaque provider', modelId: 'opaque/model' }] } };
 function fixture(t, { lostSubmit = false, lostInput = false, pageSize = 100 } = {}) {
   const database = createAssistantOrchestrationStore({ filename: ':memory:', ownerHostId: 'A-host' });
   let clock = Date.now(), offline = false, rejectIdentity = false, peer, submits = 0, commits = 0;
   const calls = [], inputKeys = new Map();
   const source = { channel: 'desktop', sessionId: 'A-owner-session', threadId: 'main', messageId: 'origin' };
-  database.createThread({ id: 'A-thread', source: { type: 'desktop', id: 'A-owner-session' } });
-  const mandate = { source, actorId: 'desktop-owner', admission: 'desktop-approved-delegation', policyVersion: 'policy',
+  const { trigger } = database.ingest({ dedupeKey: 'origin', thread: { id: 'A-thread', source: { type: 'desktop', id: 'A-owner-session' } },
+    source, actor: { kind: 'human', id: 'desktop-owner' }, content: 'Run the selected task on B.', mode: 'direct' });
+  const mandate = { source, triggerId: trigger.id, instruction: trigger.content, actorId: 'desktop-owner', admission: 'desktop-approved-delegation', policyVersion: 'policy',
     controlledActions: 'require-current-policy-and-harness-approval', execution };
-  const task = database.createTask({ threadId: 'A-thread', target: 'execute in B', acceptance: 'real evidence', mandate });
+  const task = database.createTask({ threadId: 'A-thread', target: 'execute in B', acceptance: 'real evidence', mandate, sourceTriggerIds: [trigger.id] });
   database.createAssignment(task.id, { executor: 'remote', execution, text: task.target });
   const [assignment] = database.claimAssignments('A-worker', { validateMandate: () => true });
   const event = (kind, data) => { const value = { seq: peer.events.length + 1, kind, data }; peer.events.push(value); return value; };
   const response = input => { const events = peer.events.filter(row => row.seq > (input.after || 0)).slice(0, Math.min(pageSize, input.limit || 100));
-    return { version: 1, execution: structuredClone(peer.execution), events: structuredClone(events), cursor: events.at(-1)?.seq ?? input.after ?? 0,
+    return { version: 2, execution: structuredClone(peer.execution), events: structuredClone(events), cursor: events.at(-1)?.seq ?? input.after ?? 0,
       hasMore: peer.events.some(row => row.seq > (events.at(-1)?.seq ?? input.after ?? 0)) }; };
   const ctx = { logger: { warn() {} }, get: name => name === 'benchgoLink' ? { callDevice: async call => {
     calls.push(structuredClone({ ...call, signal: undefined }));
@@ -97,6 +98,10 @@ test('A keeps the only Task, exact configuration and one Run while B returns a f
   assert.deepEqual(submit.config, execution.config);
   assert.equal(submit.identity.ownerHostId, 'A-host');
   assert.equal(submit.identity.taskId, app.task.id);
+  const original = app.database.getTrigger(app.task.mandate.triggerId);
+  assert.equal(submit.requirements.mandate.triggerId, original.id);
+  assert.deepEqual(submit.requirements.mandate.source, original.source);
+  assert.equal(submit.requirements.mandate.instruction, original.content);
   app.complete(); await app.tick();
   assert.equal(app.database.getTask(app.task.id).status, 'completed');
   assert.equal(app.database.results(app.task.id)[0].summary, '真实远端成果');

@@ -6,7 +6,7 @@ import { runInNewContext } from 'node:vm';
 import * as taskTitle from '../src/task-title.mjs';
 import * as taskState from '../client/task-state.mjs';
 import * as activityData from '../client/activity-data.mjs';
-const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const code = transformSync(readFileSync(new URL('../client/task-list.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 const walk = node => node && typeof node === 'object' && node.props ? [node, ...(node.children || []).flatMap(walk)] : [];
 function harness(fail = false) {

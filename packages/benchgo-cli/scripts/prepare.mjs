@@ -8,15 +8,15 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 const resources = join(here, 'resources');
 const files = ['workbench-installation.mjs', 'plugin-install.mjs', 'update-feed.mjs', 'server-resources.mjs', 'update-public-key.pem'];
 let source;
-try { source = await stat(join(root, 'plugins/benchgo/package.json')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+try { source = await stat(join(root, 'plugins/base/package.json')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 if (source?.isFile()) {
-  const plugin = JSON.parse(await readFile(join(root, 'plugins/benchgo/package.json'), 'utf8'));
+  const plugin = JSON.parse(await readFile(join(root, 'plugins/base/package.json'), 'utf8'));
   const upstream = JSON.parse(await readFile(join(root, 'upstream.json'), 'utf8'));
   await mkdir(resources, { recursive: true });
   await cp(join(root, 'LICENSE'), join(resources, 'LICENSE'));
   const shared = join(resources, 'shared');
   await rm(shared, { recursive: true, force: true }); await mkdir(shared, { recursive: true });
-  for (const name of files) await cp(join(root, 'plugins/benchgo/shared', name), join(shared, name));
+  for (const name of files) await cp(join(root, 'plugins/base/shared', name), join(shared, name));
   await writeFile(join(resources, 'install.json'), JSON.stringify({ schemaVersion: 1,
     releaseVersion: plugin.benchgo?.releaseVersion || plugin.version, pluginVersion: plugin.version, engineVersion: upstream.version }, null, 2) + '\n');
   const server = join(resources, 'server');

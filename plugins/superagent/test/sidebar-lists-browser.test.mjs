@@ -5,7 +5,7 @@ import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
@@ -14,7 +14,7 @@ const checkout = join(root, 'deepseek-harness');
 const official = existsSync(join(checkout, 'packages/api/gateway/lib/client.node.js')) ? checkout : dirname(realpathSync(join(checkout, 'node_modules')));
 const requireOfficial = createRequire(join(official, 'packages/api/gateway/package.json'));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 async function fixture() {
@@ -22,7 +22,7 @@ async function fixture() {
     import React from 'react';import {createRoot} from 'react-dom/client';
     import {AssistantSidebarEntry} from './plugins/superagent/client/index.jsx';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
-    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/benchgo/client/style.css';
+    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/base/client/style.css';
     import tokens from './deepseek-harness/packages/client/ui-theme/src/styles/design-platform.css';import themeBase from './deepseek-harness/packages/client/ui-theme/src/styles/base.css';
     installIconSprite({effect:effect=>effect(),on(){}},undefined);
     const panel={activePanelId:'benchgo-assistant'},sessions={ids:[],byId:{}},statuses=new Map();
@@ -31,7 +31,7 @@ async function fixture() {
     document.addEventListener('benchgo:assistant-thread',event=>window.threadEvents.push(event.detail));
     createRoot(document.getElementById('root')).render(<><style>{tokens}{themeBase}{hostCss}{css}</style><aside style={{width:208}}><AssistantSidebarEntry ctx={ctx}/></aside><main><textarea aria-label='当前草稿' defaultValue='保留这段草稿'/><div aria-label='全局任务'>所有来源的任务</div></main></>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-sidebar-list-test'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'),
       '@deepseek-ai/dsh-api-gateway/client': requireOfficial.resolve('@deepseek-ai/dsh-api-gateway/client') },

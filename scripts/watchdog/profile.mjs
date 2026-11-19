@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { resolveWatchdogConfig, readWatchdogToken } from '../../plugins/superagent/src/watchdog-config.mjs';
 
 const repository = fileURLToPath(new URL('../../', import.meta.url));
-const { parse: parseYaml } = createRequire(new URL('../../plugins/benchgo/package.json', import.meta.url))('yaml');
+const { parse: parseYaml } = createRequire(new URL('../../plugins/base/package.json', import.meta.url))('yaml');
 export const WATCHDOG_PROFILE = 'benchgo-watchdog';
 const failure = (code, message) => Object.assign(new Error(message), { code });
 const absolute = (value, name) => {
@@ -25,7 +25,7 @@ async function regularFile(path, name, maxBytes) {
 
 /** Create one isolated, new deployment; existing profiles and credentials are never replaced. */
 export async function initializeWatchdogProfile({ directory, targetId, targetUrl, tokenFile,
-  pluginDirectory = join(repository, 'plugins/benchgo'), config = {} }) {
+  pluginDirectory = join(repository, 'plugins/base'), config = {} }) {
   directory = absolute(directory, 'directory');
   tokenFile = absolute(tokenFile, 'tokenFile');
   pluginDirectory = await realpath(absolute(pluginDirectory, 'pluginDirectory'));

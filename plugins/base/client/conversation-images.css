@@ -1,0 +1,8 @@
+.bg-user-conversation-images:not([hidden]){display:contents}
+.bg-conversation-images{display:grid;justify-items:start;min-width:0}
+.bg-conversation-images[data-align=end]{justify-items:end}
+.bg-conversation-images>.bg-image-gallery{box-sizing:border-box}
+.bg-conversation-images>.bg-image-gallery[data-multiple=false]{width:min(100%,440px)}
+.bg-conversation-images-error{display:flex;gap:4px;align-items:center;color:var(--dsw-alias-label-secondary);font-size:12px}
+.bg-conversation-images[data-align=end]{width:min(100%,440px)}
+.bg-conversation-images[data-align=end]:has(>.bg-image-gallery[data-multiple=true]){width:min(100%,340px)}

@@ -3,10 +3,11 @@ import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { Loading } from '../../shared/client/ui/loading.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
-import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
+import { UIIcon } from '../../base/client/iconsax.jsx';
+import { readJsonResponse } from '../../base/client/http-response.mjs';
 import { deviceIcon, deviceKind, deviceStatus, workbenchUrl } from './device-state.mjs';
 import { connectDeviceSwitch, deviceSwitchFrameMessage, deviceSwitchState } from './device-switch.mjs';
+import { observeHostTheme, sendWorkbenchTheme, themedWorkbenchUrl } from './device-theme.mjs';
 
 const switchStyle = `.dsh-device-switch{display:flex;align-items:center;justify-content:flex-end;flex:0 1 156px;min-width:0;margin-inline-start:auto;-webkit-app-region:no-drag;color:var(--dsw-alias-label-secondary,#666);font:12px/1.4 var(--dsw-font-family,system-ui)}
 html[data-windows-titlebar] .cmd-shell-sidebar:not([data-shortcut-modal=sidebar]) .cmd-sidebar-nav:has(.dsh-device-switch){padding-right:0}
@@ -41,8 +42,13 @@ html[data-input-modality=keyboard] .dsh-device-switch-menu>[role=presentation]{t
 async function ownerRequest(action, args = {}) {
   const url = new URL('/api/commander-devices', location.origin);
   const response = await fetch(url, { method: 'POST', credentials: 'same-origin', signal: AbortSignal.timeout(15_000), headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args, parentOrigin: location.origin }) });
-  const value = await readJsonResponse(response, url);
-  if (value.error) throw new Error(typeof value.error === 'string' ? value.error : value.error.message || '设备暂时无法打开');
+  const failed = response.ok ? null : response.clone();
+  const value = await readJsonResponse(response, url).catch(async error => {
+    const body = await failed?.json().catch(() => null);
+    if (typeof body?.code === 'string') error.code = body.code;
+    throw error;
+  });
+  if (value.error) throw Object.assign(new Error(typeof value.error === 'string' ? value.error : value.error.message || '设备暂时无法打开'), { code: value.code });
   return value;
 }
 
@@ -55,6 +61,11 @@ export function DeviceSwitch() {
   const [frameErrors, setFrameErrors] = useState({});
   const embedded = window.parent && window.parent !== window;
   const owner = !embedded && document.documentElement.hasAttribute('data-windows-titlebar');
+  useEffect(() => {
+    if (owner) return observeHostTheme(theme => {
+      for (const [id, url] of Object.entries(urls)) sendWorkbenchTheme(frames.current.get(id), url, theme);
+    });
+  }, [owner, urls]);
   const state = deviceSwitchState(delegated ? { ...delegated, open } : { devices, activeId, open, busy, error });
   const refresh = () => {
     if (!owner) return;
@@ -100,7 +111,7 @@ export function DeviceSwitch() {
       if (retry || frameErrors[device.id] || !Object.hasOwn(urls, device.id)) {
         const value = await ownerRequest('select', { deviceId: device.id });
         if (typeof value.url !== 'string' || !value.url) throw new Error('设备未返回工作台地址');
-        const url = workbenchUrl(value.url, location.origin);
+        const url = themedWorkbenchUrl(workbenchUrl(value.url, location.origin));
         if (!mounted.current) return;
         setReady(items => items.filter(id => id !== device.id));
         setFrameErrors(current => ({ ...current, [device.id]: '' }));
@@ -108,7 +119,16 @@ export function DeviceSwitch() {
         setUrls(current => ({ ...current, [device.id]: url }));
       }
       if (mounted.current) { setActiveId(device.id); selected(device.id); void refresh(); }
-    } catch (reason) { if (mounted.current) { const message = reason.name === 'TimeoutError' ? '设备连接超时，请检查网络后重试' : reason.message; if (activeId === device.id) setFrameErrors(current => ({ ...current, [device.id]: message })); else { setError(message); setOpen(true); } } }
+    } catch (reason) {
+      if (!mounted.current) return;
+      const message = reason.name === 'TimeoutError' ? '设备连接超时，请检查网络后重试' : reason.message;
+      if (activeId === device.id) setFrameErrors(current => ({ ...current, [device.id]: message }));
+      if (reason.code === 'SSH_AUTH_REQUIRED') {
+        document.dispatchEvent(new CustomEvent('benchgo:device-ssh-auth', { detail: { deviceId: device.id } }));
+      } else if (activeId !== device.id) {
+        setError(message); setOpen(true);
+      }
+    }
     finally { gate.current = false; if (mounted.current) setBusy(''); }
   };
   const publish = id => {
@@ -173,7 +193,11 @@ export function DeviceSwitch() {
         {state.error && <p className="dsh-device-switch-error" role="alert">{state.error}，请选择设备重试。</p>}
       </Menu>
     </div>
-    {owner && createPortal(<div className="dsh-device-switch-stage" hidden={!activeId}>{Object.entries(urls).map(([id, url]) => <iframe key={id} ref={node => { if (node) frames.current.set(id, node); else frames.current.delete(id); }} src={url} title={(devices.find(item => item.id === id)?.name || '设备') + '工作台'} hidden={activeId !== id} onLoad={() => { setReady(items => items.filter(item => item !== id)); frames.current.get(id)?.contentWindow?.postMessage({ type: 'benchgo:device-switch:probe' }, new URL(url).origin); }} onError={() => setFrameErrors(current => ({ ...current, [id]: '设备工作台加载失败，请检查连接后重试' }))} allow="clipboard-read; clipboard-write; microphone" referrerPolicy="no-referrer" />)}
+    {owner && createPortal(<div className="dsh-device-switch-stage" hidden={!activeId}>{Object.entries(urls).map(([id, url]) => <iframe key={id} ref={node => { if (node) frames.current.set(id, node); else frames.current.delete(id); }} src={url} title={(devices.find(item => item.id === id)?.name || '设备') + '工作台'} hidden={activeId !== id} onLoad={event => {
+      setReady(items => items.filter(item => item !== id));
+      sendWorkbenchTheme(event.currentTarget, url);
+      event.currentTarget.contentWindow?.postMessage({ type: 'benchgo:device-switch:probe' }, new URL(url).origin);
+    }} onError={() => setFrameErrors(current => ({ ...current, [id]: '设备工作台加载失败，请检查连接后重试' }))} allow="clipboard-read; clipboard-write; microphone" referrerPolicy="no-referrer" />)}
       {activeId && (!ready.includes(activeId) || frameErrors[activeId]) && <div className="dsh-device-switch-loading">{frameErrors[activeId] ? <><p role="alert">{frameErrors[activeId]}</p><button type="button" disabled={!!busy} onClick={() => void choose(state.items.find(item => item.id === activeId), { retry: true })}>{busy ? '正在重试…' : '重试'}</button></> : <Loading compact label="正在打开设备工作台…" />}<button type="button" onClick={() => { setActiveId(null); setOpen(false); selected(state.items[0].id); }}>返回本机</button></div>}
     </div>, document.body)}
   </>;

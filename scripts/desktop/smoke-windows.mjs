@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { smokePreparedRuntime } from '../../deepseek-harness/apps/desktop/scripts/smoke-prepared-runtime.ts';
 import { DesktopHostProcess } from '../../deepseek-harness/apps/desktop/src/host-process.ts';
-import { getInstallState } from '../../plugins/benchgo/shared/plugin-install.mjs';
+import { getInstallState } from '../../plugins/base/shared/plugin-install.mjs';
 import { assertPackagedUpdateEngine } from './packaged-profile-probe.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));

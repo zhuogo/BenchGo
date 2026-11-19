@@ -1,9 +1,9 @@
 import { Commander } from './runtime.mjs';
-import { askNativeQuestion } from '../../benchgo/src/questions.mjs';
+import { askNativeQuestion } from '../../base/src/questions.mjs';
 import { mountHarnessCommands } from './official-commands.mjs';
 import { mountHarnessAdapter } from './adapter.mjs';
 import { mountHarnessWeb } from './web.mjs';
-import { isFullNativePermission, nativePermissionError, officialNativePermission } from './permissions.mjs';
+import { fullNativePermission } from './permissions.mjs';
 import { createRemoteExecutionService } from './remote-execution.mjs';
 import { join } from 'node:path';
 
@@ -16,11 +16,12 @@ const output = { schema: { type: 'object', additionalProperties: true }, render:
 export async function apply(ctx, config = {}) {
   const base = ctx.get('benchgo'), tooling = ctx.get('benchgoTooling');
   const commander = await new Commander({ ...base.config, ...config, dataDir: base.directory }).open();
+  commander.getMediaGeneration = () => ctx.get('mediaGeneration');
   ctx.effect(() => () => commander.close());
-  Object.assign(commander, { toolInstaller: tooling.installer, toolProfiles: tooling.profiles, routeService: tooling.routeService, pickerCatalog: tooling.pickerCatalog });
+  Object.assign(commander, { toolInstaller: tooling.installer, routeService: tooling.routeService, pickerCatalog: tooling.pickerCatalog, runtimeSettings: tooling.runtimeSettings });
   ctx.provide('commander', commander);
   ctx.inject(['llm', 'agents', 'workspaceRegistry', 'sessionQuery'], async child => {
-    const execution = await createRemoteExecutionService({ ctx: child, directory: join(base.directory, 'executions') });
+    const execution = await createRemoteExecutionService({ ctx: child, directory: join(base.directory, 'executions'), commander });
     child.provide('benchgoExecution', execution);
     child.effect(() => () => execution.close());
   });
@@ -29,14 +30,7 @@ export async function apply(ctx, config = {}) {
     child.provide('benchgoHarnessWeb', web);
   });
   const owners = new Map();
-  commander.resolvePermission = session => {
-    const owner = session.ownerSessionId;
-    if (!owner || owner.startsWith('commander-web:')) return undefined;
-    const agents = ctx.get('agents');
-    const agent = typeof agents?.get === 'function' ? agents.get(owner) : owners.get(session.id) ?? owners.get(owner);
-    if (!agent || String(agent.session?.id) !== owner) throw nativePermissionError('找不到原生会话所属的父会话，拒绝回退到默认权限。');
-    return officialNativePermission(ctx, agent);
-  };
+  commander.resolvePermission = session => session.permission ?? fullNativePermission;
   ctx.inject(['commands'], child => mountHarnessCommands(child, commander, { bindOwner: (id, agent) => owners.set(id, agent) }));
   ctx.inject(['llm', 'agents', 'workspaceRegistry'], child => { mountHarnessAdapter(child, commander, { bindOwner: (id, agent) => owners.set(id, agent) }); });
   const ownerId = exec => {
@@ -65,6 +59,12 @@ export async function apply(ctx, config = {}) {
       const controller = new AbortController(); controllers.set(event.data.id, controller);
       try {
         const owner = commander.snapshot(event.sessionId).ownerSessionId;
+        const executionHandler = commander.executionHandlers.get(event.sessionId);
+        if (executionHandler) {
+          const answer = await executionHandler(event.data, controller.signal);
+          commander.approve(event.sessionId, event.data.id, answer ?? { allow: false });
+          return;
+        }
         const agent = owners.get(event.sessionId) ?? ctx.get('agents')?.get(owner);
         const approval = ctx.get('approval');
         let allow = false;
@@ -104,25 +104,16 @@ export async function apply(ctx, config = {}) {
   register('commander_providers', 'List native coding-agent providers and protocol capabilities. Does not prove installation or login.', {}, [], async () => ({ providers: commander.catalog() }));
   register('commander_doctor', 'Check native coding-agent executables and versions. Does not inspect credentials or prove login.', {}, [], async () => ({ providers: await commander.doctor() }));
   register('commander_sessions', 'List external sessions owned by this Harness conversation.', {}, [], async (_args, exec) => ({ sessions: commander.list().filter(s => s.ownerSessionId === ownerId(exec)) }));
-  register('commander_create', 'Create or import a persistent native coding-agent session under the owning conversation permissions. Starting an external engine requires user approval unless that conversation explicitly has Full access. Use commander_send for tasks.', {
-    provider: { type: 'string', enum: ['codex', 'claude', 'pi', 'opencode', 'gemini', 'hermes', 'grok', 'mcode'] },
-    cwd: string('Absolute working directory'), model: string('Optional native model ID'), providerId: string('Optional configured DSH supplier ID; requires model and creates an isolated session, never changes the local CLI profile'),
-    nativeId: string('Existing native thread/session handle to resume, only after its original writer is stopped'),
+  register('commander_create', 'Create a persistent coding-agent session with an explicit BenchGo API route, in an isolated configuration directory. Use commander_send for tasks.', {
+    provider: { type: 'string', enum: ['codex', 'claude', 'pi', 'opencode', 'gemini', 'grok', 'mcode'] },
+    cwd: string('Absolute working directory'), model: string('Exact model ID'), providerId: string('Configured BenchGo API provider ID'),
     parentId: string('Optional BenchGo parent session for delegation'),
-  }, ['provider', 'cwd'], async (args, exec) => {
+  }, ['provider', 'cwd', 'providerId', 'model'], async (args, exec) => {
     const ownerSessionId = ownerId(exec);
     if (args.parentId) owned(args.parentId, exec);
-    const approval = ctx.get('approval');
-    if (!approval) throw new Error('A human approval service is required to start external agents');
-    const permission = ctx.get('sandboxPolicy') ? officialNativePermission(ctx, exec.agent) : undefined;
-    if (!isFullNativePermission(permission)) {
-      const grant = await approval.request({ agent: exec.agent, toolName: 'commander_create', callId: exec.callId, signal: exec.signal, reason: `Start ${args.provider} in ${args.cwd}. It uses its native credentials; permissions follow this conversation and native approval requests are forwarded separately.` });
-      if (grant !== 'allowed-once') throw new Error('External agent launch was not approved');
-    }
     exec.signal.throwIfAborted();
     const { providerId, ...createArgs } = args;
-    if (providerId && !args.model) throw new Error('An explicit model is required for a managed supplier route');
-    const session = await commander.create({ ...createArgs, ...(providerId ? { route: { providerId, model: args.model } } : {}), ownerSessionId });
+    const session = await commander.create({ ...createArgs, route: { providerId, model: args.model }, ownerSessionId });
     owners.set(session.id, exec.agent);
     return session;
   });

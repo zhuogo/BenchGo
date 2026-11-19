@@ -2,7 +2,7 @@ import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { Dialog, DialogContent, DialogTitle } from '../../shared/client/ui/dialog.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import css from './task-list.css';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { normalizeTaskTitle, TASK_TITLE_MAX_CHARS } from '../src/task-title.mjs';

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const tar = createRequire(join(root, 'plugins/benchgo/package.json'))('tar');
+const tar = createRequire(join(root, 'plugins/base/package.json'))('tar');
 export const installVerification = 'server-install-and-start';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function digest(path) { const hash = createHash('sha256'); for await (const chunk of createReadStream(path)) hash.update(chunk); return hash.digest('hex'); }

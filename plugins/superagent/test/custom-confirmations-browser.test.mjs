@@ -4,10 +4,10 @@ import {existsSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {dirname,join} from 'node:path';
-import {sharedUiStyles} from '../../benchgo/scripts/shared-ui.mjs';
+import {sharedUiStyles} from '../../base/scripts/shared-ui.mjs';
 const root=fileURLToPath(new URL('../../../',import.meta.url));
 const require=createRequire(new URL('../../../deepseek-harness/apps/web/package.json',import.meta.url));
-const {chromium}=require('playwright'),{build}=createRequire(new URL('../../benchgo/package.json',import.meta.url))('esbuild');
+const {chromium}=require('playwright'),{build}=createRequire(new URL('../../base/package.json',import.meta.url))('esbuild');
 const executablePath=[chromium.executablePath(),'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 test('custom task confirmations retain drafts on cancel and require approval before deletion',{skip:!executablePath},async()=>{
  const bundle=await build({stdin:{resolveDir:root,loader:'jsx',contents:`
@@ -16,7 +16,7 @@ test('custom task confirmations retain drafts on cancel and require approval bef
  import {Button} from './plugins/shared/client/ui/button.jsx';
  function App(){const [open,setOpen]=useState(false),[text,setText]=useState('保留这段草稿');window.calls=[];
  return <><button onClick={()=>setOpen(true)}>打开任务</button><TaskDetail open={open} title='编辑任务' dirty onClose={()=>setOpen(false)}><label>任务草稿<textarea value={text} onChange={event=>setText(event.target.value)}/></label></TaskDetail><TaskListRow api={async(...args)=>window.calls.push(args)} kind='task' row={{id:'one',taskCanOrganize:true,taskMeta:{version:3}}} title='已结束任务'/></>};createRoot(document.getElementById('root')).render(<App/>);
- `},bundle:true,write:false,format:'iife',jsx:'automatic',nodePaths:[join(root,'plugins/benchgo/node_modules'),join(root,'deepseek-harness/apps/web/node_modules')],alias:{react:dirname(require.resolve('react/package.json')),'react-dom':dirname(require.resolve('react-dom/package.json'))},loader:{'.css':'text','.svg':'text'},plugins:[sharedUiStyles()],define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent'});
+ `},bundle:true,write:false,format:'iife',jsx:'automatic',nodePaths:[join(root,'plugins/base/node_modules'),join(root,'deepseek-harness/apps/web/node_modules')],alias:{react:dirname(require.resolve('react/package.json')),'react-dom':dirname(require.resolve('react-dom/package.json'))},loader:{'.css':'text','.svg':'text'},plugins:[sharedUiStyles()],define:{'process.env.NODE_ENV':'"production"'},logLevel:'silent'});
  const browser=await chromium.launch({headless:true,executablePath});
  try{const page=await browser.newPage();page.setDefaultTimeout(5000);const errors=[],nativeDialogs=[];page.on('pageerror',error=>errors.push(error.message));page.on('dialog',dialog=>{nativeDialogs.push(dialog.message());void dialog.dismiss();});
  await page.setContent('<html><body><div id="root"></div></body></html>');await page.addScriptTag({content:bundle.outputFiles[0].text});

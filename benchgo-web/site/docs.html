@@ -1936,24 +1936,28 @@ function watchArticleFrameHeight() {
 function enhanceArticle(article) {
   const body = getArticleFrameDoc()?.body;
   body?.querySelectorAll('a[href]').forEach(link => {
-    const url = new URL(link.href, window.parent.location.href);
-    const isDocumentLink = !link.getAttribute('href')?.startsWith('#')
-      && url.origin === window.parent.location.origin && /^\/docs(?:\/|$)/.test(url.pathname);
-    if (isDocumentLink) { link.target = '_blank'; link.rel = 'noopener noreferrer'; }
-    link.addEventListener('click', event => {
+    // Keep a safe native target ready before the article becomes interactive.
+    if (!link.getAttribute('href')?.startsWith('#')) {
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
+    const openLink = event => {
+      if (event.type === 'auxclick' ? event.button !== 1 : event.button !== 0) return;
       const href = link.getAttribute('href');
       if (href?.startsWith('#')) {
         event.preventDefault();
         try { scrollToHeading(decodeURIComponent(href.slice(1))); } catch {}
-      } else {
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        if (isDocumentLink) {
-          event.preventDefault();
-          window.top.open(url.href, '_blank', 'noopener,noreferrer');
-        }
+      } else if (href) {
+        const url = new URL(href, window.parent.location.href);
+        if (!/^https?:$/.test(url.protocol)) return;
+        event.preventDefault();
+        // Open through the outer window: native article popups inherit the
+        // containing Page iframe's sandbox and cannot run the destination.
+        window.top.open(url.href, '_blank', 'noopener,noreferrer');
       }
-    });
+    };
+    link.addEventListener('click', openLink);
+    link.addEventListener('auxclick', openLink);
   });
   syncArticleFrameTheme();
   watchArticleFrameHeight();

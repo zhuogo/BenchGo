@@ -1,78 +1,249 @@
+import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { IconDownloadOutlineRegular, IconSparkleRegular, Menu } from '@deepseek-ai/dsh-client-ui-primitives';
 import { Button } from '../../shared/client/ui/button.jsx';
-import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
-import { PetEditor } from './pet-editor.jsx';
-import { petImageUrl } from './pet-state.mjs';
-import { assistantConfigSync, saveConfigPatch } from './config-sync.mjs';
 import { CustomSelect } from '../../shared/client/custom-select.jsx';
+import { saveOriginalFile } from '../../shared/client/file-save.mjs';
 import { PetAvatar } from '../../shared/client/pet-avatar.jsx';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
+import { applyPetDraft, petActionOptions, petExpressionForAction, petImageUrl, petWorkEvents } from './pet-state.mjs';
+import { assistantConfigSync } from './config-sync.mjs';
+import { ResourceState } from './resource-state.jsx';
+import css from './pet-editor.css';
 
-export function PetSettings({ api, config: initialConfig, onChanged, onDesign }) {
-  const syncedConfig = useSyncExternalStore(assistantConfigSync.subscribe, assistantConfigSync.getSnapshot);
-  const config = syncedConfig && syncedConfig.revision >= initialConfig.revision ? syncedConfig : initialConfig;
-  const [catalog, setCatalog] = useState(null), [draft, setDraft] = useState(null);
-  const [catalogLoading, setCatalogLoading] = useState(true), [catalogError, setCatalogError] = useState(''), [catalogRequest, setCatalogRequest] = useState(0);
-  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
-  const [motionNotice, setMotionNotice] = useState('');
-  const [selection, setSelection] = useState(config.pet?.kind === 'builtin' ? config.pet : null);
-  const [revision, setRevision] = useState(config.revision);
-  const [displayExpression, setDisplayExpression] = useState(null);
-  const [expressionId, setExpressionId] = useState('happy');
-  const [appearanceTab, setAppearanceTab] = useState('expression');
-  const appearanceId = useId();
-  const expressionInput = useRef(null);
-  useEffect(() => { setDisplayExpression(null); setSelection(config.pet?.kind === 'builtin' ? config.pet : null); }, [config.revision]);
-  useEffect(() => {
-    let active = true;
-    setCatalogLoading(true); setCatalogError('');
-    api('petCatalog').then(value => { if (active) { setCatalog(value); if (value.draft) setDraft(value.draft); } })
-      .catch(cause => { if (active) setCatalogError(cause.message); })
-      .finally(() => { if (active) setCatalogLoading(false); });
-    return () => { active = false; };
-  }, [api, catalogRequest]);
-  useEffect(() => { if (!draft) setRevision(config.revision); }, [config.revision, draft]);
-  async function run(work) { if (busy) return; setBusy(true); setError(''); setNotice(''); try { await work(); } catch (cause) { setError(cause.message); } finally { setBusy(false); } }
-  async function commit(action, args) {
-    const response = await api(action, args); setDraft(null); setRevision(response.revision ?? response.config?.revision);
-    setNotice('已应用，记忆与会话保持不变。');
-    Promise.resolve(onChanged?.()).catch(cause => setNotice('已应用；刷新失败：' + cause.message));
-  }
-  const base = selection || { kind: 'builtin', assetId: 'builtin', expression: catalog?.expressions?.[0]?.id, decorations: [], palette: catalog?.palettes?.[0]?.id };
-  const preview = patch => run(async () => { const next = { ...base, ...patch }; const result = await api('petPreview', { pet: next }); setSelection(next); setDraft(result); setRevision(config.revision); });
-  const upload = (file, expression) => run(async () => {
-    if (file.size > 8 * 1024 * 1024 || !['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('请选择不超过 8 MB 的 PNG、JPEG 或 WebP 图片');
-    const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('图片读取失败')); reader.readAsDataURL(file); });
-    setDraft(await api('petUpload', { dataUrl, ...(expression ? { expression } : {}) })); setRevision(config.revision);
+const fileData = file => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(new Error('文件读取失败，请重试。'));
+  reader.onabort = reader.onerror;
+  reader.readAsDataURL(file);
+});
+
+const categories = [['expression', '表情'], ['action', '动作'], ['palette', '配色'], ['decoration', '装饰']]
+  .map(([value, label]) => ({ value, label }));
+const assetTabs = [
+  { value: 'library', label: '素材库' },
+  { value: 'actions', label: '工作动作' },
+];
+const expressionImports = [
+  { id: 'happy', label: '开心' }, { id: 'think', label: '思考' },
+  { id: 'waiting', label: '等待' }, { id: 'wink', label: '眨眼' },
+];
+
+function AssetLibrary({ catalog, pet, category, setCategory, busy, previewBuiltin, previewVariant, play, onEmptyAction }) {
+  const id = useId();
+  const base = pet?.kind === 'builtin' ? pet : { kind: 'builtin', assetId: 'builtin', expression: 'standard', decorations: [], palette: 'default' };
+  const variants = category === 'palette' ? pet?.appearance?.palettes : pet?.appearance?.decorations;
+  const rows = category === 'action' ? petActionOptions(pet).map(item => ({ id: item.value, label: item.label, run: () => play(item.value) }))
+    : category === 'expression' ? (catalog.expressions || []).map(item => ({ ...item, sample: { ...base, expression: item.id }, selected: pet?.kind === 'builtin' && base.expression === item.id, run: () => previewBuiltin({ ...base, expression: item.id }) }))
+    : category === 'palette' ? (catalog.palettes || []).map(item => ({ ...item, colors: [item.body, item.corner, item.ink], selected: pet?.kind === 'builtin' && base.palette === item.id, run: () => previewBuiltin({ ...base, palette: item.id }) }))
+    : (catalog.decorations || []).map(item => ({ ...item, sample: { ...base, decorations: [item.id] }, selected: pet?.kind === 'builtin' && base.decorations.includes(item.id), run() {
+      const group = ['hat-', 'glasses-'].find(prefix => item.id.startsWith(prefix));
+      const selected = base.decorations.includes(item.id);
+      const decorations = base.decorations.filter(value => value !== item.id && (selected || !group || !value.startsWith(group)));
+      return previewBuiltin({ ...base, decorations: selected ? decorations : [...decorations, item.id] });
+    } }));
+  if (category === 'expression') for (const expression of Object.keys(pet?.expressions || {})) rows.push({
+    id: `custom:${expression}`, label: expression, src: petImageUrl(pet, document.baseURI, expression), run: () => play('', expression),
   });
-  function toggleDecoration(id) {
-    const current = base.decorations || [];
-    if (current.includes(id)) return preview({ decorations: current.filter(value => value !== id) });
-    const group = id.startsWith('hat-') ? 'hat-' : id.startsWith('glasses-') ? 'glasses-' : null;
-    const next = group ? current.filter(value => !value.startsWith(group)) : current;
-    if (next.length >= 3) { setError('最多搭配三件装饰，请先取消一件。'); return; }
-    return preview({ decorations: [...next, id] });
+  if (category === 'palette' || category === 'decoration') for (const variant of Object.keys(variants || {})) rows.push({
+    id: `custom:${variant}`, label: variant, src: petImageUrl({ ...pet, appearance: { ...pet.appearance, variant } }, document.baseURI),
+    selected: pet.appearance.variant === variant, run: () => previewVariant(pet.appearance.variant === variant ? null : variant),
+  });
+  return <>
+    <SegmentedControl label="素材分类" value={category} onChange={setCategory} tabIdPrefix={id} panelId={id + '-panel'} options={categories} />
+    <div id={id + '-panel'} role="tabpanel" aria-labelledby={`${id}-${category}`}>
+      {rows.length ? <div className="ba-pet-thumbnail-grid">{rows.map(item => <Button variant="ghost" type="button" className="ba-pet-choice" key={item.id} disabled={busy} aria-pressed={item.selected} onClick={() => item.run()}>
+        {(item.sample || item.src) && <PetAvatar pet={item.sample} src={item.src || petImageUrl(item.sample, document.baseURI)} size={42} motion={false} alt="" />}
+        {item.colors && <span className="ba-pet-swatches" aria-hidden="true">{item.colors.map((color, index) => <i key={index} style={{ backgroundColor: color }} />)}</span>}
+        <span>{item.label || item.id}</span>
+      </Button>)}</div> : <ResourceState icon="brush" title="暂无素材" description="可以导入形象包添加素材。" actionLabel="前往导入" onAction={onEmptyAction} />}
+    </div>
+  </>;
+}
+
+export function PetSettings({ api, config: initialConfig, identityFields, onChanged, onDesign, focusAssets, active = true }) {
+  const synced = useSyncExternalStore(assistantConfigSync.subscribe, assistantConfigSync.getSnapshot);
+  const config = synced && synced.revision >= initialConfig.revision ? synced : initialConfig;
+  const [catalog, setCatalog] = useState(null), [draft, setDraft] = useState(null);
+  const [loading, setLoading] = useState(true), [catalogError, setCatalogError] = useState(''), [request, setRequest] = useState(0);
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [preview, setPreview] = useState(null), [assetTab, setAssetTab] = useState('library');
+  const [category, setCategory] = useState('expression'), [orientation, setOrientation] = useState('horizontal');
+  const [importOpen, setImportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false), [exportFeedback, setExportFeedback] = useState(null);
+  const importButton = useRef(null), expressionId = useRef('');
+  const files = useRef(null), legacy = useRef(null), expressionFile = useRef(null), assets = useRef(null), assetLayout = useRef(null), running = useRef(false);
+  const draftOperation = useRef(0);
+  const id = useId();
+  useLayoutEffect(() => {
+    const node = assetLayout.current;
+    const update = () => {
+      if (node.clientWidth) setOrientation(node.clientWidth >= 510 ? 'vertical' : 'horizontal');
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    const startedAt = draftOperation.current;
+    setLoading(true); setCatalogError('');
+    api('petCatalog').then(value => {
+      if (!live) return;
+      setCatalog(value);
+      if (!running.current && draftOperation.current === startedAt) setDraft(value.draft || null);
+    })
+      .catch(cause => { if (live) setCatalogError(cause.message); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [api, request, active]);
+  useEffect(() => { if (!active) setImportOpen(false); }, [active]);
+  useEffect(() => {
+    if (active && focusAssets) assets.current?.focus();
+  }, [active, focusAssets]);
+  useEffect(() => {
+    if (!preview) return;
+    const timer = setTimeout(() => setPreview(null), 1800);
+    return () => clearTimeout(timer);
+  }, [preview]);
+  const pet = draft?.pet || config.pet;
+  const options = petActionOptions(pet);
+  const expressions = pet?.kind === 'custom' ? Object.keys(pet.expressions || {}).map(id => ({ id, label: id })) : (catalog?.expressions || []);
+  const play = (action, face) => setPreview({ action, face, key: Date.now() });
+  const previewFace = preview?.face || petExpressionForAction(pet, preview?.action);
+  const src = previewFace ? petImageUrl(pet, document.baseURI, previewFace) : draft?.src || petImageUrl(pet, document.baseURI);
+  async function run(work) {
+    if (running.current) return;
+    draftOperation.current++;
+    running.current = true; setBusy(true); setError(''); setNotice(''); setPreview(null);
+    try { await work(); } catch (cause) { setError(cause.message); }
+    finally { running.current = false; setBusy(false); }
   }
+  const makePreview = (action, args) => run(async () => { setDraft(await api(action, args)); });
+  async function commit(work) {
+    await work(); setDraft(null); setNotice('已应用形象');
+    void Promise.resolve(onChanged?.()).catch(cause => setNotice('已应用；刷新失败：' + cause.message));
+  }
+  function receive(event, kind) {
+    const file = event.target.files?.[0], expression = expressionId.current;
+    event.target.value = '';
+    if (!file) return;
+    void run(async () => {
+      const isPackage = kind === 'package';
+      if (file.size > (isPackage ? 24 : 8) * 1024 * 1024) throw new Error(isPackage ? '形象包不能超过 24 MiB' : '图片不能超过 8 MiB');
+      if (isPackage && !file.name.toLowerCase().endsWith('.zip')) throw new Error('请选择 ZIP 形象包');
+      const dataUrl = await fileData(file);
+      setDraft(await (isPackage ? api('petUploadPackage', { base64: dataUrl.slice(dataUrl.indexOf(',') + 1) })
+        : api('petUpload', { dataUrl, ...(kind === 'expression' ? { expression } : {}) })));
+    });
+  }
+  function importFile(kind) {
+    setImportOpen(false);
+    if (kind === 'package') files.current?.click();
+    else if (kind === 'image') legacy.current?.click();
+    else { expressionId.current = kind; expressionFile.current?.click(); }
+  }
+  async function exportPackage() {
+    setExporting(true); setExportFeedback(null);
+    let url;
+    try {
+      const { filename, base64 } = await api('petExportPackage');
+      if (!filename || !base64) throw new Error('服务未返回形象包。');
+      const binary = atob(base64), bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+      const mimeType = 'application/zip';
+      url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+      const result = await saveOriginalFile({ url, filename, mimeType, localObjectUrl: true });
+      if (result.status !== 'cancelled') setExportFeedback({ message: result.status === 'saved' ? '已保存形象包' : '已开始下载形象包' });
+    } catch (cause) { setExportFeedback({ error: true, message: `导出失败：${cause.message || '请重试。'}` }); }
+    finally { if (url) URL.revokeObjectURL(url); setExporting(false); }
+  }
+
   return <div className="ba-pet-settings">
-    <PetEditor name={config.name} pet={draft?.pet || config.pet} currentSrc={petImageUrl(config.pet, document.baseURI, displayExpression)} previewSrc={draft?.src} motion={config.cardMotion !== false} motionNotice={motionNotice} busy={busy} canRestore={config.petHasPrevious === true}
-      expressions={Object.keys(config.pet?.expressions || {}).map(id => ({ id, label: id }))} onExpression={setDisplayExpression}
-      onUpload={file => upload(file)}
-      onApply={() => run(() => commit('petApply', { draftId: draft.draftId, revision }))} onCancel={() => run(async () => { await api('petDiscard', { draftId: draft.draftId }); setDraft(null); setNotice('预览已取消，当前形象保持不变。'); })}
-      onRestore={() => run(() => commit('petRestore', { revision: config.revision }))} onReset={() => run(() => commit('petRestore', { revision: config.revision, default: true }))}
-      onMotionChange={cardMotion => run(async () => { setMotionNotice(''); const next = await saveConfigPatch(api, config, { cardMotion }); if (JSON.stringify(next.pet) === JSON.stringify(config.pet)) setRevision(next.revision); setMotionNotice(cardMotion ? '已开启' : '已关闭'); Promise.resolve(onChanged?.()).catch(cause => setMotionNotice('已保存；刷新失败：' + cause.message)); })} onDesign={onDesign} />
-    {config.pet?.kind === 'custom' && <section className="ba-pet-composition" aria-label="自己的表情"><h3>添加自己的表情</h3><p className="ba-note">上传同一形象的表情图，预览后保存。更换主形象时会移除旧表情绑定。</p><div className="ba-pet-editor-actions"><label>表情 <CustomSelect value={expressionId} disabled={busy} onChange={setExpressionId} options={[['happy', '开心'], ['shy', '害羞'], ['think', '思考'], ['waiting', '等待'], ['wink', '眨眼']].map(([value, label]) => ({ value, label }))} /></label><Button variant="secondary" type="button" className="ba-secondary" disabled={busy} onClick={() => expressionInput.current?.click()}>上传表情图</Button></div><input ref={expressionInput} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void upload(file, expressionId); }} /></section>}
-    {config.cardHtml && <p className="ba-note">侧栏仍使用你的自定义名片。可在“信息 → 名片”选择“当前形象”，聊天与首页已使用这里的外观。</p>}
-    <section className="ba-pet-composition" aria-label="基准形象装扮" aria-busy={catalogLoading}><header><div><h3>基准形象装扮</h3><p className="ba-note">点击即可预览，应用后生效。原创形象使用自己上传的图片与表情。</p></div><UIIcon name="brush" size={20} /></header>
-      {catalogLoading && !catalog && <div className="ba-pet-catalog-state" role="status"><UIIcon name="refresh" size={26} /><strong>正在准备装扮</strong><p>载入表情、配色与装饰。</p><div className="ba-pet-catalog-skeleton" aria-hidden="true"><span /><span /><span /><span /></div></div>}
-      {catalogError && <div className="ba-pet-catalog-state" role="alert"><UIIcon name="brush" size={26} /><strong>装扮暂时没有载入</strong><p>{catalogError}</p><Button variant="secondary" type="button" disabled={catalogLoading} onClick={() => setCatalogRequest(value => value + 1)}><UIIcon name="refresh" size={16} />重新加载</Button></div>}
-      {catalog && <><SegmentedControl label="装扮分类" value={appearanceTab} onChange={setAppearanceTab} tabIdPrefix={appearanceId} panelId={appearanceId + '-panel'} options={[{ value: 'expression', label: '表情' }, { value: 'palette', label: '配色' }, { value: 'decoration', label: '装饰' }]} /><div id={appearanceId + '-panel'} role="tabpanel" aria-labelledby={`${appearanceId}-${appearanceTab}`} >
-      <div className="ba-pet-options" hidden={appearanceTab !== 'expression'}><h4>表情</h4><div className="ba-pet-thumbnail-grid">{catalog.expressions?.map(item => { const pet = { ...base, expression: item.id }; return <Button variant="ghost" type="button" className="ba-pet-choice" key={item.id} disabled={busy} aria-pressed={base.expression === item.id} onClick={() => preview({ expression: item.id })}><PetAvatar pet={pet} src={petImageUrl(pet, document.baseURI)} size={48} motion={false} /><span>{item.label || item.id}</span></Button>; })}</div></div>
-      <div className="ba-pet-options" hidden={appearanceTab !== 'palette'}><h4>配色</h4><div className="ba-pet-palette-list">{catalog.palettes?.map(item => <Button variant="ghost" type="button" className="ba-pet-choice ba-pet-palette" key={item.id} disabled={busy} aria-pressed={base.palette === item.id} onClick={() => preview({ palette: item.id })}><span className="ba-pet-swatches" aria-hidden="true">{[item.body, item.corner, item.ink].map((color, index) => <i key={index} style={{ backgroundColor: color }} />)}</span><span>{item.label || item.id}</span></Button>)}</div></div>
-      <div className="ba-pet-options" hidden={appearanceTab !== 'decoration'}><h4>装饰 <small>最多三件，同类帽子或眼镜自动替换</small></h4><div className="ba-pet-thumbnail-grid">{catalog.decorations?.map(item => { const pet = { ...base, decorations: [item.id] }; return <Button variant="ghost" type="button" className="ba-pet-choice" key={item.id} disabled={busy} aria-pressed={base.decorations.includes(item.id)} onClick={() => toggleDecoration(item.id)}><PetAvatar pet={pet} src={petImageUrl(pet, document.baseURI)} size={48} motion={false} /><span>{item.label || item.id}</span></Button>; })}</div></div>
-      {!(catalog[appearanceTab === 'expression' ? 'expressions' : appearanceTab === 'palette' ? 'palettes' : 'decorations'] || []).length && <div className="ba-pet-catalog-state"><UIIcon name="brush" size={26} /><strong>还没有可用装扮</strong><p>可以先上传自己的图片，或稍后重新加载。</p><Button variant="secondary" type="button" disabled={catalogLoading} onClick={() => setCatalogRequest(value => value + 1)}>重新加载</Button></div>}
-    </div></>}
+    <style>{css}</style>
+    <div className="ba-pet-identity-grid">
+      <div className="ba-pet-identity-stage" data-draft={!!draft}>
+        <PetAvatar key={preview?.key || 'portrait'} pet={pet} src={src} action={preview?.action} motion={active} size={112} />
+        <span>{draft ? '形象预览' : pet?.appearance?.name || '当前形象'}</span>
+      </div>
+      <div className="ba-pet-identity-fields">
+        <div className="ba-pet-toolbar">
+          {onDesign && <Button variant="outline" size="sm" data-tone="generate" disabled={busy} onClick={() => onDesign(draft?.source === 'ai' ? 'refine' : 'design')}>
+            <IconSparkleRegular size={16} />生成
+          </Button>}
+          <Button ref={importButton} variant="outline" size="sm" data-tone="import" disabled={busy} aria-haspopup="menu" aria-expanded={importOpen}
+            onClick={() => setImportOpen(open => !open)} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setImportOpen(true); } }}>
+            <UIIcon name="folderOpen" size={16} />导入
+          </Button>
+          <Button variant="outline" size="sm" data-tone="export" disabled={busy || exporting} aria-busy={exporting} onClick={() => void exportPackage()}>
+            <IconDownloadOutlineRegular size={16} />导出
+          </Button>
+        </div>
+        <Menu open={importOpen} anchor={null} anchorRef={importButton} onClose={() => setImportOpen(false)} onSelect={importFile} portal autoFocus compact items={[
+          { id: 'package', label: '选择 ZIP 形象包', icon: <UIIcon name="folderOpen" size={16} /> },
+          { id: 'image', label: '上传单张图片', icon: <UIIcon name="picture" size={16} /> },
+          ...(config.pet?.kind === 'custom' ? [{ id: 'expression', label: '上传表情图', submenu: expressionImports }] : []),
+        ]} />
+        {exportFeedback && <p className={exportFeedback.error ? 'ba-error' : 'ba-pet-notice'} role={exportFeedback.error ? 'alert' : 'status'}>{exportFeedback.message}</p>}
+        {identityFields}
+      </div>
+    </div>
+    <section className="ba-pet-assets" aria-labelledby={id + '-title'} aria-busy={busy}>
+      <header className="ba-pet-assets-heading">
+        <h2 id={id + '-title'} ref={assets} tabIndex={-1}>形象资产</h2>
+        <div className="ba-pet-test">
+          <CustomSelect aria-label="试播" value="" placeholder="试播" disabled={busy} options={[
+            ...options.map(item => ({ ...item, value: `action:${item.value}` })),
+            ...expressions.map(item => ({ value: `expression:${item.id}`, label: item.label || item.id })),
+          ]} onChange={value => value.startsWith('action:') ? play(value.slice(7)) : play('', value.slice(11))} />
+        </div>
+      </header>
+      <input ref={files} hidden type="file" aria-label="形象包文件" accept=".zip,application/zip" onChange={event => receive(event, 'package')} />
+      <input ref={legacy} hidden type="file" aria-label="形象图片文件" accept="image/png,image/jpeg,image/webp" onChange={event => receive(event, 'image')} />
+      <input ref={expressionFile} hidden type="file" aria-label="表情图片文件" accept="image/png,image/jpeg,image/webp" onChange={event => receive(event, 'expression')} />
+      {error && <p className="ba-error" role="alert">{error}</p>}
+      {draft && <div className="ba-pet-editor-actions">
+        <Button variant="default" type="button" disabled={busy} onClick={() => run(() => commit(() => applyPetDraft(api, config, draft)))}>应用形象</Button>
+        <Button variant="ghost" type="button" disabled={busy} onClick={() => run(async () => { await api('petDiscard', { draftId: draft.draftId }); setDraft(null); })}>取消预览</Button>
+      </div>}
+      <div ref={assetLayout} className="ba-pet-asset-layout" data-orientation={orientation}>
+        <SegmentedControl navigation label="形象资产分类" options={assetTabs} value={assetTab} onChange={setAssetTab} orientation={orientation} tabIdPrefix={id} panelId={id + '-asset-panel'} />
+        <div id={id + '-asset-panel'} className="ba-pet-asset-panel" role="tabpanel" tabIndex={0} aria-labelledby={`${id}-${assetTab}`}>
+          {assetTab === 'actions' && (
+            <div className="ba-pet-work-actions">{Object.entries(petWorkEvents).map(([event, label]) => <div className="ba-pet-work-field" key={event}>
+              <span>{label}</span><CustomSelect aria-label={label} value={pet?.appearance?.bindings?.[event] || 'default'} disabled={busy}
+                options={[{ value: 'default', label: '默认动作' }, { value: 'none', label: '静止' }, ...options]}
+                onChange={value => {
+                  const bindings = { ...pet?.appearance?.bindings };
+                  if (value === 'default') delete bindings[event]; else bindings[event] = value;
+                  void makePreview('petPreview', { bindings, draftId: draft?.draftId });
+                  if (value !== 'default' && value !== 'none') play(value);
+                }} />
+            </div>)}</div>
+          )}
+          {assetTab === 'library' && <>
+            {loading && !catalog && <ResourceState kind="loading" title="正在读取形象资产" />}
+            {catalogError && <ResourceState kind="error" title="形象资产暂时无法载入" description={catalogError} onAction={() => setRequest(value => value + 1)} />}
+            {catalog && <AssetLibrary catalog={catalog} pet={pet} category={category} setCategory={setCategory} busy={busy} onEmptyAction={() => {
+              if (busy) return;
+              importButton.current?.focus(); setImportOpen(true);
+            }}
+              previewBuiltin={value => run(async () => {
+                if (value.decorations.length > 3) throw new Error('最多搭配三件装饰。');
+                setDraft(await api('petPreview', { pet: value, draftId: draft?.draftId }));
+              })}
+              previewVariant={variant => makePreview('petPreview', { variant, draftId: draft?.draftId })} play={play} />}
+          </>}
+        </div>
+      </div>
+      {(config.petHasPrevious || config.pet) && <div className="ba-pet-editor-actions ba-pet-restore">
+        {config.petHasPrevious && <Button variant="ghost" type="button" disabled={busy} onClick={() => run(() => commit(() => api('petRestore', { revision: config.revision })))}>恢复上一版</Button>}
+        {config.pet && <Button variant="ghost" type="button" disabled={busy} onClick={() => run(() => commit(() => api('petRestore', { revision: config.revision, default: true })))}>恢复默认形象</Button>}
+      </div>}
+      {(busy || notice) && <p className="ba-pet-notice" role="status">{busy ? '正在处理形象…' : notice}</p>}
     </section>
-    {error && <p className="ba-error" role="alert">{error}<Button variant="ghost" type="button" disabled={busy} onClick={() => run(async () => { const latest = await api('state'); setRevision(latest.config.revision); setCatalog(await api('petCatalog')); onChanged?.(); setNotice('已载入最新配置，预览保留，请核对后重新应用。'); })}>载入最新配置</Button></p>}
-    {(busy || notice) && <p className="ba-pet-notice" role="status"><UIIcon name={busy ? 'refresh' : 'check'} size={16} />{busy ? '正在处理，请稍候…' : notice}</p>}
   </div>;
 }

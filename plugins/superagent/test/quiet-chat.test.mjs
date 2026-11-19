@@ -8,6 +8,22 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 
+test('generated delivery stays in its original turn and repeated receipts share one row', () => {
+  const first = { groupId: 'turn:1', seq: 2, url: '/first.png' };
+  const second = { groupId: 'turn:1', seq: 4, url: '/second.png' };
+  const audio = { groupId: 'turn:1', seq: 5, url: '/voice.wav' };
+  const video = { groupId: 'turn:2', seq: 8, url: '/movie.mp4' };
+  const rows = quietChatRows({
+    messages: [{ id: 'next', role: 'user', text: 'Next', seq: 6 }],
+    images: [first, { ...first, seq: 3 }, second],
+    media: [audio, video],
+  });
+  assert.deepEqual(rows.map(row => row.key), ['generated-media:turn:1', 'message:next', 'generated-media:turn:2']);
+  assert.deepEqual(rows[0].images, [first, second]);
+  assert.deepEqual(rows[0].files, [audio]);
+  assert.deepEqual(rows[2].files, [video]);
+});
+
 test('official submission is visible immediately, reconciles by identity and withdraws on failure', () => {
   const pending = { requestId: 'rpc-1', placement: 'transcript', text: '你好', time: 1, attachments: [] };
   const session = { pendingSubmissions: [pending] };
@@ -178,7 +194,7 @@ test('history reconciles on nodes that change durable history, not on every sett
 });
 
 test('option accompanies its body and uses the validated endpoint, never approval or raw send', async () => {
-  const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+  const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
   const code = transformSync(readFileSync(new URL('../client/quiet-chat.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
   const react = { createElement: (type, props, ...children) => typeof type === 'function' ? type(props || {}) : ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) }), memo: component => component, useCallback: callback => callback, useState: value => [value, () => {}], useRef: () => ({ current: null }), useEffect() {}, useSyncExternalStore: (_subscribe, snapshot) => snapshot() };
   const module = { exports: {} }, calls = [];

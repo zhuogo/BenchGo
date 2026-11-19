@@ -1,17 +1,23 @@
+import { isLocalObjectUrl } from './file-save.mjs';
+
 /** Keep browser media URLs explicit; never turn local filesystem paths into requests. */
-export function safeImageUrl(value) {
+export function safeImageUrl(value, objectUrlPage) {
   if (typeof value !== 'string' || !value || value !== value.trim() || /[\u0000-\u0020\\]/.test(value)) return null;
   if (/^(?:\/(?!\/)|api\/)/i.test(value)) return value;
   try {
     const url = new URL(value);
+    if (objectUrlPage && isLocalObjectUrl(url, objectUrlPage)) return value;
     return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? value : null;
   } catch { return null; }
 }
 
-export function galleryImages(images = []) {
+export function galleryImages(images = [], objectUrlPage) {
   return images.flatMap((image, index) => {
-    const url = safeImageUrl(image?.url);
-    return url ? [{ ...image, url, alt: image.alt || image.prompt || image.name || `图片 ${index + 1}` }] : [];
+    const url = safeImageUrl(image?.url, objectUrlPage);
+    return url ? [{
+      ...image, url, localObjectUrl: url.startsWith('blob:'),
+      alt: image.alt || image.prompt || image.name || `图片 ${index + 1}`,
+    }] : [];
   });
 }
 

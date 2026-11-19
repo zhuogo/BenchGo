@@ -4,12 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { openRemoteExecutionStore } from '../src/remote-execution-store.mjs';
 import { createRemoteExecutionService, remoteExecutionEvidence } from '../src/remote-execution.mjs';
 import { remoteExecutionFixture as fixture } from './fixtures/remote-execution.mjs';
 
 const principal = { kind: 'device', deviceId: 'paired-owner-A' };
-const request = (extra = {}) => ({ action: 'execution', version: 1, operation: 'submit', requestId: randomUUID(), executionId: randomUUID(), sessionId: randomUUID(),
+const request = (extra = {}) => ({ action: 'execution', version: 2, operation: 'submit', requestId: randomUUID(), executionId: randomUUID(), sessionId: randomUUID(),
   identity: { ownerHostId: 'owner-A', taskId: 'task-A', assignmentId: 'assignment-A', runId: 'run-A', fence: 1 },
   config: { harness: 'official', models: [{ providerId: 'exact-provider', modelId: 'opaque-model/1', params: { temperature: 0.3 } }] },
   text: 'Inspect the assigned workspace', requirements: { instructionRevision: 1, target: 'Inspect', acceptance: 'Evidence', mandate: { instruction: 'Inspect only', toolScope: ['read', 'ask_user_question'] } }, ...extra });
@@ -45,11 +46,130 @@ test('execution journal binds authenticated subjects, immutable commands, sessio
 async function running(t, fixtureValue = fixture()) {
   const directory = await temp(t), service = await createRemoteExecutionService({ ctx: fixtureValue.ctx, directory });
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
-  const input = request(), access = { principal }, call = value => service.dispatch({ action: 'execution', version: 1, ...value }, access);
+  const input = request(), access = { principal }, call = value => service.dispatch({ action: 'execution', version: 2, ...value }, access);
   const accepted = await service.dispatch(input, access);
   await waitFor(() => fixtureValue.instances[0]?.pending.length);
   return { directory, service, input, access, call, accepted, execution: fixtureValue.instances[0], fixture: fixtureValue };
 }
+
+function nativeFixture() {
+  const sessions = new Map(), handlers = new Map(), prepared = [], submitted = [];
+  let terminal;
+  const commander = {
+    providers: new Map([['codex', {}], ['claude', {}]]),
+    pickerCatalog: { list: async () => ({ routes: [
+      { tool: 'deepseek', providerId: 'exact-provider', nativeModelId: 'opaque-model/1', name: 'Official' },
+      { tool: 'codex', providerId: 'b-responses', nativeModelId: 'opaque/model:codex', name: 'Codex' },
+      { tool: 'claude', providerId: 'b-messages', nativeModelId: 'opaque/model:claude', name: 'Claude' },
+    ] }) },
+    routeService: { capture: async route => ({ ...route, fingerprint: 'B-owned-binding' }) },
+    async advancedConfig() { return { contextWindow: 2048 }; },
+    async prepareExecution(input) {
+      prepared.push(input);
+      sessions.set(input.sessionId, { id: input.sessionId, executionId: input.executionId, status: 'idle', turnId: null, events: [] });
+      return this.snapshot(input.sessionId);
+    },
+    executionSession(id) { return [...sessions.values()].find(session => session.executionId === id); },
+    snapshot(id) { const { events, ...session } = sessions.get(id); return { ...session, cursor: events.length }; },
+    registerExecutionHandler(id, handler) { handlers.set(id, handler); return () => handlers.delete(id); },
+    async submit(id, prompt, { requestId }) {
+      submitted.push({ id, prompt, requestId });
+      const session = sessions.get(id);
+      session.status = 'running'; session.turnId = randomUUID();
+      event(id, 'input.accepted', { requestId });
+      return { status: 'accepted', turnId: session.turnId };
+    },
+    events(id, after, limit) { const { events } = sessions.get(id); return { events: events.slice(after, after + limit), cursor: Math.min(after + limit, events.length), latest: events.length }; },
+    async wait(id, { signal }) { await delay(5, undefined, { signal }); return this.snapshot(id); },
+    async persist() {},
+    async stopExecution(id) { await terminal; event(id, 'turn.completed', { status: 'interrupted' }); sessions.get(id).status = 'idle'; return this.snapshot(id); },
+    async disconnect(id) { sessions.get(id).status = 'closed'; },
+  };
+  function event(id, type, data) {
+    const session = sessions.get(id);
+    session.events.push({ seq: session.events.length + 1, turnId: session.turnId, type, data, time: new Date().toISOString() });
+  }
+  return { commander, prepared, submitted,
+    finish(id) { event(id, 'text.delta', { text: 'Done on B' }); event(id, 'turn.completed', { status: 'completed' }); sessions.get(id).status = 'idle'; },
+    ask(id) { return handlers.get(id)({ kind: 'question', nativeRequestId: 'native-request', details: { questions: [{ id: 'native-q', question: 'Which file?' }] } }); },
+    setStopBarrier(value) { terminal = value; },
+  };
+}
+
+async function runNative(t, harness) {
+  const native = nativeFixture(), f = fixture(), directory = await temp(t);
+  const service = await createRemoteExecutionService({ ctx: f.ctx, directory, commander: native.commander });
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
+  const config = { harness, models: [{ providerId: harness === 'codex' ? 'b-responses' : 'b-messages', modelId: 'opaque/model:' + harness }] };
+  const input = request({ config, requirements: { instructionRevision: 1, target: 'Inspect', mandate: { instruction: 'Inspect' } } });
+  const call = value => service.dispatch({ action: 'execution', version: 2, ...value }, { principal });
+  await call(input);
+  await waitFor(() => native.submitted.length);
+  return { native, f, input, call, service };
+}
+
+test('B runs a frozen external API binding, returns native questions, and deduplicates A submission', async t => {
+  const { native, f, input, call, service } = await runNative(t, 'codex');
+  assert.deepEqual((await call({ operation: 'catalog' })).models.map(row => row.harness), ['official', 'codex', 'claude']);
+  assert.equal(native.prepared[0].route.providerId, 'b-responses');
+  assert.deepEqual(native.prepared[0].route.advancedConfig, { contextWindow: 2048 });
+  const pending = native.ask(input.sessionId);
+  const get = () => call({ operation: 'get', executionId: input.executionId });
+  const waiting = await get();
+  assert.equal(waiting.execution.phase, 'waiting');
+  assert.equal(waiting.execution.binding, undefined);
+  const { questionId } = waiting.events.find(event => event.kind === 'question').data;
+  await call({ operation: 'input', executionId: input.executionId, requestId: randomUUID(), kind: 'answer',
+    questionId, instructionRevision: 1, text: 'answer', answers: [{ id: 'native-q', selected: [], custom: 'file.txt' }] });
+  assert.deepEqual(await pending, { allow: false, answers: { 'native-q': { answers: ['file.txt'] } } });
+  assert.equal((await call(input)).receipt.state, 'applied');
+  native.finish(input.sessionId);
+  for (let i = 0; i < 100 && (await get()).execution.phase !== 'completed'; i++) await delay(5);
+  const result = await get();
+  assert.equal(result.execution.phase, 'completed');
+  assert.equal(result.events.find(event => event.kind === 'result').data.summary, 'Done on B');
+  assert.equal(native.submitted.length, 1);
+  assert.equal(service.ownerOfSession(input.sessionId).promptable, false);
+  assert.equal(f.instances.length, 0);
+});
+
+test('B accepts Claude cancellation before stop and acknowledges only actual native shutdown', async t => {
+  const { native, input, call } = await runNative(t, 'claude');
+  let stop;
+  native.setStopBarrier(new Promise(resolve => { stop = resolve; }));
+  const get = () => call({ operation: 'get', executionId: input.executionId });
+  const command = { operation: 'control', executionId: input.executionId, requestId: randomUUID() };
+  try {
+    await assert.rejects(call({ ...command, control: 'pause' }), { code: 'NATIVE_WORKER_CONTROL_UNSUPPORTED' });
+    await assert.rejects(call({ ...command, version: 1, control: 'cancel' }), { code: 'UNSUPPORTED_EXECUTION_PROTOCOL' });
+    const accepted = await call({ ...command, control: 'cancel' });
+    assert.equal(accepted.receipt.accepted, true);
+    assert.notEqual((await get()).execution.phase, 'stopped');
+  } finally { stop(); }
+  for (let i = 0; i < 100 && (await get()).execution.phase !== 'stopped'; i++) await delay(5);
+  assert.equal((await get()).execution.phase, 'stopped');
+  assert.equal(native.commander.snapshot(input.sessionId).status, 'closed');
+});
+
+test('B recovers the completed native binding after restart without resubmitting', async t => {
+  const native = nativeFixture(), f = fixture(), directory = await temp(t);
+  const config = { harness: 'codex', models: [{ providerId: 'b-responses', modelId: 'opaque/model:codex' }] };
+  const input = request({ config, requirements: { instructionRevision: 1, mandate: { instruction: 'Inspect' } } });
+  const db = openRemoteExecutionStore(directory);
+  const row = db.tx(() => db.create(principal.deviceId, input, {}));
+  await native.commander.prepareExecution({ executionId: input.executionId, sessionId: input.sessionId });
+  await native.commander.submit(input.sessionId, input.text, { requestId: input.requestId });
+  native.finish(input.sessionId);
+  await native.commander.disconnect(input.sessionId);
+  row.phase = 'running'; row.sessionOwned = true; row.nativeStartCursor = 0; row.submittedAt = new Date().toISOString(); db.save(row); db.close();
+  const service = await createRemoteExecutionService({ ctx: f.ctx, directory, commander: native.commander });
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
+  const result = await service.dispatch({ action: 'execution', version: 2, operation: 'get', executionId: input.executionId }, { principal });
+  assert.equal(result.execution.phase, 'completed');
+  assert.equal(result.events.find(event => event.kind === 'result').data.summary, 'Done on B');
+  assert.equal(native.prepared.length, 1);
+  assert.equal(native.submitted.length, 1);
+});
 
 test('official execution works without SuperAgent, freezes exact config, and requires transcript completion', async t => {
   const { service, call, input, execution, accepted, fixture: f } = await running(t);
@@ -130,11 +250,11 @@ test('restart inspects official evidence without replaying uncertain submission 
   const row = db.tx(() => db.create(principal.deviceId, input, { directory, workingDirectory: directory }));
   row.phase = 'running'; row.sessionOwned = true; row.submittedAt = new Date().toISOString(); db.save(row); db.close();
   const service = await createRemoteExecutionService({ ctx: f.ctx, directory }); t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
-  const observed = await service.dispatch({ action: 'execution', version: 1, operation: 'get', executionId: input.executionId }, { principal });
+  const observed = await service.dispatch({ action: 'execution', version: 2, operation: 'get', executionId: input.executionId }, { principal });
   assert.equal(observed.execution.phase, 'uncertain'); assert.equal(f.instances.length, 0);
   assert.equal(service.ownerOfSession(input.sessionId).taskId, input.identity.taskId);
   await assert.rejects(service.dispatch({ ...input, text: 'Changed command' }, { principal }), { code: 'EXECUTION_COMMAND_CONFLICT' });
-  await assert.rejects(service.dispatch({ action: 'execution', version: 1, operation: 'get', executionId: input.executionId }, { principal: { kind: 'device', deviceId: 'other' } }), { code: 'EXECUTION_NOT_FOUND' });
+  await assert.rejects(service.dispatch({ action: 'execution', version: 2, operation: 'get', executionId: input.executionId }, { principal: { kind: 'device', deviceId: 'other' } }), { code: 'EXECUTION_NOT_FOUND' });
 });
 
 test('an idle or interrupted transcript is never reported as successful completion', () => {
@@ -178,7 +298,7 @@ test('uncertain storage recovery converges through original official evidence wi
   const service = await createRemoteExecutionService({ ctx: f.ctx, directory });
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
   f.logs.set(input.sessionId, [{ seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Stored real result' }] } } }, { seq: 2, type: 'turn/end', data: { reason: { kind: 'completed' } } }]);
-  const observed = await service.dispatch({ action: 'execution', version: 1, operation: 'get', executionId: input.executionId }, { principal });
+  const observed = await service.dispatch({ action: 'execution', version: 2, operation: 'get', executionId: input.executionId }, { principal });
   assert.equal(observed.execution.phase, 'completed'); assert.equal(observed.events.find(event => event.kind === 'result').data.summary, 'Stored real result');
   assert.equal(f.instances.length, 0);
 });
@@ -227,7 +347,7 @@ test('crash before publication records uncertainty and cancellation stops only a
   f.services.sessionPersistence.open = async (...args) => { persistenceOpens++; return open(...args); };
   const service = await createRemoteExecutionService({ ctx: f.ctx, directory });
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
-  const call = value => service.dispatch({ action: 'execution', version: 1, ...value }, { principal });
+  const call = value => service.dispatch({ action: 'execution', version: 2, ...value }, { principal });
   const observed = await call({ operation: 'get', executionId: input.executionId });
   assert.equal(observed.execution.phase, 'uncertain'); assert.match(observed.execution.reason, /归属尚未发布/);
   assert.equal(service.ownerOfSession(input.sessionId), null);

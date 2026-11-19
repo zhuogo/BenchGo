@@ -1,4 +1,5 @@
 import { harnessSelection } from './selection.mjs';
+import { decodeRouteModelId } from '../../base/src/picker-catalog.mjs';
 /** Native commands use the official Harness command UI and human-only result cards. */
 export function mountHarnessCommands(ctx, commander, { bindOwner } = {}) {
   ctx.effect(() => ctx.commands.register({
@@ -11,8 +12,8 @@ export function mountHarnessCommands(ctx, commander, { bindOwner } = {}) {
       const provider = selection.provider?.replace(/^commander-/, '');
       if (!selection.provider?.startsWith('commander-')) return { kind: 'error', text: '请先在模型菜单中选择 Codex、Claude Code、Pi 或 OpenCode。' };
       const id = String(agent.session.id);
-      const model = selection.model;
-      const session = commander.list().find(s => s.ownerSessionId === id && (!s.parentId || s.harnessAdopted) && !s.archived && s.provider === provider && (s.model || 'native-default') === model);
+      const binding = decodeRouteModelId(selection.model);
+      const session = binding && commander.list().find(s => s.ownerSessionId === id && (!s.parentId || s.harnessAdopted) && !s.archived && s.provider === provider && s.route?.providerId === binding.providerId && s.route?.model === binding.model);
       if (!session) return { kind: 'error', text: '先发送一条消息建立原生会话，再使用 /native。' };
       bindOwner?.(session.id, agent);
       signal.throwIfAborted();

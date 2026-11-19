@@ -5,12 +5,12 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const webRequire = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = webRequire('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const captureDir = process.env.BENCHGO_IMAGE_SCREENSHOTS || join(root, 'artifacts/reply-images-qa');
 const labels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' };
@@ -26,7 +26,7 @@ async function fixture() {
       import { installIconSprite } from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
       import chatCss from './plugins/superagent/client/quiet-chat.css';
       import typographyCss from './plugins/shared/client/chat-typography.css';
-      import iconCss from './plugins/benchgo/client/style.css';
+      import iconCss from './plugins/base/client/style.css';
       installIconSprite({effect:effect=>effect(),on(){}}, undefined);
       window.fileSaves = [];
       window.dshDesktop = {fileActions:{save:async request=>{window.fileSaves.push(request);return {status:'saved',path:'E:/saved/'+request.name};}}};
@@ -54,7 +54,7 @@ async function fixture() {
       window.drawImages();
     ` },
     bundle: true, write: false, outdir: join(root, 'artifacts/unused-image-test-output'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: {
       react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'),
@@ -403,7 +403,7 @@ test('collapsed image stacks scrub their cover by wheel without opening, scrolli
     await readyAlbum(page);
     assert.match(await currentPhoto(page).getAttribute('src'), /photo-1\.svg$/, 'clicking opens the photo currently shown on the cover');
     await album(page).getByRole('button', { name: '下一张图片', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('.bg-image-viewer-photo img')?.src.endsWith('/photo-2.svg'));
+    await settledPhoto(page, 'photo-2.svg');
     await page.keyboard.press('Escape');
     await album(page).waitFor({ state: 'hidden' });
     assert.match(await cover(), /photo-2\.svg$/, 'closing preserves the latest album selection on the collapsed cover');
@@ -588,6 +588,79 @@ test('file delivery cards stay outside bubbles and retain preview, download and 
       assert.equal(await page.getByRole('button', { name: '打开 文档.' + ext, exact: true }).count(), 0, 'formats requiring an unavailable conversion endpoint open their original file');
     }
     for (const ext of ['docx', 'pptx', 'xlsx']) await page.getByRole('button', { name: '打开 文档.' + ext, exact: true }).waitFor();
+  } finally { await browser.close(); }
+});
+
+test('chat media files play inline on demand and recover after a failed request', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 900 }, reducedMotion: 'reduce' });
+    await imageRoutes(page);
+    await page.setContent(await fixture());
+    const wav = Buffer.alloc(16044);
+    wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+    // A half-second 80×48 VP8 clip from FFmpeg's color generator.
+    const webm = Buffer.from([
+      'GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAJ1EU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZU',
+      'rmtTrIHWTbuMU6uEElTDZ1OsggEyTbuMU6uEHFO7a1OsggJf7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsCrXsYMPQkBNgIxMYXZmNjMuMS4xMDFX',
+      'QYxMYXZmNjMuMS4xMDFEiYhAf0AAAAAAABZUrmvXrgEAAAAAAABO14EBc8WItlgm6Fysv52cgQAitZyDdW5kiIEAhoVWX1ZQOIOB',
+      'ASPjg4QF9eEA4JCwgVC6gTCagQJVsIRVuYEBVe6BAOwBAAAAAAAAAgAAElTDZ/pzc59jwIBnyJlFo4dFTkNPREVSRIeMTGF2ZjYz',
+      'LjEuMTAxc3PVY8CLY8WItlgm6Fysv51nyKBFo4dFTkNPREVSRIeTTGF2YzYzLjEuMTAxIGxpYnZweGfIoUWjiERVUkFUSU9ORIeT',
+      'MDA6MDA6MDAuNTAwMDAwMDAwAB9DtnVAqOeBAKPDgQAAgHADAJ0BKlAAMAAARwiFhYiFhIgCAgJ1qgP4AgbuxkYBdMdX/gD++jPL',
+      '/8GY/gzH8GY/+DMf/dPXtPXtPX8lAKOWgQBkANEBAAUQrAAYABhYL/QACIcAAKOWgQDIANEBAAUQrAAYABhYL/QACIcAAKOWgQEs',
+      'ANEBAAUQrAAYABhYL/QACIcAAKOWgQGQANEBAAUQrAAYABhYL/QACIcAABxTu2uRu4+zgQC3iveBAfGCAbHwgQM=',
+    ].join(''), 'base64');
+    const audioUrl = 'https://gallery.test/api/benchgo/media/artifact?file=sample.wav';
+    const videoUrl = 'https://gallery.test/api/benchgo/media/artifact?file=sample.webm';
+    let audioRequests = 0, videoRequests = 0, releaseAudio;
+    const firstAudio = new Promise(resolve => { releaseAudio = resolve; });
+    await page.route(audioUrl, async route => {
+      if (++audioRequests === 1) { await firstAudio; return route.fulfill({ status: 404 }); }
+      return route.fulfill({ contentType: 'audio/wav', body: wav });
+    });
+    await page.route(videoUrl, route => { videoRequests++; return route.fulfill({ contentType: 'video/webm', body: webm }); });
+    await page.evaluate(() => window.drawImages('files', '素材准备好了。'));
+    await page.getByText('素材准备好了。', { exact: true }).waitFor();
+    assert.equal(await page.locator('.bg-conversation-media').count(), 0);
+    await shot(page, 'media-empty');
+    await page.evaluate(() => window.drawImages('files', '素材准备好了。\n\n[朗读](api/benchgo/media/artifact?file=sample.wav)\n\n[动画](api/benchgo/media/artifact?file=sample.webm)'));
+    const audio = page.locator('.bg-conversation-media[data-kind=audio]');
+    const video = page.locator('.bg-conversation-media[data-kind=video]');
+    await audio.getByRole('button', { name: '播放 朗读' }).waitFor();
+    assert.equal(await page.locator('.ba-chat-content .bg-conversation-media').count(), 0);
+    assert.deepEqual([audioRequests, videoRequests], [0, 0]);
+    await shot(page, 'media-desktop');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
+    const box = await audio.boundingBox();
+    await audio.getByRole('button', { name: '播放 朗读' }).click();
+    await audio.getByRole('status', { name: '正在加载音频…' }).waitFor();
+    await shot(page, 'media-loading');
+    releaseAudio();
+    await audio.getByRole('alert', { name: '' }).filter({ hasText: '音频暂时无法播放' }).waitFor();
+    await shot(page, 'media-error');
+    await audio.getByRole('button', { name: '重试播放 朗读' }).click();
+    await audio.getByRole('slider', { name: '播放进度' }).waitFor();
+    await page.waitForFunction(() => document.querySelector('audio').currentTime > 0);
+    assert.equal((await audio.boundingBox()).height, box.height);
+    await video.getByRole('button', { name: '播放 动画' }).click();
+    await video.locator('video[controls][playsinline]').waitFor();
+    await page.waitForFunction(() => document.querySelector('video').videoWidth === 80 && document.querySelector('video').currentTime > 0, undefined, { timeout: 5000 }).catch(async cause => {
+      const actual = await video.evaluate(node => {
+        const player = node.querySelector('video');
+        return { state: node.dataset.state, error: player.error?.message, url: player.currentSrc, width: player.videoWidth, time: player.currentTime };
+      });
+      throw new Error(`Video did not start: ${JSON.stringify(actual)}`, { cause });
+    });
+    await assertSavedFile(page, video.getByRole('button', { name: '下载 动画' }), videoUrl);
+    assert.deepEqual([audioRequests, videoRequests], [2, 1]);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await shot(page, 'media-playing');
   } finally { await browser.close(); }
 });
 

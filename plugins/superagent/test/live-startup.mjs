@@ -39,9 +39,9 @@ try {
   await mkdir(join(profile, 'node_modules'), { recursive: true });
   for (const [name, source] of [
     ['@deepseek-ai', join(root, 'deepseek-harness/apps/cli/node_modules/@deepseek-ai')],
-    ['benchgo-plugin', join(root, 'plugins/benchgo')],
+    ['benchgo-plugin', join(root, 'plugins/base')],
   ]) await symlink(source, join(profile, 'node_modules', name), process.platform === 'win32' ? 'junction' : 'dir');
-  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'benchgo-assistant-live', private: true, dependencies: { 'benchgo-plugin': `link:${join(root, 'plugins/benchgo')}` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo-plugin'] } } }));
+  await writeFile(join(profile, 'package.json'), JSON.stringify({ name: 'benchgo-assistant-live', private: true, dependencies: { 'benchgo-plugin': `link:${join(root, 'plugins/base')}` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'benchgo-plugin'] } } }));
   await writeFile(join(profile, 'cordis.yml'), '[]\n');
   const patch = [{ id: 'session-log-deepseek', config: { enabled: false } }, { id: 'session-telemetry-otel', disabled: true }, { id: 'commander-link', disabled: true }];
   if (liveModel) patch.push({ id: 'llm-pi-ai', config: { providers: { 'assistant-smoke': { api: 'openai-completions', baseURL: liveBase, apiKeyEnv: 'ASSISTANT_SMOKE_KEY', models: [{ id: liveModel, name: liveModel }] } } } });

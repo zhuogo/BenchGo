@@ -5,11 +5,11 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 async function fixture() {
@@ -19,6 +19,7 @@ async function fixture() {
     import {AssistantConversation,mountAssistantConversation} from './plugins/superagent/client/conversation.jsx';
     import {channelMessageDefinition} from './plugins/superagent/client/channel-session.jsx';
     import css from './plugins/superagent/client/style.css';
+    import hostCss from './plugins/base/client/style.css';
     const root=createRoot(document.getElementById('root'));let serial=0;
     const source={channel:'feishu',sourceType:'direct',conversationId:'oc_exact'};
     const events=['inbound','delivery'].map((direction,i)=>({type:'plugin:benchgo-plugin/channel-message',ignorable:true,seq:i+3,time:1794218400000+i,
@@ -28,6 +29,8 @@ async function fixture() {
       role:node.source.direction==='inbound'?'user':'assistant',source:node.source,text:node.content[0].text,content:node.content,seq:node.seq,time:node.time}));
     window.renderScenario=(mode='data')=>{
       const inputMode=/^(steering|queue|idle)-/.test(mode),idleMode=mode.startsWith('idle-'),stage=mode.split('-')[1],queued=mode.startsWith('queue-');
+      const threadId=inputMode||mode.startsWith('main-')?'main':'channel-thread';
+      const replyError=mode==='reply-error'||mode==='main-reply-error';
       const placement=idleMode?'transcript':queued?'queued':'steering';
       const human={id:'human',source:{kind:'user',rpcId:'human-rpc'},content:[{type:'text',text:idleMode?'这是已发送的真实要求':'这是运行中补充的真实要求'}]};
       const ordering=!idleMode&&['mixed','reordered'].includes(stage),second={...human,id:'second',source:{kind:'user',rpcId:'second-rpc'},content:[{type:'text',text:'这是第二条排队要求'}]};
@@ -49,17 +52,29 @@ async function fixture() {
       const hooks={useSession:select(session),useConversation:select(conversation),useInput:select({phase:'plain',draft:''}),useProjection:name=>name==='inbox'?inbox:undefined,inputActions:{setDraft:noop,persistDraft:noop}};
       const renderFactorySlot=(_name,_props,children)=>{const View=children.slots.views;return <View {...hooks}/>};
       const renderSlot=name=>name==='benchgo.assistant.conversation'?<Official {...hooks} renderSlot={()=>null} renderFactorySlot={renderFactorySlot}/>:null;
-      const history={sessionId:'feishu-session',threadId:inputMode?'main':'channel-thread',messages:inputMode&&stage==='history'?[{id:'human',rpcId:'human-rpc',seq:7,role:'user',text:human.content[0].text,time:1794218400100},{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}]:mode==='history'?messages:[],hasMore:false,
+      const history={sessionId:'feishu-session',threadId,messages:inputMode&&stage==='history'?[{id:'human',rpcId:'human-rpc',seq:7,role:'user',text:human.content[0].text,time:1794218400100},{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}]:mode==='history'?messages:[],hasMore:false,
         requests:inputMode?[{threadId:'main',requestId:'internal',status:'failed',text:'PRIVATE_NOTICE',error:'PRIVATE_ERROR',taskReply:{}}]:[]};
       if(ordering)history.messages=[{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}];
+      if(replyError){
+        history.error={message:'模型响应超时 '+ 'diagnostic'.repeat(50)};
+        history.failures=[{model:{modelId:'opaque-model'},reason:'连接超时'}];
+      }
       if(mode.startsWith('segments-')){history.messages=[{id:'human',role:'user',seq:1,text:'检查服务器状态'}];history.activeReply={turn:1,requestId:'human'};if(mode==='segments-history')history.messages.push(...['我先检查服务器的状态。','检查完成，服务运行正常。'].map((text,i)=>({id:'reply:human:1:'+(i+1),role:'assistant',kind:'final',requestId:'human',segment:true,text})));}
-      const api=async name=>name==='petCatalog'?{}:name==='tasks'?{tasks:[]}:name==='goals'?{goals:[]}:{};
+      if(mode==='main-media'){
+        chat.legacy.nodes=[];
+        history.messages=[{id:'human',role:'user',seq:1,text:'生成图片和语音'},{id:'next',role:'user',seq:8,text:'下一条消息'}];
+        history.images=[{groupId:'turn:1',seq:3,url:'/first.png'},{groupId:'turn:1',seq:4,url:'/second.png'}];
+        history.media=[{groupId:'turn:1',seq:5,url:'/voice.wav',name:'voice.wav',mimeType:'audio/wav'}];
+      }
+      const api=async name=>{if(name==='petCatalog'&&mode==='reply-error')throw Error('形象读取失败');return name==='tasks'?{tasks:[]}:name==='goals'?{goals:[]}:{};};
+      window.clearCalls=0;
+      const onClear=()=>{window.clearCalls++;return new Promise(resolve=>{window.finishClear=resolve;});};
       const id=++serial;
-      root.render(<ActivityProvider><div key={mode==='history'?'data':mode.startsWith('segments-')?'segments':mode} data-render={id} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}><style>{css}</style><header style={{padding:16}}>{inputMode?'BenchGo 主聊天':'feishu · oc_exact'}</header><AssistantConversation active={false} ctx={ctx} sessionId='feishu-session' threadId={inputMode?'main':'channel-thread'} history={history} api={api} assistantName='BenchGo' assistantConfig={{cardMotion:false,cardHtml:'<b>PRIVATE_CUSTOM_CARD</b>'}} SessionProvider={({children})=>children} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop}/></div></ActivityProvider>);
+      root.render(<ActivityProvider><div key={mode==='history'?'data':mode.startsWith('segments-')?'segments':mode} data-render={id} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}><style>{hostCss}{css}</style><header style={{padding:16}}>{threadId==='main'?'BenchGo 主聊天':'feishu · oc_exact'}</header><AssistantConversation active={false} ctx={ctx} sessionId='feishu-session' threadId={threadId} history={history} api={api} assistantName='BenchGo' assistantConfig={{cardMotion:false,cardHtml:'<b>PRIVATE_CUSTOM_CARD</b>'}} SessionProvider={({children})=>children} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop} onClear={onClear}/></div></ActivityProvider>);
       return id;
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-channel-quiet-ui-test'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-client-ui-primitives':join(root,'deepseek-harness/packages/client/ui-primitives/src/index.ts'),
       '@deepseek-ai/dsh-util-workspace-path':join(root,'deepseek-harness/packages/util/workspace-path/src/index.ts') },
@@ -71,7 +86,7 @@ async function fixture() {
   return `<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><style>${theme}${styles}body{margin:0;font:14px/1.6 var(--dsw-font-family);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}</style></head><body><div id='root'></div><script>${script.replaceAll('</script','<\\/script')}</script></body></html>`;
 }
 
-test('real assistant side conversation displays channel mirrors across connection states and history handoff', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+test('real assistant conversations display connection states, channel history and main chat recovery', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const html=await fixture(),browser=await chromium.launch({headless:true,executablePath});
   const screenshots=process.env.BENCHGO_CHANNEL_QUIET_SCREENSHOTS;
   if(screenshots)await mkdir(screenshots,{recursive:true});
@@ -80,11 +95,39 @@ test('real assistant side conversation displays channel mirrors across connectio
     await page.route('**/*',route=>route.request().url()==='http://localhost/'?route.fulfill({contentType:'text/html',body:html}):route.abort());await page.goto('http://localhost/');
     for(const width of [1440,390])for(const theme of ['light','dark']){
       await page.setViewportSize({width,height:800});await page.evaluate(theme=>document.body.toggleAttribute('data-ds-dark-theme',theme==='dark'),theme);
-      for(const mode of ['loading','error','settled-error','empty','data','history','activity-thinking','activity-search','activity-waiting','segments-live','segments-history']){
+      for(const mode of ['loading','error','settled-error','empty','data','history','reply-error','main-reply-error','main-data','activity-thinking','activity-search','activity-waiting','segments-live','segments-history','main-media']){
         const id=await page.evaluate(mode=>window.renderScenario(mode),mode);await page.locator('[data-render="'+id+'"]').waitFor();
         if(mode==='loading')await page.getByText('正在连接聊天',{exact:true}).waitFor();
         else if(mode==='error'||mode==='settled-error')await page.getByText('聊天暂未连接',{exact:true}).waitFor();
         else if(mode==='empty'){await page.locator('.ba-quiet-chat').waitFor();assert.equal(await page.locator('[data-chat-key]').count(),0);}
+        else if(mode==='reply-error'||mode==='main-reply-error'){
+          const feed=page.getByLabel('聊天记录',{exact:true});
+          const notice=feed.locator('[data-chat-key="notice:reply-failed"][data-role="assistant"]');
+          await notice.getByText('本次回复未完成，对话记录已保留。请重试或检查模型连接。',{exact:true}).waitFor();
+          assert.equal(await page.getByText(/本次回复未完成/).count(),1);
+          if(mode==='reply-error'){
+            assert.deepEqual(await feed.locator('[data-chat-key]').evaluateAll(rows=>rows.map(row=>row.dataset.role)),['user','assistant','assistant','assistant']);
+            assert.equal(await feed.getByRole('alert').filter({hasText:'形象读取失败'}).count(),1);
+          }
+          assert.equal(await notice.getByRole('button',{name:'清理主聊天记录'}).count(),0);
+          assert.equal(await notice.getByText(/模型响应超时/).count(),0);
+          const diagnostics=notice.getByRole('button',{name:'诊断详情'}), models=notice.getByRole('button',{name:'模型连接记录'});
+          const tagColor=button=>button.evaluate(node=>getComputedStyle(node).color);
+          assert.notEqual(await tagColor(diagnostics),await tagColor(models));
+          assert((await models.boundingBox()).width<(await notice.boundingBox()).width);
+          await diagnostics.click();
+          await notice.getByText(/模型响应超时/).waitFor();
+          await models.click();
+          await notice.getByText('opaque-model',{exact:true}).waitFor();
+          await notice.getByText('连接超时',{exact:true}).waitFor();
+          assert(await notice.locator('.ba-chat-content').evaluate(node=>node.scrollWidth<=node.clientWidth));
+        }
+        else if(mode==='main-media'){
+          const delivery=page.locator('[data-chat-key="generated-media:turn:1"]');
+          await delivery.getByRole('button',{name:'展开 2 张图片'}).waitFor();
+          await delivery.getByRole('button',{name:'播放 voice.wav'}).waitFor();
+          assert.deepEqual(await page.locator('[data-chat-key]').evaluateAll(rows=>rows.map(row=>row.dataset.chatKey)),['message:human','generated-media:turn:1','message:next']);
+        }
         else if(mode.startsWith('segments-')){await page.getByText('检查完成，服务运行正常。',{exact:true}).waitFor();assert.equal(await page.locator('[data-role=assistant]').count(),2);assert.deepEqual(await page.locator('[data-role=assistant]').evaluateAll(nodes=>nodes.map(node=>node.dataset.chatKey)),['message:reply:human:1:1','message:reply:human:1:2']);const fonts=await page.locator('.ba-chat-content,.ba-chat-content p,.ba-chat-identity-link').evaluateAll(nodes=>nodes.map(node=>getComputedStyle(node).fontFamily));assert(fonts.every(font=>/Segoe UI|YaHei/.test(font)),JSON.stringify(fonts));}
         else {await page.getByText('飞书收到的真实消息',{exact:true}).waitFor();await page.getByText('已交付到飞书的结果',{exact:true}).waitFor();assert.equal(await page.locator('[data-chat-key]').count(),2);assert.equal(await page.getByText('PRIVATE_CONTEXT',{exact:true}).count(),0);assert.equal(await page.locator('.ba-home').count(),0,'channel records must not display the empty conversation home');}
         if(mode==='settled-error'){await page.getByRole('button',{name:'\u91cd\u65b0\u8fde\u63a5',exact:true}).click();await page.locator('.ba-quiet-chat').waitFor();}
@@ -93,6 +136,17 @@ test('real assistant side conversation displays channel mirrors across connectio
         if(mode==='activity-waiting'){await page.emulateMedia({reducedMotion:'reduce'});assert(await page.locator('.ba-chat-dots i').evaluateAll(nodes=>nodes.every(node=>getComputedStyle(node).animationName==='none')));await page.emulateMedia({reducedMotion:'no-preference'});}
         assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
         if(screenshots)await page.screenshot({path:join(screenshots,mode+'-'+theme+'-'+width+'.png'),fullPage:true,animations:'disabled'});
+        const clear=page.getByRole('button',{name:'清理主聊天记录',exact:true});
+        if(mode==='main-reply-error'){
+          assert.equal(await page.locator('.ba-chat-heading-actions').getByRole('button',{name:'清理主聊天记录',exact:true}).count(),1);
+          assert.equal(await clear.locator('.cmd-ui-linear svg').count(),1);
+          assert.notEqual(await clear.evaluate(button=>getComputedStyle(button).backgroundColor),'rgba(0, 0, 0, 0)');
+          await clear.press('Enter');
+          await page.locator('.ba-chat-clear[aria-busy=true]:disabled').waitFor();
+          assert.equal(await page.evaluate(()=>window.clearCalls),1);
+          await page.evaluate(()=>window.finishClear());
+          await page.locator('.ba-chat-clear:enabled').waitFor();
+        }else assert.equal(await clear.count(),0);
       }
     }
     assert.deepEqual(errors,[]);

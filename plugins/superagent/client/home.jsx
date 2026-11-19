@@ -3,7 +3,7 @@ import React, { useRef, useState } from 'react';
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
 import { PetAvatar } from '../../shared/client/pet-avatar.jsx';
 import { petImageUrl } from './pet-state.mjs';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { activityLabels, groupHomeActivity } from './activity-data.mjs';
 import { useAssistantActivity } from './use-activity.jsx';
 import css from './home.css';
@@ -39,14 +39,14 @@ export function AssistantHome({ api, assistantName, assistantConfig, onOpenResou
     setNotice('已放入输入框，可以修改后发送。');
     root.current?.closest('[data-assistant-chat]')?.querySelector('[data-composer-card] [contenteditable="true"], [data-composer-card] textarea')?.focus();
   };
-  return <section className="ba-home" ref={root} aria-label="SuperAgent 工作简报" data-has-work={hasWork} data-pet-motion={assistantConfig?.cardMotion !== false ? 'on' : 'off'}>
+  return <section className="ba-home" ref={root} aria-label="SuperAgent 工作简报" data-has-work={hasWork}>
     <style>{css}</style>
     <header className="ba-home-intro">
       <div className="ba-home-copy"><div className="ba-home-signature"><span>BenchGo</span><span>SuperAgent</span></div>
         <h1>{hasWork ? <>每一步，<br />都在向前。</> : <>把想法，<br />推进成结果。</>}</h1>
         <p>{hasWork ? '看看正在推进的事，再决定下一步。' : '说出目标，让我们一起把事情做好。'}</p>
       </div>
-      <div className="ba-home-art" aria-hidden="true"><div className="ba-home-arch" /><div className="ba-home-mascot"><PetAvatar pet={assistantConfig?.pet} src={petImageUrl(assistantConfig?.pet, document.baseURI)} size={126} motion={assistantConfig?.cardMotion !== false} /></div><span className="ba-home-art-caption">思考 · 行动 · 交付</span></div>
+      <div className="ba-home-art" aria-hidden="true"><div className="ba-home-arch" /><div className="ba-home-mascot"><PetAvatar pet={assistantConfig?.pet} src={petImageUrl(assistantConfig?.pet, document.baseURI)} size={126} /></div><span className="ba-home-art-caption">思考 · 行动 · 交付</span></div>
       <div className="ba-home-byline"><span>{(assistantConfig?.name ?? assistantName) || '你的总助手'} · 工作简报</span><span>{updated ? <><span className="ba-home-live" />已同步</> : '从这里开始'}</span></div>
     </header>
     {error && <div className="ba-home-error" role="alert"><span>{rows ? '暂时无法更新，以下为上次同步的任务。' : '暂时无法读取任务。'}<small>{error}</small></span><Button variant="ghost" type="button" onClick={refresh} disabled={loading}>{loading ? '重试中…' : '重试'}</Button></div>}

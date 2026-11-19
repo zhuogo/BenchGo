@@ -5,12 +5,12 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 async function fixture() {
@@ -19,7 +19,7 @@ async function fixture() {
     import {Artifacts} from './plugins/superagent/client/artifacts.jsx';
     import {SystemFiles} from './plugins/superagent/client/system-files.jsx';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
-    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/benchgo/client/style.css';
+    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/base/client/style.css';
     installIconSprite({effect:fn=>fn(),on:()=>{}},undefined);
     const root=createRoot(document.getElementById('root'));let serial=0;
     const name='发布准备与部署回滚记录_长文件名用于核验窄屏布局_20261108.md';window.longName=name;
@@ -35,7 +35,7 @@ async function fixture() {
       root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body'>{target==='artifacts'?<Artifacts api={api}/>:<SystemFiles api={api} onPreviewChange={value=>window.previewChanges.push(value)}/>}</main></div>);
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-files-navigation'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text' }, plugins: [{ name: 'official-files-primitives-source', setup(build) {
       // Isolated checkouts may lack generated official lib/. Exercise the same
@@ -58,7 +58,7 @@ test('file lists preserve filters, scroll and focus through previews, directory 
   try {
     const page = await browser.newPage(), errors = [];
     page.setDefaultTimeout(7000);page.on('pageerror', error => errors.push(error.message));
-    const html = await fixture(), markdown = await readFile(join(root, 'plugins/benchgo/lib/preview/markdown.js'), 'utf8');
+    const html = await fixture(), markdown = await readFile(join(root, 'plugins/base/lib/preview/markdown.js'), 'utf8');
     let failPreview = false;
     await page.route('**/*', route => {
       const url = route.request().url();

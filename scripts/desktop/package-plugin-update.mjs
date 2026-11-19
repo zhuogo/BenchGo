@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { stagePluginBundle } from './plugin-bundle.mjs';
 import { serverResourceDelivery } from './payload-policy.mjs';
-import { MAX_PLUGIN_BYTES } from '../../plugins/benchgo/shared/update-feed.mjs';
+import { MAX_PLUGIN_BYTES } from '../../plugins/base/shared/update-feed.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -23,7 +23,7 @@ export async function assertPluginArchiveSize(filename, maxBytes = MAX_PLUGIN_BY
 
 export async function packagePluginUpdate({ out, runtime, serverResources = 'full' } = {}) {
   serverResources = serverResourceDelivery(serverResources);
-  const plugin = join(root, 'plugins/benchgo');
+  const plugin = join(root, 'plugins/base');
   const manifest = JSON.parse(await readFile(join(plugin, 'package.json')));
   const output = resolve(out || join(root, 'artifacts/plugins'));
   const tar = createRequire(join(plugin, 'package.json'))('tar');

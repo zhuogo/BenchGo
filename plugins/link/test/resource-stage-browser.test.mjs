@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { officialUiEntries, officialUiLoaders } from '../scripts/official-ui.mjs';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -18,12 +18,12 @@ const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executa
 test('remote resources announce late readiness, reuse a live device document and preserve the owner workspace', { skip: !executablePath && 'Chromium/Edge is required', timeout: 60000 }, async () => {
   const options = { bundle: true, write: false, outdir: join(root, 'artifacts/unused-resource-stage'), format: 'iife', jsx: 'automatic', target: 'es2022', minify: true,
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), ...await officialUiEntries() },
-    nodePaths: [join(root, 'plugins/link/node_modules'), join(root, 'plugins/benchgo/node_modules')], plugins: [sharedUiStyles()],
+    nodePaths: [join(root, 'plugins/link/node_modules'), join(root, 'plugins/base/node_modules')], plugins: [sharedUiStyles()],
     loader: { '.css': 'text', '.svg': 'text', ...officialUiLoaders }, define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' };
   const built = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
     import React, { useState } from 'react'; import { createRoot } from 'react-dom/client';
     import { ResourceStage } from './plugins/link/client/resource-navigation.jsx';
-    import css from './plugins/benchgo/client/style.css';
+    import css from './plugins/base/client/style.css';
     function App() { const [target,setTarget]=useState(null); window.resourceScenario=(mode,options={})=>{window.mode=mode;setTarget(mode==='empty'?null:{device:{id:options.deviceId||mode,name:'襄阳服务器',...options.identity},resource:options.resource||{kind:'sessions',resourceId:'session'},onReturn:options.ownerReturn?()=>{window.returnedOwner=options.resource.ownerTask.taskId;}:undefined,requestId:options.requestId||String(Math.random())});};
       return <><style>{css}{'body{margin:0;font-family:Arial;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}.cmd-shell-frame{height:100vh;display:grid;grid-template-columns:180px 1fr}.cmd-shell-frame>aside{padding:16px}.fixture-centerCol{position:relative;padding:16px}html{--dsw-alias-bg-base:#fff;--dsw-alias-label-primary:#202020}html[data-theme=dark]{--dsw-alias-bg-base:#19191b;--dsw-alias-label-primary:#ededee}'}</style><div className="cmd-shell-frame"><aside><button onClick={()=>document.dispatchEvent(new CustomEvent('benchgo:workbench-selected',{detail:{deviceId:'local'}}))}>本机工作台</button></aside><main className="fixture-centerCol"><p>本机草稿</p><textarea defaultValue="保留的草稿"/></main></div><ResourceStage target={target} onClose={()=>setTarget(null)}/></>;
     } createRoot(document.getElementById('root')).render(<App/>);

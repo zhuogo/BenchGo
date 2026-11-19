@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { acpProviderClasses, ACP_TOOL_DEFAULTS } from '../src/providers/acp.mjs';
-import { askNativeQuestion } from '../../benchgo/src/questions.mjs';
+import { askNativeQuestion } from '../../base/src/questions.mjs';
 const fixture = fileURLToPath(new URL('./acp-fixture.mjs', import.meta.url));
 async function connect(t, { id = 'gemini', env = {}, session = {}, approval, delegation, config = {} } = {}) {
   const events = [], errors = [], approvals = []; let nativeId;
@@ -13,7 +13,7 @@ async function connect(t, { id = 'gemini', env = {}, session = {}, approval, del
 }
 async function completed(state, count = 1) { for (let i = 0; i < 100; i++) { if (state.events.filter(event => event.type === 'turn.completed').length >= count) return; await delay(5); } assert.fail('ACP turn never finished'); }
 test('ACP defaults use confirmed Paseo launch commands', () => {
-  assert.deepEqual(Object.keys(acpProviderClasses), ['gemini', 'hermes', 'grok', 'mcode']);
+  assert.deepEqual(Object.keys(acpProviderClasses), ['gemini', 'grok', 'mcode']);
   assert.deepEqual(ACP_TOOL_DEFAULTS.grok.args, ['agent', 'stdio']); assert.deepEqual(ACP_TOOL_DEFAULTS.gemini.args, ['--acp']);
 });
 test('all ACP tools initialize, select model, stream messages/tools and discover commands', async t => {

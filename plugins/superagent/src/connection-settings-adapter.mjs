@@ -1,5 +1,5 @@
 import { channelDefinition, channelIds, connectionConfig, connectionSettingsSchema } from './channel-catalog.mjs';
-import { applySettingsOps, normalizeSettingsOps } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { applySettingsOps, normalizeSettingsOps } from '../../base/shared/settings-adapter-utils.mjs';
 const namespaceFor = channel => `superagent-connections:${channel}`;
 const channelFor = namespace => { const channel = channelIds.find(id => namespaceFor(id) === namespace); if (!channel) throw new Error('未知链接设置'); return channel; };
 export function createConnectionSettingsAdapter(connections, { applyConfig } = {}) {

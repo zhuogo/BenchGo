@@ -1,8 +1,8 @@
 import { lstat, readFile, readdir, realpath, rmdir, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { assertReleaseVersion, getInstallState, releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
-import { writeArtifact } from '../../plugins/benchgo/scripts/write-artifact.mjs';
+import { assertReleaseVersion, getInstallState, releaseBundleName } from '../../plugins/base/shared/plugin-install.mjs';
+import { writeArtifact } from '../../plugins/base/scripts/write-artifact.mjs';
 
 const directories = ['lib/preview', 'lib/link-web', 'assets/channel-brands', 'assets/fonts'];
 const runtimeDirectories = ['shared', 'lib/modules', 'src'];
@@ -56,9 +56,10 @@ export async function syncDesktopArtifacts({ root, profile = desktopProfile(), w
   // The official profile activation pointer may be a junction; it must resolve
   // to this exact validated wrapper, never a different release or checkout.
   if (await realpath(join(profile, 'node_modules', state.bundleName)) !== await realpath(wrapper)) throw new Error('桌面插件活动指向与受管安装不一致，未同步');
-  const source = await realpath(join(root, 'plugins', 'benchgo'));
+  const source = await realpath(join(root, 'plugins', 'base'));
   if (source === target || inside(source, target) || inside(target, source)) throw new Error('源码与桌面插件目录重叠，未同步');
-  if ((await json(join(source, 'package.json'))).name !== 'benchgo-plugin') throw new Error('源码插件包名无效，未同步');
+  const sourcePackage = await json(join(source, 'package.json'));
+  if (sourcePackage.name !== 'benchgo-plugin') throw new Error('源码插件包名无效，未同步');
   const plan = [], published = new Set(), obsolete = [];
   const visit = async (name, destination = target) => {
     const from = join(source, name), to = join(destination, name);
@@ -79,6 +80,9 @@ export async function syncDesktopArtifacts({ root, profile = desktopProfile(), w
   // The plugin manager names the enrolled wrapper, not its implementation package.
   await visit('locale', wrapper);
   if (runtime) await visit('cordis.patch.yml', wrapper);
+  for (const name of await readdir(join(source, 'lib'))) {
+    if (/^client\.[A-Za-z0-9][A-Za-z0-9._-]*\.js$/u.test(name)) await visit(join('lib', name));
+  }
   await visit('lib/client.js');
   const inspectRuntime = async name => {
     const path = join(target, name), entry = await checked(profile, path);

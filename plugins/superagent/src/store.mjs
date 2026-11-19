@@ -14,7 +14,7 @@ import { loadChannelModules } from './channel-catalog.mjs';
 import { createAssistantOrchestrationStore } from './orchestration-store.mjs';
 import { migrateTaskState, migrateTaskMemoryDocument } from './task-storage-migration.mjs';
 import { createAssistantIdentity, identityName, withIdentityName } from './identity.mjs';
-import { applySettingsOps, assertSettingsExpected, notifySettings, settingsSnapshot } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { applySettingsOps, assertSettingsExpected, notifySettings, settingsSnapshot } from '../../base/shared/settings-adapter-utils.mjs';
 import { ASSISTANT_BLOCKED_PATHS, ASSISTANT_CONFIG_SCHEMA } from './settings-schema.mjs';
 
 // Windows keeps an open SQLite handle from being removed during test/profile
@@ -53,6 +53,7 @@ export function validateAssistantModels(models) {
   const seen = new Set();
   for (const model of models) {
     validateModel(model);
+    if (model.providerId.startsWith('commander-')) throw new Error('请选择模型供应商，外部 Harness 在 Worker 角色中独立配置');
     if (model.credentialRef !== undefined) throw new Error('文本模型凭据请在供应商设置中配置');
     if (model.options !== undefined) {
       if (!object(model.options) || Object.keys(model.options).some(key => !['reasoningEffort', 'maxTokens'].includes(key))) throw new Error('不支持的文本模型选项');
@@ -75,17 +76,18 @@ export function validateAssistantAuxiliary(value) {
 }
 function validateConfig(value) {
   if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new Error('Unsupported assistant configuration version');
-  if (value.cardHtml === undefined) value.cardHtml = null;
-  if (value.cardMotion === undefined) value.cardMotion = true;
+  delete value.cardHtml;
+  delete value.cardMotion;
   if (value.pet === undefined) value.pet = null;
   if (value.petPrevious === undefined) value.petPrevious = null;
   if (value.petHasPrevious === undefined) value.petHasPrevious = false;
   validatePetProfile(value.pet);
   validatePetProfile(value.petPrevious);
   if (typeof value.petHasPrevious !== 'boolean') throw new Error('Invalid pet history');
-  if (value.video === undefined) value.video = null;
   if (value.auxiliary === undefined) value.auxiliary = null;
   if (value.workerModels === undefined) value.workerModels = [];
+  if (value.workerHarness === undefined) value.workerHarness = 'official';
+  if (!['official', 'codex', 'claude'].includes(value.workerHarness)) throw new Error('Invalid Worker Harness');
   if (value.workerConcurrency === undefined) value.workerConcurrency = 2;
   if (value.maintenance === undefined) value.maintenance = { quietSeconds: 120, intervalHours: 6 };
   if (!object(value.maintenance) || Object.keys(value.maintenance).some(key => !['quietSeconds', 'intervalHours'].includes(key))) throw new Error('Invalid maintenance configuration');
@@ -96,13 +98,12 @@ function validateConfig(value) {
   if (!Number.isSafeInteger(value.workerConcurrency) || value.workerConcurrency < 1) throw new Error('Worker 并发数量必须是正整数');
   validateAssistantModels(value.models);
   validateAssistantModels(value.workerModels);
+  if (value.workerHarness !== 'official' && value.workerModels.length !== 1)
+    throw new Error('外部 Worker 需要一个明确的 API 模型');
   validateAssistantAuxiliary(value.auxiliary);
   noSecrets(value);
   if (typeof value.name !== 'string' || value.name.length > 100) throw new Error('Invalid assistant name');
-  if (value.cardHtml !== undefined && value.cardHtml !== null && typeof value.cardHtml !== 'string') throw new Error('Invalid assistant cardHtml');
-  if (typeof value.cardHtml === 'string' && !value.cardHtml.trim()) value.cardHtml = null;
-  if (typeof value.cardMotion !== 'boolean') throw new Error('Invalid assistant cardMotion');
-  for (const field of ['image', 'video', 'tts', 'asr']) if (value[field] !== null) {
+  for (const field of ['image', 'video', 'tts', 'asr']) if (value[field] != null) {
     validateModel(value[field]);
     if (value[field].credentialRef && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value[field].credentialRef)) throw new Error('Invalid credentialRef');
     if (field === 'asr' && value.asr.language !== undefined) throw new Error('当前语音识别适配器不支持独立语言参数');
@@ -135,13 +136,12 @@ function checkRevision(value, revision) {
 }
 
 export async function createAssistantStore({ dataDirectory } = {}) {
-  await loadChannelModules();
   if (typeof dataDirectory !== 'string' || !dataDirectory) throw new Error('dataDirectory is required');
   const rootDirectory = resolve(dataDirectory, 'assistant');
   const directory = rootDirectory;
   const paths = { directory, workspace: join(directory, 'workspace'), config: join(directory, 'config.json'), state: join(directory, 'state.json'), identity: join(directory, 'IDENTITY.md'), user: join(directory, 'USER.md'), database: join(directory, 'assistant.db') };
-  await mkdir(paths.workspace, { recursive: true });
-  const defaults = { schemaVersion: 1, revision: 0, name: '', cardHtml: null, models: [], image: null, video: null, tts: null, asr: null, capabilities: { proactive: false } };
+  await Promise.all([mkdir(paths.workspace, { recursive: true }), loadChannelModules()]);
+  const defaults = { schemaVersion: 1, revision: 0, name: '', models: [], workerHarness: 'official', tts: null, asr: null, capabilities: { proactive: false } };
   const initialState = { schemaVersion: 1, revision: 0, mainSessionId: null, threads: [] };
   async function readVersioned(path, fallback, validate) {
     const value = await json(path, fallback);
@@ -188,13 +188,29 @@ export async function createAssistantStore({ dataDirectory } = {}) {
   async function getConfig() {
     const [config, document] = await Promise.all([readConfig(), documents.read('IDENTITY.md')]);
     const name = identityName(document.content);
-    return { ...config, name: name ?? config.name };
+    const { image, video, ...current } = config;
+    return { ...current, name: name ?? current.name };
+  }
+  function migrateGenerationSettings(importLegacyMedia) {
+    return serialize(directory, async () => {
+      const current = await readConfig();
+      const { image, video, ...next } = current;
+      if (!Object.hasOwn(current, 'image') && !Object.hasOwn(current, 'video')) return;
+      if (image || video) await importLegacyMedia({ image, video });
+      next.revision++;
+      validateConfig(next);
+      await atomic(paths.config, JSON.stringify(next, null, 2) + '\n');
+      notifySettings(configListeners, { namespace: 'superagent' });
+    });
   }
   function updateConfig(patch, options = {}) {
     return serialize(directory, async () => {
       if (!object(patch) || 'schemaVersion' in patch || 'revision' in patch) throw new Error('Invalid update');
       if (!options.petWrite && ['pet', 'petPrevious', 'petHasPrevious'].some(key => Object.hasOwn(patch, key))) throw new Error('请通过宠物预览与应用操作修改形象');
+      if (Object.hasOwn(patch, 'cardHtml')) throw Object.assign(new Error('侧栏 HTML 名片设置已移除'), { code: 'CARD_HTML_REMOVED', status: 400 });
+      if (Object.hasOwn(patch, 'cardMotion')) throw Object.assign(new Error('形象动效设置已移除'), { code: 'CARD_MOTION_REMOVED', status: 400 });
       if (Object.hasOwn(patch, 'keyPools')) throw Object.assign(new Error('凭据路由池已移除，请使用首选和备用模型'), { code: 'KEY_POOL_REMOVED', status: 400 });
+      if (['image', 'video'].some(key => Object.hasOwn(patch, key))) throw Object.assign(new Error('图片和视频模型请在媒体设置中配置'), { code: 'MEDIA_SETTINGS_MOVED', status: 400 });
       const current = await readConfig();
       checkRevision(current, options.revision);
       if (options.expected || options.settingsOps) assertSettingsExpected(await configurationSnapshot(), options.expected, options.signal);
@@ -205,6 +221,7 @@ export async function createAssistantStore({ dataDirectory } = {}) {
         const submitted = applySettingsOps(projected, options.settingsOps, { blockedPaths: ASSISTANT_BLOCKED_PATHS, base: configurationValue(base) });
         if (Object.keys(submitted).some(key => !Object.hasOwn(ASSISTANT_CONFIG_SCHEMA.properties, key))) throw new Error('未知总助手配置字段');
         next = { ...copy(defaults), ...submitted, schemaVersion: current.schemaVersion, revision: current.revision };
+        for (const key of ['image', 'video']) if (Object.hasOwn(current, key)) next[key] = current[key];
         patch = Object.fromEntries(options.settingsOps.map(operation => [operation.path[0], next[operation.path[0]]]));
         if (Object.hasOwn(patch, 'name') && patch.name === undefined) patch.name = '';
       } else next = merge(current, patch);
@@ -254,7 +271,11 @@ export async function createAssistantStore({ dataDirectory } = {}) {
   }
   const exportConfig = config => {
     const value = JSON.parse(JSON.stringify(config));
-    for (const key of ['image', 'video', 'tts', 'asr']) if (value[key]) delete value[key].credentialRef;
+    for (const key of ['tts', 'asr']) if (value[key]) delete value[key].credentialRef;
+    delete value.cardHtml;
+    delete value.cardMotion;
+    delete value.image;
+    delete value.video;
     delete value.revision;
     delete value.schemaVersion;
     return value;
@@ -352,6 +373,7 @@ export async function createAssistantStore({ dataDirectory } = {}) {
     ownedSkills,
     ideas,
     getConfig,
+    migrateGenerationSettings,
     updateConfig,
     configurationSnapshot,
     subscribeConfig(listener) { configListeners.add(listener); return () => configListeners.delete(listener); },

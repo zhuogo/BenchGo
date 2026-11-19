@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
 import { harnessSelection } from './selection.mjs';
-import { discoverModels } from './models.mjs';
 import { DelegationBridge } from './delegation.mjs';
+import { decodeRouteModelId } from '../../base/src/picker-catalog.mjs';
 import { isFullNativePermission } from './permissions.mjs';
 
-const webOwner = id => `commander-web:${id}`;
 const text = (value, name, max = 20000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`Invalid ${name}`);
   return value;
@@ -15,7 +14,7 @@ export async function mountHarnessWeb(ctx, commander, config = {}, dependencies 
   const maxChildren = config.maxDelegationChildren ?? 5;
   if (!Number.isSafeInteger(maxDepth) || maxDepth < 1 || maxDepth > 8) throw new Error('maxDelegationDepth must be an integer from 1 to 8');
   if (!Number.isSafeInteger(maxChildren) || maxChildren < 1 || maxChildren > 64) throw new Error('maxDelegationChildren must be an integer from 1 to 64');
-  const models = new Map(), starts = new Map(), childCreations = new Map();
+  const childCreations = new Map();
   const capabilities = { delegation: { available: false } };
   let delegationError, disposed = false;
   ctx.effect(() => () => { disposed = true; commander.delegate = undefined; });
@@ -28,11 +27,6 @@ export async function mountHarnessWeb(ctx, commander, config = {}, dependencies 
     if (!p) throw new Error('Project no longer exists');
     return p;
   };
-  const owned = id => {
-    const s = commander.snapshot(text(id, 'sessionId', 200));
-    if (!s.ownerSessionId?.startsWith('commander-web:')) throw new Error('This session belongs to a Harness conversation; control it there');
-    return s;
-  };
   const result = id => {
     const s = commander.snapshot(id);
     const events = commander.get(id).events.filter(e => e.turnId === s.turnId);
@@ -42,7 +36,7 @@ export async function mountHarnessWeb(ctx, commander, config = {}, dependencies 
       ...(s.status === 'running' || s.status === 'waiting' ? { next: 'Read again with operation=result and sessionId; do not create a duplicate child.' } : {}),
     };
   };
-  commander.delegate = async (parentId, args) => {
+  commander.delegate = async (parentId, args, { signal } = {}) => {
     if (delegationError) throw new Error(`Native delegation unavailable: ${delegationError.message}`, { cause: delegationError });
     const parent = commander.snapshot(parentId);
     if (!parent.ownerSessionId) throw new Error('Native delegation requires an owning conversation');
@@ -53,31 +47,63 @@ export async function mountHarnessWeb(ctx, commander, config = {}, dependencies 
       return result(child.id);
     }
     const provider = text(args.provider, 'provider', 100);
+    const providerId = text(args.providerId, 'providerId', 200);
+    const model = text(args.model, 'model', 300);
     const prompt = text(args.text, 'text');
+    if (signal?.aborted) throw signal.reason;
+    if (!['codex', 'claude', 'pi', 'opencode', 'gemini', 'grok', 'mcode'].includes(provider)) throw new Error('Unsupported native provider');
     let depth = 0, ancestor = parent;
     while (ancestor.parentId) { ancestor = commander.snapshot(ancestor.parentId); depth++; }
     if (depth >= maxDepth) throw new Error('Delegation depth limit reached');
-    if (commander.list().filter(s => s.parentId === parentId && !s.archived).length >= maxChildren) throw new Error('Delegation child limit reached');
+    const fingerprint = createHash('sha256').update(JSON.stringify([parentId, parent.turnId, provider, providerId, model, prompt])).digest('hex');
+    const requestId = args.requestId === undefined ? fingerprint : text(args.requestId, 'requestId', 180);
     if (!isFullNativePermission(await commander.permissionFor(parent))) {
-      const answer = await commander.ask(parentId, { kind: 'permission', method: 'commander_delegate', details: { provider, model: args.model, text: prompt, cwd: parent.cwd } });
+      const answer = await commander.ask(parentId, { kind: 'permission', method: 'commander_delegate', details: { provider, providerId, model, text: prompt, cwd: parent.cwd } }, signal);
       if (!answer.allow) throw new Error('Delegation denied by user');
     }
-    // Serialize only child creation per parent; approval and execution stay concurrent.
+    // Reserve identity and submit under the same per-parent serialization.
     const creation = (childCreations.get(parentId) ?? Promise.resolve()).catch(() => {}).then(async () => {
-      if (!commander.drivers.has(parentId)) throw new Error('Parent session was disconnected');
+      const activeParent = commander.snapshot(parentId);
+      if (!commander.drivers.has(parentId) || activeParent.turnId !== parent.turnId ||
+          commander.interruptedTurns.get(parentId) === parent.turnId || !['running', 'waiting'].includes(activeParent.status)) {
+        throw new Error('Parent native turn is no longer active');
+      }
+      if (signal?.aborted) throw signal.reason;
+      const existing = commander.list().find(s => s.parentId === parentId && s.delegationRequestId === requestId);
+      const receiptId = `delegation:${requestId}`;
+      if (existing && existing.delegationFingerprint !== fingerprint) throw new Error('requestId was already used for a different delegation');
+      if (existing && commander.get(existing.id).receipts[receiptId]) {
+        if (commander.get(existing.id).receipts[receiptId].receipt.status === 'uncertain') throw new Error('Delegated submission is uncertain; inspect the original native session before retrying');
+        return existing;
+      }
+      if (existing) {
+        await commander.connect(existing.id);
+        if (signal?.aborted || commander.interruptedTurns.get(parentId) === parent.turnId || commander.snapshot(parentId).turnId !== parent.turnId) throw new Error('Parent native turn is no longer active');
+        await commander.submit(existing.id, prompt, { requestId: receiptId });
+        return existing;
+      }
       if (commander.list().filter(s => s.parentId === parentId && !s.archived).length >= maxChildren) throw new Error('Delegation child limit reached');
       // Re-resolve the registered project: native engines cannot choose another directory.
       const p = parent.projectId ? project(parent.projectId) : ctx.workspaceRegistry.list().find(p => p.path === parent.cwd);
       if (!p) throw new Error('Parent project is no longer registered');
-      return commander.create({ provider, model: args.model, cwd: p.path, projectId: p.id, parentId, ownerSessionId: parent.ownerSessionId, title: prompt.slice(0, 60) });
+      const child = await commander.create({ provider, route: { providerId, model }, cwd: p.path, projectId: p.id,
+        parentId, parentTurnId: parent.turnId, ownerSessionId: parent.ownerSessionId, title: prompt.slice(0, 60),
+        delegationRequestId: requestId, delegationFingerprint: fingerprint });
+      if (signal?.aborted || commander.interruptedTurns.get(parentId) === parent.turnId || commander.snapshot(parentId).turnId !== parent.turnId) throw new Error('Parent native turn is no longer active');
+      commander.event(parentId, 'delegation.created', { sessionId: child.id, provider, model });
+      await commander.submit(child.id, prompt, { requestId: receiptId });
+      return child;
     });
     childCreations.set(parentId, creation);
     let child;
     try { child = await creation; }
     finally { if (childCreations.get(parentId) === creation) childCreations.delete(parentId); }
-    commander.event(parentId, 'delegation.created', { sessionId: child.id, provider, model: args.model ?? null });
-    await commander.submit(child.id, prompt);
-    await commander.wait(child.id, { timeout: 55000 });
+    if (signal) {
+      const cancel = () => { void commander.stopExecution(child.id).catch(error => ctx.logger?.warn?.(`Delegated stop not confirmed: ${error.message}`)); };
+      signal.addEventListener('abort', cancel, { once: true });
+      try { await commander.wait(child.id, { timeout: 55000, signal }); }
+      finally { signal.removeEventListener('abort', cancel); }
+    } else await commander.wait(child.id, { timeout: 55000 });
     const value = result(child.id);
     commander.event(parentId, 'delegation.result', { sessionId: child.id, status: value.session.status });
     return value;
@@ -86,59 +112,6 @@ export async function mountHarnessWeb(ctx, commander, config = {}, dependencies 
     if (disposed) throw Object.assign(new Error('Harness 聚合已停用'), { status: 503, code: 'HARNESS_UNAVAILABLE' });
     const { action } = input;
     if (action === 'doctor') return { providers: await commander.doctor() };
-    if (action === 'models') {
-      const p = project(input.projectId);
-      const provider = text(input.provider, 'provider', 100);
-      if (!commander.providers.has(provider)) throw new Error('Unknown provider');
-      const key = `${provider}:${p.path}`;
-      let promise = models.get(key);
-      if (!promise) { promise = discoverModels(provider, await commander.providerConfig(provider), p.path); models.set(key, promise); promise.catch(() => models.delete(key)); }
-      return { models: await promise };
-    }
-    if (action === 'create') {
-      const p = project(input.projectId);
-      const provider = text(input.provider, 'provider', 100);
-      if (input.model !== undefined && typeof input.model !== 'string') throw new Error('Invalid model');
-      return { session: await commander.create({ provider, cwd: p.path, projectId: p.id, model: input.model, title: input.title, ownerSessionId: webOwner(p.id) }) };
-    }
-    if (action === 'start') {
-      // Validate before creating anything. The durable owner identifies this
-      // first message even if connecting fails or the HTTP response is lost.
-      const prompt = text(input.text, 'text');
-      const requestId = text(input.requestId, 'requestId', 200);
-      const p = project(input.projectId);
-      const provider = text(input.provider, 'provider', 100);
-      if (!commander.providers.has(provider)) throw new Error('Unknown provider');
-      if (input.model !== undefined && typeof input.model !== 'string') throw new Error('Invalid model');
-      const prefix = `commander-web:start:${encodeURIComponent(requestId)}:`;
-      const fingerprint = createHash('sha256').update(JSON.stringify([p.id, provider, input.model || null, prompt])).digest('hex');
-      const ownerSessionId = `${prefix}${fingerprint}`;
-      const inFlight = starts.get(requestId);
-      if (inFlight) {
-        if (inFlight.ownerSessionId !== ownerSessionId) throw new Error('requestId was already used for a different first message');
-        return inFlight.promise;
-      }
-      const existing = commander.list().find(s => s.ownerSessionId?.startsWith(prefix));
-      if (existing && existing.ownerSessionId !== ownerSessionId) throw new Error('requestId was already used for a different first message');
-      const promise = (async () => {
-        let session = existing;
-        try {
-          if (!session) session = await commander.create({ provider, cwd: p.path, projectId: p.id, model: input.model, title: prompt.slice(0, 60), ownerSessionId });
-          // A durable receipt means the native process may already have seen
-          // this message. Ask submit for its receipt without reconnecting or
-          // blindly executing the prompt again, including after a restart.
-          if (!Object.hasOwn(commander.get(session.id).receipts, requestId) && !commander.drivers.has(session.id)) await commander.connect(session.id);
-          await commander.submit(session.id, prompt, { requestId });
-          return { session: commander.snapshot(session.id) };
-        } catch (error) {
-          session ??= commander.list().find(s => s.ownerSessionId === ownerSessionId);
-          if (session) error.session = commander.snapshot(session.id);
-          throw error;
-        }
-      })();
-      starts.set(requestId, { ownerSessionId, promise });
-      try { return await promise; } finally { starts.delete(requestId); }
-    }
     if (action === 'events') {
       // Owner-authenticated human may inspect conversation-owned delegations as well.
       const id = text(input.id, 'sessionId', 200);
@@ -146,13 +119,14 @@ export async function mountHarnessWeb(ctx, commander, config = {}, dependencies 
     }
     if (action === 'adopt') {
       const s = commander.snapshot(text(input.id, 'sessionId', 200));
-      if (!s.ownerSessionId?.startsWith('commander-web:') && !s.parentId) throw new Error('Only legacy or delegated sessions can be adopted');
+      if (!s.parentId && !s.ownerSessionId?.startsWith('commander-web:detached:')) throw new Error('Only delegated sessions can be adopted');
       if (['running', 'waiting', 'connecting'].includes(s.status)) throw new Error('Finish or interrupt the active native session before opening it in Harness');
       const harnessId = text(input.harnessSessionId, 'harnessSessionId', 200);
       const agent = ctx.get('agents')?.get(harnessId);
       if (!agent || agent.session.header.cwd !== s.cwd) throw new Error('Harness session must be open in the same project');
       const selection = harnessSelection(ctx, agent);
-      if (selection.provider !== `commander-${s.provider}` || selection.model !== (s.model || 'native-default')) throw new Error('Harness session must select the same native tool and model');
+      const binding = decodeRouteModelId(selection.model);
+      if (selection.provider !== `commander-${s.provider}` || !binding || binding.providerId !== s.route?.providerId || binding.model !== s.route?.model) throw new Error('Harness session must select the same native tool and API model');
       const record = commander.get(s.id);
       record.ownerSessionId = harnessId;
       record.harnessAdopted = true;
@@ -161,25 +135,14 @@ export async function mountHarnessWeb(ctx, commander, config = {}, dependencies 
     }
     // The Connection route is owner-authenticated. Humans may manage native
     // records owned by Harness too; model-side tools retain their own scope.
-    if (action === 'archive') {
+    if (action === 'archive' || action === 'delete') {
       const id = text(input.id, 'sessionId', 200);
+      if (commander.snapshot(id).executionId)
+        throw Object.assign(new Error('工单的执行记录只读，请返回原工单管理。'), { status: 403, code: 'EXECUTION_INPUT_REQUIRES_OWNER' });
+      if (action === 'delete') return commander.remove(id);
       if (input.archived !== undefined && typeof input.archived !== 'boolean') throw new Error('Invalid archived flag');
       return commander.archive(id, input.archived ?? true);
     }
-    if (action === 'delete') return commander.remove(text(input.id, 'sessionId', 200));
-    const s = owned(input.id);
-    if (action === 'send') {
-      const prompt = text(input.text, 'text');
-      if (['disconnected', 'closed'].includes(s.status)) await commander.connect(s.id);
-      if (!s.title) { commander.get(s.id).title = prompt.slice(0, 60); await commander.persist(); }
-      return commander.submit(s.id, prompt, { requestId: text(input.requestId, 'requestId', 200) });
-    }
-    if (action === 'connect') return commander.connect(s.id);
-    if (action === 'interrupt') { await commander.interrupt(s.id); return commander.snapshot(s.id); }
-    if (action === 'steer') { await commander.steer(s.id, text(input.text, 'text')); return commander.snapshot(s.id); }
-    if (action === 'close') return commander.disconnect(s.id);
-    if (action === 'history') return { history: await commander.history(s.id) };
-    if (action === 'approve') { commander.approve(s.id, text(input.approvalId, 'approvalId', 200), input.answer); return commander.snapshot(s.id); }
     throw new Error(`Unknown BenchGo action: ${action}`);
   };
   try {

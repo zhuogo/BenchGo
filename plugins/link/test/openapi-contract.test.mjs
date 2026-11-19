@@ -17,11 +17,13 @@ test('cross-device OpenAPI references resolve and owner/device contracts stay se
   const owner = spec.paths['/api/commander-devices'].post.requestBody.content['application/json'].schema.properties.action.enum;
   assert.deepEqual(owner, ['launch','devices','select','resources','resourceScope','setResourceScope','sessionAction']);
   const center = schemas.DeviceRequest.properties.action.enum;
-  for (const action of ['devices','resources','resourceScope','setResourceScope','sessionAction','hostManagementDecide']) assert.ok(center.includes(action));
+  for (const action of ['devices','resources','resourceScope','setResourceScope','sessionAction','hostManagementDecide','serverPrefetch','jobCancel']) assert.ok(center.includes(action));
   assert.equal(center.includes('hostGrantDevice'),false);
   const directed = schemas.DirectedDeviceInput.properties.action.enum;
   assert.deepEqual(directed, ['state','models','create','history','send','cancel','respond','resources','execution','management','sessionAction']);
-  for (const action of ['hostGrantDevice','hostManagementDecide','admin','configure','relay-pool-configure']) assert.equal(directed.includes(action), false);
+  for (const action of ['hostGrantDevice','hostManagementDecide','admin','configure','relay-pool-configure','serverPrefetch','jobCancel']) assert.equal(directed.includes(action), false);
+  assert.equal(schemas.RemoteExecutionRequest.properties.version.const, 2);
+  assert.deepEqual(schemas.RemoteExecutionRequest.properties.config.properties.harness.enum, ['official','codex','claude']);
   assert.equal(schemas.ResourcePage.properties.items.maxItems, 100);
   assert.equal(schemas.ResourceScope.additionalProperties, false);
   assert.deepEqual(schemas.ManagementOperation.properties.state.enum, ['pending','applying','applied','failed','unknown','expired','rejected','revoked']);

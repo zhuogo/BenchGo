@@ -3,7 +3,7 @@ import { sign, verify } from 'node:crypto';
 import { cp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileDigest } from './record-artifact.mjs';
-import { releaseDownloadUrl } from '../../plugins/benchgo/shared/update-feed.mjs';
+import { releaseDownloadUrl } from '../../plugins/base/shared/update-feed.mjs';
 
 export const downloadPlatforms = ['mac-arm64', 'mac-x64', 'linux-server'];
 const safeName = name => typeof name === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name);

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { socialEvent, socialFacts, authorizeSocial } from '../social-common.mjs';
 const require = createRequire(import.meta.url);
-function dependency(name) { try { return require(name); } catch (e) { if (e.code !== 'MODULE_NOT_FOUND') throw e; return createRequire(new URL('../../../../benchgo/package.json', import.meta.url))(name); } }
+function dependency(name) { try { return require(name); } catch (e) { if (e.code !== 'MODULE_NOT_FOUND') throw e; return createRequire(new URL('../../../../base/package.json', import.meta.url))(name); } }
 const LIMIT = 48000 * 4 * 20;
 export function discordPcmWav(pcm) {
   const size = Math.floor(pcm.length / 8) * 2, wav = Buffer.alloc(44 + size);

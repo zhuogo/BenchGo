@@ -30,10 +30,10 @@ export function createStartupTiming(directory, { now = () => performance.now(), 
   };
 }
 
-/** A local, sandboxed splash shown before the official backend starts. */
-export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativeTheme, page, iconPath }) {
+/** Start a local sandboxed splash without waiting for Chromium; return its cleanup handle. */
+export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativeTheme, page, iconPath, onVisible }) {
   const icon = iconPath && nativeImage ? nativeImage.createFromPath(iconPath) : undefined;
-  const background = () => nativeTheme?.shouldUseDarkColors ? '#19191b' : '#ffffff';
+  const background = () => nativeTheme?.shouldUseDarkColors ? '#101218' : '#f3f6f6';
   const window = new BrowserWindow({
     width: 420, height: 300, useContentSize: true, center: true,
     frame: false, resizable: false, maximizable: false, fullscreenable: false,
@@ -44,7 +44,7 @@ export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativ
   const updateTheme = () => { if (!window.isDestroyed()) window.setBackgroundColor(background()); };
   nativeTheme?.on('updated', updateTheme);
   const waiting = new Map();
-  let disposed = false;
+  let disposed = false, loaded = false, pendingStage;
   const dispose = () => {
     if (disposed) return;
     disposed = true;
@@ -61,6 +61,7 @@ export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativ
   dispose.setStage = stage => {
     const label = STARTUP_LABELS[stage];
     if (disposed || window.isDestroyed() || !label) return;
+    if (!loaded) { pendingStage = stage; return; }
     // Only fixed presentation strings reach our local sandboxed document.
     void window.webContents.executeJavaScript(`(() => { const status = document.getElementById('startup-status'); if (status) { status.dataset.phase = ${JSON.stringify(stage)}; status.textContent = ${JSON.stringify(label)}; } })()`).catch(() => {});
   };
@@ -87,13 +88,21 @@ export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativ
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.once('render-process-gone', dispose);
-  try {
-    await window.loadFile(page);
-    if (!disposed && !window.isDestroyed()) window.show();
-  } catch (error) {
+  const unavailable = error => {
     // Presentation failure must not prevent the official application from starting.
     dispose();
-    console.warn('Startup card unavailable:', error.message);
-  }
+    console.warn('Startup window unavailable:', error.message);
+  };
+  try {
+    // Chromium may take seconds to start on a cold machine. Return the cleanup
+    // handle now so enrollment and the Host can prepare while this page loads.
+    void window.loadFile(page).then(() => {
+      loaded = true;
+      if (disposed || window.isDestroyed()) return;
+      window.show();
+      onVisible?.();
+      if (pendingStage) dispose.setStage(pendingStage);
+    }, unavailable).catch(unavailable);
+  } catch (error) { unavailable(error); }
   return dispose;
 }

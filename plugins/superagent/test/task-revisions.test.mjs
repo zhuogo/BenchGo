@@ -97,6 +97,10 @@ test('completed work creates an idempotent linked adjustment and never changes i
   const next = f.db.changeTask(f.task.id, { ...f.input, operation: 'adjustment' });
   assert.notEqual(next.id, before.id);
   assert.equal(next.adjustmentOfTaskId, before.id);
+  const original = f.db.getTrigger(next.mandate.triggerId);
+  assert.equal(original.id, f.input.triggerId);
+  assert.equal(next.mandate.instruction, original.content);
+  assert.deepEqual(next.mandate.source, original.source);
   assert.equal(next.instructionRevision, 1);
   assert.equal(next.resultVersion, 0);
   assert.deepEqual(f.db.getTask(f.task.id), before);

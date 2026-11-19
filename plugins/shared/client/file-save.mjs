@@ -12,6 +12,13 @@ function sameOrigin(left, right) {
   return !!right && left.protocol === right.protocol && left.host === right.host;
 }
 
+export function isLocalObjectUrl(url, page) {
+  if (url.protocol !== 'blob:' || !page) return false;
+  if (['http:', 'https:'].includes(page.protocol)) return url.origin === page.origin;
+  return page.protocol === 'dsh-app:' && page.host === 'app'
+    && (url.pathname.startsWith('dsh-app://app/') || url.pathname.startsWith('null/'));
+}
+
 function sourceUrl(file, environment) {
   const value = file?.downloadUrl ?? file?.url;
   if (typeof value !== 'string' || !value || value !== value.trim() || /[\u0000-\u001f\u007f\\]/u.test(value)) throw new Error('文件地址无效。');
@@ -22,7 +29,7 @@ function sourceUrl(file, environment) {
     url = new URL(value, page);
   } catch { throw new Error('文件地址无效。'); }
   if (url.username || url.password) throw new Error('文件地址不能包含登录凭据。');
-  if (!['http:', 'https:'].includes(url.protocol)
+  if (!['http:', 'https:'].includes(url.protocol) && !(file?.localObjectUrl && isLocalObjectUrl(url, page))
     && !(url.protocol === 'dsh-app:' && url.hostname === 'app' && sameOrigin(url, page))) throw new Error('不支持此文件地址，请使用网页文件链接。');
   return { url, sameOrigin: sameOrigin(url, page) };
 }

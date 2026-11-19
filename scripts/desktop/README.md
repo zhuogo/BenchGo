@@ -13,7 +13,7 @@
 - `prepare-brand.mjs`：统一从 `assets/brand/benchgo-app.svg` 生成 BenchGo Windows、托盘、安装/卸载图标，并为启动页注入同一母版；官方源码保持不变。
 - `prepare-tray.mjs`：官方完整构建后复用官方 tsdown 主进程配置，仅在编译输入中将 Windows 托盘菜单改为“主窗口”“退出”（英文 Main Window / Quit），并接入启动卡片。编译结果写到 `.local/desktop/main/`。electron-builder 会丢弃应用目录外的 from/to 映射，因此只在收集 asar 文件时临时换入 `apps/desktop/lib/main.js`，收集后立即恢复官方产物。不修改子模块源码，不运行时拦截。官方模块、配置或文案锚点变化立即中止打包。
 - `renderer/`：打包时通过官方文件映射替换初始化页面，只展示 BenchGo 和工作台准备状态，通过已有 `dshWelcome.skip()` 进入工作台；失败可重试，不写入虚假凭据或登录状态。模型凭据在工作台内配置。
-- `prepare-startup.mjs` / `startup-window.mjs`：复用根目录主进程编译步骤，在官方 `main()` 开始时加载 420×300 BenchGo 启动卡片，覆盖后端初始化等待；其他窗口显示、致命错误或退出时销毁。窗口图标使用 `resources/icon.png`，避免任务栏落到 Electron 默认图标。编译锚点变化中止打包，不修改上游源码、不做运行时拦截。BenchGo Windows 打包接入此步骤，根目录 `npm run dev` 启动该打包应用；官方 Desktop 的命令封装 `npm run start` 不包含这条开发同步流程。
+- `prepare-startup.mjs` / `startup-window.mjs`：复用根目录主进程编译步骤，在官方 `main()` 开始时加载 420×300 BenchGo 启动卡片，覆盖后端初始化等待；页面加载与插件登记、后台启动并行，不等待 Chromium 冷启动，实际显示时才记录 `splash-visible`；其他窗口显示、致命错误或退出时销毁，未加载完的卡片也不再迟到弹出。窗口图标使用 `resources/icon.png`，避免任务栏落到 Electron 默认图标。编译锚点变化中止打包，不修改上游源码、不做运行时拦截。BenchGo Windows 打包接入此步骤，根目录 `npm run dev` 启动该打包应用；官方 Desktop 的命令封装 `npm run start` 不包含这条开发同步流程。
 - `prepare-dev.mjs` / `sync-dev-plugin.mjs`：`npm run dev` 先用当前登记脚本初始化 profile，再镜像同步本地源码、模块产物与统一客户端，最后启动 `artifacts/windows/win-unpacked/BenchGo.exe`。可执行文件缺失时明确报错并要求先打包，保留用户配置、依赖与服务器种子。
 - `renderer/splash.html`：左图标、右文案，墨黑描边与冷青 loading；页面源码直接引用品牌母版，打包时写入 `.local/desktop/brand/renderer/` 并内联 SVG 数据，不依赖 asar 外部图片，也不维护图标副本；不显示虚假百分比，不设最低停留时长；20 秒后提示仍在准备，支持减少动效。卡片只能在 Electron ready 后显示，无法覆盖操作系统加载 exe 的阶段，也不缩短实际初始化时间。
 
@@ -30,7 +30,7 @@
 ```powershell
 npm run setup
 npm ci --prefix plugins/link
-npm ci --prefix plugins/benchgo
+npm ci --prefix plugins/base
 npm run build:plus
 npm run package:plus:win
 ```

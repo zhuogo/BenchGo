@@ -14,7 +14,8 @@ import { historyPage, updateHistoryIndex } from './history-index.mjs';
 import { modelFallbackType, modelFallbackSource, modelRouteType, readModelFallbacks } from './model-fallback.mjs';
 import { findExecutionSessionOwner } from './execution-session.mjs';
 import { isChatUserMessage } from './question-reply.mjs';
-import { hostReplyPublicationOf, isHostReplyRequest } from '../../benchgo/shared/public-chat-record.mjs';
+import { hostReplyPublicationOf, isHostReplyRequest } from '../../base/shared/public-chat-record.mjs';
+import { reconcileRoutedReasoning } from '../../base/shared/live-reasoning.mjs';
 import { approvalSignalBinding } from './approval-chat-binding.mjs';
 import { channelMessageRecordType } from './channel-session-record.mjs';
 import { createSessionRoleAssembly, liveSessionRole } from './session-role-assembly.mjs';
@@ -210,6 +211,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     if (!primary) throw Object.assign(new Error('请先配置总助手文本模型'), { code: 'ASSISTANT_MODELS_UNAVAILABLE' });
     // The official loop captures its route before pre-step, so selection must
     // finish before this message enters followup. The queue belongs to that message.
+    candidates = await reconcileRoutedReasoning(ctx.llm, candidates);
     appendRecord(agent.session, modelRouteType, { messageId: message.id, models: candidates });
   }
   const inbox = createMessageInbox({
@@ -419,10 +421,12 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       if (!prior) {
         const config = await store.getConfig();
         validateAssistantModels(config.models);
-        route = copy(config.models);
+        route = await reconcileRoutedReasoning(ctx.llm, copy(config.models), signal);
         signal?.throwIfAborted();
         appendRecord(agent.session, modelRouteType, { requestId: request.requestId, fingerprint, models: route });
       }
+      if (prior) route = await reconcileRoutedReasoning(ctx.llm, route, signal);
+      signal?.throwIfAborted();
       const previous = agent.model.current();
       const activeRoute = activeRoutes.get(agent);
       if (agent.status === 'running' && request.mode === 'steer' && (previous?.provider !== route[0].providerId || previous?.model !== route[0].modelId
@@ -453,7 +457,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const operation = (async () => {
         const record = await thread('main');
         if (!record.sessionId) return { status: 'uninitialized' };
-        const evidence = await inspectRouterRecovery({ ctx, sessionId: record.sessionId });
+        const evidence = await inspectRouterRecovery({ ctx, sessionId: record.sessionId, signal: lifecycle.signal });
         if (evidence.status === 'live') return evidence;
         assertOpen();
         // A local handle can outlive the host registry after its owner scope
@@ -626,10 +630,14 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       return compaction.compactNow(agent, new AbortController().signal);
     },
     async catalog() {
-      return Promise.all(ctx.llm.listProviders().map(async provider => {
-        try { return { ...provider, models: await ctx.llm.listModels(provider.id), available: true }; }
+      const providers = await Promise.all(ctx.llm.listProviders().filter(provider => !provider.id.startsWith('commander-')).map(async provider => {
+        try {
+          const models = await ctx.llm.listModels(provider.id);
+          return models.length ? { ...provider, models, available: true } : null;
+        }
         catch (error) { return { ...provider, models: [], available: false, error: error.message }; }
       }));
+      return providers.filter(Boolean);
     },
     dispose() {
       if (disposal) return disposal;

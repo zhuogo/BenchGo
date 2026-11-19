@@ -7,7 +7,7 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { PetAvatar } from '../../shared/client/pet-avatar.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';

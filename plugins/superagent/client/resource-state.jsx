@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { Loading } from '../../shared/client/ui/loading.jsx';
 import css from './resource-state.css';

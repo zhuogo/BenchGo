@@ -42,11 +42,11 @@ test('splash covers hidden backend startup and disposes only when another window
   assert.equal(splash.isVisible(), true);
   assert.equal(splash.isDestroyed(), false);
   assert.equal(splash.options.icon.path, 'icon.png');
-  assert.equal(splash.options.backgroundColor, '#ffffff');
+  assert.equal(splash.options.backgroundColor, '#f3f6f6');
   env.nativeTheme.shouldUseDarkColors = true; env.nativeTheme.emit('updated');
-  assert.equal(splash.background, '#19191b');
+  assert.equal(splash.background, '#101218');
   env.nativeTheme.shouldUseDarkColors = false; env.nativeTheme.emit('updated');
-  assert.equal(splash.background, '#ffffff');
+  assert.equal(splash.background, '#f3f6f6');
   assert.equal(splash.options.webPreferences.sandbox, true);
   assert.equal(splash.options.webPreferences.preload, undefined);
   assert.deepEqual(splash.openHandler(), { action: 'deny' });
@@ -71,12 +71,34 @@ test('fatal cleanup and quit dispose the card without an extra quit request', as
     const env = fixture();
     env.nativeTheme.shouldUseDarkColors = true;
     const close = await openStartupWindow(env);
-    assert.equal(env.windows[0].options.backgroundColor, '#19191b');
+    assert.equal(env.windows[0].options.backgroundColor, '#101218');
     if (action === 'fatal') close(); else env.app.emit('will-quit');
     assert.equal(env.windows[0].isDestroyed(), true);
     assert.equal(env.app.quits, undefined);
     assert.equal(env.app.listenerCount('will-quit'), 0);
     assert.equal(env.nativeTheme.listenerCount('updated'), 0);
+  }
+});
+
+test('a pending splash never delays backend preparation or reappears after the workspace', async () => {
+  for (const workspaceFirst of [false, true]) {
+    const env = fixture();
+    let finishLoad, visible = 0;
+    const pending = new Promise(resolve => { finishLoad = resolve; });
+    env.BrowserWindow.prototype.loadFile = () => pending;
+    const close = await openStartupWindow({ ...env, onVisible: () => { visible++; } });
+    const splash = env.windows[0];
+    assert.equal(typeof close, 'function', 'backend receives cleanup while Chromium is still loading');
+    assert.equal(splash.isVisible(), false);
+    close.setStage('host-starting');
+    assert.equal(splash.scripts.length, 0, 'status waits for the local document');
+    if (workspaceFirst) new env.BrowserWindow({ show: false }).show();
+    finishLoad();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(visible, workspaceFirst ? 0 : 1);
+    assert.equal(splash.isVisible(), !workspaceFirst);
+    if (!workspaceFirst) assert.match(splash.scripts.at(-1), /正在启动服务/);
+    close();
   }
 });
 

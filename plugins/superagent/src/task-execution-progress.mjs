@@ -213,7 +213,7 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
       const revision = task.instructionRevision ?? 1, assignment = assignments.filter(row => row.taskId === task.id).at(-1);
       const run = assignment && database.runs(assignment.id).filter(row => row.fence === assignment.fence).at(-1);
       if (!run) return null;
-      const worker = records.get(run.sessionId), live = agents.get(run.sessionId);
+      const worker = records.get(run.sessionId), live = agents.get(run.sessionId) || worker?.live;
       const current = worker?.runId === run.id && worker?.fence === assignment.fence;
       const historyOf = record => record?.runId === run.id ? (record.state?.activityHistory || [])
         .filter(row => row.time && row.time >= run.createdAt) : [];

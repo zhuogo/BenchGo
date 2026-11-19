@@ -3,17 +3,17 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, unlinkSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const sharedPath = existsSync(new URL('./shared/workbench-installation.mjs', import.meta.url))
   ? new URL('./shared/workbench-installation.mjs', import.meta.url)
-  : new URL('../../plugins/benchgo/shared/workbench-installation.mjs', import.meta.url);
+  : new URL('../../plugins/base/shared/workbench-installation.mjs', import.meta.url);
 const shared = await import(sharedPath.href);
 const readJson = async path => JSON.parse(await readFile(path, 'utf8'));
 
-/** Inspect the actual bundled runtime; product and plugin versions remain independent. */
-export async function desktopWorkbenchInstallation({ resources, runtime, profile, node = process.execPath, home } = {}, api = shared) {
+async function desktopWorkbenchLocation({ resources, runtime, profile, node = process.execPath, home } = {}, api = shared) {
   if (typeof resources !== 'string' || !resources) throw new Error('BenchGo: desktop application resources are required');
   resources = resolve(resources);
   const application = await readJson(join(resources, 'app.asar', 'package.json'));
@@ -26,10 +26,16 @@ export async function desktopWorkbenchInstallation({ resources, runtime, profile
   }
   const paths = api.workbenchPaths({ home });
   if (profile !== undefined && resolve(profile) !== paths.profile) throw new Error('BenchGo Desktop 只接管当前用户的共同工作区，未创建第二套工作区');
-  const inspected = await api.inspectWorkbenchRuntime(runtime);
-  return { paths, installation: { kind: 'desktop', runtime: inspected.runtime, engineVersion: inspected.engineVersion,
+  return { paths, installation: { kind: 'desktop', runtime,
     profile: paths.profile, node: resolve(node), executable: resolve(node), resources,
     primaryRuntime: join(resources, 'runtime', 'primary-runtime') } };
+}
+
+/** Inspect the actual bundled runtime; product and plugin versions remain independent. */
+export async function desktopWorkbenchInstallation(options, api = shared) {
+  const { paths, installation } = await desktopWorkbenchLocation(options, api);
+  const inspected = await api.inspectWorkbenchRuntime(installation.runtime);
+  return { paths, installation: { ...installation, ...inspected } };
 }
 
 /** Offline enrollment may update metadata only while no other Host owns this profile. */
@@ -117,12 +123,14 @@ export async function createDesktopWorkbenchOwner({ paths, installation, pid = p
 /** Transfer only an idle managed Web Host, then enroll and start under one ownership lease. */
 export async function beginDesktopWorkbench({ initialize, ...options }, api = shared) {
   if (typeof initialize !== 'function') throw new Error('BenchGo Desktop 缺少官方插件登记入口');
-  const { paths, installation } = await desktopWorkbenchInstallation(options, api);
-  const previous = await api.readWorkbenchInstallation({ home: paths.home, expectedEngine: installation.engineVersion });
+  const { paths, installation } = await desktopWorkbenchLocation(options, api);
   const lease = await api.readWorkbenchLease({ home: paths.home });
   if (lease?.active) {
     if (lease.pid === process.pid) throw new Error('BenchGo 桌面工作台已经取得所有权');
-    if (!previous || lease.kind !== 'web') throw new Error('已有 BenchGo 桌面工作台或未知进程正在运行，未启动第二个工作台');
+    if (lease.kind !== 'web') throw new Error('已有 BenchGo 桌面工作台或未知进程正在运行，未启动第二个工作台');
+    const { engineVersion } = await api.inspectWorkbenchRuntime(installation.runtime);
+    const previous = await api.readWorkbenchInstallation({ home: paths.home, expectedEngine: engineVersion });
+    if (!previous) throw new Error('已有 BenchGo 桌面工作台或未知进程正在运行，未启动第二个工作台');
     // The Web supervisor locks admission, inspects tasks again and acknowledges graceful teardown.
     await api.requestWorkbenchControl(previous, { home: paths.home, action: 'stop' });
     await api.waitForWorkbenchStop({ home: paths.home });
@@ -148,9 +156,29 @@ export async function beginDesktopWorkbench({ initialize, ...options }, api = sh
   };
   try {
     const { enrollment, registered } = await api.withWorkbenchInstallLock({ home: paths.home }, async () => {
-      await api.readWorkbenchInstallation({ home: paths.home, expectedEngine: installation.engineVersion });
-      const enrollment = await initialize({ ...options, resources: options.resources, runtime: installation.runtime, profile: paths.profile, registerInstallation: false });
-      const registered = await api.registerWorkbenchInstallation({ home: paths.home, installation });
+      const runtimeChecks = new Map();
+      const inspected = await api.inspectWorkbenchRuntime(installation.runtime, { runtimeChecks });
+      const installOptions = { home: paths.home, expectedEngine: inspected.engineVersion, runtimeChecks };
+      await api.readWorkbenchInstallation(installOptions);
+      const enrollment = await initialize({ ...options, resources: options.resources, runtime: inspected.runtime, profile: paths.profile, registerInstallation: false });
+      const profile = await readJson(join(paths.profile, 'package.json'));
+      const version = profile.dsh?.plusInstall?.version;
+      if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version))
+        throw new Error('BenchGo 插件登记完成，但 profile 配置保护尚未就绪');
+      const integrityModule = join(paths.profile, '.benchgo', 'releases', version, 'node_modules', 'benchgo-plugin', 'shared', 'profile-integrity.mjs');
+      const createGuard = api.createProfileIntegrityGuard
+        ?? (await import(pathToFileURL(integrityModule).href)).createProfileIntegrityGuard;
+      let atomicServices = api.createProfileIntegrityServices;
+      if (!atomicServices) {
+        const runtimeRequire = createRequire(join(inspected.runtime, 'node_modules/@deepseek-ai/dsh/package.json'));
+        atomicServices = await import(pathToFileURL(runtimeRequire.resolve('@deepseek-ai/dsh-atomic-write')).href);
+      }
+      await createGuard({
+        paths: [join(paths.profile, 'cordis.patch.yml'), join(paths.home, 'cordis.patch.yml')],
+        directory: join(paths.home, '.benchgo', 'profile-integrity'),
+        ...atomicServices,
+      });
+      const registered = await api.registerWorkbenchInstallation({ ...installOptions, installation: { ...installation, ...inspected } });
       return { enrollment, registered };
     });
     owner = await createDesktopWorkbenchOwner({ paths, installation: registered, api });

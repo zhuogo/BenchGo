@@ -48,7 +48,7 @@ jobs:
         run: |
           npm run setup
           npm ci --prefix plugins/link
-          npm ci --prefix plugins/benchgo
+          npm ci --prefix plugins/base
       - name: Build plugin and native BenchGo distribution
         run: |
           # osx-sign scans the complete bundled runtime and offline plugin tree.

@@ -57,7 +57,7 @@ test('legacy download streams only an exact checksum-verified MZ installer and r
 });
 
 test('plugin-only release keeps application versions and reuses both native binaries', () => {
-  const value = plan({ versions: versions({ plugin: '1.1.0' }), paths: ['plugins/voice/src/calls.mjs'] });
+  const value = plan({ versions: versions({ plugin: '1.1.0' }), paths: ['plugins/media/src/calls.mjs'] });
   assert.deepEqual(value.builds, { plugin: true, windows: false, android: false });
   assert.equal(value.versions.windows, '1.0.0');
 });
@@ -86,12 +86,12 @@ test('native Android and embedded Link changes are explicit; documentation and t
   assert.deepEqual(classifyChanges(['plugins/link/mobile/android/app/src/main/java/Main.kt']), { plugin: [], windows: [], android: ['plugins/link/mobile/android/app/src/main/java/Main.kt'] });
   const embedded = classifyChanges(['plugins/link/client/main.jsx']);
   assert.equal(embedded.plugin.length, 1); assert.equal(embedded.android.length, 1); assert.equal(embedded.windows.length, 0);
-  assert.deepEqual(plan({ paths: ['docs/设计.md', 'plugins/voice/test/calls.test.mjs', '.github/workflows/unified-release.yml'] }).builds,
+  assert.deepEqual(plan({ paths: ['docs/设计.md', 'plugins/media/test/calls.test.mjs', '.github/workflows/unified-release.yml'] }).builds,
     { plugin: false, windows: false, android: false });
 });
 
 test('changed components require increased versions and Android additionally requires increased versionCode', () => {
-  assert.throws(() => plan({ paths: ['plugins/voice/src/calls.mjs'] }), /increment its component version/);
+  assert.throws(() => plan({ paths: ['plugins/media/src/calls.mjs'] }), /increment its component version/);
   assert.throws(() => plan({ versions: versions({ windows: '1.1.0', android: '1.1.0' }) }), /increased versionCode/);
   assert.throws(() => plan({ versions: versions({ android: '1.1' }) }), /Invalid android component version/);
   assert.throws(() => plan({ releaseVersion: '1.0.0' }), /must increase/);
@@ -113,7 +113,7 @@ test('immutable component references forbid mutable channel and unrelated reposi
 test('provenance requires exact source, unified identity, verification results and staging scope', () => {
   const value = plan({ versions: versions({ plugin: '1.1.0' }) });
   const receipt = { schemaVersion: 1, component: 'plugin', sourceSha: newSha, releaseVersion: '1.1.0', version: '1.1.0',
-    verified: requiredVerification.plugin, staged: [{ path: 'plugins/benchgo/package.json', field: 'benchgo.releaseVersion', value: '1.1.0' }],
+    verified: requiredVerification.plugin, staged: [{ path: 'plugins/base/package.json', field: 'benchgo.releaseVersion', value: '1.1.0' }],
     artifact: 'benchgo-1.1.0-plugin.tar.gz', files: [{ name: 'benchgo-1.1.0-plugin.tar.gz', sha256: hash, size: 100 }] };
   assert.equal(validateReceipt(receipt, value, 'plugin'), receipt);
   assert.throws(() => validateReceipt({ ...receipt, sourceSha: oldSha }, value, 'plugin'), /source or version/);
@@ -125,7 +125,7 @@ test('Android publication also requires the completed native update-signature un
   const value = plan();
   const receipt = { schemaVersion: 1, component: 'android', sourceSha: newSha, releaseVersion: '1.1.0', version: '1.0.0', versionCode: 10,
     verified: ['android-release-signature', 'android-current-resources', 'android-non-debuggable'],
-    staged: [{ path: 'plugins/benchgo/package.json', field: 'benchgo.releaseVersion', value: '1.1.0' }],
+    staged: [{ path: 'plugins/base/package.json', field: 'benchgo.releaseVersion', value: '1.1.0' }],
     artifact: 'benchgo-1.0.0-android.apk', files: [{ name: 'benchgo-1.0.0-android.apk', sha256: hash, size: 100 }] };
   assert.throws(() => validateReceipt(receipt, value, 'android'), /verification/);
   assert.equal(validateReceipt({ ...receipt, verified: [...receipt.verified, 'android-update-signature-tests'] }, value, 'android').versionCode, 10);
@@ -171,7 +171,7 @@ test('assembly fails on wrong checksum before signing any update channel', async
   await writeFile(resolve(built, 'benchgo-1.1.0-plugin.tar.gz'), 'corrupt');
   await writeFile(resolve(built, 'component-source.json'), JSON.stringify({ schemaVersion: 1, component: 'plugin', sourceSha: newSha,
     releaseVersion: '1.1.0', version: '1.1.0', verified: requiredVerification.plugin,
-    staged: [{ path: 'plugins/benchgo/package.json', field: 'benchgo.releaseVersion', value: '1.1.0' }],
+    staged: [{ path: 'plugins/base/package.json', field: 'benchgo.releaseVersion', value: '1.1.0' }],
     artifact: 'benchgo-1.1.0-plugin.tar.gz', files: [{ name: 'benchgo-1.1.0-plugin.tar.gz', size: 7, sha256: hash }] }));
   await assert.rejects(assembleRelease({ plan: value, buildRoot: directory, outDir: resolve(directory, 'out'), enforceSource: false }), /checksum mismatch/);
 });
@@ -193,7 +193,7 @@ test('first release combines independently versioned verified components under o
     }
     await writeFile(resolve(folder, 'component-source.json'), JSON.stringify({ schemaVersion: 1, component, sourceSha: newSha, releaseVersion: '1.1.0', version: '1.0.0',
       ...(component === 'android' ? { versionCode: 10 } : {}), artifact, files, verified: requiredVerification[component],
-      staged: [{ path: 'plugins/benchgo/package.json', field: 'benchgo.releaseVersion', value: '1.1.0' }] }));
+      staged: [{ path: 'plugins/base/package.json', field: 'benchgo.releaseVersion', value: '1.1.0' }] }));
   }
   const keys = generateKeyPairSync('ed25519', { privateKeyEncoding: { format: 'pem', type: 'pkcs8' }, publicKeyEncoding: { format: 'pem', type: 'spki' } });
   const out = resolve(directory, 'release');

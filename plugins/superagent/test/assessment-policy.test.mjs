@@ -100,11 +100,11 @@ test('verified allowlisted machine system stop is attention only without admissi
   ]) assert.equal(authorizeAssessment({ ...input, ...change }).allowed, false);
 });
 
-test('assessment keeps Router and Worker role queues separate and resolves Worker inheritance', async () => {
+test('assessment keeps Router and Worker role queues separate without implicit inheritance', async () => {
   const router = { providerId: 'Router/@', modelId: 'Exact: Router/1' };
   const worker = { providerId: 'Worker/@', modelId: 'Exact: Worker/2' };
   const auxiliary = { models: [{ providerId: 'Aux/@', modelId: 'Exact: Aux/3' }], capabilities: ['review'] };
-  let config = { revision: 1, models: [router], workerModels: [worker], auxiliary };
+  let config = { revision: 1, models: [router], workerHarness: 'official', workerModels: [worker], auxiliary };
   const store = { getConfig: async () => config, connections: { read: () => ({ revision: 1, config: {} }), list: () => [{ channel: 'feishu', revision: 1, config: {} }] }, documents: { read: async () => ({ hash: 'rules', content: '' }) } };
   const policy = await readAssessmentPolicy(store);
   assert.deepEqual(policy.model, router);
@@ -113,7 +113,7 @@ test('assessment keeps Router and Worker role queues separate and resolves Worke
   assert.deepEqual(policy.routingConfig, config);
   for (const workerModels of [[], undefined]) {
     config = { ...config, workerModels };
-    assert.deepEqual((await readAssessmentPolicy(store)).workerModels, [router]);
+    assert.deepEqual((await readAssessmentPolicy(store)).workerModels || [], []);
   }
 });
 

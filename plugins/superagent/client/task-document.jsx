@@ -1,6 +1,6 @@
 import React from 'react';
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 
 const labels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' };
 

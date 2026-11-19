@@ -28,18 +28,25 @@ export function orderedModels(primary, models = []) {
     && all.findIndex(other => other?.providerId === model.providerId && other?.modelId === model.modelId) === index));
 }
 
-/** An empty Worker queue explicitly inherits Router; explicit selections stay first. */
 export function roleModels(primary, config = {}, role = 'router') {
-  if (!['router', 'worker'].includes(role)) throw new Error('Unknown model role');
-  const models = role === 'worker' && config.workerModels?.length ? config.workerModels : config.models;
-  return orderedModels(primary, models || []);
+  const main = config.models ?? config.routingConfig?.models ?? [config.model];
+  if (role === 'router') return orderedModels(primary, main);
+  if (role !== 'worker') throw new Error('Unknown model role');
+  const workers = config.workerModels ?? config.routingConfig?.workerModels ?? [];
+  const harness = primary?.harness ?? config.workerHarness ?? config.routingConfig?.workerHarness ?? 'official';
+  return orderedModels(primary, workers.length || harness !== 'official' ? workers : main);
 }
 
 /** Share capability routing without changing each caller's tool permissions. */
-export function auxiliaryModels(primary, config = {}, capability, routePolicy = 'router-fallback') {
+export function auxiliaryRoute(primary, config = {}, capability, routePolicy = 'router-fallback') {
   if (!['router-fallback', 'auxiliary-only'].includes(routePolicy)) throw new Error('Unknown auxiliary route policy');
-  const auxiliary = config.auxiliary?.capabilities?.includes(capability) ? config.auxiliary : null;
-  const selected = (auxiliary?.models || []).map(model => routePolicy !== 'auxiliary-only' && primary?.providerId === model.providerId && primary?.modelId === model.modelId ? primary : model);
-  const models = [...selected, ...(routePolicy === 'auxiliary-only' ? [] : roleModels(primary, config, 'router'))];
-  return orderedModels(models[0], models.slice(1));
+  const configured = config.auxiliary?.capabilities?.includes(capability) ? config.auxiliary.models : [];
+  const selected = (configured || []).filter(model => model?.providerId && model?.modelId);
+  const auxiliary = selected.length > 0;
+  if (auxiliary && routePolicy === 'auxiliary-only') return { models: orderedModels(undefined, selected), auxiliary };
+  const preferred = selected.map(model => primary?.providerId === model.providerId && primary?.modelId === model.modelId ? primary : model);
+  const [first, ...rest] = [...preferred, ...roleModels(primary, config, 'router')];
+  return { models: orderedModels(first, rest), auxiliary };
 }
+
+export const auxiliaryModels = (...args) => auxiliaryRoute(...args).models;

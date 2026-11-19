@@ -1,0 +1,110 @@
+.media-settings{max-width:880px;container:media-settings / inline-size}
+.media-settings>header{margin-bottom:20px}
+.media-settings>header h2{font-size:21px;font-weight:550;letter-spacing:-.02em}
+.media-settings>header p{margin-top:8px;line-height:1.6}
+.media-settings .media-settings-navigation{justify-content:flex-start;gap:12px 20px}
+.media-settings .media-settings-navigation>h2{flex:none}
+.media-settings .media-settings-navigation>.bg-segments-scroll{margin-left:auto}
+.media-settings .voice-provider-settings{padding:0;margin:18px 0;border:0;border-radius:0}
+.media-settings .voice-provider-settings legend{font-size:13px;font-weight:550;padding:0;margin-bottom:8px}
+.media-settings .voice-mode-settings{margin-bottom:12px}
+.media-settings .voice-setting-toggle{padding-block:8px}
+.media-settings .voice-select{margin-block:10px}
+.media-settings .voice-select>.voice-field-label{margin:0}
+.media-settings :is(.voice-route-fields,.voice-protocol-fields,.voice-sound-fields){display:grid;grid-template-columns:minmax(0,1fr)}
+.media-settings .voice-route-fields{align-items:end;gap:12px;margin-block:12px}
+.media-settings .voice-route-fields > :is(.voice-select,.voice-model-field){margin:0;min-width:0}
+.media-settings :is(.media-route-heading,.media-route){
+  --media-route-control-size:34px;
+  display:grid;
+  grid-template-columns:3.75rem minmax(0,2fr) minmax(0,3fr) var(--media-route-control-size);
+  align-items:center;
+  gap:4px 8px
+}
+.media-route-heading{margin-top:10px;padding-block:4px;color:var(--voice-muted);font-size:12px}
+.media-route-heading>span:first-child{grid-column:2}
+.media-route{padding-block:5px;border-bottom:1px solid var(--voice-border)}
+.media-route-position{font-size:12px;font-weight:550;white-space:nowrap;color:var(--voice-text)}
+.media-settings .media-route .voice-select{min-width:0;margin:0}
+.media-settings .media-route .voice-select-trigger,
+.media-settings .media-route input.media-route-input{
+  box-sizing:border-box;
+  min-height:var(--media-route-control-size);
+  padding:4px 8px;
+  border-radius:7px
+}
+.media-settings .media-route .voice-select-trigger{gap:6px}
+.media-route .voice-select-trigger .voice-select-copy{display:contents}
+.media-settings .media-route .media-route-menu-trigger{
+  width:100%;
+  min-height:var(--media-route-control-size);
+  height:var(--media-route-control-size);
+  color:var(--voice-muted)
+}
+.media-settings .media-route-menu-trigger[aria-busy=true]>.cmd-ui-icon{animation:voice-model-refresh 900ms linear infinite}
+.media-route .media-route-message{grid-column:2/-1;min-width:0;margin:0;overflow-wrap:anywhere}
+.media-voices{grid-column:2/-1;min-width:0;padding:4px 0 8px;margin-top:2px}
+.media-voices-header{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--voice-muted);font-size:12px}
+.media-voices-header strong{font-weight:550;color:var(--voice-text)}
+.media-voice-row{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr) auto var(--media-route-control-size);align-items:center;gap:6px 8px;padding-block:5px}
+.media-voice-row+.media-voice-row{border-top:1px solid var(--voice-border)}
+.media-voice-default{display:flex;align-items:center;gap:5px;white-space:nowrap;color:var(--voice-muted);font-size:12px;cursor:pointer}
+.media-voice-default input{margin:0;accent-color:var(--voice-blue)}
+.media-settings .media-route .media-voice-remove{width:var(--media-route-control-size);height:var(--media-route-control-size);color:var(--voice-muted)}
+.media-settings .media-add-route{margin-top:6px;color:var(--voice-muted)}
+@container media-settings (max-width:420px){
+  .media-settings :is(.media-route-heading,.media-route){grid-template-columns:2.5rem minmax(0,2fr) minmax(0,3fr) var(--media-route-control-size);column-gap:6px}
+  .media-voices{grid-column:1/-1}
+  .media-voice-row{grid-template-columns:minmax(0,1fr) auto var(--media-route-control-size)}
+  .media-voice-description{grid-column:1/-1;grid-row:2}
+}
+@media(pointer:coarse){
+  .media-settings :is(.media-route-heading,.media-route){--media-route-control-size:44px}
+  .media-settings .media-route input.media-route-input{font-size:16px}
+  .media-voice-default,.media-voices-header button{min-height:44px}
+  .media-settings .media-add-route,.media-route-menu-list[role=menu] [role=menuitem]{min-height:44px}
+}
+.media-settings .voice-sound-fields{gap:0}
+@container media-settings (min-width:560px){
+  .media-settings .voice-route-fields:has(> .voice-model-field){grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:16px}
+  .media-settings :is(.voice-protocol-fields,.voice-sound-fields){grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+}
+.media-settings .voice-select-trigger{min-height:38px}
+.media-settings .voice-connection-settings{margin-top:16px}
+.media-settings .voice-connection-settings .bg-ui-disclosure-trigger{min-height:36px;padding-block:8px;font-size:12px;color:var(--voice-muted)}
+.media-settings .voice-settings-content>footer>span{color:var(--voice-muted);font-size:12px}
+.media-settings .voice-provider-hint{font-size:12px;line-height:1.7}
+.media-settings .voice-model-actions{display:flex;align-items:center;gap:4px;flex-wrap:nowrap;margin:0}
+.media-settings .voice-model-field{display:flex;align-items:flex-end;gap:8px;min-width:0;margin:12px 0}
+.media-settings .voice-model-field>.voice-select,.media-settings .voice-model-field>label{flex:1;min-width:0;margin:0}
+.media-settings .voice-model-tools{display:flex;align-items:center;gap:4px;flex:none;padding-bottom:2px}
+.media-settings .voice-model-tools>.voice-model-actions{flex:none;gap:4px;margin:0}
+.media-settings .voice-model-tools>span{display:flex}
+.media-settings .voice-model-field .voice-model-actions>span{margin:0;display:flex}
+.media-settings .voice-model-field .voice-icon-button{width:36px;height:36px;padding:9px;color:var(--voice-muted)}
+.media-settings .voice-icon-button:disabled{opacity:.45;cursor:default}
+.media-settings .voice-icon-button:focus-visible{outline:2px solid var(--voice-blue);outline-offset:2px}
+.media-settings .voice-model-actions .voice-icon-button[aria-busy=true]>.cmd-ui-icon{animation:voice-model-refresh 900ms linear infinite}
+@keyframes voice-model-refresh{to{transform:rotate(360deg)}}
+.media-settings .voice-protocol-actions{display:flex;gap:6px;align-items:center;margin-top:10px}
+.media-settings .voice-protocol-actions>span{display:flex}
+.media-settings .voice-protocol-actions .voice-icon-button{width:36px;height:36px;color:var(--voice-text);padding:9px;border:1px solid var(--voice-border);background:var(--voice-hover)}
+.media-settings .voice-protocol-actions .voice-icon-button:disabled{color:var(--voice-muted);background:transparent;opacity:.35;pointer-events:none;cursor:default}
+.media-settings .voice-protocol-actions .voice-icon-button:not(:disabled):hover{color:var(--voice-blue)}
+.media-settings .voice-model-tools .voice-protocol-match{color:var(--voice-text);border:1px solid var(--voice-border);background:var(--voice-hover)}
+.media-settings .voice-model-tools .voice-protocol-match:disabled{color:var(--voice-muted);background:transparent;opacity:.35;pointer-events:none}
+.media-settings .voice-protocol-summary{margin:10px 0 0;font-size:12px;color:var(--voice-muted)}
+.media-settings .voice-protocol-summary.is-verified{color:var(--voice-blue)}
+.voice-listening-check{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 24px}
+.voice-listening-check .voice-text-button{min-height:36px;padding:7px 12px;border:1px solid var(--voice-border);border-radius:8px}
+.voice-listening-check>span{font-size:12px;color:var(--voice-muted)}
+.voice-listening-word{font-size:12px;color:var(--voice-text);margin:10px 0 16px;overflow-wrap:anywhere}
+.media-settings .voice-protocol-attempts{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:9px;font-size:12px}
+.media-settings .voice-protocol-attempts li{display:grid;gap:2px;overflow-wrap:anywhere}
+.media-settings .voice-protocol-attempts small{color:var(--voice-muted);font-size:11px;line-height:1.6}
+@media(max-width:520px){.media-settings .voice-model-field .voice-icon-button{width:40px;height:40px}}
+.media-settings .media-availability{padding:0;font-size:12px;line-height:1.6}
+.media-settings .voice-settings-content>footer{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding-top:14px;background:transparent;border:0}
+.media-settings [role=status]{line-height:1.6}
+.media-settings .bg-segments-scroll{margin-bottom:16px}
+@media(max-width:520px){.media-settings .voice-setting-toggle{padding-block:14px}.media-settings .voice-save{min-height:44px}}

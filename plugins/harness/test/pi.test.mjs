@@ -5,7 +5,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { PiProvider } from '../src/providers/pi.mjs';
-import { askNativeQuestion } from '../../benchgo/src/questions.mjs';
+import { askNativeQuestion } from '../../base/src/questions.mjs';
 
 const fixture = fileURLToPath(new URL('./commands-fixture.mjs', import.meta.url));
 async function exchange(t, ui, approval) {

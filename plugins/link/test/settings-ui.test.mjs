@@ -5,12 +5,12 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { connectionDefaults, pairingConnection } from '../client/connection-mode.mjs';
 
-const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
+const require = createRequire(new URL('../../base/package.json', import.meta.url));
 const { transformSync } = require('esbuild');
 const source = await readFile(new URL('../client/app.jsx', import.meta.url), 'utf8');
 const css = await readFile(new URL('../client/style.css', import.meta.url), 'utf8');
 const code = transformSync(source, { loader: 'jsx', format: 'cjs' }).code;
-const catalog = JSON.parse(await readFile(new URL('../../benchgo/client/assets/iconsax/catalog.json', import.meta.url), 'utf8'));
+const catalog = JSON.parse(await readFile(new URL('../../base/client/assets/iconsax/catalog.json', import.meta.url), 'utf8'));
 const nodes = tree => tree && typeof tree === 'object' ? [tree, ...(tree.children || []).flatMap(nodes)] : [];
 const textOf = node => (node?.children || []).map(value => typeof value === 'object' ? textOf(value) : String(value)).join('');
 function fixture({ origin = 'https://dsh.draftgo.cn', clipboard = async () => {}, respond } = {}) {

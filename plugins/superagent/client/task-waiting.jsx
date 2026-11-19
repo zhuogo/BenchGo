@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { TaskIconButton } from './task-list.jsx';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { taskWaiting } from './task-state.mjs';
 import { TaskAttention } from './task-attention.jsx';
 import css from './task-waiting.css';

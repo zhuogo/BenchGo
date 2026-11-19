@@ -40,7 +40,7 @@ export async function openStore(directory) {
     }).reverse();
   };
   state.workbenchSessions = pruneSessions(Array.isArray(saved.workbenchSessions) ? saved.workbenchSessions : []);
-  const pairings = new Map(), pending = new Map();
+  const pairings = new Map(), pending = new Map(), probes = new Map();
   let writes = Promise.resolve();
   let sessionChanges = Promise.resolve();
   const changeSessions = operation => {
@@ -61,6 +61,7 @@ export async function openStore(directory) {
   function prune() {
     for (const [key, value] of pairings) if (value.expiresAt <= Date.now()) pairings.delete(key);
     for (const [key, value] of pending) if (value.expiresAt <= Date.now()) pending.delete(key);
+    for (const [key, value] of probes) if (value.expiresAt <= Date.now()) probes.delete(key);
   }
   if (retiredGrants) await persist();
   return {
@@ -82,7 +83,24 @@ export async function openStore(directory) {
         try { await persist(); } catch (error) { state.workbenchSessions = previous; throw error; }
       });
     },
-    pending() { prune(); return [...pending.values()].filter(p => p.status === 'pending').map(({ id, name, createdAt, expiresAt }) => ({ id, name, createdAt, expiresAt, capabilities: [...PAIRED_DEVICE_CAPABILITIES] })); },
+    pending(code) {
+      prune();
+      const pairingHash = code === undefined ? undefined : hash(text(code, '配对码', 128));
+      return [...pending.values()].filter(p => p.status === 'pending' && (pairingHash === undefined || p.pairingHash === pairingHash)).map(({ id, name, createdAt, expiresAt }) => ({ id, name, createdAt, expiresAt, capabilities: [...PAIRED_DEVICE_CAPABILITIES] }));
+    },
+    beginProbe() {
+      prune();
+      if (probes.size >= 32) throw new Error('连接检查过多，请稍后重试');
+      const id = randomUUID(), proof = secret();
+      probes.set(id, { proof, expiresAt: Date.now() + 15000 });
+      return { id, proof };
+    },
+    takeProbe(id) {
+      prune();
+      const probe = probes.get(id);
+      probes.delete(id);
+      return probe?.proof;
+    },
     begin() {
       prune(); if (pairings.size + pending.size >= 32) throw new Error('配对请求过多，请稍后重试');
       const code = secret(), expiresAt = Date.now() + 300_000;
@@ -93,7 +111,7 @@ export async function openStore(directory) {
       if (!value) throw new Error('配对码已使用或过期');
       pairings.delete(key);
       const pollToken = secret(), id = randomUUID();
-      pending.set(id, { id, name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pollHash: hash(pollToken), status: 'pending' });
+      pending.set(id, { id, name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pairingHash: key, pollHash: hash(pollToken), status: 'pending' });
       return { requestId: id, pollToken, expiresAt: value.expiresAt };
     },
     poll(id, pollToken) {
@@ -132,6 +150,6 @@ export async function openStore(directory) {
         await persist();
       });
     },
-    clearPairings() { pairings.clear(); pending.clear(); },
+    clearPairings() { pairings.clear(); pending.clear(); probes.clear(); },
   };
 }

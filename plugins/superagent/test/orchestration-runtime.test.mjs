@@ -103,7 +103,7 @@ test('execution evidence remains readable before a Task has an Assignment', asyn
 async function remoteExecutionFixture(t, phase = 'running') {
   let localReads = 0;
   const app = await fixture(t, { ctx: { agents: { get() { localReads++; return { status: 'running' }; } } } });
-  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-pair', config: { harness: 'official', models: [{ providerId: 'exact', modelId: 'exact/model' }] } };
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-pair', protocolVersion: 2, config: { harness: 'official', models: [{ providerId: 'exact', modelId: 'exact/model' }] } };
   const task = app.db.createTask({ threadId: 'thread', target: '在 B 执行', mandate: { ...app.task.mandate, execution } });
   app.db.createAssignment(task.id, { id: 'remote-work', executor: 'remote', execution });
   const assignment = app.db.claimAssignments('remote-observer', { limit: 10, validateMandate: () => true }).find(row => row.id === 'remote-work');
@@ -166,7 +166,7 @@ test('missing Worker configuration is a concrete scheduling blocker that clears 
   const task = app.db.createTask({ threadId: 'thread', target: '等待配置恢复后执行', mandate: app.task.mandate });
   const getConfig = app.store.getConfig, config = await getConfig();
   let models = [];
-  app.store.getConfig = async () => ({ ...config, models: [], workerModels: models });
+  app.store.getConfig = async () => ({ ...config, models, workerModels: [] });
   await app.runtime.tick();
   assert.equal(app.db.getTask(task.id).status, 'waiting');
   assert.equal(app.db.getTask(task.id).continuationWait.code, 'WORKER_MODEL_ROUTE');
@@ -187,13 +187,13 @@ test('remote admission schedules its frozen peer model even without host Worker 
     calls.push(input);
     if (input.input.operation === 'submit') accepted = input.input;
     assert.ok(accepted);
-    return { version: 1, execution: { id: accepted.executionId, identity: accepted.identity, sessionId: accepted.sessionId,
+    return { version: 2, execution: { id: accepted.executionId, identity: accepted.identity, sessionId: accepted.sessionId,
       phase: 'running', receivedInstructionRevision: 1, appliedInstructionRevision: 1 }, events: [], cursor: 0, hasMore: false };
   } };
   const app = await fixture(t, { ctx: { get: name => name === 'benchgoLink' ? link : undefined } });
   const config = await app.store.getConfig();
   app.store.getConfig = async () => ({ ...config, models: [], workerModels: [] });
-  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-pair', config: { harness: 'official', models: [{ providerId: 'B:opaque', modelId: 'B/opaque:model' }] } };
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-pair', protocolVersion: 2, config: { harness: 'official', models: [{ providerId: 'B:opaque', modelId: 'B/opaque:model' }] } };
   const task = app.db.createTask({ threadId: 'thread', target: '只在 B 执行', mandate: { ...app.task.mandate, execution } });
   for (let index = 0; index < 30 && !app.db.assignments(task.id)[0]?.remoteExecution; index++) {
     await app.runtime.tick(); await new Promise(resolve => setTimeout(resolve, 2));

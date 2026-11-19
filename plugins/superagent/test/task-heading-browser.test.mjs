@@ -5,12 +5,12 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const webRequire = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = webRequire('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const longRequirements = ['# 发布要求', '', '- 核查运行环境', '- 保留验证记录', '', '| 检查项 | 验证目标 |', '| --- | --- |', '| 请求标识 | opaque-' + 'identifier'.repeat(45) + ' |', '', '```js', 'const requestId = "' + 'opaque-identifier-'.repeat(30) + '";', 'console.log(requestId);', '```', '', ...Array.from({ length: 45 }, (_, index) => `长文段落 ${String(index + 1).padStart(2, '0')}：滚动阅读任务要求，并保持标题与操作入口可达。\n`)].join('\n');
 const resultMarkdown = ['# 交付结果', '', '- 环境检查完成', '- 证据已整理', '', '| 检查项 | 结果 |', '| --- | --- |', '| 兼容性 | 通过 |', '', '```json', '{"status":"completed"}', '```'].join('\n');
@@ -23,7 +23,7 @@ async function fixture() {
       import {configureAssistantActivity} from './plugins/superagent/client/use-activity.jsx';
       import {createTaskManagement} from './plugins/superagent/src/task-management.mjs';
       import css from './plugins/superagent/client/style.css';
-      import hostCss from './plugins/benchgo/client/style.css';
+      import hostCss from './plugins/base/client/style.css';
       const root=createRoot(document.getElementById('root'));
       window.renderScenario=(state='data',section='tasks')=>{
         window.calls=[];window.resourceState=state;
@@ -61,7 +61,7 @@ async function fixture() {
       };
     ` },
     bundle: true, write: false, outdir: join(root, 'artifacts/unused-task-heading-test'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'),
       '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'),

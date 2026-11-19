@@ -6,7 +6,6 @@ import { commandCatalog, normalizeCommand } from '../commands.mjs';
 // Original adapter implementation: ACP JSON-RPC, no filesystem/terminal client privileges.
 export const ACP_TOOL_DEFAULTS = Object.freeze({
   gemini: Object.freeze({ command: 'gemini', args: Object.freeze(['--acp']) }),
-  hermes: Object.freeze({ command: 'hermes', args: Object.freeze(['acp']) }),
   grok: Object.freeze({ command: 'grok', args: Object.freeze(['agent', 'stdio']) }),
   mcode: Object.freeze({ command: 'mcode', args: Object.freeze(['acp']) }),
 });

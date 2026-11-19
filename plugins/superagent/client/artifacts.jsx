@@ -7,7 +7,7 @@ import { ArtifactPreview } from '../../shared/client/artifact-preview.jsx';
 import { FileSaveButton } from '../../shared/client/file-save-button.jsx';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 
 const categories = [
   ['document', '文档', 'document'],

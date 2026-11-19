@@ -8,7 +8,7 @@
     pending = true;
     retry.hidden = true;
     retry.disabled = true;
-    status.textContent = '';
+    status.textContent = '正在打开工作台…';
     try {
       await window.dshWelcome.skip();
       entered = true;

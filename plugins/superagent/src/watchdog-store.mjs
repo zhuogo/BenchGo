@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
-import { DataOwner } from '../../benchgo/shared/data-owner.mjs';
+import { DataOwner } from '../../base/shared/data-owner.mjs';
 import { watchdogPublicConfig } from './watchdog-config.mjs';
 import { migrateTaskState } from './task-storage-migration.mjs';
 

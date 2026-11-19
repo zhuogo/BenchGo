@@ -20,7 +20,7 @@ export async function publishWebCatalog({ directory, releaseVersion, sourceSha, 
     if (size < 1 || size > (index ? 4096 : 512 * 1024)) throw new Error('Web catalog metadata is missing or oversized');
     bytes.push(await readFile(path));
   }
-  const trusted = createPublicKey(publicKey ?? await readFile(new URL('../../plugins/benchgo/shared/update-public-key.pem', import.meta.url)));
+  const trusted = createPublicKey(publicKey ?? await readFile(new URL('../../plugins/base/shared/update-public-key.pem', import.meta.url)));
   if (!verify(null, bytes[0], trusted, Buffer.from(bytes[1].toString('utf8').trim(), 'base64'))) throw new Error('Invalid web catalog signature');
   const catalog = JSON.parse(bytes[0]);
   if (catalog.schemaVersion !== 1 || catalog.releaseVersion !== releaseVersion || catalog.sourceSha !== sourceSha

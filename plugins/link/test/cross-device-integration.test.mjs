@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mountLink } from '../src/index.mjs';
-import { mountWeb } from '../../benchgo/src/web.mjs';
+import { mountWeb } from '../../base/src/web.mjs';
 
 async function host(t, name, projects, assistant, stored = {}) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-cross-device-')), directory = join(root, 'link');
@@ -17,7 +17,7 @@ async function host(t, name, projects, assistant, stored = {}) {
     connection: { fetch: { register: value => { routes.push(value); return () => {}; } } },
     effect: fn => fn(),
   };
-  const link = await mountLink(ctx, { directory, env: {} });
+  const link = await mountLink(ctx, { directory, env: {}, testRelayConnection: async () => ({ ok: true }) });
   t.after(async () => { await link.close(); await rm(root, { recursive: true, force: true }); });
   const route = routes.find(route => route.path === '/api/commander-devices');
   const launchResponse = await route.fetch(new Request('http://127.0.0.1' + route.path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'launch' }) }));
@@ -55,7 +55,7 @@ async function sessionHost(t, name) {
   const project = { id: 'same-project', title: `${name} project`, path: `/${name}/work`, sessionIds: ['same-session'] };
   const hidden = new Set(), hostValue = await host(t, name, [project], { sidebarPrivateSessionIds: async () => [...hidden] });
   const calls = [], rows = [{ sessionId: 'same-session', updatedAt: 10, projections: { values: { title: `${name} session` } } }];
-  const nativeRows = new Map([['same-native', { id: 'same-native', projectId: project.id, cwd: project.path, ownerSessionId: 'commander-web:owner', provider: 'codex', status: 'idle' }]]);
+  const nativeRows = new Map([['same-native', { id: 'same-native', projectId: project.id, cwd: project.path, ownerSessionId: 'commander-web:detached:owner', provider: 'codex', status: 'idle' }]]);
   const commander = {
     list: () => [...nativeRows.values()],
     async archive(id, archived) { calls.push(['native', archived ? 'archive' : 'unarchive', id]); nativeRows.get(id).archived = archived; },
@@ -197,8 +197,8 @@ test('session resources share one project snapshot and remain readable over TLS 
   b.ctx.workspaceRegistry.list = () => { projectReads++; return projects; };
   const get = b.ctx.get;
   b.ctx.get = name => name === 'commander' ? { list: () => [
-    { id: 'native-default', ownerSessionId: 'commander-web:owner', projectId: 'default', cwd: '/default', provider: 'native-provider', updatedAt: 30 },
-    { id: 'native-other', ownerSessionId: 'commander-web:owner', projectId: 'other', cwd: '/other', provider: 'native-provider', updatedAt: 40 },
+    { id: 'native-default', ownerSessionId: 'commander-web:detached:owner', projectId: 'default', cwd: '/default', provider: 'native-provider', updatedAt: 30 },
+    { id: 'native-other', ownerSessionId: 'commander-web:detached:owner', projectId: 'other', cwd: '/other', provider: 'native-provider', updatedAt: 40 },
   ] } : get(name);
   b.ctx.connection.createPeer = () => ({ dispose() {} });
   b.ctx.typertGateway = {
@@ -275,10 +275,10 @@ test('revocation removes cached remote resources without clearing healthy local 
 test('execution works without SuperAgent and binds the real paired principal and target identity', async t => {
   const calls = [];
   const b = await host(t, 'B', []);
-  b.ctx.get = name => name === 'benchgoExecution' ? { async dispatch(input, access) { calls.push({ input, access }); return { version: 1, available: true }; } } : undefined;
+  b.ctx.get = name => name === 'benchgoExecution' ? { async dispatch(input, access) { calls.push({ input, access }); return { version: 2, available: true }; } } : undefined;
   const a = await host(t, 'A', []);
   const device = await pair(a, b);
-  const input = { action: 'execution', version: 1, operation: 'catalog', principal: { kind: 'owner' } };
+  const input = { action: 'execution', version: 2, operation: 'catalog', principal: { kind: 'owner' } };
   const target = (await a.link.devices()).devices.find(row => row.id === device.id);
   const call = value => a.link.callDevice({ deviceId: device.id, expectedHostId: target.hostId, expectedAuthorizationId: target.authorizationId, input: value });
   const inboundId = b.link.status().devices[0].id;
@@ -292,7 +292,7 @@ test('execution works without SuperAgent and binds the real paired principal and
   assert.equal(calls[0].access.principal.deviceId, inboundId);
   assert.deepEqual(calls[0].access.principal.capabilities, ['collaboration','management']);
   const capabilities = (await a.link.resources({ deviceId: device.id, kind: 'capabilities' })).devices[0].items;
-  assert.equal(capabilities.find(item => item.id === 'execution').version, 1);
+  assert.equal(capabilities.find(item => item.id === 'execution').version, 2);
   assert.equal(capabilities.some(item => item.id === 'collaboration'), false);
   await assert.rejects(call({ action: 'collaboration', operation: 'delegate' }), { code: 'UNSUPPORTED' });
   assert.equal((await a.link.callDevice({ deviceId: device.id, input: { action: 'management', operation: 'status' } })).enabled,true);
@@ -303,10 +303,10 @@ test('execution works without SuperAgent and binds the real paired principal and
 
 test('remote relay changes require one exact local decision and preserve unrelated configuration', async t => {
   const a = await host(t, 'A', []), b = await host(t, 'B', []);
-  await b.link.admin({ action: 'relay-pool-configure', nodes: [
-    { id: 'first', url: 'https://relay-one.example', token: 'test-first-secret', priority: 0, enabled: false },
-    { id: 'second', url: 'https://relay-two.example', token: 'test-second-secret', priority: 1, enabled: false },
-  ] });
+  for (const node of [
+    { id: 'first', url: 'https://relay-one.example', token: 'test-first-secret' },
+    { id: 'second', url: 'https://relay-two.example', token: 'test-second-secret' },
+  ]) await b.link.admin({ action: 'relay-pool-configure', operation: 'add', expected: { fingerprint: b.link.status().relay.fingerprint }, ...node, enabled: false });
   const device = await pair(a, b);
   const call = input => a.link.callDevice({ deviceId: device.id, input: { action: 'management', ...input } });
   const snapshot = await call({ operation: 'settings-read', namespace: 'benchgo-link-relay' });
@@ -320,16 +320,17 @@ test('remote relay changes require one exact local decision and preserve unrelat
   const applied = await b.deviceApi({ action: 'hostManagementDecide', operationId: prepared.operationId, allow: true });
   assert.equal(applied.state, 'applied', JSON.stringify(applied.error));
   assert.equal((await call({ operation: 'operation', operationId: prepared.operationId })).state, 'applied');
-  assert.equal(b.link.status().relay.nodes[0].priority, 8);
-  assert.equal(b.link.status().relay.nodes[1].priority, 1);
-  assert.equal(b.link.status().relay.nodes[1].enabled, false);
+  assert.deepEqual(b.link.status().relay.nodes.map(({ id, priority, enabled }) => ({ id, priority, enabled })), [
+    { id: 'second', priority: 1, enabled: false }, { id: 'first', priority: 8, enabled: false },
+  ]);
   assert.equal((await b.deviceApi({ action: 'hostManagementDecide', operationId: prepared.operationId, allow: true })).state, 'applied');
   assert.equal(b.link.status().pendingManagement.length, 0);
 });
 
 test('remote management rejects changed intent, owner refusal, stale CAS and revoked grants without applying', async t => {
   const a = await host(t, 'A', []), b = await host(t, 'B', []);
-  await b.link.admin({ action: 'relay-pool-configure', nodes: [{ id: 'only', url: 'https://relay.example', token: 'private-relay-secret', priority: 0, enabled: false }] });
+  await b.link.admin({ action: 'relay-pool-configure', operation: 'add', expected: { fingerprint: b.link.status().relay.fingerprint },
+    id: 'only', url: 'https://relay.example', token: 'private-relay-secret', enabled: false });
   const device = await pair(a, b);
   const call = input => a.link.callDevice({ deviceId: device.id, input: { action: 'management', ...input } });
   const prepare = async (requestId, value = 4) => {
@@ -346,22 +347,24 @@ test('remote management rejects changed intent, owner refusal, stale CAS and rev
   assert.equal(b.link.status().relay.nodes[0].priority, 0);
 
   const conflict = await call(await prepare('conflict'));
-  await b.link.admin({ action: 'relay-pool-configure', nodes: [{ id: 'only', url: 'https://relay.example', priority: 2, enabled: false }] });
+  await b.link.admin({ action: 'relay-pool-configure', operation: 'update', expected: { fingerprint: b.link.status().relay.fingerprint },
+    id: 'only', token: 'replacement-relay-secret' });
   const failed = await b.deviceApi({ action: 'hostManagementDecide', operationId: conflict.id, allow: true });
   assert.equal(failed.state, 'failed'); assert.equal(failed.error.code, 'REVISION_CONFLICT');
-  assert.equal(b.link.status().relay.nodes[0].priority, 2);
+  assert.equal(b.link.status().relay.nodes[0].priority, 0);
   const revoked = await call(await prepare('revoked'));
   await b.link.admin({ action: 'revoke', id: b.link.status().devices[0].id });
   assert.equal((await b.deviceApi({ action: 'hostManagementDecide', operationId: revoked.id, allow: true })).state, 'revoked');
   await assert.rejects(call({ operation: 'operation', operationId: revoked.id }), error=>error.statusCode===401);
   await assert.rejects(a.link.callDevice({ deviceId: device.id, input: { action: 'admin', operation: 'relay-pool-configure' } }), { code: 'UNSUPPORTED' });
-  assert.equal(b.link.status().relay.nodes[0].priority, 2);
+  assert.equal(b.link.status().relay.nodes[0].priority, 0);
 });
 
 test('completed management receipts do not permanently exhaust the bounded operation queue', async t => {
   const completed = Array.from({ length: 128 }, (_, i) => ({ id: `old-${i}`, requestId: `old-request-${i}`, deviceId: 'retired-device', state: 'applied', createdAt: i, expiresAt: Date.now() + 60000 }));
   const a = await host(t, 'A', []), b = await host(t, 'B', [], undefined, { managementOperations: completed });
-  await b.link.admin({ action: 'relay-pool-configure', nodes: [{ id: 'only', url: 'https://relay.example', token: 'private-relay-secret', priority: 0, enabled: false }] });
+  await b.link.admin({ action: 'relay-pool-configure', operation: 'add', expected: { fingerprint: b.link.status().relay.fingerprint },
+    id: 'only', url: 'https://relay.example', token: 'private-relay-secret', enabled: false });
   const device = await pair(a, b);
   const call = input => a.link.callDevice({ deviceId: device.id, input: { action: 'management', ...input } });
   const snapshot = await call({ operation: 'settings-read', namespace: 'benchgo-link-relay' });

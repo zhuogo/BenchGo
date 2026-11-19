@@ -1,12 +1,13 @@
 import { replyNotificationOption } from './notification-option.mjs';
 import { reactionScope, setMessageReaction } from './message-reaction.mjs';
-import { executionSessionProjection, readOwnedSessionRole, superagentSessionInventory } from './execution-session.mjs';
+import { executionSessionProjection, readNativeWorkerSession, readOwnedSessionRole, superagentSessionInventory } from './execution-session.mjs';
 import { resolveApprovalOrigins } from './execution-approval-origin.mjs';
 import { channelDefinition } from './channel-catalog.mjs';
 import { readAssessmentPolicy } from './assessment-policy.mjs';
 import { taskStopped } from './task-lifecycle.mjs';
 import { profileDocuments } from './profile-documents.mjs';
 import { resolveReplyFileSource } from './reply-file-source.mjs';
+import { managementOwner } from './management-http.mjs';
 
 /** The owner-facing HTTP action table behind POST /api/commander/assistant. */
 export function createAssistantDispatch(runtime) {
@@ -48,6 +49,8 @@ export function createAssistantDispatch(runtime) {
       }
       case 'petCatalog': return pet.catalog();
       case 'petUpload': return pet.upload(input);
+      case 'petUploadPackage': return pet.uploadPackage(input);
+      case 'petExportPackage': managementOwner(peer); return pet.exportPackage();
       case 'petPreview': return pet.preview(input);
       case 'petApply': return pet.apply(input);
       case 'petRestore': return pet.restore(input);
@@ -70,7 +73,7 @@ export function createAssistantDispatch(runtime) {
       }
       case 'connectionVerify': {
         const channel = input.channel || 'feishu', current = store.connections.read(channel);
-        const adapter = channel === 'feishu' ? feishu : channels.get(channel);
+        const adapter = channel === 'feishu' ? feishu : await channels.ready(channel);
         if (!adapter?.verify) throw new Error('此渠道不支持认证验证');
         const status = await adapter.verify();
         if (store.connections.read(channel).revision !== current.revision) throw Object.assign(new Error('链接配置已更新，请重新验证'), { code: 'REVISION_CONFLICT' });
@@ -93,7 +96,7 @@ export function createAssistantDispatch(runtime) {
           if (input.operation === 'listChats') return feishu.listChats({ pageToken: input.pageToken });
           throw new Error('飞书不支持此操作');
         }
-        const channel = input.channel, adapter = channels.get(channel);
+        const channel = input.channel, adapter = await channels.ready(channel);
         if (!adapter) throw new Error('链接渠道不可用');
         if (typeof adapter.action === 'function') return adapter.action({ ...input, ownerAuthenticated: principal?.kind === 'owner' }, { principal });
         if (typeof adapter.operation === 'function') return adapter.operation(input, { principal });
@@ -143,6 +146,7 @@ export function createAssistantDispatch(runtime) {
         return store.orchestration.resumeTask(task.id);
       }
       case 'taskAnswer': return store.orchestration.answerDesktopAttention(input);
+      case 'nativeWorkerSession': return readNativeWorkerSession({ ctx, database, taskId: input.taskId, sessionId: input.sessionId, after: input.after, signal: queryOptions.signal });
       case 'taskChange': {
         const original = JSON.stringify(input), ownerAgent = await engine.ensureSession({ threadId });
         return taskChanges.submitForm(JSON.parse(original), { ownerAgent, threadId, original });

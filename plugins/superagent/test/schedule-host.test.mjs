@@ -10,6 +10,7 @@ import { createAssistantStore } from '../src/store.mjs';
 import { createAssistantEngine } from '../src/engine.mjs';
 import { createScheduleBridge } from '../src/schedule-bridge.mjs';
 import { createAssessmentRunner } from '../src/assessment-runner.mjs';
+import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 import { authorizeAssessment, readAssessmentPolicy } from '../src/assessment-policy.mjs';
 import { installRoleHost } from './role-host-fixture.mjs';
 
@@ -21,9 +22,9 @@ const core = await Promise.all(['session', 'session-projection', 'system-prompt'
 test('official Host Schedule persists a due reminder and enters SuperAgent Eval without a Router model request', { timeout: 20000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'superagent-schedule-host-'));
   const ctx = new Context();
-  let engine, bridge, store, runner;
+  let engine, bridge, store, runner, runtime;
   t.after(async () => {
-    await bridge?.stop(); await runner?.stop(); await engine?.dispose(); await ctx.fiber.dispose();
+    await runtime?.stop(); await bridge?.stop(); await runner?.stop(); await engine?.dispose(); await ctx.fiber.dispose();
     store?.close(); await rm(directory, { recursive: true, force: true });
   });
   await ctx.plugin(LlmRuntime);
@@ -84,5 +85,10 @@ test('official Host Schedule persists a due reminder and enters SuperAgent Eval 
   });
   await runner.tick();
   assert.equal(store.orchestration.listTasks().length, 1);
-  assert.equal(store.orchestration.listTasks()[0].mandate.admission, 'desktop-schedule');
+  const [task] = store.orchestration.listTasks();
+  assert.equal(task.mandate.admission, 'desktop-schedule');
+  runtime = createOrchestrationRuntime({ ctx, store, execute: async () => ({ summary: '完成检查', completion: { kind: 'completed' }, evidenceRefs: [] }) });
+  await runtime.tick();
+  assert.equal(store.orchestration.getTask(task.id).continuationWait, null);
+  assert.equal(store.orchestration.assignments(task.id).length, 1);
 });

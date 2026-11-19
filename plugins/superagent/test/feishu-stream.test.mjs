@@ -25,7 +25,7 @@ test('long connection persists authenticated events and stops old callbacks afte
 });
 
 test('official dispatcher payload is normalized and disposal drains accepted ingestion', async () => {
-  const { EventDispatcher } = await import('../../benchgo/node_modules/@larksuiteoapi/node-sdk/lib/index.js');
+  const { EventDispatcher } = await import('../../base/node_modules/@larksuiteoapi/node-sdk/lib/index.js');
   let dispatcher, release, ingested;
   const stream = createFeishuStream({ allowUnboundAuthorization: true,
     getConfig: () => ({ enabled: true, appId: 'app', appSecretRef: 'SECRET', chatIds: ['chat'] }),

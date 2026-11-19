@@ -1,4 +1,4 @@
-import { documentPreview, previewFailure } from '../../benchgo/src/document-preview.mjs';
+import { documentPreview, previewFailure } from '../../base/src/document-preview.mjs';
 import { createHash } from 'node:crypto';
 import { readdir, lstat, realpath, open, unlink, link } from 'node:fs/promises';
 import { constants } from 'node:fs';

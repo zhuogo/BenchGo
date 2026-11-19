@@ -83,7 +83,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
     const url = new URL(req.url, `https://${host}`);
     const device = url.pathname.startsWith('/link/workbench/')
       ? workbench?.authenticate?.(req)
-      : ['/link/api/rpc', '/link/api/workbench'].includes(url.pathname)
+      : ['/link/api/info', '/link/api/rpc', '/link/api/workbench'].includes(url.pathname)
         ? store.authenticate(req.headers.authorization?.replace(/^Bearer\s+/i, '')) : undefined;
     // Relay traffic shares one loopback socket address. Only verified device
     // identities may use the independent authenticated quota.
@@ -113,7 +113,17 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
         return await workbench.handle(req, res, url, headers);
       }
       if (req.method === 'GET') {
-        if (url.pathname === '/link/api/info') return send(res, 200, { name: 'DSH Link', hostName: store.state.name, version: '0.1.0' });
+        if (url.pathname === '/link/api/info') {
+          if (req.headers.authorization && !device) throw fail('设备授权已失效，请重新配对', 401);
+          const probe = url.searchParams.get('probe');
+          if (probe) {
+            const proof = store.takeProbe(probe);
+            if (!proof) throw fail('连接检查已失效', 404);
+            return send(res, 200, { proof });
+          }
+          return send(res, 200, { name: 'DSH Link', hostName: store.state.name, version: '0.1.0',
+            ...(device && routes ? { hostId: 'sha256:' + identity.pin, routes: routes() } : {}) });
+        }
         const file = { '/link': 'index.html', '/link/': 'index.html', '/link/index.html': 'index.html', '/link/app.js': 'app.js', '/link/app.css': 'app.css' }[url.pathname];
         if (!file) throw fail('未找到', 404);
         if (url.pathname === '/link') { res.writeHead(308, { location: '/link/', ...headers }); return res.end(); }

@@ -5,12 +5,12 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 async function fixture() {
@@ -20,7 +20,7 @@ async function fixture() {
     import {Artifacts} from './plugins/superagent/client/artifacts.jsx';
     import {SystemFiles} from './plugins/superagent/client/system-files.jsx';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
-    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/benchgo/client/style.css';
+    import css from './plugins/superagent/client/style.css';import hostCss from './plugins/base/client/style.css';
     installIconSprite({effect:fn=>fn(),on:()=>{}},undefined);
     const root=createRoot(document.getElementById('root'));let serial=0;
     const file={id:'note.md',name:'note.md',path:'note.md',type:'file',url:'/api/files/note.md',bytes:48,hash:'revision-1',updatedAt:'2026-11-08T08:00:00Z'};
@@ -41,7 +41,7 @@ async function fixture() {
       root.render(<div className='ba-root' key={++serial}><style>{hostCss}{css}</style><main className='ba-studio-body' style={{padding:24,maxWidth:1000,margin:'auto',boxSizing:'border-box'}}>{page==='memory'?<MemoryPage api={api} refresh={async()=>{}} entries={rows} threadId='main'/>:page==='artifacts'?<Artifacts api={api} onPreviewChange={preview}/>:<SystemFiles api={api} onPreviewChange={preview}/>}</main></div>);
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-resource-ui-test'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')) },
     loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles()], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent' });
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font-family:Arial,sans-serif}.ba-root{height:auto!important;min-width:0!important}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text.replaceAll('</script', '<\\/script')}</script></body></html>`;
@@ -54,7 +54,7 @@ test('resource pages render four states, compact memory, unified artifact header
   try {
     const page = await browser.newPage(), errors = [];
     page.setDefaultTimeout(7000);page.on('pageerror', error => errors.push(error.message));
-    const html = await fixture(), markdown = await readFile(join(root, 'plugins/benchgo/lib/preview/markdown.js'), 'utf8');
+    const html = await fixture(), markdown = await readFile(join(root, 'plugins/base/lib/preview/markdown.js'), 'utf8');
     await page.route('**/*', route => {
       const url = route.request().url();
       if (url === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });

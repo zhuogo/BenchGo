@@ -7,7 +7,7 @@ import { runInNewContext } from 'node:vm';
 import { Context } from '@deepseek-ai/cordis';
 import { webcrypto } from 'node:crypto';
 
-const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 function load(path, overrides = {}, { suffix = '', globals = {} } = {}) {
   const module = { exports: {} };
   const empty = new Proxy({}, { get: () => () => {} });
@@ -22,7 +22,7 @@ function load(path, overrides = {}, { suffix = '', globals = {} } = {}) {
 }
 
 test('declared client dependencies authorize native conversation and delivery services in optional child scope', async () => {
-  const entry = load('../../benchgo/client/index.jsx');
+  const entry = load('../../base/client/index.jsx');
   const effects = [], errors = [], activated = [];
   const conversation = load('../client/conversation.jsx', { react: {
     createContext: () => ({}), createElement: () => null, useEffect: effect => effects.push(effect), useCallback: callback => callback, useMemo: read => read(),
@@ -52,7 +52,7 @@ test('declared client dependencies authorize native conversation and delivery se
 test('opening artifacts and resolving reply files preserve shared state reads while mutations invalidate them', async () => {
   const calls = [], stateReads = [], module = load('../client/index.jsx', {
     '../../shared/client/perf-trace.mjs': { perfTrace: { time: () => () => {} } },
-    '../../benchgo/client/http-response.mjs': { readJsonResponse: response => response.json() },
+    '../../base/client/http-response.mjs': { readJsonResponse: response => response.json() },
     './config-sync.mjs': { assistantConfigSync: { begin: () => 0, accept: value => value } },
   }, { suffix: '\nexport { api };', globals: { URL, AbortSignal, fetch: async (_url, options) => {
     const { action } = JSON.parse(options.body); calls.push(action);

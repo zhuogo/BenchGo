@@ -29,7 +29,7 @@ test('packaged seed checks all current exported entries without requiring remove
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-seed-contract-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const plugin = join(directory, 'node_modules', 'benchgo-plugin');
-  const manifest = JSON.parse(await readFile(new URL('../../plugins/benchgo/package.json', import.meta.url), 'utf8'));
+  const manifest = JSON.parse(await readFile(new URL('../../plugins/base/package.json', import.meta.url), 'utf8'));
   const entries = ['.', './harness-plugin', './superagent-plugin', './voice-plugin', './link-plugin', './runtime'];
   const files = new Set(['lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'cordis.patch.yml', ...entries.map(key => manifest.exports[key])]);
   for (const file of files) {

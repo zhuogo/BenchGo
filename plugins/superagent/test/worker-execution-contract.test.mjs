@@ -22,9 +22,21 @@ test('new Worker uses only its work role; resume preserves the frozen queue and 
   assert.equal(resumed.index, 1);
   assert.deepEqual(workerRequest({ provider: 'project', model: 'default', reasoningEffort: 'ultra', maxTokens: 900, tools: [] }, resumed.models[1]),
     { provider: backup.providerId, model: backup.modelId, maxTokens: 200, tools: [] });
-  assert.throws(() => workerModelRoute({ policy: { models: [primary] } }), /not configured/);
+  assert.deepEqual(workerModelRoute({ policy: { models: [primary, backup], workerModels: [] } }).models, [primary, backup]);
+  assert.throws(() => workerModelRoute({ policy: {} }), /not configured/);
   assert.throws(() => workerModelRoute({ policy, resumed: true }), /route is missing/, 'a continued Run never adopts current settings');
   assert.throws(() => workerModelRoute({ policy, savedQueue: { models: frozen.models, index: 99 }, resumed: true }), /outside/);
+});
+
+test('Worker Harness selection stays frozen and external routes never inherit Router models', () => {
+  const external = { providerId: 'router/api', modelId: 'vendor/model' };
+  const policy = { workerHarness: 'codex', models: [{ providerId: 'router/api', modelId: 'router/model' }], workerModels: [external], routingConfig: { workerModels: [external], workerHarness: 'codex' } };
+  const frozen = workerModelRoute({ policy });
+  assert.equal(frozen.harness, 'codex');
+  assert.deepEqual(frozen.models, [{ ...external, harness: 'codex' }]);
+  assert.throws(() => workerModelRoute({ policy: { ...policy, workerModels: [], routingConfig: { workerModels: [], workerHarness: 'claude' }, workerHarness: 'claude' } }), /外部 Worker/);
+  const resumed = workerModelRoute({ policy: { workerHarness: 'official', workerModels: [] }, savedQueue: frozen, resumed: true });
+  assert.equal(resumed.harness, 'codex');
 });
 
 test('Worker route freezes once, preserves its selection after reopen and rejects a stale writer', async t => {

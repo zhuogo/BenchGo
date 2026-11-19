@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
-const { transformSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
 function harness(file, name, props, failure, initialState = []) {
   let cursor = 0, refCursor = 0; const state = [...initialState], refs = [], calls = [], module = { exports: {} };

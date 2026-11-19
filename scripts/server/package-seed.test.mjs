@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { assertLinuxNativeClosure, linuxWorkerArchivePath, prepareLinuxDependencies, promoteServerResources, writeServerSeedArchive } from './package-seed.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const tar = createRequire(join(root, 'plugins/benchgo/package.json'))('tar');
+const tar = createRequire(join(root, 'plugins/base/package.json'))('tar');
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-seed-mode-'));

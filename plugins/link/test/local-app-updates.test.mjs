@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
 import { officialUiEntries, officialUiLoaders } from '../scripts/official-ui.mjs';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../package.json', import.meta.url));
@@ -17,9 +17,9 @@ const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executa
 test('APK update trust key is copied from the canonical source and the native bridge stays local', async () => {
   const app = join(root, 'plugins/link/mobile/android/app');
   const gradle = await readFile(join(app, 'build.gradle'), 'utf8');
-  assert(gradle.includes("inputs.file(file('../../../../benchgo/shared/update-public-key.pem'))"));
+  assert(gradle.includes("inputs.file(file('../../../../base/shared/update-public-key.pem'))"));
   assert(gradle.includes("into new File(out, 'updates')"));
-  assert.equal(resolve(app, '../../../../benchgo/shared/update-public-key.pem'), join(root, 'plugins/benchgo/shared/update-public-key.pem'));
+  assert.equal(resolve(app, '../../../../base/shared/update-public-key.pem'), join(root, 'plugins/base/shared/update-public-key.pem'));
   const native = await readFile(join(app, 'src/main/java/cn/draftgo/benchgo/link/MainActivity.kt'), 'utf8');
   assert(native.includes('webView.removeJavascriptInterface("LinkNative")'));
   assert(native.includes('"appUpdateCheck" -> appUpdates.check()'));
@@ -42,7 +42,7 @@ test('APK update trust key is copied from the canonical source and the native br
 
 test('local APK update UI renders four states and completes check, source-save and browser handoff', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const result = await build({ bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic', target: 'es2022', minify: true,
-    outfile: join(root, 'artifacts/android-updates-qa/app.js'), nodePaths: [join(root, 'plugins/link/node_modules'), join(root, 'plugins/benchgo/node_modules')],
+    outfile: join(root, 'artifacts/android-updates-qa/app.js'), nodePaths: [join(root, 'plugins/link/node_modules'), join(root, 'plugins/base/node_modules')],
     alias: { react: fileURLToPath(new URL('../node_modules/react', import.meta.url)), 'react-dom': fileURLToPath(new URL('../node_modules/react-dom', import.meta.url)), ...await officialUiEntries() },
     plugins: [sharedUiStyles()], loader: { '.css': 'text', '.svg': 'text', '.json': 'json', ...officialUiLoaders }, logLevel: 'silent', define: { 'process.env.NODE_ENV': '"production"' },
     stdin: { resolveDir: root, loader: 'jsx', contents: `

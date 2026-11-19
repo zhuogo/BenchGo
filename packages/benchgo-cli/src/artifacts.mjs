@@ -15,7 +15,7 @@ const json = async path => JSON.parse(await readFile(path, 'utf8'));
 export async function loadInstallMetadata(resourceRoot) {
   const candidates = [resourceRoot && join(resourceRoot, 'install.json'), join(bundled, 'install.json')].filter(Boolean);
   for (const path of candidates) if (await exists(path)) return validateMetadata(await json(path));
-  const [upstream, plugin] = await Promise.all([json(join(root, 'upstream.json')), json(join(root, 'plugins/benchgo/package.json'))]);
+  const [upstream, plugin] = await Promise.all([json(join(root, 'upstream.json')), json(join(root, 'plugins/base/package.json'))]);
   return validateMetadata({ schemaVersion: 1, engineVersion: upstream.version, pluginVersion: plugin.version,
     releaseVersion: plugin.benchgo?.releaseVersion || plugin.version });
 }

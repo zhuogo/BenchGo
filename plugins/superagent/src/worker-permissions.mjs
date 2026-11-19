@@ -29,6 +29,8 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
   const previousEffects = executionEffects({ events: priorToolEvents }, toolReceipts);
   scope.systemPrompt?.section({ name: 'benchgo-external-action-boundary', order: -109, interpolate: false,
     text: 'Open terminal, scripts and browser tools remain available for normal work and preparation. Never submit payment/purchase, password changes, account deletion or additional external sending through these open tools, scripts or aliases. Submit these four categories only through a registered assistant_external_action adapter with exact frozen recipient/object/content and a fresh one-time approval. If no adapter is registered, prepare up to the final step and return a clear human handoff; never claim submission or approval. Public reading and normal authenticated replies/progress/questions/results to the original source use their existing owned paths. Tool-level checks cannot prove arbitrary commands or natural-language browser actions free of high-risk effects.' });
+  scope.systemPrompt?.section({ name: 'benchgo-configuration-boundary', order: -108, interpolate: false,
+    text: 'BenchGo application configuration is owned by the Router through assistant_settings catalog/read/prepare/commit and official services. For provider, model, default, credential and plugin setup, perform only connection discovery, read-only inspection and actual request verification; return findings and exact identifiers to the Router for the managed change. Never edit application configuration through shell, scripts, file tools or aliases, even when the assignment says configure or repair it. If the required namespace or service is unavailable, report that limitation instead of bypassing it. Preserve exact provider/model IDs; do not invent aliases or substitute another model. Use known exact paths and prior verified results rather than repeating broad searches. Once the saved configuration parses and the requested outcome is verified, finish; do not remove BOMs, reformat or make unrelated edits. If a tool returns PROFILE_CONFIG_DIRECT_WRITE or PROFILE_CONFIG_RESTORED, stop and report it to the Router; do not retry the write, alter the guard or attempt another repair. These instructions do not imply that arbitrary shell commands are isolated from application files.' });
   scope.on('tools/pre-execute', (execution, next) => {
     execution.signal.throwIfAborted(); workerAppliedTask(database, assignment, execution); return next();
   });
@@ -64,6 +66,7 @@ export function installWorkerPermissionGate(scope, { database, assignment, readP
  * Argument errors remain correctable; successful work or new instructions resets the streak.
  */
 export function installWorkerFailureConvergence(scope, agent, { database, assignment, revision = () => database.getTask(assignment.taskId)?.instructionRevision, onStop = () => {} }) {
+  const configurationGuard = new Set(['PROFILE_CONFIG_DIRECT_WRITE', 'PROFILE_CONFIG_RESTORED']);
   const structural = new Set(['ENOSPC', 'EDQUOT', 'EROFS', 'WORKER_AUTHORIZATION_CHANGED', 'WORKER_TASK_INACTIVE',
     'ROLE_SERVICES_UNAVAILABLE', 'ROLE_PRESET_UNAVAILABLE', 'SESSION_ROLE_STORE_UNAVAILABLE',
     'MANAGEMENT_OWNER_REQUIRED', 'MANAGEMENT_APPROVAL_UNAVAILABLE', 'MANAGEMENT_APPROVAL_DENIED', 'APPROVAL_POLICY_NEVER', 'SETTINGS_UNAVAILABLE', 'CLEANUP_UNAVAILABLE']);
@@ -77,9 +80,10 @@ export function installWorkerFailureConvergence(scope, agent, { database, assign
     if (execution.agent !== agent) return;
     const message = result.error?.message || (result.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
     const code = result.error?.info?.code ?? result.error?.code ?? failures.get(execution.callId) ?? /^([A-Z_]+): /.exec(message)?.[1];
-    if (!result.isError || !structural.has(code)) { prior = undefined; return; }
+    if (!result.isError || (!structural.has(code) && !configurationGuard.has(code))) { prior = undefined; return; }
     const currentRevision = revision();
-    if (prior?.code === code && prior.message === message && prior.revision === currentRevision) stopped = prior;
+    if (configurationGuard.has(code)) stopped = { code, message, revision: currentRevision, toolName: execution.name, callId: execution.callId };
+    else if (prior?.code === code && prior.message === message && prior.revision === currentRevision) stopped = prior;
     else prior = { code, message, revision: currentRevision, toolName: execution.name, callId: execution.callId };
   });
   scope.on('agent/pre-step', (payload, next) => {

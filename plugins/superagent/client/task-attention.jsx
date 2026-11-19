@@ -1,7 +1,7 @@
 import React, { useId, useRef, useState } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { attentionMatchesTask, terminalTaskStates } from './task-state.mjs';
 import css from './task-attention.css';
 

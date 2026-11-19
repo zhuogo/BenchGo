@@ -14,7 +14,7 @@
   "title": "设备与远程连接",
   "eyebrow": "REMOTE / LINK",
   "subtitle": "A 宿主持有业务任务，B 只提供执行；Link 复用认证、可信路线与有限协议，不依赖 B 的 SuperAgent。",
-  "boundary": "节点状态区分已有源码与待实施设计；连线表示职责关系，不代表链路已完成或通过真机验收。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。 2026-11-15 已接通 A 唯一业务 Task → Link v1 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v1 仅 official 单模型、无二级子代理委派，执行会话只读，跨设备产物传输不支持。  统一本机 CLI 和已登记 Desktop/Web 发现已接线：交互默认浏览器，SSH/无头保留后台；同一 canonical profile 只有一个写入宿主，检测原 SSH/systemd 服务时不另建。未知旧 Harness profile 保守拒绝，三平台原生与 GUI 交接仍待实物验收；唯一契约见更新与发布板块。",
+  "boundary": "节点状态区分已有源码与待实施设计；连线表示职责关系，不代表链路已完成或通过真机验收。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。 A 唯一业务 Task → Link v2 execution → B 独立 benchgoExecution → A 事实与结果回流已接线。既有验证覆盖如下。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v2 每次冻结一个 Harness 与模型组合、无二级子代理委派，执行会话只读，跨设备产物传输不支持。  统一本机 CLI 和已登记 Desktop/Web 发现已接线：交互默认浏览器，SSH/无头保留后台；同一 canonical profile 只有一个写入宿主，检测原 SSH/systemd 服务时不另建。未知旧 Harness profile 保守拒绝，三平台原生与 GUI 交接仍待实物验收；唯一契约见更新与发布板块。",
   "nodes": [
     {
       "id": "entry",
@@ -51,7 +51,7 @@
       "sources": [
         "plugins/link/src/devices/center.mjs"
       ],
-      "note": "owner 管理能力按 hostAdmin 能力开放，不能由远端设备授权替代。 当前主机部分设置已接统一配置；AI 连接动作需提取共享领域服务，不能调用页面票据或模拟点击来管理。",
+      "note": "owner 管理能力按 hostAdmin 能力开放，不能由远端设备授权替代。 当前主机部分设置已接统一配置；AI 连接动作需提取共享领域服务，不能调用页面票据或模拟点击来管理。 服务器卡片将已有 Link 与 SSH 通道按验证后的实例身份关联，主要入口见下方服务器走读。",
       "state": "implemented",
       "x": 440,
       "y": 160
@@ -252,7 +252,7 @@
         "plugins/link/src/server/relay-deployment.mjs",
         "scripts/server/bootstrap.mjs",
         "docs/05-更新与发布/设计.md",
-        "plugins/benchgo/shared/server-resources.mjs",
+        "plugins/base/shared/server-resources.mjs",
         "plugins/link/client/device-center.jsx"
       ],
       "note": "已有部署代码；公网签发/续期、反代复用、首次部署仍需环境验收。 本地/在线部署资源服务已有源码，真实首次 SSH 部署、离线资源和公开签名发行仍按产物验收。现有 SSH stdout 授权协议保留；三平台本机 CLI 与 Desktop/CLI 共同发现、单写入宿主契约在更新与发布板块维护。",
@@ -276,7 +276,7 @@
         "docs/02-工作台与Agent/跨设备资源导航.md",
         "plugins/link/client/resource-navigation.jsx",
         "plugins/link/client/resource-state.mjs",
-        "plugins/benchgo/client/index.jsx",
+        "plugins/base/client/index.jsx",
         "plugins/superagent/src/remote-assignment-executor.mjs",
         "plugins/superagent/src/remote-execution-store.mjs",
         "plugins/superagent/test/owned-remote-execution-integration.test.mjs"
@@ -304,7 +304,7 @@
         "plugins/link/src/devices/resources.mjs",
         "plugins/link/src/session/adapter.mjs"
       ],
-      "note": "共享资源与独立于 B SuperAgent 的 Link v1 execution 已接线；catalog 真实 TLS、认证身份和目标绑定测试通过。双方分别配对可双向访问，一次配对反向通道仍待实施；真实物理双机部署仍需核验。",
+      "note": "共享资源与独立于 B SuperAgent 的 Link v2 execution 已接线；catalog 真实 TLS、认证身份和目标绑定测试通过。双方分别配对可双向访问，一次配对反向通道仍待实施；真实物理双机部署仍需核验。",
       "state": "implemented",
       "x": 440,
       "y": 1040,
@@ -313,12 +313,12 @@
     {
       "id": "cross-target",
       "title": "B 的执行服务与原始记录",
-      "kicker": "EXECUTION ONLY / IMPLEMENTED",
+      "kicker": "EXECUTION ONLY / PARTIAL",
       "kind": "orchestration",
-      "sub": "Link + Harness · 无 B 业务 Task",
+      "sub": "目标设备执行与回执",
       "symbol": "benchgoExecution / executionId",
       "plain": "B 运行 Worker、保存过程；这张业务工单只属于 A。",
-      "role": "B 以 Link 和实际可用的 Harness 执行服务接收 A 的冻结委托，不要求启用 B SuperAgent，不进入 B 的 Router、研判、工单库或业务调度。执行配置由 A 按 B 真实 Harness/模型目录选择并冻结，B 校验精确标识、项目路径、权限和本机凭据后创建官方会话或恢复已确认暂停的同一会话。B 仅持久保存执行实例、输入应用版本、控制回执、事件水位、日志和产物，向 A 回传进度、问题、结果及退出事实；不决定业务要求或任务终态。",
+      "role": "B 根据 A 冻结的组合及 B 本机工具和凭据运行官方或外部 Worker。事件、提问、停止证明和结果回到 A 的原工单。",
       "input": "A 的稳定任务/执行身份、冻结要求与执行配置",
       "output": "B 的 executionId、原生会话、应用回执与执行事实",
       "sources": [
@@ -328,11 +328,11 @@
         "plugins/harness/src/remote-execution-store.mjs",
         "plugins/harness/test/remote-execution.test.mjs"
       ],
-      "note": "B 独立执行服务已实现，不创建业务 Task、不依赖 B SuperAgent。原目标业务 Task 链及 A 引用旁账已删除。v1 仅 official 单模型，不开放二级子代理委派/调度类工具；B 会话只读，业务输入在 A，产物留 B 且无跨设备传输。fixture 覆盖运行和控制，物理双机、安装版与真实供应商请求待验。",
-      "state": "implemented",
+      "note": "B 的执行服务独立于 SuperAgent。执行记录只读，业务输入回 A。协议与双宿主 TLS 有定向覆盖，跨设备产物传输待实施。物理双机、真实 API 与安装版待验。",
+      "state": "partial",
       "x": 820,
       "y": 1040,
-      "doc": "docs/01-设备与远程连接/跨设备协作.md"
+      "doc": "docs/06-superagent/任务与执行.md#跨设备任务"
     },
     {
       "id": "cross-admin",
@@ -357,6 +357,82 @@
       "x": 1200,
       "y": 1040,
       "doc": "docs/01-设备与远程连接/跨设备协作.md"
+    },
+    {
+      "id": "server-register",
+      "x": 60,
+      "title": "登记与恢复 SSH",
+      "kicker": "SERVER REGISTRATION",
+      "kind": "orchestration",
+      "sub": "核验实例 · 复用安装 · 按需重连",
+      "symbol": "设备实例身份 + SSH 配置",
+      "plain": "同一台服务器的同一实例在设备中心只有一张卡。",
+      "role": "核对 SSH 指纹并认证，兼容实例直接复用，缺失时安装。原 Link 卡需要验证目标实例身份才能补绑。重启后从已授权认证来源按需恢复 SSH，缺少认证时打开该设备的重连入口。",
+      "input": "主机地址、端口、账号、指纹和认证",
+      "output": "已登记的实例与 SSH 管理连接",
+      "note": "同主机不同实例分别登记。迁移保留别名、授权和可用路线；SSH 状态与工作台状态分别确认。",
+      "y": 1325,
+      "state": "implemented",
+      "sources": [
+        "docs/01-设备与远程连接/SSH服务器运维.md"
+      ]
+    },
+    {
+      "id": "server-shell",
+      "x": 440,
+      "title": "人工 SSH 终端",
+      "kicker": "INTERACTIVE TERMINAL",
+      "kind": "execution",
+      "sub": "设备卡图标 → 交互式终端",
+      "symbol": "设备中心 SSH",
+      "plain": "点服务器卡右侧终端图标直接连接。",
+      "role": "复用设备登记和主机认证，在本机打开对应账号的交互式会话。工作台停止时，只要 SSH 可达且认证成功，终端仍可使用。",
+      "input": "已登记设备与本机 SSH 授权",
+      "output": "显示目标账号与主机的交互式终端",
+      "note": "人工终端与 AI 共用已核验的目标，各自建立会话。",
+      "y": 1325,
+      "state": "implemented",
+      "sources": [
+        "docs/01-设备与远程连接/SSH服务器运维.md"
+      ]
+    },
+    {
+      "id": "server-ai",
+      "x": 820,
+      "title": "本机 AI 运维",
+      "kicker": "AUTHORIZED SSH COMMANDS",
+      "kind": "execution",
+      "sub": "对话指令 → SSH 命令 → 远程事实",
+      "symbol": "工作台对话 → 设备中心 SSH",
+      "plain": "在当前工作台的对话中点名已登记的服务器，直接交给 AI 执行。",
+      "role": "工具核对当前用户指令、设备登记及主机指纹，按远端账号权限执行并返回输出与退出状态。",
+      "input": "当前用户指令、设备登记与命令",
+      "output": "远端输出、退出状态或待核实结果",
+      "note": "认证材料留在本机。断线后先核实远端事实；修复工作台后实际验证可打开。",
+      "y": 1325,
+      "state": "implemented",
+      "sources": [
+        "docs/01-设备与远程连接/SSH服务器运维.md"
+      ]
+    },
+    {
+      "id": "server-share",
+      "x": 1200,
+      "title": "生成手机连接码",
+      "kicker": "SERVER LINK PAIRING",
+      "kind": "finish",
+      "sub": "服务器签发 → 手机扫码 → 目标批准",
+      "symbol": "SSH 管理请求 → Link 配对",
+      "plain": "手机获批后使用自己的 Link 凭据。",
+      "role": "从服务器卡通过获授权的 SSH 让目标签发短时单次配对码。优先使用已验证的公网 HTTPS，其次使用已接入的中继。没有手机可达路线时提供配置入口。",
+      "input": "本机管理授权和目标可用的手机入口",
+      "output": "可独立访问同一工作台的手机配对",
+      "note": "关闭桌面及本机隧道后手机仍可连接。手机配对由目标管理，SSH 运维随登记生效和移除。",
+      "y": 1325,
+      "state": "implemented",
+      "sources": [
+        "docs/01-设备与远程连接/SSH服务器运维.md"
+      ]
     }
   ],
   "edges": [
@@ -511,6 +587,34 @@
       "from": "b",
       "to": "b",
       "kind": "feedback"
+    },
+    {
+      "a": "ssh",
+      "b": "server-register",
+      "label": "核验与复用",
+      "from": "b",
+      "to": "t"
+    },
+    {
+      "a": "server-register",
+      "b": "server-shell",
+      "label": "打开终端",
+      "from": "r",
+      "to": "l"
+    },
+    {
+      "a": "server-register",
+      "b": "server-ai",
+      "label": "授权工具",
+      "from": "b",
+      "to": "b"
+    },
+    {
+      "a": "server-register",
+      "b": "server-share",
+      "label": "签发配对",
+      "from": "b",
+      "to": "b"
     }
   ],
   "steps": [
@@ -563,7 +667,7 @@
     {
       "node": "cross-target",
       "title": "已接线：A 工单，B 执行",
-      "text": "A 持有完整 Task，通过 Link v1 execution 委托 B 的独立 benchgoExecution。B 无需 SuperAgent，使用校验后的本机项目、凭据及 A 冻结的 official 单模型运行；不创建业务 Task，无二级子代理委派。"
+      "text": "A 持有工单，经 Link v2 派发。B 校验组合与项目，使用自己的 API 凭据执行。"
     },
     {
       "node": "cross-admin",
@@ -574,6 +678,30 @@
       "node": "cross-entry",
       "title": "已接线：同一工单跟进与回流",
       "text": "A 用原 taskId 补充、修订、答复或停止；B 回传已应用版本和真实控制结果，A 连续归入同一任务与原 inbox。原 session 暂停恢复和结果回流 fixture 通过；uncertain 只核实，不重派迁移，真实双机仍待验。"
+    },
+    {
+      "node": "server-register",
+      "title": "登记自有服务器",
+      "text": "核对 SSH 指纹并认证，兼容实例直接复用，缺失时安装。原 Link 卡需要验证目标实例身份才能补绑。重启后从已授权认证来源按需恢复 SSH，缺少认证时打开该设备的重连入口。",
+      "edge": 20
+    },
+    {
+      "node": "server-shell",
+      "title": "打开交互式终端",
+      "text": "复用设备登记和主机认证，在本机打开对应账号的交互式会话。工作台停止时，只要 SSH 可达且认证成功，终端仍可使用。",
+      "edge": 21
+    },
+    {
+      "node": "server-ai",
+      "title": "本机 AI 执行运维",
+      "text": "工具核对当前用户指令、设备登记及主机指纹，按远端账号权限执行并返回输出与退出状态。",
+      "edge": 22
+    },
+    {
+      "node": "server-share",
+      "title": "给手机配对同一工作台",
+      "text": "从服务器卡通过获授权的 SSH 让目标签发短时单次配对码。优先使用已验证的公网 HTTPS，其次使用已接入的中继。没有手机可达路线时提供配置入口。 目标批准后，手机可脱离电脑与隧道访问。",
+      "edge": 23
     }
   ],
   "docs": [
@@ -600,12 +728,16 @@
     {
       "label": "统一安装与资源交付",
       "path": "docs/05-更新与发布/设计.md"
+    },
+    {
+      "label": "SSH 服务器运维",
+      "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
-  "version": "2026-11-16-installation-implementation-1",
+  "version": "2026-11-18-external-harness-api-2",
   "canvas": {
     "width": 1580,
-    "height": 1280
+    "height": 1570
   },
   "zones": [
     {
@@ -614,6 +746,13 @@
       "w": 1440,
       "h": 245,
       "label": "跨设备协作 · A 唯一工单 / B 独立执行 · 源码与定向 fixture 已验证"
+    },
+    {
+      "x": 40,
+      "y": 1275,
+      "w": 1440,
+      "h": 245,
+      "label": "自有服务器统一登记、运维与手机配对"
     }
   ]
 }</script><script src="../_assets/architecture.js"></script></body></html>

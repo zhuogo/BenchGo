@@ -62,10 +62,10 @@ npm run setup
 源码开发使用 Node.js `^22.19.0 || >=24.0.0` 和官方锁定的 Corepack pnpm。Windows 预览先按 [桌面构建说明](scripts/desktop/README.md) 打包，再运行 `npm run dev`，启动 `artifacts/windows/win-unpacked/BenchGo.exe` 并同步当前插件。`npm run start` 仍是官方 Desktop 命令封装，不作为 BenchGo 开发预览入口。网页变更执行 `npm run reload:plus` 后刷新浏览器；`npm run check` 只核对引擎与入口一致性，不代表构建或运行验收。
 
 ```text
-plugins/benchgo       BenchGo 基础层与唯一安装包 benchgo-plugin
+plugins/base       BenchGo 基础层与唯一安装包 benchgo-plugin
 plugins/harness       Harness 聚合：原生 Agent、会话、委派与 MCP
 plugins/superagent    SuperAgent 总助手：对话、任务、记忆与产物
-plugins/voice         Voice：听写、朗读与实时通话
+plugins/media         Media：媒体生成、听写、朗读与实时通话
 plugins/link          设备连接、桌面设置、移动界面和 Android
 plugins/shared/client 跨包共享界面组件
 packages/benchgo-cli  工作台命令 benchgo
@@ -81,4 +81,4 @@ Windows EXE、macOS 双架构 DMG/ZIP、Android 发行签名 APK 和 Linux 服�
 
 ## 许可
 
-项目遵循 [MIT](LICENSE)。官方引擎、图标和字体遵循各自许可证，见 [NOTICE](plugins/benchgo/NOTICE)。
+项目遵循 [MIT](LICENSE)。官方引擎、图标和字体遵循各自许可证，见 [NOTICE](plugins/base/NOTICE)。

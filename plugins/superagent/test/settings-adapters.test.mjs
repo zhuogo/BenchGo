@@ -6,9 +6,9 @@ import { join } from 'node:path';
 import { createAssistantStore } from '../src/store.mjs';
 import { createAssistantSettingsAdapter } from '../src/settings-adapter.mjs';
 import { createConnectionSettingsAdapter } from '../src/connection-settings-adapter.mjs';
-import { VoiceConfig } from '../../voice/src/config.mjs';
-import { createVoiceSettingsAdapter } from '../../voice/src/settings-adapter.mjs';
-import { applySettingsOps } from '../../benchgo/shared/settings-adapter-utils.mjs';
+import { VoiceConfig } from '../../media/src/config.mjs';
+import { createVoiceSettingsAdapter } from '../../media/src/settings-adapter.mjs';
+import { applySettingsOps } from '../../base/shared/settings-adapter-utils.mjs';
 
 async function directory(t) { const path = await mkdtemp(join(tmpdir(), 'benchgo-settings-adapters-')); t.after(() => rm(path, { recursive: true, force: true })); return path; }
 const set = (path, value) => ({ op: 'set', path, value });

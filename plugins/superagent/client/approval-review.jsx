@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { ResourceState } from './resource-state.jsx';
 import { TaskIconButton } from './task-list.jsx';

@@ -7,7 +7,7 @@ import { openStore } from '../src/pairing/store.mjs';
 import { createSessionActions } from '../src/session/actions.mjs';
 import { createSessionAdapter } from '../src/session/adapter.mjs';
 import { createNativeAdapter } from '../src/session/native.mjs';
-import { mountWeb } from '../../benchgo/src/web.mjs';
+import { mountWeb } from '../../base/src/web.mjs';
 
 const baseTime = Date.now(), requestId = value => `sa:${baseTime}:${value}`;
 
@@ -16,7 +16,7 @@ async function fixture(t) {
   const store = await openStore(directory), calls = [], routes = new Map();
   const device = { id: 'paired-device' }, hidden = new Set(), officialRows = new Map([['session', { sessionId: 'session', running: false, updatedAt: 10, projections: { values: { title: 'Original' } } }]]);
   const project = { id: 'project', path: '/project', title: 'Project', sessionIds: ['session'] };
-  const records = new Map([['direct', { id: 'direct', ownerSessionId: 'commander-web:project', projectId: 'project', cwd: '/project', status: 'idle', provider: 'codex', title: 'Native' }]]);
+  const records = new Map([['direct', { id: 'direct', ownerSessionId: 'commander-web:detached:project', projectId: 'project', cwd: '/project', status: 'idle', provider: 'codex', title: 'Native' }]]);
   let authorized = true, availableProjects = [project], currentTime = baseTime;
   const commander = { list: () => [...records.values()].map(row => ({ ...row })), async archive(id, archived) { calls.push(['native', archived ? 'archive' : 'unarchive', id]); records.get(id).archived = archived; }, async remove(id) { calls.push(['native', 'delete', id]); records.delete(id); } };
   const services = { commander, benchgo: { directory }, assistant: { sidebarPrivateSessionIds: async () => [...hidden] }, sessionTitle: {}, sessionController: { rename() {} }, workspaceController: Object.fromEntries(['pinSession', 'unpinSession', 'archiveSession', 'unarchiveSession'].map(method => [method, () => {}])) };
@@ -221,7 +221,7 @@ test('native actions preserve ownership and archived listings, and unsupported m
   assert.equal(f.native.list([f.project], { includeArchived: true })[0].archived, true);
   await f.invoke('unarchive', native); assert.equal(f.records.get('direct').archived, false);
   for (const operation of ['pin', 'unpin', 'rename', 'fork']) await assert.rejects(f.invoke(operation, { ...native, ...(operation === 'rename' ? { title: 'New' } : {}) }), { code: 'UNSUPPORTED' });
-  f.hidden.add('commander-web:project'); await assert.rejects(f.invoke('delete', native), { code: 'NOT_FOUND' }); f.hidden.clear();
+  f.hidden.add('commander-web:detached:project'); await assert.rejects(f.invoke('delete', native), { code: 'NOT_FOUND' }); f.hidden.clear();
   f.records.get('direct').cwd = '/moved'; await assert.rejects(f.invoke('delete', native), { code: 'NOT_FOUND' }); f.records.get('direct').cwd = '/project';
   const result = await f.invoke('delete', { ...native, requestId: 'native-delete' }); assert.equal(result.deleted, true);
   assert.equal((await f.invoke('delete', { ...native, requestId: 'native-delete' })).deleted, true);

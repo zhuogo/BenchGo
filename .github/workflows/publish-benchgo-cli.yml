@@ -6,10 +6,10 @@ on:
       package:
         description: Package directory to publish
         required: true
-        default: plugins/benchgo
+        default: plugins/base
         type: choice
         options:
-          - plugins/benchgo
+          - plugins/base
           - packages/benchgo-cli
           - packages/benchgo-relay
 permissions:
@@ -37,25 +37,25 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ matrix.package }}/package.json
       - name: Prepare official plugin build toolchain
-        if: matrix.package == 'plugins/benchgo'
+        if: matrix.package == 'plugins/base'
         run: |
           git submodule update --init --recursive -- deepseek-harness
           npm install --global --force corepack@0.34.0
           corepack enable
           npm run check
       - name: Install locked plugin dependencies
-        if: matrix.package == 'plugins/benchgo'
+        if: matrix.package == 'plugins/base'
         run: |
           npm run setup
           npm ci --prefix plugins/link
-          npm ci --prefix plugins/benchgo
+          npm ci --prefix plugins/base
       - name: Build current plugin and verify published entry closure
-        if: matrix.package == 'plugins/benchgo'
+        if: matrix.package == 'plugins/base'
         run: |
           npm run build:plus
-          node --import ./scripts/source-loader.mjs --test plugins/benchgo/test/package-layout.test.mjs
+          node --import ./scripts/source-loader.mjs --test plugins/base/test/package-layout.test.mjs
       - name: Verify standalone command installation and package metadata
-        if: matrix.package != 'plugins/benchgo'
+        if: matrix.package != 'plugins/base'
         working-directory: ${{ matrix.package }}
         run: |
           npm ci

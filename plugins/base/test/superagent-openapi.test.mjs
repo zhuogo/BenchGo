@@ -1,0 +1,443 @@
+﻿import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { mountVault } from '../src/vault.mjs';
+import { createAssistantOrchestrationStore } from '../../superagent/src/orchestration-store.mjs';
+import { createEvaluationDisposition } from '../../superagent/src/eval-disposition.mjs';
+import { createAssistantRuntimeStore } from '../../superagent/src/runtime-store.mjs';
+import { createAssistantStore, validateAssistantModels, validateAssistantAuxiliary } from '../../superagent/src/store.mjs';
+import { roleModels, auxiliaryModels } from '../../superagent/src/routing.mjs';
+import { scheduleLifecyclePublication } from '../../superagent/src/schedule-lifecycle.mjs';
+import { systemStateDelivery } from '../../superagent/src/result-delivery.mjs';
+
+const hostRequire = createRequire(new URL('../../../deepseek-harness/packages/boot/app-boot/package.json', import.meta.url));
+const { default: Ajv } = hostRequire('ajv/dist/2020.js');
+const document = JSON.parse(await readFile(new URL('../openapi.json', import.meta.url), 'utf8'));
+const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: false });
+ajv.addSchema({ $id: 'benchgo-contract', components: document.components });
+const compile = schema => ajv.compile({ ...schema, components: document.components });
+const request = compile({ $ref: '#/components/schemas/AssistantRequest' });
+const vaultRequest = compile({ $ref: '#/components/schemas/VaultRequest' });
+const response = (path, action) => compile(document.paths[path].post.responses['200']['x-action-schemas'][action]);
+const valid = (validator, value) => assert.equal(validator(value), true, JSON.stringify(validator.errors));
+const hash = 'a'.repeat(64);
+const path = '/api/commander/assistant';
+
+test('official history search and point reads use distinct bounded pagination contracts', () => {
+  valid(request, { action: 'sessionSearch', query: '香港', cursor: 'opaque-search-page', limit: 10 });
+  valid(request, { action: 'sessionHistory', sessionId: 'router-main', seq: 12, before: 1, textLimit: 1000, offset: 0 });
+  valid(request, { action: 'sessionHistory', sessionId: 'router-main', before: 1000, limit: 30 });
+  valid(request, { action: 'sessionHistory', sessionId: 'router-main', seq: 12, before: 30, after: 30 });
+  valid(request, { action: 'sessionList', limit: 20, cursor: 'opaque-header-page' });
+  valid(request, { action: 'ledgerRead', id: 'business-reference', cursor: 8 });
+  for (const input of [{ action: 'sessionSearch' }, { action: 'sessionSearch', query: 'x', cursor: 3 },
+    { action: 'sessionSearch', query: 'x', limit: 101 }, { action: 'sessionHistory', seq: 1 },
+    { action: 'sessionHistory', sessionId: 'main', seq: -1 },
+    { action: 'sessionHistory', sessionId: 'main', seq: 3, before: 31 },
+    { action: 'sessionHistory', sessionId: 'main', after: 31 },
+    { action: 'sessionHistory', sessionId: 'main', textLimit: 16001 },
+    { action: 'sessionList', cursor: 5 }, { action: 'sessionList', limit: 0 },
+    { action: 'ledgerRead' }, { action: 'ledgerRead', id: 'business-reference', cursor: 'search-page' },
+    { action: 'ledgerRead', id: 'business-reference', limit: 100001 }]) assert.equal(request(input), false, JSON.stringify(input));
+  const text = { sessionId: 's', seq: 3, time: 1, role: 'user', text: '原文', fullLength: 2, offset: 0,
+    nextOffset: null, complete: true, source: 'official' };
+  const search = { query: '香港', source: 'official', results: [{ ...text, snippet: text.text, title: null }],
+    nextCursor: null, truncated: false, matchMode: 'official-phrase', coverage: 'official-message-text', limitations: ['中文子串不保证命中'] };
+  valid(response(path, 'sessionSearch'), search);
+  valid(response(path, 'sessionHistory'), { sessionId: 's', events: [text], hasMore: false, nextCursor: null, source: 'official' });
+  valid(response(path, 'sessionList'), { sessions: [{ id: 's', title: null, createdAt: 1 }], nextCursor: null });
+  assert.equal(response(path, 'sessionSearch')({ ...search, results: [{ ...search.results[0], text: 'x'.repeat(501) }] }), false);
+  assert.equal(response(path, 'sessionSearch')({ ...search, source: 'ledger' }), false);
+  assert.equal(response(path, 'sessionHistory')({ sessionId: 's', messages: [text] }), false);
+});
+
+test('P0 inbox reconciliation and quota-free continuation keep the public contract', () => {
+  valid(request, { action: 'requestState', threadId: 'side' });
+  valid(response(path, 'requestState'), [{ requestId: 'r', status: 'processing' }]);
+  valid(request, { action: 'taskPause', taskId: 't' });
+  valid(request, { action: 'taskResume', taskId: 't', expectedResultVersion: 0 });
+  assert.equal(request({ action: 'taskResume', taskId: 't', expectedResultVersion: -1 }), false);
+  // Goals are a checklist: no quota, execution-control or self-check contract exists.
+  assert.doesNotMatch(JSON.stringify(document), /additionalExecutionMs|goalBudget|goalCancel|goalPause|goalResume|goalAdvance|selfCheck|memoryCandidate/);
+  valid(request, { action: 'goalCreate', goal: { objective: '把语音体验做稳', requestId: 'r' } });
+  for (const goal of [{ objective: '缺少请求标识' }, { objective: 'x', requestId: 'r', projectId: 'p' }, { objective: 'x', requestId: 'r', children: [] }]) assert.equal(request({ action: 'goalCreate', goal }), false);
+  valid(response(path, 'taskResume'), { queued: false, code: 'EXECUTION_EFFECTS_UNKNOWN' });
+  assert.equal(request({ action: 'taskRetryReview', taskId: 't' }), false);
+  assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].taskRetryReview, undefined);
+});
+
+test('history exposes only optional structured active reply identity', () => {
+  const validate = response(path, 'history');
+  valid(validate, { activeReply: null, messages: [] });
+  valid(validate, { activeReply: { requestId: 'u', turn: 2 }, messages: [] });
+  assert.equal(validate({ activeReply: { requestId: 'u' } }), false);
+  assert.equal(validate({ activeReply: { requestId: 'u', turn: 2, reasoning: 'private' } }), false);
+});
+
+test('memory writes are immediate and keep their revision contract', () => {
+  valid(request, { action: 'memorySave', memory: { content: '偏好简洁中文' } });
+  valid(request, { action: 'memorySave', revision: 2, memory: { id: 'saved', content: '偏好完整说明' } });
+  valid(request, { action: 'memoryDelete', id: 'saved', revision: 3 });
+  for (const input of [{ action: 'memorySave' }, { action: 'memorySave', memory: {} }, { action: 'memoryDelete' }, { action: 'memoryForget', id: '' }]) assert.equal(request(input), false);
+  const entry = { id: 'saved', content: '偏好简洁中文', source: { kind: 'user' }, revision: 1, document: 'MEMORY.md' };
+  valid(response(path, 'memorySave'), entry);
+  valid(response(path, 'memorySearch'), { memories: [entry] });
+  valid(response(path, 'memoryDelete'), { removed: true });
+  assert.equal(response(path, 'memorySave')({ ...entry, revision: 0 }), false);
+});
+
+test('notification options require a source-bound event and return ordinary send receipt', () => {
+  valid(request, { action: 'notificationOption', eventId: 'event', threadId: 'side', text: '就这么办' });
+  for (const field of ['eventId', 'threadId', 'text']) {
+    const input = { action: 'notificationOption', eventId: 'event', threadId: 'side', text: '就这么办' };
+    delete input[field]; assert.equal(request(input), false);
+  }
+  valid(response(path, 'notificationOption'), { threadId: 'side', sessionId: 'session', messageId: 'message', duplicate: true });
+});
+
+test('OpenAPI descriptions retain UTF-8 and channel actions require scoped writes', () => {
+  assert.doesNotMatch(JSON.stringify(document), /\?{3}|\uFFFD/u);
+  assert.match(document.paths['/api/benchgo/vault'].post.summary, /.+/u);
+  valid(request, { action: 'connectionConfigure', channel: 'telegram', revision: 0, patch: { botTokenRef: 'Opaque:Ref' } });
+  valid(request, { action: 'connectionCredential', channel: 'discord', field: 'botTokenRef', secret: 'example' });
+  valid(request, { action: 'connectionAction', channel: 'api', operation: 'submit', requestId: '1', conversationId: 'room', text: 'hello' });
+  for (const invalid of [
+    { action: 'connectionConfigure', patch: {} },
+    { action: 'connectionCredential', channel: 'discord', field: 'botTokenRef' },
+    { action: 'connectionAction', channel: 'api', operation: 'submit', text: 'hello' },
+    { action: 'connectionStatus', channel: 'unknown' },
+  ]) assert.equal(request(invalid), false, JSON.stringify(invalid));
+});
+
+test('new documented actions exist in production and require their actual CAS fields', async () => {
+  const service = await readFile(new URL('../../superagent/src/assistant-dispatch.mjs', import.meta.url), 'utf8');
+  for (const action of ['taskCancel', 'taskResult', 'taskTakeover', 'taskVerify']) {
+    assert.doesNotMatch(service, new RegExp(`case '${action}':`));
+    assert.equal(document.components.schemas.AssistantRequest.properties.action.enum.includes(action), false);
+    assert.equal(document.paths[path].post.responses['200']['x-action-schemas'][action], undefined);
+  }
+  const inputs = [
+    { action: 'taskChange', id: 'task', operation: 'adjustment', expectedInstructionRevision: 2, requestId: 'r', reason: 'continue' },
+    { action: 'evaluations', after: 0, limit: 50 }, { action: 'evaluationHistory', candidateId: 'candidate' },
+    { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'retry', expectedRevision: 0, expectedUpdatedAt: '2026-11-02T00:00:00.000Z' },
+    { action: 'summarize', text: 'summarize this' }, { action: 'analyzeImage', file: 'image.png', question: 'read this image' },
+  ];
+  for (const input of inputs) { assert.ok(service.includes(`case '${input.action}':`), input.action); valid(request, input); }
+  for (const input of [
+    { action: 'taskChange', id: 'task', operation: 'reopen', requestId: 'r', reason: '缂哄皯瑕佹眰鐗堟湰' },
+    { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'retry', expectedRevision: 0 },
+    { action: 'summarize', text: '' }, { action: 'analyzeImage', file: 'image.png' },
+    { action: 'evaluationDispose', candidateId: 'candidate', disposition: 'approve', expectedRevision: 0, expectedUpdatedAt: 'date' },
+  ]) assert.equal(request(input), false, JSON.stringify(input));
+});
+
+test('removed file-backup actions are unavailable', async () => {
+  const service = await readFile(new URL('../../superagent/src/assistant-dispatch.mjs', import.meta.url), 'utf8');
+  for (const action of ['checkpointList', 'checkpointPreview', 'checkpointRestore']) {
+    assert.equal(request({ action, taskId: 'task', runId: 'run', token: hash }), false);
+    assert.equal(document.paths[path].post.responses['200']['x-action-schemas'][action], undefined);
+    assert.equal(service.includes("case '" + action + "':"), false);
+  }
+});
+
+test('vault contract matches owner HTTP responses and excludes plaintext or execution', async () => {
+  const records = new Map();
+  const ctx = { credentials: { readRecord: async key => structuredClone(records.get(key)), modifyRecord: async (key, change) => { const next = await change(structuredClone(records.get(key))); records.set(key, structuredClone(next)); } }, provide() {}, effect() {} };
+  const { service, fetch } = mountVault(ctx);
+  const call = async input => { valid(vaultRequest, input); const result = await fetch(new Request('https://benchgo.test/api/benchgo/vault', { method: 'POST', body: JSON.stringify(input), headers: { 'content-type': 'application/json' } })); assert.equal(result.status, 200); assert.equal(result.headers.get('cache-control'), 'no-store'); const value = await result.json(); valid(response('/api/benchgo/vault', input.action), value); return value; };
+  try {
+    await call({ action: 'status' });
+    const value = await call({ action: 'save', address: '本机服务', credentials: [{ name: '账号', value: 'private-account' }, { name: '密码', value: 'private-value' }] });
+    assert.doesNotMatch(JSON.stringify(value), /private-account|private-value/);
+    const listed = await call({ action: 'list' });
+    assert.deepEqual(listed.entries, [value.entry]);
+    assert.doesNotMatch(JSON.stringify(listed), /private-account|private-value/);
+    const updated = await call({ action: 'save', handle: value.entry.handle, revision: value.entry.revision, address: 'http://device.local/login', credentials: value.entry.credentials.map((item, index) => ({ id: item.id, name: item.name, ...(index ? { value: 'replacement-value' } : {}) })) });
+    await service.withCredentials(updated.entry, data => {
+      assert.equal(data.credentials[0].value, 'private-account');
+      assert.equal(data.credentials[1].value, 'replacement-value');
+    });
+    assert.equal(vaultRequest({ action: 'execute', handle: value.entry.handle, revision: 1 }), false);
+    assert.equal(vaultRequest({ action: 'save', handle: value.entry.handle, address: '服务', credentials: [{ name: '密钥', value: 'private' }] }), false);
+    assert.equal(vaultRequest({ action: 'save', label: 'old', secret: 'private', target: 'https://api.example.test/auth', method: 'POST', placement: 'header', field: 'Authorization' }), false);
+  } finally { service.dispose(); }
+});
+
+test('Eval response contracts accept real persistent records', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-contract-records-'));
+  const database = createAssistantOrchestrationStore({ directory: root });
+  const tasks = createAssistantRuntimeStore({ filename: join(root, 'tasks.db') });
+  try {
+    database.ingest({ dedupeKey: 'event', thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } }, source: { eventId: 'event' }, actor: { id: 'owner' }, content: '鍘熸枃', gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p' });
+    for (let index = 0; index < 3; index++) { database.claimEval('thread', { owner: 'old', policyVersion: 'p', now: index * 20, timeoutMs: 10 }); database.requeueExpiredEvals(index * 20 + 11); }
+    const evaluations = createEvaluationDisposition({ database, readPolicy: async () => ({ version: 'p' }) });
+    const list = evaluations.list(); valid(response(path, 'evaluations'), list);
+    const candidate = list.candidates[0];
+    valid(response(path, 'evaluationDispose'), await evaluations.dispose({ candidateId: candidate.id, expectedRevision: candidate.dispositionRevision, expectedUpdatedAt: candidate.updatedAt, action: 'ignore' }, { kind: 'human' }));
+    valid(response(path, 'evaluationHistory'), evaluations.history(candidate.id));
+  } finally { database.close(); tasks.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('Feishu lightweight configuration and paginated chat list have explicit contracts', () => {
+  valid(request, { action: 'connectionConfigure', channel: 'feishu', revision: 0, patch: { accessMode: 'platform', directMessages: true, groups: [{ chatId: 'oc_exact', name: '无敌大队', mode: 'mentions' }], otherGroups: 'disabled' } });
+  valid(request, { action: 'connectionConfigure', channel: 'feishu', revision: 1, patch: { groups: null, chatIds: ['oc_legacy'] } });
+  valid(request, { action: 'connectionAction', channel: 'feishu', operation: 'listChats', pageToken: 'Opaque/+Token' });
+  for (const patch of [{ accessMode: 'everyone' }, { directMessages: 'true' }, { groups: [{ chatId: 'oc_1', mode: 'auto' }] }, { groups: [{ mode: 'mentions' }] }, { otherGroups: 'all' }]) {
+    assert.equal(request({ action: 'connectionConfigure', channel: 'feishu', revision: 0, patch }), false, JSON.stringify(patch));
+  }
+  const chatList = compile(document.paths[path].post.responses['200']['x-action-schemas'].connectionAction['x-operation-schemas']['feishu.listChats']);
+  valid(chatList, { chats: [{ chatId: 'oc_exact', name: '无敌大队' }], nextPageToken: 'Opaque/+Token' });
+  valid(chatList, { chats: [] });
+  assert.equal(chatList({ chats: [{ name: 'Missing ID' }] }), false);
+});
+
+test('three model queues match persisted configuration and real role routing', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-contract-models-'));
+  let store = await createAssistantStore({ dataDirectory: root });
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const router = { providerId: 'Opaque/@Provider', modelId: 'Router Model:07', options: { reasoningEffort: 'opaque-effort', maxTokens: 1000 } };
+  const worker = { providerId: 'Other/Provider', modelId: 'Worker:02' };
+  const auxiliary = { models: [{ providerId: 'Aux', modelId: 'Exact/Aux' }], capabilities: ['review'] };
+  const patch = { models: [router], workerModels: [worker], workerHarness: 'codex', auxiliary };
+  valid(request, { action: 'config', patch });
+  const saved = await store.updateConfig(patch);
+  valid(response(path, 'config'), saved);
+  await assert.rejects(store.updateConfig({ workerModels: [] }, { revision: saved.revision }), /API/);
+  store.close(); store = await createAssistantStore({ dataDirectory: root });
+  const loaded = await store.getConfig();
+  valid(response(path, 'config'), loaded);
+  assert.equal(loaded.workerHarness, 'codex');
+  assert.deepEqual(roleModels(undefined, loaded, 'worker'), [worker]);
+  const edited = await store.updateConfig({ workerModels: [], workerHarness: 'official' }, { revision: loaded.revision });
+  assert.deepEqual(edited.models, patch.models); assert.deepEqual(edited.auxiliary, auxiliary);
+  assert.deepEqual(roleModels(undefined, edited, 'worker'), []);
+  assert.deepEqual(roleModels(worker, edited, 'worker'), [worker]);
+  assert.equal(request({ action: 'config', patch: { workerHarness: 'unsupported' } }), false);
+  assert.deepEqual(auxiliaryModels(undefined, loaded, 'review'), [...auxiliary.models, router]);
+  assert.deepEqual(auxiliaryModels(undefined, loaded, 'summary'), [router]);
+  for (const models of [[{ ...router, providerId: ' padded' }], [{ ...router, modelId: 'bad\nID' }],
+    [{ ...router, options: { maxTokens: 0 } }], [{ ...router, credentialRef: 'legacy' }], Array(33).fill(router)]) {
+    assert.equal(request({ action: 'config', patch: { workerModels: models } }), false);
+    assert.throws(() => validateAssistantModels(models));
+  }
+  for (const auxiliary of [{ models: [], capabilities: [] }, { models: [worker], capabilities: ['unknown'] }]) {
+    assert.equal(request({ action: 'config', patch: { auxiliary } }), false);
+    assert.throws(() => validateAssistantAuxiliary(auxiliary));
+  }
+  assert.equal(request({ action: 'config', patch: { keyPools: [{ providerId: 'legacy' }] } }), false);
+});
+
+test('native Worker transcript requires a task and session and returns a cursor', () => {
+  const input = { action: 'nativeWorkerSession', taskId: 'work', sessionId: 'native', after: 0 };
+  valid(request, input);
+  for (const patch of [{ taskId: undefined }, { sessionId: '' }, { after: -1 }, { after: 1.5 }]) {
+    assert.equal(request({ ...input, ...patch }), false);
+  }
+  valid(response(path, input.action), {
+    status: 'running', cursor: 3, events: [{ seq: 3, text: 'progress' }], truncated: false
+  });
+});
+
+test('real memory responses retain bounded sources and correction version references', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-contract-memory-'));
+  const store = await createAssistantStore({ dataDirectory: root });
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const first = await store.saveMemory({ content: 'a'.repeat(6001), source: { type: 'user-edit' } }, { candidateId: 'candidate-source' });
+  valid(response(path, 'memorySave'), first);
+  assert.equal(first.candidateId, 'candidate-source'); assert.equal(first.source.excerpt.length, 6000);
+  assert.equal(first.source.excerptTruncated, true);
+  const changed = await store.saveMemory({ id: first.id, content: '保存修订事实', source: { type: 'user-edit' } }, { revision: 1 });
+  valid(response(path, 'memorySave'), changed);
+  assert.equal(changed.supersedes.revision, 1); assert.deepEqual(changed.versionChain, [changed.supersedes]);
+  valid(response(path, 'memorySearch'), { memories: [changed] });
+  for (const source of [{ excerpt: 'x'.repeat(6001) }, { excerptTruncated: 'true' }]) {
+    assert.equal(request({ action: 'memorySave', memory: { content: 'fact', source } }), false);
+    assert.equal(response(path, 'memorySave')({ ...changed, source }), false);
+    await assert.rejects(store.saveMemory({ content: 'fact', source }));
+  }
+  assert.equal(response(path, 'memorySave')({ ...changed, versionChain: [{ id: first.id, revision: 0, updatedAt: null }] }), false);
+});
+
+test('owner delivery reconciliation requests enforce attempts, evidence and sent-only receipts', async () => {
+  const service = await readFile(new URL('../../superagent/src/assistant-dispatch.mjs', import.meta.url), 'utf8');
+  const branch = service.slice(service.indexOf("case 'directReplyReconcile':"), service.indexOf("case 'evaluations':"));
+  assert.match(branch, /peer\?\.principal\?\.kind !== 'owner'/);
+  assert.match(branch, /status: 403, code: 'OWNER_REQUIRED'/);
+  for (const action of ['directReplyReconcile', 'outboxReconcile']) {
+    const base = { action, id: 'delivery', attempts: 1, outcome: 'unknown', evidence: '平台查询记录' };
+    valid(request, base); valid(request, { ...base, outcome: 'not_sent' });
+    valid(request, { ...base, outcome: 'sent', evidence: 'x'.repeat(2000), receipt: { status: 'accepted', messageId: 'x'.repeat(512) } });
+    for (const key of ['id', 'attempts', 'outcome', 'evidence']) { const missing = { ...base }; delete missing[key]; assert.equal(request(missing), false); }
+    for (const patch of [{ id: '' }, { attempts: 0 }, { attempts: 1.5 }, { attempts: Number.MAX_SAFE_INTEGER + 1 },
+      { outcome: 'pending' }, { evidence: '' }, { evidence: ' ' }, { evidence: 'x'.repeat(2001) },
+      { receipt: null }, { outcome: 'not_sent', receipt: {} }, { outcome: 'sent' },
+      ...[{ status: 'unknown', messageId: 'id' }, { status: 'accepted', messageId: '' },
+        { status: 'accepted', messageId: ' ' }, { status: 'accepted', messageId: 'x'.repeat(513) }].map(receipt => ({ outcome: 'sent', receipt }))]) {
+      assert.equal(request({ ...base, ...patch }), false, JSON.stringify(patch));
+    }
+  }
+});
+
+test('delivery response contracts accept persisted reconciliation records without changing outbox payload', t => {
+  const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
+  const source = { channel: 'feishu', chatId: 'original', messageId: 'message' };
+  const actor = { kind: 'human', id: 'owner' }, gate = { allowed: true, strength: 'explicit' };
+  const { candidate } = db.ingest({ dedupeKey: 'message', thread: { id: 'thread', source: { type: 'feishu', id: 'original' } }, source, actor, gate, content: 'hello', policyVersion: 'p1' });
+  const evaluation = db.claimEval('thread', { owner: 'router', policyVersion: 'p1', now: 0 });
+  db.decide(candidate.id, { evalId: evaluation.id, owner: 'router', outcome: 'answer', assessment: {}, policyVersion: 'p1', now: 1,
+    reply: { text: '你好', source, actor, gate, policyVersion: 'p1' } });
+  const [reply] = db.claimDirectReplies({ owner: 'sender', now: 2 });
+  db.finishDirectReply(reply.id, { owner: 'sender', uncertain: true, now: 3 });
+  const task = db.createTask({ threadId: 'thread', target: 'saved task', mandate: { source } });
+  db.createAssignment(task.id, { id: 'work' });
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  const failure = { owner: assignment.owner, fence: assignment.fence, stage: 'execution', code: 'NETWORK', now: 10 };
+  assert.equal(db.recordAssignmentFailure(assignment.id, failure), true);
+  const [delivery] = db.claimOutbox('sender', { now: 11 });
+  db.finishOutbox(delivery.id, { owner: 'sender', uncertain: true, now: 12 });
+  for (const [action, id, reconcile] of [['directReplyReconcile', reply.id, db.reconcileDirectReply], ['outboxReconcile', delivery.id, db.reconcileOutbox]]) {
+    const unknown = reconcile(id, { attempts: 1, outcome: 'unknown', evidence: 'pending lookup', now: 20 });
+    valid(response(path, action), unknown);
+    const sent = reconcile(id, { attempts: 1, outcome: 'sent', evidence: 'found original', receipt: { status: 'accepted', messageId: 'Opaque/receipt:1' }, now: 30 });
+    valid(response(path, action), sent);
+    assert.equal(sent.reconciliations.length, 2);
+    if (action === 'outboxReconcile') {
+      assert.deepEqual(sent.payload, delivery.payload); assert.equal(sent.payload.reconciliations, undefined);
+      assert.equal(db.recordAssignmentFailure(assignment.id, failure), true);
+      assert.deepEqual(db.claimOutbox('sender', { now: 31 }), []);
+      const { reconciliations, ...missing } = sent; assert.equal(response(path, action)(missing), false);
+    }
+  }
+});
+
+test('history accepts four real schedule lifecycle facts and current task projections', () => {
+  const at = '2026-11-05T10:00:00.000Z';
+  const events = ['created', 'triggered', 'completed', 'failed'].map(phase => scheduleLifecyclePublication({ type: 'schedule.lifecycle', origin: 'system',
+    schedule: { id: 'schedule', title: '定时检查', sourceSessionId: 'owner', phase, at,
+      ...(phase !== 'created' ? { occurrenceAt: at } : {}), ...(['completed', 'failed'].includes(phase) ? { taskId: 'task' } : {}) } }));
+  assert.ok(events.every(Boolean)); valid(response(path, 'history'), { notifications: events });
+  for (const action of ['notifications', 'notificationSync']) valid(response(path, action), { events, cursor: 4, hasMore: false, resyncRequired: false });
+  const verified = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
+  const result = { type: 'task.result', taskId: 'task', text: verified.text, publication: verified, origin: 'system', systemState: verified.systemState,
+    currentInstructionRevision: 2, currentResultVersion: 1, currentResult: { version: 1, instructionRevision: 2, outcome: 'completed' },
+    currentAttention: null, currentPauseReason: { code: 'EXECUTION_EFFECTS_UNKNOWN' } };
+  valid(response(path, 'history'), { notifications: [result] });
+  valid(response(path, 'history'), { notifications: [{ ...result, currentResult: null, currentPauseReason: null }] });
+  const validate = compile({ $ref: '#/components/schemas/AssistantNotification' });
+  assert.equal(validate({ ...events[0], origin: 'router' }), false);
+  assert.equal(validate({ ...events[1], schedule: { ...events[1].schedule, occurrenceAt: undefined } }), false);
+  assert.equal(validate({ ...result, origin: 'router' }), false);
+});
+
+test('attention resolution evidence belongs to task rows and accepts real host decisions', t => {
+  const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
+  db.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
+  const task = db.createTask({ threadId: 'thread', target: '回答问题', mandate: { instruction: '使用简体中文', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
+  db.createAssignment(task.id, { model: { providerId: 'p', modelId: 'worker' } });
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  const ownership = { owner: assignment.owner, fence: assignment.fence };
+  const run = db.prepareRun(assignment.id, { ...ownership, sessionId: 'worker-session', directory: '/fixture' });
+  db.updateRun(run.id, { ...ownership, state: 'submitted' });
+  const questions = [{ id: 'language', question: '输出语言？' }, { id: 'approval', question: '是否批准执行？' }];
+  const attentionResolutions = db.saveAttentionResolutions(assignment.id, { ...ownership, sessionId: run.sessionId, callId: 'call', questions,
+    decisions: [{ questionId: 'language', route: 'self', basis: '原指令已说明', evidence: '简体中文' }, { questionId: 'approval', route: 'user', basis: '需要主人决定' }] });
+  valid(response(path, 'tasks'), { tasks: [{ ...db.getTask(task.id), attentionResolutions }] });
+  assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].state.properties.attentionResolutions, undefined);
+  const resolution = compile({ $ref: '#/components/schemas/AssistantAttentionResolution' });
+  assert.equal(resolution({ ...attentionResolutions[1], answer: { id: 'approval', selected: [], custom: '批准' } }), false);
+  const [attention] = db.openAttention(assignment.id, { ...ownership, sessionId: run.sessionId, callId: 'call', questions: [questions[1]] });
+  valid(response(path, 'history'), { notifications: [{ type: 'task.attention', text: '请确认', currentAttention: { ...attention, instructionRevision: 1 }, currentResult: null, currentPauseReason: null }] });
+});
+
+test('delegation rejects per-task model overrides and completed changes return linked new tasks', t => {
+  const tool = name => compile(document.paths[path].post['x-tool-input-schemas'][name]);
+  const delegate = tool('assistant_delegate'), base = { text: '检查原任务', acceptance: '保留原要求', requestId: 'request', duplicateOfTaskId: 'active-task' };
+  valid(delegate, base); assert.equal(delegate({ ...base, provider: 'Opaque/@Provider', model: 'Exact Model:07' }), false);
+  valid(delegate, { ...base, acceptance: '' });
+  for (const patch of [{ provider: 'p' }, { model: 'm' }, { duplicateOfTaskId: '' }, { duplicateOfTaskId: 'x'.repeat(513) }]) assert.equal(delegate({ ...base, ...patch }), false);
+  const db = createAssistantOrchestrationStore({ filename: ':memory:' }); t.after(() => db.close());
+  const source = { channel: 'desktop', sessionId: 'owner', messageId: 'original' }, actor = { kind: 'human', id: 'desktop-owner' };
+  const thread = { id: 'thread', source: { type: 'desktop', id: 'owner' } };
+  db.ingest({ dedupeKey: 'original', thread, source, actor, content: '原任务', mode: 'direct' });
+  const task = db.createTask({ threadId: thread.id, target: '原任务', mandate: { source, actorId: actor.id } });
+  db.createAssignment(task.id, { id: 'original-work' });
+  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
+  const run = db.prepareRun(assignment.id, { ...assignment, sessionId: 'session', directory: '/task' });
+  db.updateRun(run.id, { ...assignment, state: 'submitted' });
+  db.commitResult(task.id, { assignment, uniqueKey: 'original-result',
+    result: { summary: '原成果', runId: run.id, sessionId: run.sessionId, instructionRevision: 1, completion: { kind: 'completed' } } });
+  assert.equal(db.getTask(task.id).status, 'completed');
+  for (const delivery of db.claimOutbox('test-delivery')) {
+    db.saveOutboxReply(delivery.id, { owner: 'test-delivery', publication: { action: 'deliver', origin: 'router', text: '原任务已完成，成果已整理。' } });
+    assert.equal(db.getTask(task.id).status, 'completed');
+    db.finishOutbox(delivery.id, { owner: 'test-delivery', sent: true, receipt: { status: 'accepted', messageId: `sent:${delivery.id}` } });
+  }
+  assert.equal(db.getTask(task.id).status, 'completed');
+  const before = db.getTask(task.id), results = db.results(task.id);
+  const nextSource = { ...source, messageId: 'adjustment' };
+  const { trigger } = db.ingest({ dedupeKey: 'adjustment', thread, source: nextSource, actor, content: '调整成果', mode: 'direct' });
+  const change = { id: task.id, operation: 'adjustment', expectedInstructionRevision: 1, requestId: 'change', reason: '补充要求' };
+  valid(request, { action: 'taskChange', ...change }); valid(tool('assistant_task_change'), change);
+  assert.equal(request({ action: 'taskChange', ...change, operation: 'reopen' }), false);
+  assert.equal(request({ action: 'taskChange', ...change, provider: 'p', model: 'm' }), false);
+  assert.equal(request({ action: 'taskChange', ...change, expectedInstructionRevision: 0 }), false);
+  assert.equal(request({ action: 'taskChange', ...change, provider: 'unpaired' }), false);
+  const next = db.changeTask(task.id, { ...change, target: '调整成果', acceptance: '新要求', requestKey: 'change', triggerId: trigger.id,
+    mandate: { source: nextSource, actorId: actor.id, instruction: '调整成果' }, model: { providerId: 'p', modelId: 'm' }, validateMandate: () => true });
+  valid(response(path, 'taskChange'), next);
+  assert.equal(next.adjustmentOfTaskId, task.id); assert.equal(next.instructionRevision, 1); assert.equal(next.resultVersion, 0);
+  assert.deepEqual(db.getTask(task.id), before); assert.deepEqual(db.results(task.id), results);
+});
+
+
+test('trusted execution-session actions expose the current contract', () => {
+  for (const action of ['executionSessions']) valid(request, { action });
+  valid(response(path, 'executionSessions'), { sessions: [{ sessionId: 'session', taskId: 'task', title: 'Task', available: true }] });
+  valid(response(path, 'executionSessions'), { sessions: [
+    { sessionId: 'root', taskId: 'task', title: 'Task', available: true, role: 'worker', parentSessionId: null, status: 'running', runState: 'running', promptable: true },
+    { sessionId: 'child', taskId: 'task', title: 'Task', available: true, role: 'child-worker', parentSessionId: 'root', status: 'completed', runState: 'verifying', promptable: false, reason: '子执行会话仅供查看，请向所属任务补充要求。' },
+  ] });
+  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', taskId: 'task', title: 'Task', available: true, promptable: 'yes' }] }), false);
+  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', taskId: 'task', title: 'Task', available: true, role: 'ordinary' }] }), false);
+  assert.equal(response(path, 'executionSessions')({ sessions: [{ sessionId: 'session', taskId: 'task', title: 'Task', available: false }] }), false);
+  const result = compile({ $ref: '#/components/schemas/AssistantCurrentResult' });
+  assert.equal(result({ version: 1, instructionRevision: 1, review: { verdict: 'passed' } }), false);
+  valid(request, { action: 'review' }); // Background memory review remains independent.
+});
+
+test('approval origins expose read-only Router and Worker links with scoped tool rechecks', () => {
+  valid(request, { action: 'approvalOrigins' });
+  valid(request, { action: 'approvalOrigins', sessionId: 'worker', toolName: 'assistant_external_action' });
+  for (const input of [{ action: 'executionApprovalOrigins', ownerSessionId: 'router' },
+    { action: 'approvalOrigins', toolName: 'assistant_external_action' },
+    { action: 'approvalOrigins', sessionId: '' },
+    { action: 'approvalOrigins', sessionId: 'worker', toolName: '' }]) assert.equal(request(input), false);
+  assert.equal(document.paths[path].post.responses['200']['x-action-schemas'].executionApprovalOrigins, undefined);
+  const validate = response(path, 'approvalOrigins');
+  valid(validate, { origins: [] });
+  const router = { kind: 'router', title: '主聊天', sourceTitle: '主聊天',
+    sessionId: 'router', ownerSessionId: 'router', ownerThreadId: 'main' };
+  const origin = { kind: 'worker', sourceTitle: '主聊天', taskId: 'task', title: '发送准备稿', assignmentId: 'assignment', runId: 'run',
+    sessionId: 'worker', ownerSessionId: 'router', ownerThreadId: 'main' };
+  valid(validate, { origins: [router, origin] });
+  assert.equal(validate({ origins: [{ ...origin, approvalToken: 'invented' }] }), false);
+  const { runId, ...missing } = origin;
+  assert.equal(validate({ origins: [missing] }), false);
+});
+
+test('task archive scope and direct history lookup share the original ledger contract', () => {
+  valid(request, { action: 'tasks', archived: false });
+  valid(request, { action: 'tasks', archived: true, limit: 2 });
+  valid(request, { action: 'tasks', taskId: 'closed-original' });
+  assert.equal(request({ action: 'tasks', archived: 'yes' }), false);
+  assert.equal(request({ action: 'tasks', taskId: '' }), false);
+  assert.equal(request({ action: 'tasks', limit: 1001 }), false);
+  const task = compile({ $ref: '#/components/schemas/AssistantTask' });
+  const original = { id: 'closed-original', status: 'completed', instructionRevision: 1, resultVersion: 1,
+    adjustmentOfTaskId: null, liveSummary: { goal: '检查文件', progress: '已交付', blocker: '', status: 'completed', updatedAt: '2026-11-09T00:00:00Z' } };
+  valid(task, { ...original, archived: true });
+  assert.equal(task({ ...original, archived: 'true' }), false);
+});

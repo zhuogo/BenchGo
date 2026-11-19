@@ -310,7 +310,9 @@ test('connecting relay timeout reports once, retries and closes without uncaught
   t.mock.timers.tick(10_000);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(errors, ['中继连接超时']);
-  assert.deepEqual(host.status(), { connected: false, lastError: '中继连接超时' });
+  const { checkedAt, ...status } = host.status();
+  assert.deepEqual(status, { connected: false, lastError: '中继连接超时' });
+  assert(Number.isFinite(checkedAt), 'a failed channel check records its observation time');
 
   const reconnect = once(stalled, 'connection');
   t.mock.timers.tick(1_000);

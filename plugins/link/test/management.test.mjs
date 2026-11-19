@@ -16,6 +16,10 @@ async function temporaryProfile(prefix) {
   return directory;
 }
 
+const changeRelay = (link, operation, node, fingerprint = link.status().relay.fingerprint) =>
+  link.admin({ action: 'relay-pool-configure', operation, expected: { fingerprint }, ...node });
+const verifiedRelay = async () => ({ ok: true });
+
 test('Link uses the base data directory and pairs without Harness aggregation or SuperAgent', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'link-base-only-'));
   await mkdir(join(directory, 'link'));
@@ -181,17 +185,17 @@ test('quick enable preserves settings and pairing uses suitable addresses withou
 test('owner relay configuration persists separately without returning credentials', async t => {
   const directory = await temporaryProfile('link-relay-save-');
   const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: () => () => {} } }, effect: fn => fn() };
-  let link = await mountLink(ctx, { directory, env: {} });
+  let link = await mountLink(ctx, { directory, env: {}, testRelayConnection: verifiedRelay });
   t.after(async () => { await link.close(); await rm(directory, { recursive: true, force: true }); });
   const token = 'owner-relay-credential-'.repeat(3);
-  await assert.rejects(link.admin({ action: 'relay-configure', url: 'http://relay.example', token }), /HTTPS/);
-  const value = await link.admin({ action: 'relay-configure', url: 'https://relay.example:48730', token, enabled: false });
+  await assert.rejects(changeRelay(link, 'add', { id: 'only', url: 'http://relay.example', token }), /HTTPS/);
+  const value = await changeRelay(link, 'add', { id: 'only', url: 'https://relay.example:48730', token, enabled: false });
   assert.equal(value.enabled, true);
   assert.equal(value.relay.configured, true);
   assert.equal(JSON.stringify(value).includes(token), false);
   const beforeTest = await readFile(join(directory, 'devices.json'), 'utf8');
   const tested = await link.admin({ action: 'relay-test', id: value.relay.nodes[0].id, url: 'http://invalid.example', token: '' });
-  assert.equal(tested.ok, false); assert.match(tested.message, /HTTPS/);
+  assert.equal(tested.ok, false); assert.match(tested.message, /重新输入主机密钥/);
   assert.equal(await readFile(join(directory, 'devices.json'), 'utf8'), beforeTest, 'relay test does not persist settings');
   await link.close(); link = await mountLink(ctx, { directory, env: { DSH_LINK_RELAY_URL: 'https://ignored.example' } });
   assert.equal(link.status().relay.url, 'https://relay.example:48730');
@@ -201,29 +205,67 @@ test('owner relay configuration persists separately without returning credential
 test('relay pool configuration persists ordered nodes and exposes only public route metadata', async t => {
   const directory = await temporaryProfile('link-relay-pool-');
   const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: () => () => {} } }, effect: fn => fn() };
-  const link = await mountLink(ctx, { directory, env: {} });
+  const link = await mountLink(ctx, { directory, env: {}, testRelayConnection: verifiedRelay });
   t.after(async () => { await link.close(); await rm(directory, { recursive: true, force: true }); });
   const token = 'relay-pool-token-'.repeat(3);
-  const value = await link.admin({ action: 'relay-pool-configure', nodes: [
-    { id: 'primary', url: 'https://relay-a.example:48730', token, priority: 0, enabled: false },
-    { id: 'backup', url: 'https://relay-b.example:48730', token, priority: 1, enabled: false },
-  ] });
+  await changeRelay(link, 'add', { id: 'primary', url: 'https://relay-a.example:48730', token, enabled: false });
+  const value = await changeRelay(link, 'add', { id: 'backup', url: 'https://relay-b.example:48730', token, enabled: false });
   assert.deepEqual(value.relay.nodes.map(node => node.id), ['primary', 'backup']);
   assert.equal(JSON.stringify(value).includes(token), false);
   const saved = JSON.parse(await readFile(join(directory, 'devices.json'), 'utf8'));
   assert.deepEqual(saved.relayPool.map(node => node.id), ['primary', 'backup']);
 });
 
+test('relay edits use CAS, verify changed credentials and keep unrelated channels alive', async t => {
+  const directory = await temporaryProfile('link-relay-edit-');
+  const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: () => () => {} } }, effect: fn => fn() };
+  const opened = [], closed = [], probed = [];
+  const first = { id: 'first', url: 'https://relay-one.example', token: 'first-credential' };
+  const backup = { id: 'backup', url: 'https://relay-two.example', token: 'backup-credential' };
+  const link = await mountLink(ctx, {
+    directory, env: {},
+    testRelayConnection: async node => { probed.push(node); return { ok: node.token !== 'invalid-credential', message: '中继拒绝认证' }; },
+    createRelayHost: async ({ relayUrl }) => {
+      opened.push(relayUrl);
+      return { status: () => ({ connected: true }), close: async () => { closed.push(relayUrl); } };
+    },
+  });
+  t.after(async () => { await link.close(); await rm(directory, { recursive: true, force: true }); });
+  await changeRelay(link, 'add', first);
+  const expected = link.status().relay.fingerprint;
+  await changeRelay(link, 'add', backup, expected);
+  await assert.rejects(changeRelay(link, 'update', { id: first.id, enabled: false }, expected), { code: 'REVISION_CONFLICT' });
+  await assert.rejects(changeRelay(link, 'add', { ...first, url: 'https://collision.example' }), /中继 ID 已存在/);
+  await assert.rejects(changeRelay(link, 'add', { ...first, id: 'duplicate' }), /中继地址已存在/);
+  await changeRelay(link, 'prefer', { id: backup.id });
+  assert.equal(link.status().relay.selectedId, backup.id);
+  assert.deepEqual(opened, [first.url, backup.url]); assert.deepEqual(closed, []);
+
+  const changedUrl = 'https://relay-changed.example';
+  await assert.rejects(changeRelay(link, 'update', { id: first.id, url: changedUrl }), /重新输入主机密钥/);
+  assert.equal((await link.admin({ action: 'relay-test', id: first.id, url: changedUrl })).ok, false);
+  assert.equal(probed.some(node => node.url === changedUrl), false);
+  await assert.rejects(changeRelay(link, 'update', { id: first.id, url: changedUrl, token: 'invalid-credential' }), /拒绝认证/);
+  assert.deepEqual(closed, []);
+  await changeRelay(link, 'update', { id: first.id, url: changedUrl, token: 'changed-credential' });
+  assert.deepEqual(closed, [first.url]);
+  assert.deepEqual(opened, [first.url, backup.url, changedUrl]);
+  await changeRelay(link, 'update', { id: backup.id, enabled: false });
+  assert.deepEqual(closed, [first.url, backup.url]);
+  assert.equal(link.status().relay.selectedId, first.id);
+});
+
 test('relay pool can be emptied after a node is disabled', async t => {
   const directory = await temporaryProfile('link-relay-delete-');
   const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: () => () => {} } }, effect: fn => fn() };
-  let link = await mountLink(ctx, { directory, env: {}, createRelayHost: async () => ({ status: () => ({ connected: true }), close: async () => {} }) });
+  let link = await mountLink(ctx, { directory, env: {}, testRelayConnection: verifiedRelay,
+    createRelayHost: async () => ({ status: () => ({ connected: true }), close: async () => {} }) });
   t.after(async () => { await link.close(); await rm(directory, { recursive: true, force: true }); });
   const node = { id: 'only', url: 'https://relay.example:48730', token: 'relay-delete-token', enabled: true };
-  await link.admin({ action: 'relay-pool-configure', nodes: [node] });
-  await assert.rejects(link.admin({ action: 'relay-pool-configure', nodes: [] }), /请先停用中继/);
-  await link.admin({ action: 'relay-pool-configure', nodes: [{ ...node, enabled: false }] });
-  const value = await link.admin({ action: 'relay-pool-configure', nodes: [] });
+  await changeRelay(link, 'add', node);
+  await assert.rejects(changeRelay(link, 'remove', { id: node.id }), /请先停用中继/);
+  await changeRelay(link, 'update', { id: node.id, enabled: false });
+  const value = await changeRelay(link, 'remove', { id: node.id });
   assert.deepEqual(value.relay.nodes, []);
   assert.equal(value.relay.enabled, false);
   assert.equal(value.relay.configured, false);
@@ -247,7 +289,7 @@ test('relay test reuses saved secrets without changing configuration', async t =
   const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: () => () => {} } }, effect: fn => fn() };
   const link = await mountLink(ctx, { directory, env: {}, relayTestOptions: { ca: identity.cert } });
   t.after(async () => { await link.close(); for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
-  await link.admin({ action: 'relay-pool-configure', nodes: [{ id: 'saved', url: `https://localhost:${server.address().port}`, token, enabled: false }] });
+  await changeRelay(link, 'add', { id: 'saved', url: `https://localhost:${server.address().port}`, token, enabled: false });
   const before = await readFile(join(directory, 'devices.json'), 'utf8');
   const tested = await link.admin({ action: 'relay-test', id: 'saved', token: '' });
   assert.equal(tested.ok, true); assert.match(tested.message, /HTTP\/2/); assert.equal(JSON.stringify(tested).includes(token), false);
@@ -277,15 +319,16 @@ test('old disabled profiles migrate to persistent connections and local names su
   assert.equal(JSON.parse(await readFile(join(directory, 'devices.json'), 'utf8')).enabled, true);
 });
 
-test('single relay configure registers its runtime state in the relay node list', async t => {
+test('relay add registers its runtime state and recent observation in the node list', async t => {
   const directory = await temporaryProfile('link-relay-node-state-');
   const ctx = { get: () => undefined, workspaceRegistry: { list: () => [] }, connection: { fetch: { register: () => () => {} } }, effect: fn => fn() };
-  const link = await mountLink(ctx, { directory, env: {} });
+  const link = await mountLink(ctx, { directory, env: {}, testRelayConnection: verifiedRelay });
   t.after(async () => { await link.close(); await rm(directory, { recursive: true, force: true }); });
   await link.admin({ action: 'configure', enabled: true, host: '127.0.0.1', port: 0 });
-  await link.admin({ action: 'relay-configure', url: 'https://127.0.0.1:1', token: 'relay-secret', enabled: true });
+  await changeRelay(link, 'add', { id: 'primary', url: 'https://127.0.0.1:1', token: 'relay-secret', enabled: true });
   for (let index = 0; index < 50 && !link.status().relay.nodes[0].lastError; index++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(link.status().relay.nodes[0].lastError, /ECONNREFUSED/);
+  assert.equal(typeof link.status().relay.nodes[0].checkedAt, 'number');
 });
 
 test('relay status and pairing select the same connected enabled node by priority after reload', async t => {
@@ -299,16 +342,16 @@ test('relay status and pairing select the same connected enabled node by priorit
       return { status: () => states.get(relayUrl), async close() { states.set(relayUrl, { connected: false, lastError: null }); } };
     },
   };
-  let link = await mountLink(ctx, config);
-  t.after(async () => { await link.close(); await rm(directory, { recursive: true, force: true }); });
-  await link.admin({ action: 'configure', enabled: true, host: '127.0.0.1', port: 0, publicUrl: 'https://direct.example' });
   const nodes = [
     { id: 'disabled', url: 'https://disabled.example', token: 'relay-secret', priority: -1, enabled: false },
     { id: 'first', url: 'https://first.example', token: 'relay-secret', priority: 0, enabled: true },
     { id: 'backup', url: 'https://backup.example', token: 'relay-secret', priority: 20, enabled: true },
     { id: 'preferred', url: 'https://preferred.example', token: 'relay-secret', priority: 10, enabled: true },
   ];
-  await link.admin({ action: 'relay-pool-configure', nodes });
+  await writeFile(join(directory, 'devices.json'), JSON.stringify({ host: '127.0.0.1', port: 0, publicUrl: 'https://direct.example', relayPool: nodes }));
+  let link = await mountLink(ctx, config);
+  t.after(async () => { await link.close(); await rm(directory, { recursive: true, force: true }); });
+  await link.admin({ action: 'configure', enabled: true, host: '127.0.0.1', port: 0, publicUrl: 'https://direct.example' });
   await link.close();
   states.clear();
   link = await mountLink(ctx, config);
@@ -325,6 +368,10 @@ test('relay status and pairing select the same connected enabled node by priorit
   assert.equal(new URL(fallback.webUrl).origin, nodes[2].url);
   connected(nodes[3].url);
   assert.equal(link.status().relay.url, nodes[3].url, 'configuration priority wins over list order');
+  assert.equal(link.status().relay.preferredId, 'first');
+  assert.equal(link.status().relay.selectedId, 'preferred');
+  assert.equal((await link.admin({ action: 'pairing', mode: 'relay', relayId: 'backup' })).url, nodes[2].url);
+  await assert.rejects(link.admin({ action: 'pairing', mode: 'relay', relayId: 'first' }), /尚未连接/);
   assert.equal((await link.admin({ action: 'pairing', mode: 'relay' })).url, nodes[3].url);
   connected(nodes[1].url);
   assert.equal(link.status().relay.url, nodes[1].url);

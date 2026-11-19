@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createNotificationSound, createNotificationFactGate, notificationKeys } from '../client/notification-sound.mjs';
-import { AgentFeed } from '../../voice/client/agent-feed.mjs';
+import { AgentFeed } from '../../media/client/agent-feed.mjs';
 import { mountReplySound } from '../client/notification-sound-runtime.mjs';
 
 function fixture(options = {}) {

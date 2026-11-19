@@ -25,6 +25,7 @@ import { installExecutionSummaryStore } from './execution-summary-store.mjs';
 import { redactExecutionText } from './execution-summary-input.mjs';
 import { hasSavedCompletion } from './execution-uncertainty.mjs';
 import { initializeOwnerHostId, installRemoteExecutionStore, initializeRemoteExecutionFacts } from './remote-execution-store.mjs';
+import { usesExternalWorker } from './work-role-policy.mjs';
 
 const json = value => JSON.stringify(value);
 const parse = value => JSON.parse(value);
@@ -193,7 +194,7 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
       const existing = db.prepare('SELECT task_id FROM sa_task_triggers WHERE trigger_id=? LIMIT 1').get(triggerId);
       if (existing && input.allowSharedDesktopSource !== true) throw Object.assign(fail('TRIGGER_ALREADY_ASSIGNED', 'A Trigger can open only one Task'), { taskId: existing.task_id });
     }
-    const target = String(input.target || ''), acceptance = input.acceptance ?? input.mandate.acceptance ?? target;
+    const target = String(input.target || ''), acceptance = input.acceptance ?? input.mandate.acceptance ?? '';
     if (typeof acceptance !== 'string') throw new Error('Task acceptance must be text');
     const mandate = { ...input.mandate, target, acceptance };
     db.prepare('INSERT INTO sa_tasks(id,thread_id,title,target,acceptance,status,mandate,created_by_decision,created_at,updated_at,result_version) VALUES (?,?,?,?,?,?,?,?,?,?,0)')
@@ -459,6 +460,8 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         const task = api.getTask(taskId);
         if (!task) throw fail('TASK_NOT_FOUND', 'Task does not exist');
         if (task.status === 'completed' || taskStopped(task)) return task;
+        if (usesExternalWorker(api, task))
+          throw fail('NATIVE_WORKER_CONTROL_UNSUPPORTED', '此外部 Harness 暂无可核实的暂停边界，可使用停止');
         if (triggerId) api.recordTaskInputInTransaction({ taskId, triggerId, kind: 'pause', idempotencyKey: inputKey ?? `trigger:${triggerId}` });
         // Pausing also withdraws delayed recovery intent in this transaction;
         // a later scheduler tick must not revive work the user just paused.

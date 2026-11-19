@@ -182,11 +182,12 @@ test('active path is public runtime state, never persisted and cleared at restar
   const registry = await openDeviceRegistry(directory);
   const device = await registry.upsert({ ...target, name: '电脑', currentPath: 'relay' });
   assert.equal(device.currentPath, null, 'input cannot claim an active connection');
-  registry.markRoute(device.id, 'direct');
+  registry.markRoute(device.id, { kind: 'direct' });
   assert.equal(registry.publicDevice(registry.get(device.id)).currentPath, 'direct');
-  registry.markRoute(device.id, 'relay');
+  registry.markRoute(device.id, { ...relay, relayId: 'backup' });
   assert.equal(registry.list().devices[1].currentPath, 'relay');
-  assert.throws(() => registry.markRoute(device.id, 'unknown'));
+  assert.equal(registry.list().devices[1].currentRelayId, 'backup');
+  assert.throws(() => registry.markRoute(device.id, { kind: 'unknown' }));
   await registry.rename(device.id, '改名');
   const file = join(directory, 'connections.json'), persisted = JSON.parse(await readFile(file, 'utf8'));
   assert.equal(Object.hasOwn(persisted.devices[0], 'currentPath'), false);
@@ -196,6 +197,25 @@ test('active path is public runtime state, never persisted and cleared at restar
   assert.equal(restored.list().devices[1].currentPath, null);
   await restored.rename(device.id, '再次改名');
   assert.equal((await readFile(file, 'utf8')).includes('currentPath'), false);
+});
+
+test('workbench admission falls back on service unavailability but stops on authorization failures', async () => {
+  const first = { ...relay, relayId: 'primary', priority: 0 };
+  const second = { ...relay, url: 'https://backup.test', relayId: 'backup', priority: 1 };
+  const saved = { ...target, routes: [first, second] };
+  const checked = [];
+  const selected = await selectRoute(saved, { probe: async () => {}, accept: async (_, route) => {
+    checked.push(route.relayId);
+    if (route === undefined || route.relayId === 'primary') throw Object.assign(new Error('bad gateway'), { status: 502 });
+  } });
+  assert.equal(selected.url, second.url);
+  assert.deepEqual(checked, ['primary', 'backup']);
+  checked.length = 0;
+  await assert.rejects(selectRoute(saved, { probe: async () => {}, accept: async (_, route) => {
+    checked.push(route.relayId);
+    throw Object.assign(new Error('expired authorization'), { status: 401 });
+  } }), { status: 401 });
+  assert.deepEqual(checked, ['primary']);
 });
 
 test('trust errors, HTTP authorization errors and cancellation never downgrade routes', async () => {

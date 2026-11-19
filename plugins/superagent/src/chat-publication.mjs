@@ -1,5 +1,5 @@
 import { channelMessageRecordOf, channelMessageRecordType } from './channel-session-record.mjs';
-import { chatPublicationRecordOf, hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../benchgo/shared/public-chat-record.mjs';
+import { chatPublicationRecordOf, hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../base/shared/public-chat-record.mjs';
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { fallbackRequestIds, readModelFallbacks, modelFallbackType } from './model-fallback.mjs';
 import { questionBatch, questionAnswers, questionReplyText, readQuestionReply } from './question-reply.mjs';

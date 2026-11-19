@@ -8,10 +8,18 @@ import { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import * as NativeToolExecutor from '../../../deepseek-harness/packages/core/tool-executor-native/lib/index.js';
 import * as plugin from '../src/plugin.mjs';
 import { Commander } from '../src/runtime.mjs';
+import { encodeRouteModelId } from '../../base/src/picker-catalog.mjs';
+import { fixtureRoute, fixtureRouteService, fixtureInstaller } from './fixtures/api-route.mjs';
 
 function loadHarness(ctx, directory) {
   ctx.provide('benchgo', { directory, config: {} });
-  ctx.provide('benchgoTooling', {});
+  ctx.provide('benchgoTooling', {
+    installer: fixtureInstaller,
+    routeService: fixtureRouteService,
+    pickerCatalog: { async models(tool) {
+      return tool === 'codex' ? [{ provider: 'commander-codex', id: encodeRouteModelId('test-api', 'test/model'), name: 'API Test', inputModalities: ['text'] }] : [];
+    } },
+  });
   return ctx.plugin(plugin);
 }
 
@@ -53,14 +61,14 @@ test('actual Cordis loads/unloads the service and tools; conversations cannot ac
     assert.ok(tools.has('commander_create'));
     assert.equal(tools.has('commander_approve'), false);
     const exec = { signal: new AbortController().signal, agent: { session: { id: 'owner' } } };
-    await assert.rejects(tools.get('commander_create').execute({ provider: 'codex', cwd: directory }, exec), /approval service/);
+    await assert.rejects(tools.get('commander_create').execute({ provider: 'codex', cwd: directory }, exec), /explicit API model/);
     ctx.commander.providers.set('test', { async connect() { return { nativeId: 'native', close: async () => {} }; } });
-    const { id } = await ctx.commander.create({ provider: 'test' });
+    const { id } = await ctx.commander.create({ provider: 'test', route: fixtureRoute() });
     ctx.commander.get(id).ownerSessionId = 'someone-else';
     await assert.rejects(tools.get('commander_events').execute({ id }, exec), /different Harness session/);
     assert.deepEqual(await tools.get('commander_sessions').execute({}, exec), { sessions: [] });
     const catalog = await tools.get('commander_providers').execute({}, exec);
-    assert.equal(catalog.providers.length, 9);
+    assert.equal(catalog.providers.length, 8);
   } finally {
     await ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true });
   }
@@ -100,16 +108,16 @@ test('native permissions and questions go to human services associated with the 
     }());
     const agent = { session: { id: 'owner' } };
     const exec = { agent, callId: 'human-test', signal: new AbortController().signal };
-    const session = await tools.get('commander_create').execute({ provider: 'codex', cwd: directory }, exec);
+    const session = await tools.get('commander_create').execute({ provider: 'codex', cwd: directory, ...fixtureRoute() }, exec);
     assert.deepEqual(await ctx.commander.ask(session.id, { kind: 'permission', method: 'bash', details: { command: 'echo safe' } }), { allow: true });
     const reply = await ctx.commander.ask(session.id, { kind: 'question', details: { questions: [{ id: 'q1', question: 'Pick', options: [{ label: 'B' }] }] } });
     assert.deepEqual(reply, { allow: false, answers: { q1: { answers: ['B'] } } });
-    assert.equal(grants.length, 2); assert.equal(questions.length, 1);
-    assert.equal(grants[1].agent, agent); assert.equal(questions[0].agent, agent);
+    assert.equal(grants.length, 1); assert.equal(questions.length, 1);
+    assert.equal(grants[0].agent, agent); assert.equal(questions[0].agent, agent);
   } finally { await ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('official Full launches native agents without a redundant never-policy approval; explicit lower settings and missing owners remain authoritative', async () => {
+test('API-backed native launches use Full even for workbench owners with a lower policy', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'commander-full-owner-'));
   const ctx = new Context(), tools = new Map(), grants = [], connects = [], sent = [];
   const agent = { session: { id: 'owner', header: { cwd: directory } } }, agents = new Map([['owner', agent]]);
@@ -125,14 +133,14 @@ test('official Full launches native agents without a redundant never-policy appr
       async connect(session) { connects.push(session); return { nativeId: session.id, async setPermission() {}, async submit(text) { sent.push(text); }, async close() {} }; }
     }());
     const exec = { agent, signal: new AbortController().signal, callId: 'launch' };
-    const first = await tools.get('commander_create').execute({ provider: 'codex', cwd: directory }, exec);
+    const first = await tools.get('commander_create').execute({ provider: 'codex', cwd: directory, ...fixtureRoute() }, exec);
     assert.equal(grants.length, 0); assert.deepEqual(connects[0].permission, permission);
     permission = { sandbox: 'workspace-write', approval: 'ask' };
-    await tools.get('commander_create').execute({ provider: 'codex', cwd: directory }, exec);
-    assert.equal(grants.length, 1); assert.deepEqual(connects[1].permission, permission);
+    await tools.get('commander_create').execute({ provider: 'codex', cwd: directory, ...fixtureRoute() }, exec);
+    assert.equal(grants.length, 0); assert.deepEqual(connects[1].permission, { sandbox: 'danger-full-access', approval: 'never' });
     agents.delete('owner');
-    await assert.rejects(ctx.commander.submit(first.id, 'must not run'), /找不到.*父会话/);
-    assert.deepEqual(sent, []);
+    await ctx.commander.submit(first.id, 'run');
+    assert.deepEqual(sent, ['run']);
   } finally { await ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -147,8 +155,8 @@ test('full Commander composition registers native engines in the official model 
     await ctx.plugin(LlmRuntime);
     const fiber = loadHarness(ctx, directory); await fiber;
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(ctx.llm.listProviders().map(p => p.id).sort(), ['commander-claude', 'commander-codex', 'commander-gemini', 'commander-grok', 'commander-hermes', 'commander-mcode', 'commander-opencode', 'commander-pi']);
-    assert.equal((await ctx.llm.listModels('commander-codex'))[0].id, 'native-default');
+    assert.deepEqual(ctx.llm.listProviders().map(p => p.id).sort(), ['commander-claude', 'commander-codex', 'commander-gemini', 'commander-grok', 'commander-mcode', 'commander-opencode', 'commander-pi']);
+    assert.equal((await ctx.llm.listModels('commander-codex'))[0].id, encodeRouteModelId('test-api', 'test/model'));
     await fiber.dispose();
     assert.deepEqual(ctx.llm.listProviders(), []);
   } finally { await ctx.fiber.dispose(); await rm(directory, { recursive: true, force: true }); }

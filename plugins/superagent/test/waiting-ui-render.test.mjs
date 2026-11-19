@@ -5,12 +5,12 @@ import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const webRequire = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = webRequire('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
 // Render production components. Only service responses and the host session boundary are fixtures.
@@ -26,7 +26,7 @@ async function fixture() {
       import { AssistantConversation } from './plugins/superagent/client/conversation.jsx';
       import { AssistantHome } from './plugins/superagent/client/home.jsx';
       import css from './plugins/superagent/client/style.css';
-      import hostCss from './plugins/benchgo/client/style.css';
+      import hostCss from './plugins/base/client/style.css';
       const root = createRoot(document.getElementById('root')); let serial = 0;
       window.renderScenario = (surface, state='data', overrides={}) => {
         window.calls=[];
@@ -67,7 +67,7 @@ async function fixture() {
       };
     ` },
     bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-waiting-test-output'), format: 'iife', jsx: 'automatic',
-    nodePaths: [join(root, 'plugins/benchgo/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
+    nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     alias: { react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'),
       '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts') },

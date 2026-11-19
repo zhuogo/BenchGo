@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, KeyObject, verify } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { validateReleaseManifest, compareVersions } from '../../plugins/benchgo/shared/update-feed.mjs';
+import { validateReleaseManifest, compareVersions } from '../../plugins/base/shared/update-feed.mjs';
 
 export const repository = 'zhuogo/BenchGo';
 export const releaseKind = 'benchgo-unified-release';
@@ -36,7 +36,7 @@ export async function readSignedRelease(release, { publicKey } = {}) {
   const byName = name => release.assets?.find(asset => asset.name === name);
   const raw = await assetBytes(byName('benchgo-update.json'));
   const signature = await assetBytes(byName('benchgo-update.json.sig'), { maxBytes: 4096 });
-  const supplied = publicKey ?? await readFile(new URL('../../plugins/benchgo/shared/update-public-key.pem', import.meta.url));
+  const supplied = publicKey ?? await readFile(new URL('../../plugins/base/shared/update-public-key.pem', import.meta.url));
   const trusted = supplied instanceof KeyObject && supplied.type === 'public' ? supplied : createPublicKey(supplied);
   if (!verify(null, raw, trusted, Buffer.from(signature.toString('utf8').trim(), 'base64'))) throw new Error('Previous release signature is invalid');
   const manifest = validateReleaseManifest(JSON.parse(raw.toString('utf8')));

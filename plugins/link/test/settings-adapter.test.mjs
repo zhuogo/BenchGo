@@ -7,7 +7,7 @@ import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { mountLink } from '../src/index.mjs';
 import { createLinkSettingsAdapter, LINK_TRANSPORT_NAMESPACE, LINK_RELAY_NAMESPACE } from '../src/settings-adapter.mjs';
-import { createSettingsManagement } from '../../benchgo/src/settings-management.mjs';
+import { createSettingsManagement } from '../../base/src/settings-management.mjs';
 
 const actor = { kind: 'owner', id: 'link-settings-test', confirm: async plan => ({ outcome: 'allowed-once', digest: plan.digest }) };
 const ref = namespace => ({ adapterId: 'benchgo-link', namespace });
@@ -25,7 +25,8 @@ async function fixture(t) {
       callback({ get: name => name === 'benchgoSettings' ? manager : undefined, effect: fn => { const dispose = fn(); disposals.push(dispose); return dispose; } });
     },
   };
-  let link = await mountLink(ctx, { directory, env: {}, createRelayHost: async () => ({ close: async () => {}, status: () => ({ connected: true }) }) });
+  let link = await mountLink(ctx, { directory, env: {}, testRelayConnection: async () => ({ ok: true }),
+    createRelayHost: async () => ({ close: async () => {}, status: () => ({ connected: true }) }) });
   await manager.flush();
   t.after(async () => { for (const dispose of disposals) dispose(); await manager.close(); await link.close(); await rm(directory, { recursive: true, force: true }); });
   return { directory, link, manager, routes, adapter: createLinkSettingsAdapter(link), async reload() {
@@ -87,7 +88,8 @@ test('Link failed listener changes restore the prior configuration and continue 
 
 test('Link relay public fields share the native pool and secrets remain blocked and absent from audit', async t => {
   const { manager, link, adapter } = await fixture(t), token = 'private-link-secret-123';
-  await link.admin({ action: 'relay-pool-configure', nodes: [{ id: 'primary', url: 'https://relay.example', token, priority: 0, enabled: false }] });
+  await link.admin({ action: 'relay-pool-configure', operation: 'add', expected: { fingerprint: link.status().relay.fingerprint },
+    id: 'primary', url: 'https://relay.example', token, enabled: false });
   await manager.flush();
   const current = await manager.read(ref(LINK_RELAY_NAMESPACE));
   assert.equal(JSON.stringify(current).includes(token), false);
@@ -99,4 +101,5 @@ test('Link relay public fields share the native pool and secrets remain blocked 
   assert.equal(JSON.stringify(manager.history(ref(LINK_RELAY_NAMESPACE))).includes(token), false);
   const snapshot = await adapter.read(LINK_RELAY_NAMESPACE);
   await assert.rejects(adapter.apply(LINK_RELAY_NAMESPACE, { ops: [{ op: 'set', path: ['nodes', '0', 'token'], value: 'replacement' }], expected: { fingerprint: snapshot.fingerprint } }), { code: 'SETTINGS_PATH_BLOCKED' });
+  await assert.rejects(adapter.apply(LINK_RELAY_NAMESPACE, { ops: [{ op: 'set', path: ['nodes', '0', 'url'], value: 'https://replacement.example' }], expected: { fingerprint: snapshot.fingerprint } }), { code: 'SETTINGS_PATH_BLOCKED' });
 });

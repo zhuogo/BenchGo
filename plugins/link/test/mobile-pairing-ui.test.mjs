@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { deviceName, rememberDeviceName } from '../client/pairing-state.mjs';
 
-const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
+const require = createRequire(new URL('../../base/package.json', import.meta.url));
 const source = await readFile(new URL('../client/pairing.jsx', import.meta.url), 'utf8');
 const code = require('esbuild').transformSync(source, { loader: 'jsx', format: 'cjs' }).code;
 const nodes = value => value && typeof value === 'object' ? [value, ...(value.children || []).flatMap(nodes)] : [];

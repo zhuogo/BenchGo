@@ -11,12 +11,12 @@ import { PiProvider } from './providers/pi.mjs';
 import { OpenCodeProvider } from './providers/opencode.mjs';
 import { normalizeCommand } from './commands.mjs';
 import { acpProviderClasses, ACP_TOOL_DEFAULTS } from './providers/acp.mjs';
-import { prepareDefaultDataDirectory } from '../../benchgo/src/data-directory.mjs';
+import { prepareDefaultDataDirectory } from '../../base/src/data-directory.mjs';
 import { fullNativePermission, isFullNativePermission, nativePermission, nativePermissionError } from './permissions.mjs';
 
 const copy = value => JSON.parse(JSON.stringify(value));
 const terminal = new Set(['idle', 'failed', 'disconnected', 'closed']);
-export const providerClasses = { codex: CodexProvider, claude: ClaudeProvider, pi: PiProvider, opencode: OpenCodeProvider, ...acpProviderClasses };
+export const providerClasses = { codex: CodexProvider, claude: ClaudeProvider, pi: PiProvider, opencode: OpenCodeProvider, gemini: acpProviderClasses.gemini, grok: acpProviderClasses.grok, mcode: acpProviderClasses.mcode };
 
 export class Commander extends EventEmitter {
   constructor({ dataDir, providers = {}, approvalTimeout = 120_000, eventLimit = 2000, routeService } = {}) {
@@ -33,6 +33,8 @@ export class Commander extends EventEmitter {
     this.removals = new Map();
     this.archiving = new Set();
     this.interruptedTurns = new Map();
+    this.executionHandlers = new Map();
+    this.preparingExecutions = new Map();
   }
 
   async open() {
@@ -47,7 +49,6 @@ export class Commander extends EventEmitter {
           }
         }
         record.status = record.archived ? 'closed' : 'disconnected';
-        if (!record.route) record.routeMode = 'native-unbound';
         record.pendingApprovals = [];
         this.sessions.set(record.id, record);
       }
@@ -69,22 +70,22 @@ export class Commander extends EventEmitter {
   catalog() { return [...this.providers].map(([name, provider]) => ({ name, capabilities: provider.constructor.capabilities })); }
   async providerConfig(name, session) {
     const base = this.providers.get(name)?.config ?? {};
-    const installed = this.toolInstaller ? await this.toolInstaller.resolveLaunch(name) : null;
-    // Reconnecting never reads mutable tool defaults or global applied profiles.
+    const installed = base.command ? { command: base.command, args: base.commandArgs ?? [] } : await this.toolInstaller?.resolveLaunch(name);
     const route = session?.route;
     if (route && !this.routeService) throw new Error('会话绑定服务不可用，拒绝回退到本机配置。');
     const launch = route ? await this.routeService.launch({ tool: name, route, sessionId: session.id }) : {};
-    const profile = launch.managedProfile;
-    return { ...base, ...(installed && !base.command ? { command: name === 'claude' && installed.args.length ? installed.args[0] : installed.command, commandArgs: name === 'claude' ? [] : installed.args } : {}),
-      ...(ACP_TOOL_DEFAULTS[name] ? { args: base.args ?? installed?.args ?? base.commandArgs ?? [] } : {}),
-      ...launch, commandArgs: [...(base.commandArgs ?? (name === 'claude' ? [] : installed?.args) ?? []), ...(launch.commandArgs ?? [])],
-      env: { ...(!base.command ? installed?.env : {}), ...base.env, ...launch.env }, ...(profile?.configured ? { managedProfile: profile } : {}) };
+    if (!installed) throw Object.assign(new Error(`${name} CLI is not installed or cannot be launched`), { code: 'TOOL_UNAVAILABLE' });
+    return { ...base, ...launch, command: installed.command, commandArgs: [...(installed.args ?? []), ...(launch.commandArgs ?? [])],
+      args: [...(installed.args ?? []), ...(base.args ?? [])],
+      env: { ...installed.env, ...base.env, ...launch.env },
+    };
   }
+  async advancedConfig(tool) { return await this.runtimeSettings?.get(tool) ?? {}; }
   async permissionFor(session) {
     const selected = await this.resolvePermission?.(copy(session));
     let permission = selected !== undefined ? nativePermission(selected) : session.permission ? nativePermission(session.permission) : undefined;
     if (!permission && session.parentId) permission = await this.permissionFor(this.get(session.parentId));
-    if (!permission && !session.parentId && !session.nativeId && !session.nativeEstablished) permission = { ...fullNativePermission };
+    if (!permission && (session.executionId || !session.parentId && !session.nativeId && !session.nativeEstablished)) permission = { ...fullNativePermission };
     if (permission && !isFullNativePermission(permission) && !this.providers.get(session.provider)?.constructor.capabilities?.permissions) throw nativePermissionError(`${session.provider} 原生适配器无法精确同步 ${permission.sandbox} + ${permission.approval} 权限，请使用支持此限制的 Codex 或官方 API 会话。`);
     return permission;
   }
@@ -101,12 +102,11 @@ export class Commander extends EventEmitter {
   async doctor() {
     const run = promisify(execFile);
     return Promise.all([...this.providers].map(async ([name, provider]) => {
-      const config = await this.providerConfig(name);
-      const command = config.command ?? ACP_TOOL_DEFAULTS[name]?.command ?? (name === 'claude' ? 'claude' : name);
       try {
-        const { stdout } = await run(command, [...(config.commandArgs ?? []), '--version'], { env: { ...process.env, ...config.env }, timeout: 8000, maxBuffer: 32_768, windowsHide: true });
-        return { name, available: true, version: stdout.trim().slice(0, 200), login: 'not-checked' };
-      } catch (error) { return { name, available: false, error: error.code === 'ENOENT' ? 'not-installed' : 'version-check-failed', login: 'not-checked' }; }
+        const config = await this.providerConfig(name);
+        const { stdout } = await run(config.command, [...(config.commandArgs ?? []), '--version'], { env: { ...process.env, ...config.env }, timeout: 8000, maxBuffer: 32_768, windowsHide: true });
+        return { name, available: true, version: stdout.trim().slice(0, 200) };
+      } catch (error) { return { name, available: false, error: ['ENOENT', 'TOOL_UNAVAILABLE'].includes(error.code) ? 'not-installed' : 'version-check-failed' }; }
     }));
   }
   persist() {
@@ -116,7 +116,7 @@ export class Commander extends EventEmitter {
 
   event(id, type, data = {}) {
     const session = this.get(id);
-    if (type === 'turn.started' && session.status !== 'closed') session.status = session.pendingApprovals.length ? 'waiting' : 'running';
+    if (type === 'turn.started' && session.status !== 'closed' && session.status !== 'waiting') session.status = 'running';
     if (type === 'turn.completed') {
       session.status = data.status === 'failed' ? 'failed' : 'idle';
       this.denyPending(id);
@@ -142,34 +142,91 @@ export class Commander extends EventEmitter {
     return copy({ events: selected, cursor: selected.at(-1)?.seq ?? after, latest: session.cursor, truncated: after < first - 1 });
   }
 
-  async create({ provider, cwd, model, parentId, nativeId, ownerSessionId, projectId, title, route, nativeMode = false } = {}) {
+  async create({ id, provider, cwd, parentId, ownerSessionId, projectId, title, route, executionId, executionMetadata, delegationRequestId, delegationFingerprint, parentTurnId } = {}) {
     this.healthy();
     if (!this.providers.has(provider)) throw new Error(`Unknown provider: ${provider}`);
+    if (!route) throw new Error('An explicit API provider and model are required');
     if (parentId) this.get(parentId);
-    if (nativeId && [...this.sessions.values()].some(s => s.provider === provider && s.nativeId === nativeId && this.drivers.has(s.id))) throw new Error('Native session already owned by BenchGo');
-    if (route && nativeId) throw new Error('不能为已有原生会话自动绑定隔离供应商，请新建会话。');
-    if (nativeMode && route) throw new Error('原生配置模式不能同时指定托管供应商。');
-    if (!nativeMode && !nativeId && this.routeService && this.toolProfiles?.list) {
-      const defaults = (await this.toolProfiles.list({ includeNative: false })).defaults;
-      const selected = Array.isArray(defaults) ? defaults.find(item => item.tool === provider) : defaults?.[provider];
-      if (!route && selected) route = { ...selected, ...(model !== undefined ? { model } : {}) };
-      else if (route && route.quickSettings === undefined && selected?.quickSettings) route = { ...route, quickSettings: selected.quickSettings };
-    }
-    if (route && !this.routeService) throw new Error('会话绑定服务不可用');
-    const binding = route ? await this.routeService.capture({ ...route, tool: provider, model: route.model ?? model }) : undefined;
+    if (typeof route.model !== 'string' || !route.model) throw new Error('An explicit API model selection is required');
+    if (!this.routeService) throw new Error('会话绑定服务不可用');
+    const binding = route.fingerprint ? copy(route) : await this.routeService.capture({ ...route, tool: provider });
     const session = {
-      ...(binding ? { route: binding, routeMode: binding.mode } : { routeMode: 'native-unbound' }),
-      id: randomUUID(), provider, cwd: await workingDirectory(cwd), ...((binding?.model ?? model) ? { model: binding?.model ?? model } : {}),
-      ...(parentId ? { parentId } : {}), ...(nativeId ? { nativeId } : {}),
+      route: binding, routeMode: binding.mode,
+      id: id ?? randomUUID(), provider, cwd: await workingDirectory(cwd), model: binding.model,
+      ...(parentId ? { parentId } : {}),
       ...(ownerSessionId ? { ownerSessionId } : {}),
+      ...(executionId ? { executionId, executionMetadata: copy(executionMetadata ?? {}) } : {}),
+      ...(delegationRequestId ? { delegationRequestId, delegationFingerprint, parentTurnId } : {}),
       ...(projectId ? { projectId } : {}), ...(title ? { title: String(title).slice(0, 120) } : {}),
       status: 'disconnected', archived: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       cursor: 0, events: [], receipts: {}, pendingApprovals: [], nativeEstablished: false,
     };
+    if (executionId && [...this.sessions.values()].some(record => record.executionId === executionId)) throw new Error('Execution already owns a Commander session');
+    if (this.sessions.has(session.id)) throw new Error('Requested BenchGo sessionId already exists');
     this.sessions.set(session.id, session);
     await this.persist();
     await this.connect(session.id);
     return this.snapshot(session.id);
+  }
+
+  executionSession(executionId) {
+    if (typeof executionId !== 'string' || !executionId) throw new Error('Invalid executionId');
+    const session = [...this.sessions.values()].find(row => row.executionId === executionId);
+    return session ? this.snapshot(session.id) : undefined;
+  }
+
+  async prepareExecution({ executionId, sessionId, provider, cwd, route, projectId, title, metadata, advancedConfig } = {}) {
+    this.healthy();
+    if (typeof executionId !== 'string' || !executionId || executionId.length > 200) throw new Error('Invalid executionId');
+    if (!sessionId || !/^[a-f0-9-]{36}$/iu.test(sessionId)) throw new Error('A stable BenchGo sessionId is required');
+    route = { ...route, ...(advancedConfig === undefined ? {} : { advancedConfig }) };
+    if (!route || typeof route.providerId !== 'string' || !route.providerId || typeof route.model !== 'string' || !route.model) throw new Error('An explicit API provider and model are required');
+    const normalizedCwd = await workingDirectory(cwd);
+    const previous = this.preparingExecutions.get(executionId);
+    const preparation = (async () => {
+      await previous?.catch(() => {});
+      const existing = [...this.sessions.values()].find(row => row.executionId === executionId);
+      if (existing) {
+        const same = existing.id === sessionId && existing.provider === provider && existing.cwd === normalizedCwd && existing.projectId === projectId
+          && existing.route?.providerId === route.providerId && existing.route?.model === route.model
+          && (route.fingerprint ? existing.route?.fingerprint === route.fingerprint
+            : route.advancedConfig === undefined || JSON.stringify(existing.route?.advancedConfig ?? {}) === JSON.stringify(route.advancedConfig));
+        if (!same) throw new Error('Execution binding changed; start a new execution identity');
+        if (['disconnected', 'closed', 'connecting'].includes(existing.status) ||
+            existing.status === 'failed' && !Object.keys(existing.receipts).length) await this.connect(existing.id);
+        return this.snapshot(existing.id);
+      }
+      return this.create({ id: sessionId, executionId, executionMetadata: metadata, provider, cwd: normalizedCwd,
+        projectId, title, ownerSessionId: `commander-execution:${executionId}`, route });
+    })();
+    this.preparingExecutions.set(executionId, preparation);
+    try { return await preparation; }
+    finally { if (this.preparingExecutions.get(executionId) === preparation) this.preparingExecutions.delete(executionId); }
+  }
+
+  registerExecutionHandler(sessionId, handler) {
+    if (!this.get(sessionId).executionId || typeof handler !== 'function') throw new Error('Execution handler requires a Worker-owned Commander session');
+    this.executionHandlers.set(sessionId, handler);
+    return () => {
+      if (this.executionHandlers.get(sessionId) !== handler) return;
+      this.executionHandlers.delete(sessionId);
+      this.denyPending(sessionId);
+    };
+  }
+
+  async stopExecution(id) {
+    const session = this.get(id);
+    if (this.connecting.has(id)) await this.connecting.get(id);
+    if (!session.turnId && session.status === 'idle') return this.snapshot(id);
+    if (['running', 'waiting'].includes(session.status)) {
+      await this.interrupt(id);
+      await this.wait(id, { timeout: 60_000 });
+    }
+    if (!session.events.some(event => event.turnId === session.turnId && event.type === 'turn.completed' &&
+        ['interrupted', 'cancelled', 'completed'].includes(event.data.status))) {
+      throw Object.assign(new Error('Native stop has not been confirmed'), { code: 'NATIVE_STOP_UNVERIFIED' });
+    }
+    return this.snapshot(id);
   }
 
   async connect(id) {
@@ -189,6 +246,7 @@ export class Commander extends EventEmitter {
   async connectInternal(id) {
     const session = this.get(id);
     if (session.archived) throw new Error('Unarchive session before connecting');
+    if (!session.route) throw Object.assign(new Error('Session does not have an explicit API binding'), { code: 'SESSION_ROUTE' });
     if ((session.nativeEstablished ?? (session.cursor > 0 && !(session.events.length === session.cursor && session.events.every(event => event.type === 'session.error')))) && !session.nativeId) throw new Error('No durable native handle; refusing to create a replacement session');
     if (session.nativeId && [...this.sessions.values()].some(s => s.id !== id && s.provider === session.provider && s.nativeId === session.nativeId && (this.drivers.has(s.id) || this.connecting.has(s.id)))) throw new Error('Native session already owned by BenchGo');
     session.status = 'connecting';
@@ -197,7 +255,7 @@ export class Commander extends EventEmitter {
     const current = () => this.generations.get(id) === generation && !this.closing && session.status !== 'closed';
     let failed;
     const host = {
-      ...(this.delegationBridge ? { delegation: this.delegationBridge.forSession(id), delegate: args => { if (!current()) throw new Error('Native connection was released'); return this.delegate(id, args); } } : {}),
+      ...(!session.executionId && this.delegationBridge ? { delegation: this.delegationBridge.forSession(id), delegate: args => { if (!current()) throw new Error('Native connection was released'); return this.delegate(id, args); } } : {}),
       event: (type, data) => { if (current()) this.event(id, type, data); },
       nativeId: value => { if (current()) { session.nativeId = value; this.event(id, 'session.native', { nativeId: value }); if (ACP_TOOL_DEFAULTS[session.provider]) return this.persist(); } },
       failure: error => {
@@ -214,6 +272,10 @@ export class Commander extends EventEmitter {
           const permission = await this.permissionFor(session);
           if (!live()) return { allow: false };
           if (isFullNativePermission(permission)) return { allow: true };
+        }
+        if (session.executionId) {
+          const handler = this.executionHandlers.get(id);
+          return handler ? this.ask(id, request, signal, handler) : { allow: false };
         }
         return this.ask(id, request, signal);
       },
@@ -244,6 +306,7 @@ export class Commander extends EventEmitter {
   }
 
   async submit(id, text, { requestId = randomUUID() } = {}) {
+    if (!this.get(id).route) throw new Error('This session has no explicit API route; create a new session with a selected provider and model');
     return this.acceptInput(id, text, requestId, () => this.drivers.get(id).submit(text), 'prompt');
   }
 
@@ -325,37 +388,57 @@ export class Commander extends EventEmitter {
     if (!['running', 'waiting'].includes(session.status)) throw new Error('No active turn to interrupt');
     this.interruptedTurns.set(id, session.turnId);
     this.denyPending(id);
-    await this.drivers.get(id).interrupt();
+    const driver = this.drivers.get(id);
+    if (this.activeSubmissions.has(id)) await Promise.allSettled(Object.values(session.receipts)
+      .filter(entry => entry.receipt.turnId === session.turnId)
+      .map(entry => this.submissions.get(`${id}:${entry.receipt.requestId}`)));
+    const children = [...this.sessions.values()].filter(child => child.parentId === id && child.parentTurnId === session.turnId &&
+      ['running', 'waiting', 'connecting'].includes(child.status));
+    const operations = children.map(child => this.stopExecution(child.id));
+    if (['running', 'waiting'].includes(session.status)) operations.push(driver.interrupt());
+    const outcomes = await Promise.allSettled(operations);
     this.event(id, 'turn.interrupt-requested', {});
+    const failure = outcomes.find(outcome => outcome.status === 'rejected');
+    if (failure) throw failure.reason;
   }
 
-  ask(id, request, signal) {
+  ask(id, request, signal, handler) {
     if (this.closing || signal?.aborted) return Promise.resolve({ allow: false });
-    const session = this.get(id); const approvalId = randomUUID();
-    return new Promise(resolve => {
-      const finish = answer => {
+    const session = this.get(id), approvalId = randomUUID();
+    const ownerSignal = handler ? new AbortController() : undefined;
+    return new Promise((resolve, reject) => {
+      const finish = (answer, error) => {
         if (!this.pending.delete(approvalId)) return;
         clearTimeout(timer); signal?.removeEventListener('abort', abort);
-        session.pendingApprovals = session.pendingApprovals.filter(p => p.id !== approvalId);
-        if (session.status === 'waiting' && !session.pendingApprovals.length) session.status = 'running';
-        this.event(id, 'approval.resolved', { id: approvalId, answer });
-        resolve(answer);
+        ownerSignal?.abort();
+        if (!handler) session.pendingApprovals = session.pendingApprovals.filter(p => p.id !== approvalId);
+        if (session.status === 'waiting' && ![...this.pending.values()].some(p => p.sessionId === id)) session.status = 'running';
+        if (!handler) this.event(id, 'approval.resolved', { id: approvalId, answer });
+        if (error) reject(error);
+        else resolve(answer);
       };
       const abort = () => finish({ allow: false });
-      const timer = setTimeout(abort, this.approvalTimeout);
-      this.pending.set(approvalId, { sessionId: id, finish });
+      const timer = handler ? undefined : setTimeout(abort, this.approvalTimeout);
+      this.pending.set(approvalId, { sessionId: id, finish, workerOwned: !!handler });
       session.status = 'waiting';
-      const approval = copy({ id: approvalId, sessionId: id, turnId: session.turnId ?? null, ...request });
-      session.pendingApprovals.push(approval);
       signal?.addEventListener('abort', abort, { once: true });
-      this.event(id, 'approval.requested', approval);
+      if (handler) {
+        Promise.resolve().then(() => {
+          ownerSignal.signal.throwIfAborted();
+          return handler(request, ownerSignal.signal);
+        }).then(answer => finish(answer ?? { allow: false }), error => finish({ allow: false }, error));
+      } else {
+        const approval = copy({ id: approvalId, sessionId: id, turnId: session.turnId ?? null, ...request });
+        session.pendingApprovals.push(approval);
+        this.event(id, 'approval.requested', approval);
+      }
     });
   }
 
   // Trusted human/controller API only: deliberately NOT exposed as a model tool.
   approve(id, approvalId, answer) {
     this.healthy(); const pending = this.pending.get(approvalId);
-    if (!pending || pending.sessionId !== id) throw new Error('Approval expired, already answered, or belongs to another session');
+    if (!pending || pending.workerOwned || pending.sessionId !== id) throw new Error('Approval expired, already answered, or belongs to another session');
     if (!answer || typeof answer !== 'object' || Array.isArray(answer)) throw new Error('Approval answer must be an object');
     if (Object.hasOwn(answer, 'allow') && typeof answer.allow !== 'boolean') throw new Error('Approval allow must be boolean');
     pending.finish(copy(answer));
@@ -389,6 +472,7 @@ export class Commander extends EventEmitter {
     const session = this.get(id); session.status = 'closed';
     this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
     this.delegationBridge?.revoke(id);
+    this.executionHandlers.delete(id);
     this.denyPending(id);
     const driver = this.drivers.get(id); this.drivers.delete(id);
     await driver?.close();

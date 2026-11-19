@@ -9,11 +9,11 @@ export async function stageRelease({ sourceSha, releaseVersion, cwd = process.cw
   if (!/^[a-f0-9]{40}$/.test(sourceSha) || actual !== sourceSha || process.env.GITHUB_SHA && process.env.GITHUB_SHA !== sourceSha) throw new Error('Release staging requires the exact workflow source checkout');
   if (!releaseVersion) return { sourceSha, staged: [] };
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(releaseVersion)) throw new Error('Unified release version must be stable X.Y.Z');
-  const file = resolve(cwd, 'plugins/benchgo/package.json');
+  const file = resolve(cwd, 'plugins/base/package.json');
   const pkg = JSON.parse(await readFile(file, 'utf8'));
   pkg.benchgo = { ...pkg.benchgo, releaseVersion };
   await writeFile(file, `${JSON.stringify(pkg, null, 2)}\n`);
-  return { sourceSha, staged: [{ path: 'plugins/benchgo/package.json', field: 'benchgo.releaseVersion', value: releaseVersion }] };
+  return { sourceSha, staged: [{ path: 'plugins/base/package.json', field: 'benchgo.releaseVersion', value: releaseVersion }] };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -8,7 +8,7 @@ import { groupHomeActivity, activityLabels } from '../client/activity-data.mjs';
 import { quietChatRows } from '../client/quiet-chat.mjs';
 import * as petState from '../client/pet-state.mjs';
 
-const { transformSync, buildSync } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { transformSync, buildSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const navigationBundle = buildSync({ entryPoints: [fileURLToPath(new URL('../client/reply-file-navigation.mjs', import.meta.url))],
   bundle: true, write: false, format: 'cjs', platform: 'browser', external: ['@deepseek-ai/*', '../../link/client/resource-navigation-store.mjs'],
   alias: { '@deepseek-ai/dsh-util-workspace-path': fileURLToPath(new URL('../../../deepseek-harness/packages/util/workspace-path/src/index.ts', import.meta.url)) } });

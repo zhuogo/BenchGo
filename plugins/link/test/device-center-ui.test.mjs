@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
-import { deviceIcon, deviceKind, deviceStatus, jobFinished, sshInput, workbenchUrl } from '../client/device-state.mjs';
+import { deviceIcon, deviceKind, deviceStatus, jobFinished, sshCredentials, sshInput, sshStatus, workbenchUrl } from '../client/device-state.mjs';
 import { workbenchNavigationMessage } from '../client/device-navigation.mjs';
 import { deviceSwitchFrameMessage } from '../client/device-switch.mjs';
 
-const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
+const require = createRequire(new URL('../../base/package.json', import.meta.url));
 const source = await readFile(new URL('../client/device-center.jsx', import.meta.url), 'utf8');
-const code = require('esbuild').transformSync(source + '\nexport { AddComputer, AddServer, AddDevice, ManageDevice, RelayWizard, RelayPool };', { loader: 'jsx', format: 'cjs' }).code;
+const code = require('esbuild').transformSync(source + '\nexport { AddComputer, AddServer, AddDevice, ServerInstall, ManageDevice, ReconnectServer, ServerPairing, RelayWizard, RelayPool };', { loader: 'jsx', format: 'cjs' }).code;
 const nodes = value => value && typeof value === 'object' ? [value, ...(value.children || []).flatMap(nodes)] : [];
 const textOf = value => typeof value === 'object' ? (value?.children || []).map(textOf).join('') : String(value ?? '');
 
@@ -39,7 +39,8 @@ function fixture(component, props = {}) {
   const window = { addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); }, removeEventListener(name, fn) { listeners.get(name)?.delete(fn); } };
   const parent = props.embedded ? { postMessage(data, origin) { this.messages.push({ data, origin }); }, messages: [] } : window;
   const module = { exports: {} };
-  runInNewContext(code, { module, exports: module.exports, URL, URLSearchParams, window, parent, location: { origin: 'http://127.0.0.1:17770', search: props.embedded ? '?parentOrigin=http://127.0.0.1:17770' + (props.reuseWorkbench ? '&reuseWorkbench=1' : '') : '' }, document: { activeElement: null, createElement: () => ({ remove() {} }), head: { append() {} } }, setTimeout(fn) { const id = Math.random(); timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), require: id => id === 'react' ? react : id.includes('device-navigation') ? { workbenchNavigationMessage } : id.includes('device-switch') ? { deviceSwitchFrameMessage } : id.includes('device-state') ? { deviceIcon, deviceKind, deviceStatus, jobFinished, sshInput, workbenchUrl, jobFailed: job => ['failed', 'error'].includes(job?.state) } : id.includes('app.jsx') ? { useLinkStyle() {}, LinkSettings() {} } : {} });
+  const parentOrigin = props.embedded ? 'http://127.0.0.1:17770' : '';
+  runInNewContext(code, { module, exports: module.exports, URL, URLSearchParams, crypto: globalThis.crypto, window, parent, __DSH_DEVICE_PARENT_ORIGIN__: parentOrigin, location: { origin: 'http://127.0.0.1:17770', search: '', hash: props.reuseWorkbench ? '#reuseWorkbench=1' : '' }, document: { activeElement: null, createElement: () => ({ remove() {} }), head: { append() {} } }, setTimeout(fn) { const id = Math.random(); timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), require: id => id === 'react' ? react : id.includes('device-navigation') ? { workbenchNavigationMessage } : id.includes('device-switch') ? { deviceSwitchFrameMessage } : id.includes('device-theme') ? { observeHostTheme() {}, sendWorkbenchTheme() {}, themedWorkbenchUrl: url => url } : id.includes('device-state') ? { deviceIcon, deviceKind, deviceStatus, jobFinished, sshCredentials, sshInput, sshStatus, workbenchUrl, jobFailed: job => ['failed', 'error'].includes(job?.state) } : id.includes('collapsible.jsx') ? { Disclosure() {} } : id.includes('server-terminal.jsx') ? { ServerTerminal() {} } : id.includes('app.jsx') ? { useLinkStyle() {}, LinkSettings() {}, PairingDialog() {} } : {} });
   const frameWindows = new Map();
   const render = () => { dirty = false; cursor = 0; tree = module.exports[component]({ ...props, runtime }); for (const node of nodes(tree)) if (node.type === 'iframe' && node.props.ref) { if (!frameWindows.has(node.props.src)) frameWindows.set(node.props.src, { messages: [], postMessage(data, origin) { this.messages.push({ data, origin }); } }); node.props.ref({ contentWindow: frameWindows.get(node.props.src) }); } for (const effect of effects.splice(0)) effect(); return tree; };
   const settle = async () => { for (let i = 0; i < 10; i++) { if (dirty) render(); await new Promise(resolve => setImmediate(resolve)); } return tree; };
@@ -74,7 +75,10 @@ test('server authentication starts after fingerprint confirmation', async () => 
   const fields = view.nodes().filter(node => node.type === 'input');
   fields[1].props.onChange({ target: { value: 'server.example.com' } }); fields[3].props.onChange({ target: { value: 'ubuntu' } }); await view.settle();
   view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
-  assert(textOf(view.tree).includes('确认服务器身份')); assert.equal(view.calls.some(item => item.action === 'sshConnect'), false);
+  assert(textOf(view.tree).includes('服务器准备就绪'));
+  assert.equal(view.nodes().find(node => node.type === 'details').props.open, undefined);
+  assert.deepEqual(Object.keys(view.calls.find(item => item.action === 'sshProbe').args).sort(), ['host', 'port', 'username']);
+  assert.equal(view.calls.some(item => item.action === 'sshConnect'), false);
   view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
   assert.equal(view.calls.find(item => item.action === 'sshConnect').args.fingerprint, 'SHA256:valid');
   await view.tick(); assert(textOf(view.tree).includes('打开工作台'));
@@ -90,11 +94,11 @@ test('server resource prefetch preserves the form and returns to installation wi
   } } });
   await view.settle();
   view.nodes().filter(node => node.type === 'input')[0].props.onChange({ target: { value: '保留的服务器名称' } }); await view.settle();
-  await view.click('准备离线部署资源');
+  await view.click('准备部署资源');
   assert.equal(calls[0].action, 'serverPrefetch');
   assert.equal(calls[0].input.source, 'mirror');
   await view.tick();
-  assert.match(textOf(view.tree), /部署资源已准备好（0\.1\.4）/);
+  assert.match(textOf(view.tree), /部署资源已就绪/);
   assert.doesNotMatch(textOf(view.tree), /打开工作台/);
   await view.click('继续安装');
   assert.equal(added.length, 0);
@@ -109,15 +113,15 @@ test('resource cancellation waits for the final job state and remains a neutral 
     if (action === 'job') return { id: 'prefetch', kind: 'server-prefetch', state: cancelled ? 'cancelled' : 'running', cancellable: !cancelled, error: cancelled ? '部署资源获取已取消，可重新尝试' : undefined, steps: [] };
     throw new Error('unexpected ' + action);
   } } });
-  await view.settle(); await view.click('准备离线部署资源');
-  await view.click('取消准备');
+  await view.settle(); await view.click('准备部署资源');
+  await view.click('取消');
   assert.equal(cancellations, 1);
   assert.equal(jobFinished({ state: 'cancelled' }), true);
   await view.tick();
-  assert.match(textOf(view.tree), /返回安装/);
-  assert.doesNotMatch(textOf(view.tree), /打开工作台|重新检查进度/);
-  await view.click('返回安装');
-  assert.match(textOf(view.tree), /检查服务器/);
+  assert.match(textOf(view.tree), /返回/);
+  assert.doesNotMatch(textOf(view.tree), /打开工作台|刷新进度/);
+  await view.click('返回');
+  assert.match(textOf(view.tree), /检查/);
 });
 
 test('failed resource preparation retries with the selected source and never connects SSH', async () => {
@@ -129,9 +133,9 @@ test('failed resource preparation retries with the selected source and never con
     if (action === 'job') return { id: input.jobId, kind: 'server-prefetch', state: 'error', error: '资源校验失败，请重试', steps: [] };
     throw new Error('unexpected ' + action);
   } } });
-  await view.settle(); await view.click('准备离线部署资源'); await view.tick();
-  assert.match(textOf(view.tree), /重试准备/);
-  await view.click('重试准备');
+  await view.settle(); await view.click('准备部署资源'); await view.tick();
+  assert.match(textOf(view.tree), /重试/);
+  await view.click('重试');
   assert.equal(attempts, 2);
   assert.equal(calls.some(call => call.action.startsWith('ssh')), false);
 });
@@ -148,7 +152,7 @@ test('server upload and install stages do not offer resource cancellation', asyn
   fields[1].props.onChange({ target: { value: 'server.example.com' } }); fields[3].props.onChange({ target: { value: 'ubuntu' } }); await view.settle();
   const submit = () => view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
   submit(); await view.settle(); submit(); await view.settle(); await view.tick();
-  assert.doesNotMatch(textOf(view.tree), /取消准备/);
+  assert.doesNotMatch(textOf(view.tree), /取消/);
 });
 
 test('server management cancellation waits for the backend and never opens a cancelled update', async () => {
@@ -205,6 +209,21 @@ test('desktop embedded device selection reuses the owner workbench without anoth
   }
   assert.equal(view.calls.some(call => call.action === 'select'), false);
   assert.equal(view.nodes().some(node => node.type === 'iframe'), false);
+});
+
+test('desktop device center only opens SSH authentication for the saved device from its owner', async () => {
+  const device = { id: 'ssh-server', name: '香港', kind: 'ssh', sshManaged: true };
+  const view = fixture('DeviceCenter', { embedded: true, reuseWorkbench: true, runtime: { async call() { return { devices: [device], capabilities: { serverManagement: true } }; } } }); await view.settle();
+  const { origin } = view.parent.messages.find(message => message.data.type === 'dsh-devices:actions-ready');
+  const data = { type: 'dsh-devices:reconnect', deviceId: device.id };
+  view.emit({ source: {}, origin, data });
+  view.emit({ source: view.parent, origin: 'https://evil.test', data });
+  await view.settle();
+  assert.equal(view.nodes().some(node => node.props.title === '重新认证 SSH'), false);
+  view.emit({ source: view.parent, origin, data }); await view.settle();
+  assert(view.nodes().some(node => node.props.title === '重新认证 SSH'));
+  view.emit({ source: view.parent, origin, data: { type: 'dsh-devices:closed' } }); await view.settle();
+  assert.equal(view.nodes().some(node => node.props.title === '重新认证 SSH'), false);
 });
 
 test('local device name and remote remarks can be edited and saved independently', async () => {
@@ -361,9 +380,8 @@ test('embedded device selection syncs failure and permits only the active ready 
 });
 
 test('server reconnect remains an explicit job until completion', async () => {
-  const view = fixture('ManageDevice', { device: { id: 'server', name: '云端', kind: 'ssh' }, onChanged() {}, onRemoved() {} }); await view.settle();
-  await view.click('重新连接隧道');
-  const form = view.nodes().find(node => node.type === 'form' && nodes(node).some(child => child.type?.name === 'Credentials')); await form.props.onSubmit({ preventDefault() {} }); await view.settle();
+  const view = fixture('ReconnectServer', { device: { id: 'server', name: '云端', kind: 'ssh' }, onConnected() {} }); await view.settle();
+  const form = view.nodes().find(node => node.type === 'form'); await form.props.onSubmit({ preventDefault() {} }); await view.settle();
   assert(view.nodes().some(node => node.props.job?.id === 'job-id'));
   await view.tick(); assert(view.nodes().some(node => node.props.job?.state === 'completed'));
 });
@@ -375,9 +393,41 @@ test('device center exposes one add flow and owner pairing through existing sett
   await view.click('添加设备');
   assert(view.nodes().some(node => typeof node.type === 'function' && node.type.name === 'AddDevice'));
   const add = fixture('AddDevice', { onAdded() {}, sshAvailable: true }); await add.settle();
-  assert.match(textOf(add.tree), /连接已有设备/); assert.match(textOf(add.tree), /安装到服务器/);
-  await add.click('安装到服务器');
-  assert(add.nodes().some(node => typeof node.type === 'function' && node.type.name === 'AddServer'));
+  const segments = add.nodes().find(node => node.props.label === '添加方式');
+  assert.deepEqual(Array.from(segments.props.options, option => option.label), ['连接已有设备', '添加服务器']);
+  segments.props.onChange('server'); await add.settle();
+  assert.equal(add.nodes().find(node => node.props.id === 'dc-add-server-panel').props.hidden, false);
+  assert(add.nodes().some(node => typeof node.type === 'function' && node.type.name === 'ServerInstall'));
+});
+
+test('server installation shows SSH first and places the manual script in a disclosure', async () => {
+  const view = fixture('ServerInstall', { onAdded() {}, sshAvailable: false }); await view.settle();
+  const manual = view.nodes().find(node => node.props.title === '手动安装');
+  assert.equal(manual.props.defaultOpen, true);
+  const download = view.nodes().find(node => node.props.download === 'install-server.sh');
+  assert.equal(download.props.href, 'https://benchgo.cn/api/x/install/linux.sh');
+  assert.equal(textOf(view.nodes().find(node => node.type === 'code')), `installer=$(curl -fsSL '${download.props.href}') && bash -c "$installer"`);
+  assert.equal(view.nodes().some(node => typeof node.type === 'function' && node.type.name === 'AddServer'), false);
+  assert.doesNotMatch(textOf(view.tree), /通过 SSH|不会|无需|密码与私钥/);
+  const desktop = fixture('ServerInstall', { onAdded() {}, sshAvailable: true }); await desktop.settle();
+  const ssh = desktop.nodes().find(node => typeof node.type === 'function' && node.type.name === 'AddServer');
+  assert(ssh);
+  assert.doesNotMatch(textOf(desktop.tree), /连接服务器/);
+  assert.equal(desktop.nodes().find(node => node.props.title === '手动安装').props.defaultOpen, false);
+});
+
+test('job polling recovers automatically from a transient progress failure', async () => {
+  let polls = 0;
+  const view = fixture('AddServer', { onAdded() {}, runtime: { async call(action) {
+    if (action === 'serverPrefetch') return { jobId: 'prefetch' };
+    if (action === 'job') { if (++polls === 1) throw new Error('连接中断'); return { id: 'prefetch', kind: 'server-prefetch', state: 'failed', error: '部署资源缺失', steps: [] }; }
+  } } });
+  await view.settle(); await view.click('准备部署资源'); await view.tick();
+  assert(view.nodes().some(node => node.props.error === '连接中断'));
+  await view.tick();
+  assert.equal(polls, 2);
+  assert.match(textOf(view.tree), /重试/);
+  assert.doesNotMatch(textOf(view.tree), /关闭此面板后|正在重试/);
 });
 
 test('connection stays above compact device and relay tabs with retained management state', async () => {
@@ -440,19 +490,26 @@ test('saving a new relay selects its pool and refreshes the visible list', async
   assert.equal(view.nodes().some(node => node.type?.name === 'RelayWizard'), false);
 });
 
-test('returning to device centre retains workbench and relay changes refresh every consumer', async () => {
+test('device directory omits the current workbench marker and keeps the existing frame reachable', async () => {
   const view = fixture('DeviceCenter'); await view.settle();
-  await view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes('开发电脑')).props.onClick(); await view.settle();
+  const remote = () => view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes('开发电脑'));
+  const initialLabel = textOf(remote());
+  await remote().props.onClick(); await view.settle();
   const frame = view.nodes().find(node => node.type === 'iframe');
   await view.nodes().find(node => node.props['aria-label'] === '返回设备中心').props.onClick(); await view.settle();
   assert.equal(view.nodes().find(node => node.props.className === 'dc-surface').props.hidden, false);
   assert.equal(view.nodes().find(node => node.type === 'iframe').props.src, frame.props.src);
+  assert.equal(textOf(remote()), initialLabel);
+  assert.match(textOf(view.tree), /本机工作台/);
+  assert.doesNotMatch(textOf(view.tree), /当前打开的工作台/);
+  assert.equal(view.nodes().some(node => node.props.className?.includes('dc-selected') || node.props.className === 'dc-topbar-workbench'), false);
+  assert(view.nodes().some(node => node.props['aria-label'] === '开发电脑设置'));
   const pool = () => view.nodes().find(node => typeof node.type === 'function' && node.type.name === 'RelayPool');
   const before = pool().props.refreshToken;
   pool().props.onChanged(); await view.settle();
   assert.equal(pool().props.refreshToken, before + 1);
   assert.equal(view.nodes().find(node => typeof node.type === 'function' && node.type.name === 'LinkSettings').props.refreshToken, before + 1);
-  await view.nodes().find(node => typeof node.type === 'function' && node.props['aria-label'] === '返回开发电脑工作台').props.onClick(); await view.settle();
+  await remote().props.onClick(); await view.settle();
   assert.equal(view.nodes().find(node => node.props.className === 'dc-surface').props.hidden, true);
   assert.equal(view.nodes().find(node => node.type === 'iframe').props.src, frame.props.src);
 });
@@ -494,13 +551,18 @@ test('a phone local device opens its name settings instead of selecting a workbe
 test('relay wizard deploys in one step without requiring email or fingerprint confirmation', async () => {
   const calls = [];
   let connected = false;
+  const status = pending => ({ relay: { fingerprint: 'rev', connected: true, nodes: [
+    { id: 'other', url: 'https://elsewhere.test', connected: true, enabled: true },
+    { id: 'deployed', url: 'https://8.8.8.8:24680', connected, enabled: true },
+  ] }, pending });
   const view = fixture('RelayWizard', { onChanged() {}, runtime: { async call(action, args) {
     calls.push({ action, args });
     if (action === 'relayProbe') return { fingerprint: 'SHA256:relay' };
     if (action === 'relayDeploy') return { jobId: 'relay-job' };
     if (action === 'job') return { id: 'relay-job', state: 'completed', steps: [], relay: { url: 'https://8.8.8.8:24680' } };
-    if (action === 'hostStatus') return { relay: { connected }, pending: [{ id: 'phone', name: '手机' }] };
-    if (action === 'hostConfirm') return { relay: { connected }, pending: [] };
+    if (action === 'hostStatus') return status([{ id: 'phone', name: '手机' }]);
+    if (action === 'hostConfirm') return status([]);
+    if (action === 'hostRelayPoolConfigure') return status([]);
     if (action === 'hostPairing') return { uri: 'dshlink://pair?code=once' };
     return {};
   } } });
@@ -517,18 +579,23 @@ test('relay wizard deploys in one step without requiring email or fingerprint co
   assert.equal(deployment.args.email, ''); assert.equal(deployment.args.relayPort, 24680); assert.equal(deployment.args.challengeMode, 'standalone');
   assert.doesNotMatch(textOf(view.tree), /确认服务器身份|已有中继服务/);
   await view.tick();
-  const pairButton = () => view.nodes().find(node => typeof node.type === 'function' && textOf(node) === '生成中继连接信息');
+  const pairButton = () => view.nodes().find(node => typeof node.type === 'function' && textOf(node) === '生成连接信息');
   assert.equal(pairButton().props.disabled, true);
+  assert.match(textOf(view.tree), /跨网访问待验证/);
   connected = true; await view.tick();
   assert.equal(pairButton().props.disabled, false);
-  await view.click('生成中继连接信息');
+  await view.click('生成连接信息');
   assert.equal(calls.find(item => item.action === 'hostPairing').args.mode, 'relay');
+  assert.equal(calls.find(item => item.action === 'hostPairing').args.relayId, 'deployed');
   const pairingDialog = () => view.nodes().find(node => node.props.pairing?.uri?.includes('code=once'));
   assert(pairingDialog());
   assert.equal(pairingDialog().props.pending[0].id, 'phone');
   await pairingDialog().props.onConfirm('phone', 'confirm'); await view.settle();
   assert.equal(calls.find(item => item.action === 'hostConfirm').args.id, 'phone');
   assert.equal(pairingDialog().props.pending.length, 0);
+  await view.click('停用'); await view.click('确认停用');
+  const toggle = calls.find(item => item.action === 'hostRelayPoolConfigure').args;
+  assert.equal(toggle.operation, 'update'); assert.equal(toggle.id, 'deployed'); assert.equal(toggle.enabled, false);
 });
 
 test('relay deployment exposes webroot and returns to editable fields after failure', async () => {
@@ -543,24 +610,25 @@ test('relay deployment exposes webroot and returns to editable fields after fail
   await view.settle();
   await view.click('部署');
   view.nodes().find(node => node.type === 'input' && node.props.placeholder === '公网 IP 或域名').props.onChange({ target: { value: 'relay.example.com' } });
-  view.nodes().find(node => node.props.className === 'dc-advanced-toggle').props.onClick(); await view.settle();
+  view.nodes().find(node => node.props.className === 'dc-relay-advanced').props.onOpenChange(true); await view.settle();
   view.nodes().find(node => node.props.value === 'standalone').props.onChange({ target: { value: 'webroot' } }); await view.settle();
   assert(view.nodes().some(node => node.type === 'input' && node.props.placeholder === '/var/www/acme' && node.props.required));
   view.nodes().find(node => node.props.value === 'webroot').props.onChange({ target: { value: 'standalone' } }); await view.settle();
   view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle(); await view.tick();
-  assert(view.nodes().some(node => node.props.job?.error === 'SSH 认证失败，请检查用户名或密码')); assert.match(textOf(view.tree), /返回修改/);
+  assert(view.nodes().some(node => node.props.job?.error === 'SSH 认证失败，请检查用户名或密码')); assert.match(textOf(view.tree), /返回/);
   assert.equal(view.nodes().some(node => node.type === 'form'), false);
-  await view.click('返回修改');
+  await view.click('返回');
   assert(view.nodes().some(node => node.type === 'form'));
   assert.equal(calls.at(-1).action, 'relayJobDismiss');
 });
 
 
-test('relay deployment entry is unavailable when client capability is absent', async () => {
+test('adding an existing relay remains available without SSH deployment', async () => {
   const view = fixture('DeviceCenter'); await view.settle();
   const panel = view.nodes().find(node => node.props.id === 'dc-panel-relay');
   const pool = nodes(panel).find(node => typeof node.type === 'function' && node.type.name === 'RelayPool');
-  assert.equal(pool.props.onAdd, undefined);
+  pool.props.onAdd(); await view.settle();
+  assert.equal(view.nodes().find(node => typeof node.type === 'function' && node.type.name === 'RelayWizard').props.canDeploy, false);
 });
 
 test('adding a relay defaults to connect, tests without saving and appends existing nodes', async () => {
@@ -568,7 +636,7 @@ test('adding a relay defaults to connect, tests without saving and appends exist
   const view = fixture('RelayWizard', { onChanged() { changed++; }, runtime: { async hostCall(action, input) {
     calls.push({ action, input });
     if (action === 'relayTest') return { ok: false, message: '中继拒绝认证' };
-    if (action === 'hostStatus') return { relay: { nodes: [{ id: 'first', url: 'https://first.test', enabled: true }] } };
+    if (action === 'hostStatus') return { relay: { fingerprint: 'rev', nodes: [{ id: 'first', url: 'https://first.test', enabled: true }] } };
     return { relay: {} };
   } } });
   await view.settle();
@@ -576,18 +644,19 @@ test('adding a relay defaults to connect, tests without saving and appends exist
   assert.equal(view.nodes().some(node => node.props.placeholder === '公网 IP 或域名'), false);
   view.nodes().find(node => node.props.name === 'url').props.onChange({ target: { value: 'https://second.test' } });
   view.nodes().find(node => node.props.name === 'token').props.onChange({ target: { value: 'new-secret' } }); await view.settle();
-  await view.click('测试连接');
+  await view.click('测试');
   assert.equal(calls.length, 1); assert.equal(calls[0].action, 'relayTest'); assert.equal(changed, 0);
   assert(view.nodes().some(node => node.props.result?.message === '中继拒绝认证'));
   await view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
-  const saved = calls.find(item => item.action === 'relayPoolConfigure').input.nodes;
-  assert.equal(saved.length, 2); assert.equal(saved[0].id, 'first'); assert.equal(saved[1].token, 'new-secret');
+  const saved = calls.find(item => item.action === 'hostRelayPoolConfigure').input;
+  assert.equal(saved.operation, 'add'); assert.equal(saved.expected.fingerprint, 'rev'); assert.equal(saved.token, 'new-secret');
+  assert.equal(saved.nodes, undefined);
   assert.equal(changed, 1);
 });
 
 test('relay list polls channel status, preserves edited secrets and leaves failed edits open', async () => {
   const calls = []; let connected = false, failSave = true;
-  const status = () => ({ relay: { nodes: [{ id: 'one', url: 'https://relay.test', enabled: true, connected }] } });
+  const status = () => ({ relay: { fingerprint: 'rev', preferredId: 'one', nodes: [{ id: 'one', url: 'https://relay.test', enabled: true, connected }] } });
   const view = fixture('RelayPool', { runtime: { async hostCall(action, input) {
     calls.push({ action, input });
     if (action === 'hostRelayPoolConfigure' && failSave) throw Error('保存失败');
@@ -599,12 +668,13 @@ test('relay list polls channel status, preserves edited secrets and leaves faile
   await view.click('编辑');
   const token = () => view.nodes().find(node => node.props.placeholder === '留空以保留当前密钥');
   await view.nodes().filter(node => typeof node.type === 'function' && textOf(node) === '测试连接').at(-1).props.onClick(); await view.settle();
-  const tested = calls.find(item => item.action === 'relayTest'); assert.equal(tested.input.id, 'one'); assert.equal(tested.input.token, '');
+  const tested = calls.find(item => item.action === 'relayTest'); assert.equal(tested.input.id, 'one'); assert.equal(tested.input.token, undefined);
   token().props.onChange({ target: { value: 'replacement-secret' } }); await view.settle();
   await view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
   assert(token()); assert(view.nodes().some(node => node.props.error === '保存失败'));
   await view.tick(); assert(view.nodes().some(node => node.props.error === '保存失败'));
-  assert.equal(calls.find(item => item.action === 'hostRelayPoolConfigure').input.nodes[0].token, 'replacement-secret');
+  const update = calls.find(item => item.action === 'hostRelayPoolConfigure').input;
+  assert.equal(update.operation, 'update'); assert.equal(update.token, 'replacement-secret'); assert.equal(update.expected.fingerprint, 'rev');
   failSave = false;
   await view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
   assert.equal(token(), undefined);
@@ -626,11 +696,11 @@ test('relay deployment progress survives closing its wizard and refreshes the li
 test('relay removal requires disabling and supports deleting the final node', async () => {
   let current = [{ id: 'only', url: 'https://relay.test', enabled: true }];
   const view = fixture('RelayPool', { onAdd() {}, runtime: { async hostCall(action, input) {
-    if (action === 'hostRelayPoolConfigure') current = input.nodes;
-    return { relay: { nodes: current } };
+    if (action === 'hostRelayPoolConfigure') current = input.operation === 'remove' ? [] : current.map(node => ({ ...node, enabled: input.enabled }));
+    return { relay: { fingerprint: 'rev', nodes: current } };
   } } });
   await view.settle();
-  const remove = () => view.nodes().find(node => node.props['aria-label'] === '删除中继 only');
+  const remove = () => view.nodes().find(node => node.props['aria-label'] === '删除中继 relay.test');
   assert.equal(remove().props.disabled, true);
   assert.equal(view.nodes().find(node => textOf(node) === '添加中继' && typeof node.type === 'function').props.icon, undefined);
   await view.click('停用');

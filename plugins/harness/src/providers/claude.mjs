@@ -17,7 +17,7 @@ export class ClaudeProvider {
     const initialPermission = permissionOptions(permission);
     let sdk;
     try { sdk = await import('@anthropic-ai/claude-agent-sdk'); }
-    catch { throw new Error('Claude Agent SDK is not installed; run npm install in plugins/benchgo'); }
+    catch { throw new Error('Claude Agent SDK is not installed; run npm install in plugins/base'); }
     const isolatedHome = this.config.managedProfile?.isolated ? this.config.env.CLAUDE_CONFIG_DIR : null;
     const historyInfo = id => isolatedHome ? isolatedClaudeHistory(isolatedHome, 'info', id, session.cwd) : sdk.getSessionInfo(id, { dir: session.cwd });
     if (session.nativeId && !await historyInfo(session.nativeId)) {
@@ -115,10 +115,6 @@ export class ClaudeProvider {
         query.initializationResult(),
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Claude initialization timed out')), 30_000); }),
       ]);
-      if (this.config.managedProfile?.subscription) {
-        const account = await query.accountInfo();
-        if (!account?.subscriptionType || account.subscriptionType === 'none' || account.apiKeySource && account.apiKeySource !== 'none' || account.apiProvider && account.apiProvider !== 'firstParty') throw new Error('请先在本机 Claude Code 中完成 Claude 订阅登录，不能用 API 密钥替代订阅。');
-      }
     } catch (error) { await driver.close(); throw error; }
     finally { clearTimeout(timer); }
     driver.history = async () => {

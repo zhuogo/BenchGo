@@ -11,7 +11,9 @@ export function normalizeChannelCapabilities(input = {}) {
 }
 // Loaded once per plugin lifecycle; optional SDKs are loaded by each adapter only on use.
 export async function loadChannelModules() {
-  for (const id of channelIds.slice(1)) if (!modules.has(id)) modules.set(id, await import(`./channels/${id}/index.mjs`));
+  await Promise.all(channelIds.slice(1).filter(id => !modules.has(id)).map(async id => {
+    modules.set(id, await import(`./channels/${id}/index.mjs`));
+  }));
 }
 export function channelModule(id) { return modules.get(id); }
 export function channelDefinition(id) {

@@ -10,8 +10,8 @@ import { Context, Service } from './deepseek-harness/vendor/cordis/src/index.ts'
 import * as hostScopes from './deepseek-harness/packages/core/scope/src/index.ts';
 import SystemPrompt from './deepseek-harness/packages/core/system-prompt/src/index.ts';
 import Tools from './deepseek-harness/packages/core/tools/src/index.ts';
-import { loadScopes } from './plugins/benchgo/node_modules/dsh-ops/lib/adapter/dsh/host.js';
-import { integration } from './plugins/benchgo/node_modules/dsh-ops/lib/integration/index.js';
+import { loadScopes } from './plugins/base/node_modules/dsh-ops/lib/adapter/dsh/host.js';
+import { integration } from './plugins/base/node_modules/dsh-ops/lib/integration/index.js';
 const opsScopes = await loadScopes();
 assert.equal(opsScopes, hostScopes, 'OPS must load the exact host scope module');
 const root = new Context();
@@ -62,7 +62,7 @@ test('without the source-host loader installed OPS cannot read the host scope ta
     import assert from 'node:assert/strict';
     import { Context } from './deepseek-harness/vendor/cordis/src/index.ts';
     import * as host from './deepseek-harness/packages/core/scope/src/index.ts';
-    import { loadScopes } from './plugins/benchgo/node_modules/dsh-ops/lib/adapter/dsh/host.js';
+    import { loadScopes } from './plugins/base/node_modules/dsh-ops/lib/adapter/dsh/host.js';
     const ops = await loadScopes();
     assert.notEqual(ops, host);
     const root = new Context(), agent = {};

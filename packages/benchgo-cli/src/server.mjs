@@ -30,7 +30,7 @@ export async function serverCommand(action, options = {}, { runCommand = command
   if (!['install', 'update'].includes(action)) throw new Error(`不支持的服务器操作：${action || '(空)'}`);
   const { readWorkbenchInstallation, workbenchPaths } = await shared('workbench-installation.mjs');
   if (await readWorkbenchInstallation({ home: options.home })) throw new Error('已有本机工作台，未再创建一套服务器；请使用本机工作台命令');
-  const roots = [options.root && join(options.root, 'plugins/benchgo/lib/server'), options.root,
+  const roots = [options.root && join(options.root, 'plugins/base/lib/server'), options.root,
     fileURLToPath(new URL('../resources/server/', import.meta.url))].filter(Boolean);
   let assetsRoot;
   for (const root of roots) if (await exists(join(root, 'resources.json')) || await exists(join(root, 'manifest.json'))) { assetsRoot = resolve(root); break; }

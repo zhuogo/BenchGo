@@ -4,9 +4,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const result = await build({ entryPoints: [fileURLToPath(new URL('../client/channel-session.jsx', import.meta.url))], bundle: true, write: false,
-  platform: 'node', format: 'esm', alias: { react: dirname(require.resolve('react/package.json')) }, nodePaths: [fileURLToPath(new URL('../../benchgo/node_modules/', import.meta.url))], logLevel: 'silent' });
+  platform: 'node', format: 'esm', alias: { react: dirname(require.resolve('react/package.json')) }, nodePaths: [fileURLToPath(new URL('../../base/node_modules/', import.meta.url))], logLevel: 'silent' });
 const { channelMessageDefinition: definition, registerChannelMessages } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 const source = { channel: 'feishu', sourceType: 'direct', conversationId: 'private-chat', senderId: 'owner', identityEvidence: { account: 'bot' } };
 const record = (direction = 'inbound') => ({ type: 'plugin:benchgo-plugin/channel-message', ignorable: true, seq: 4, time: 1731000000000,

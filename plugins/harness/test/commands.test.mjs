@@ -5,13 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Commander } from '../src/runtime.mjs';
+import { fixtureRoute, fixtureRouteService } from './fixtures/api-route.mjs';
 
 async function fixture(t, provider, model) {
   const directory = await mkdtemp(join(tmpdir(), 'commander-commands-'));
   const commandArgs = [fileURLToPath(new URL('./commands-fixture.mjs', import.meta.url))];
-  const runtime = await new Commander({ dataDir: directory, providers: { [provider]: { command: process.execPath, commandArgs } } }).open();
+  const runtime = await new Commander({ dataDir: directory, routeService: fixtureRouteService, providers: { [provider]: { command: process.execPath, commandArgs } } }).open();
   t.after(async () => { await runtime.close(); await rm(directory, { recursive: true, force: true }); });
-  const session = await runtime.create({ provider, model });
+  const session = await runtime.create({ provider, route: fixtureRoute(model) });
   return { runtime, id: session.id, directory };
 }
 
@@ -47,13 +48,6 @@ test('Pi compact uses native RPC and extension commands without model turns fini
   await runtime.command(id, { name: 'review', arguments: 'contradiction' });
   assert.equal(runtime.snapshot(id).status, 'running');
   await runtime.wait(id);
-});
-
-test('OpenCode compact validates required model before allocating a command receipt', async t => {
-  const { runtime, id } = await fixture(t, 'opencode');
-  await assert.rejects(runtime.command(id, { name: 'compact', requestId: 'no-model' }), /explicit provider\/model/);
-  assert.equal(runtime.snapshot(id).status, 'idle');
-  assert.equal(runtime.get(id).receipts['no-model'], undefined);
 });
 
 test('OpenCode native commands and summarize use authenticated HTTP and complete through SSE', async t => {

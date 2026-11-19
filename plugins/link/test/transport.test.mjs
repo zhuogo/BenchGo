@@ -22,9 +22,10 @@ async function setup(t) {
   const store = await openStore(directory), identity = await loadIdentity(directory);
   const config = validateConfig({ enabled: true, host: '127.0.0.1', port: 0, publicUrl: 'https://desk.example.com' }, store.state);
   Object.assign(store.state, config);
-  const server = await listen({ identity, config, webRoot: new URL('../dist/web/', import.meta.url), store, dispatch: async (body, device) => ({ action: body.action, device: device.id }), onError: () => {} });
+  const routes = [{ kind: 'relay', url: 'https://backup.example.com', relayId: 'backup', priority: 1 }];
+  const server = await listen({ identity, config, webRoot: new URL('../dist/web/', import.meta.url), store, routes: () => routes, dispatch: async (body, device) => ({ action: body.action, device: device.id }), onError: () => {} });
   t.after(async () => { await server.close(); await store.flush(); await rm(directory, { recursive: true, force: true }); });
-  return { directory, store, identity, server, call: (path, options) => request(server.port, identity, path, options) };
+  return { directory, store, identity, server, routes, call: (path, options) => request(server.port, identity, path, options) };
 }
 test('real TLS certificate identity is stable and matches the QR SPKI', async t => {
   const f = await setup(t);
@@ -34,6 +35,7 @@ test('real TLS certificate identity is stable and matches the QR SPKI', async t 
   assert.equal(f.identity.pin, createHash('sha256').update(spki).digest('base64'));
   const response = await f.call('/link/api/info', { method: 'GET' });
   assert.equal(response.status, 200); assert.equal(response.value.name, 'DSH Link');
+  assert.equal(response.value.routes, undefined);
   assert.equal(response.headers['cache-control'], 'no-store');
 });
 test('single-use pairing needs desktop approval and a secret poll token; devices survive restart and revoke', async t => {
@@ -51,6 +53,11 @@ test('single-use pairing needs desktop approval and a secret poll token; devices
   assert.equal(approved.status, 'approved');
   assert.equal(approved.hostName, f.store.state.name);
   assert.equal(approved.name, f.store.state.name);
+  assert.deepEqual(approved.routes, f.routes);
+  f.routes.unshift({ kind: 'relay', url: 'https://primary.example.com', relayId: 'primary', priority: 0 });
+  const refreshed = await f.call('/link/api/info', { method: 'GET', token: approved.token });
+  assert.equal(refreshed.value.hostId, approved.hostId);
+  assert.deepEqual(refreshed.value.routes, f.routes);
   await f.store.renameDevice(approved.deviceId, '随身手机');
   assert.equal(f.store.state.devices[0].name, 'Phone', 'a local alias cannot change the paired device identity');
   assert.equal(f.store.state.devices[0].alias, '随身手机');
@@ -62,6 +69,7 @@ test('single-use pairing needs desktop approval and a secret poll token; devices
   assert.equal(reopened.authenticate(approved.token).id, approved.deviceId);
   assert.equal(reopened.state.devices[0].alias, '随身手机');
   await f.store.revoke(approved.deviceId);
+  assert.equal((await f.call('/link/api/info', { method: 'GET', token: approved.token })).status, 401);
   assert.equal((await f.call('/link/api/rpc', { token: approved.token })).status, 401);
   assert.equal((await f.call('/link/api/pair/status', { body: query })).status, 400);
 });

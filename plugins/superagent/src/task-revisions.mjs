@@ -1,6 +1,7 @@
 import { taskExecutionBlocked } from './task-lifecycle.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { installTaskInputStore } from './task-input-store.mjs';
+import { usesExternalWorker } from './work-role-policy.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const names = value => value.scope?.toolNames ?? value.toolScope;
@@ -56,6 +57,8 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
         if (!task) throw fail('TASK_NOT_FOUND', '任务不存在');
         if (task.instructionRevision !== expectedInstructionRevision) throw Object.assign(fail('INSTRUCTION_REVISION_CONFLICT', '任务要求已变化，请刷新后重试'), { revision: task.instructionRevision });
         const adjustment = task.status === 'completed' || task.executionControl?.stopped === true;
+        if (!adjustment && usesExternalWorker(api, task))
+          throw fail('NATIVE_WORKER_INPUT_UNSUPPORTED', '此外部 Harness 暂无可核实的修订应用边界，请停止后创建关联调整');
         if (!adjustment && operation !== 'revise') throw fail('TASK_STATE_CONFLICT', '进行中的任务请修订；关联调整只用于已结束任务');
         if (task.executionControl?.stopRequested === true) throw fail('TASK_STOPPED', '任务正在停止，不能追加执行要求');
         const trigger = api.getTrigger(triggerId);
@@ -70,7 +73,7 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
         // A follow-up is not a new grant. Natural-language text never changes the
         // immutable source Mandate; structured authority changes require a host receipt.
         const currentMandate = api.currentTaskMandate(task.id, task.mandate);
-        let appliedMandate = { ...(adjustment ? mandate : currentMandate) };
+        let appliedMandate = adjustment ? { ...mandate, triggerId: trigger.id } : { ...currentMandate };
         if (taskMandateDifference(currentMandate, mandate)) {
           if (isTaskMandateNarrowing(currentMandate, mandate)) appliedMandate = { ...appliedMandate, ...(mandate.scope ? { scope: mandate.scope } : {}), ...(mandate.toolScope ? { toolScope: mandate.toolScope } : {}) };
           else {
@@ -83,7 +86,7 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
             if (prior && prior.fingerprint !== approvalFingerprint) throw fail('AUTHORIZATION_APPROVAL_CONFLICT', '授权回执已经绑定另一份范围差异');
             db.prepare('INSERT OR IGNORE INTO sa_task_authorization_approvals VALUES (?,?,?,?)').run(approval.id, taskId, approvalFingerprint,
               JSON.stringify({ triggerId: trigger.id, actorId: trigger.actor.id, source: trigger.source, difference }));
-            appliedMandate = { ...mandate, authorizationVersion: (currentMandate.authorizationVersion ?? 1) + 1,
+            appliedMandate = { ...mandate, triggerId: trigger.id, authorizationVersion: (currentMandate.authorizationVersion ?? 1) + 1,
               authorizationApproval: { id: approval.id, triggerId: trigger.id, actorId: trigger.actor.id, difference } };
           }
         }

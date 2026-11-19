@@ -8,11 +8,12 @@ import java.security.MessageDigest
 import java.util.Base64
 
 data class Identity(val url: String, val pin: String, val code: String, val name: String, val token: String,
-    val id: String = stableId(url, pin), val kind: String = "computer", val ssh: JSONObject? = null, val warning: String = "", val routes: JSONArray? = null, val alias: String = "") {
+    val id: String = stableId(url, pin), val kind: String = "computer", val ssh: JSONObject? = null, val warning: String = "", val routes: JSONArray? = null, val alias: String = "", val hostId: String = "") {
     val hostKey: String get() = "$url|$pin"
     fun toJson() = JSONObject().apply {
         put("url", url); put("pin", pin); put("code", code); put("name", name); put("token", token)
         if (routes != null) put("routes", routes)
+        if (hostId.isNotEmpty()) put("hostId", hostId)
         if (alias.isNotBlank()) put("alias", alias)
         put("id", id); put("kind", kind); if (ssh != null) put("ssh", ssh); if (warning.isNotBlank()) put("warning", warning)
     }
@@ -32,7 +33,7 @@ data class Identity(val url: String, val pin: String, val code: String, val name
             val token = json.optString("token").trim()
             require(code.length <= 256 && token.length <= 4096) { "设备凭据无效" }
             require(code.isNotEmpty() || token.isNotEmpty()) { "缺少配对码或设备令牌" }
-            return Identity(url, pin, code, json.optString("name").take(128), token, json.optString("id").ifBlank { stableId(url, pin) }, json.optString("kind", "computer"), json.optJSONObject("ssh"), json.optString("warning"), json.optJSONArray("routes"), json.optString("alias").take(128))
+            return Identity(url, pin, code, json.optString("name").take(128), token, json.optString("id").ifBlank { stableId(url, pin) }, json.optString("kind", "computer"), json.optJSONObject("ssh"), json.optString("warning"), json.optJSONArray("routes"), json.optString("alias").take(128), json.optString("hostId"))
         }
     }
 }
@@ -75,6 +76,12 @@ internal class IdentityStore(context: Context) {
     @Synchronized fun get(id: String): Identity? = devices[id]
     @Synchronized fun all(): List<Identity> = devices.values.toList()
     @Synchronized fun selectedId(): String = activeId
+    @Synchronized fun refreshConnection(identity: Identity, name: String, routes: JSONArray?, hostId: String) {
+        val saved = devices[identity.id] ?: return
+        if (saved.token != identity.token || saved.hostKey != identity.hostKey) return
+        val next = saved.copy(name = name.ifBlank { saved.name }, routes = routes ?: saved.routes, hostId = hostId.ifBlank { saved.hostId })
+        if (next.name != saved.name || next.hostId != saved.hostId || next.routes.toString() != saved.routes.toString()) write(next, false)
+    }
     @Synchronized fun write(identity: Identity, select: Boolean = true) {
         require(!unreadable) { "设备凭据无法解密，请检查系统密钥；已保留原有数据" }
         require(identity.token.isNotEmpty()) { "仅保存已授权设备" }

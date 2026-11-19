@@ -11,10 +11,3 @@ export function nativePermission(value) {
   if (value.additionalWritableRoots !== undefined && (!Array.isArray(value.additionalWritableRoots) || value.additionalWritableRoots.some(root => typeof root !== 'string' || !root || root.includes('\0')))) throw nativePermissionError('原生会话的附加可写目录无效。');
   return { sandbox: value.sandbox, approval: value.approval, ...(value.additionalWritableRoots?.length ? { additionalWritableRoots: [...value.additionalWritableRoots] } : {}) };
 }
-
-export function officialNativePermission(ctx, agent) {
-  const sandbox = ctx.get('sandboxPolicy'), approval = ctx.get('approval');
-  if (!agent?.session || typeof sandbox?.resolve !== 'function' || typeof approval?.overrideOf !== 'function') throw nativePermissionError('父会话权限服务不可用，不能启动或继续原生会话。');
-  const policy = sandbox.resolve({ session: agent.session });
-  return nativePermission({ sandbox: policy.mode, approval: approval.overrideOf(agent.session) ?? approval.config?.policy ?? 'ask', ...(policy.additionalWritableRoots ? { additionalWritableRoots: policy.additionalWritableRoots } : {}) });
-}

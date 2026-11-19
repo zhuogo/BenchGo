@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 
-const require = createRequire(new URL('../../benchgo/package.json', import.meta.url));
+const require = createRequire(new URL('../../base/package.json', import.meta.url));
 const { transformSync } = require('esbuild');
 const slots = ['sidebar.session.row.trailing', 'benchgo.sidebar.session.row.trailing'];
 

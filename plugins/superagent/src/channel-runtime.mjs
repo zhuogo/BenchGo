@@ -10,10 +10,10 @@ export function createChannelRuntime({ ctx, store, adapterOptions = {}, onInboun
   const ingress = createUnifiedChannelIngress({ store, onInbound: onInbound || adapterOptions.onInbound });
   let closed = false, callbacksAvailable = false;
   const get = channel => adapters.get(channel);
-  async function restart(channel) {
+  async function restart(channel, { waitForConnection = true } = {}) {
     if (channel === 'feishu') return;
     const previous = queues.get(channel) || Promise.resolve();
-    const operation = previous.catch(() => {}).then(async () => {
+    const mounted = previous.catch(() => {}).then(async () => {
       await adapters.get(channel)?.dispose?.();
       adapters.delete(channel); failures.delete(channel);
       if (closed) return;
@@ -40,7 +40,10 @@ export function createChannelRuntime({ ctx, store, adapterOptions = {}, onInboun
       if (adapter.send && channelDefinition(channel).capabilities.externalActions.includes('external-send')) adapter.prepareExternalSend = (input, context) => ingress.prepareExternalSend(channel, input, context);
       const send = adapter.send?.bind(adapter);
       if (send) adapter.send = async input => {
-        await beforeDelivery(() => authorizeConnection({ operation: 'send', source: input.source }));
+        await beforeDelivery(async () => {
+          await queues.get(channel);
+          return authorizeConnection({ operation: 'send', source: input.source });
+        });
         const current = store.connections.read(channel);
         if (!current.config.enabled || (input.source?.connectionRevision !== undefined && input.source.connectionRevision !== current.revision)) throw deliveryFailure('交付来源配置已撤销', 'not_sent');
         if (['api', 'webhook', 'email'].includes(channel)) return send(input);
@@ -66,16 +69,20 @@ export function createChannelRuntime({ ctx, store, adapterOptions = {}, onInboun
         return { ...last, ...(receipts.length > 1 ? { parts: receipts } : {}) };
       };
       adapters.set(channel, adapter);
-      if (row.config.enabled) await adapter.start?.();
-    }).catch(error => { failures.set(channel, '链接启动失败，请核对凭据和服务环境'); ctx.logger?.warn?.(`SuperAgent ${channel} 链接启动失败`); });
+      return row.config.enabled ? adapter : undefined;
+    });
+    const operation = mounted.then(async adapter => {
+      if (!closed) await adapter?.start?.();
+    }).catch(() => { failures.set(channel, '链接启动失败，请核对凭据和服务环境'); ctx.logger?.warn?.(`SuperAgent ${channel} 链接启动失败`); });
     queues.set(channel, operation);
-    return operation;
+    return waitForConnection ? operation : mounted.catch(() => {});
   }
   return {
     get, restart,
+    async ready(channel) { await queues.get(channel); return closed ? undefined : get(channel); },
     setCallbacksAvailable(value) { callbacksAvailable = value === true; },
     callbackStatus(channel) { return { available: callbacksAvailable, path: `/api/commander/assistant/channels/${channel}`, ...(callbacksAvailable ? {} : { reason: '当前载体未提供 HTTP 回调服务，请使用带 Web 服务的主机' }) }; },
-    start: () => Promise.all(channelIds.slice(1).map(restart)),
+    start: options => Promise.all(channelIds.slice(1).map(channel => restart(channel, options))),
     async status(channel) {
       const row = store.connections.read(channel), adapter = get(channel);
       let status;

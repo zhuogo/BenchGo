@@ -76,6 +76,43 @@ test('disabled channel lifecycle needs no network and callbacks report missing c
   } finally { await runtime.dispose(); connections.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test('mounting channels exposes adapters while remote login is pending', { timeout: 30_000 }, async () => {
+  await loadChannelModules();
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-channel-background-'));
+  const connections = createAssistantConnections({ directory });
+  const login = Promise.withResolvers(), requested = Promise.withResolvers();
+  const runtime = createChannelRuntime({ ctx: {}, store: { connections }, adapterOptions: {
+    credentials: { resolve: async () => ({ value: 'fixture-token' }) },
+    async fetcher(url) {
+      assert.equal(url, 'https://api.telegram.org/botfixture-token/getMe');
+      requested.resolve();
+      await login.promise;
+      return Response.json({ ok: false }, { status: 503 });
+    },
+  } });
+  let timer;
+  try {
+    connections.update({ enabled: true, botTokenRef: 'fixture-ref' }, { channel: 'telegram', revision: 0 });
+    const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('channel login blocked adapter registration')), 3000); });
+    await Promise.race([Promise.all([runtime.start({ waitForConnection: false }), requested.promise]), deadline]);
+    assert.ok(runtime.get('telegram').prepareExternalSend);
+    assert.equal((await runtime.status('telegram')).authentication, 'unverified');
+    const ready = runtime.ready('telegram');
+    const marker = Symbol('login still pending');
+    assert.equal(await Promise.race([ready, Promise.resolve(marker)]), marker);
+    const disposal = runtime.dispose();
+    login.resolve();
+    await disposal;
+    assert.equal(await ready, undefined);
+  } finally {
+    clearTimeout(timer);
+    login.resolve();
+    await runtime.dispose();
+    connections.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('late HTTP carrier mounts signed callbacks and revokes routes on disposal', async () => {
   await loadChannelModules();
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-channel-http-'));

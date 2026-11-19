@@ -11,6 +11,7 @@ function remoteSessionProjection(database, task, assignment, run) {
   const identity = { deviceId: location.deviceId || target.deviceId, hostId: location.hostId || target.hostId,
     authorizationId: location.authorizationId || target.authorizationId };
   const ownerHostId = task.ownerHostId || database.ownerHostId?.();
+  const harness = target.config?.harness;
   return { available: !!(sessionId && location.executionId && ownerHostId && identity.deviceId && identity.hostId && identity.authorizationId), remote: true,
     taskId: task.id, title: task.title || task.target, ownerHostId,
     ...identity, deviceName: target.deviceName || target.name || identity.deviceId,
@@ -18,6 +19,7 @@ function remoteSessionProjection(database, task, assignment, run) {
     status: task.status, phase: location.phase || 'prepared', observedAt: location.observedAt || null,
     observed: location.available === true && !!location.observedAt, code: location.code,
     reason: sessionId ? '远端执行会话只读，请在原任务补充或调整要求。' : '远端执行会话尚未就绪，请稍后重试。',
+    ...(['codex', 'claude'].includes(harness) ? { nativeWorker: true, harness } : {}),
     placement: task.mandate?.project ? 'project' : 'ungrouped', promptable: false };
 }
 
@@ -177,9 +179,44 @@ export function executionSessionProjection(database, taskId) {
   const runs = assignments.flatMap(assignment => database.runs(assignment.id).map(run => ({ assignment, run })));
   const current = runs.findLast(({ assignment, run }) => run.fence === assignment.fence) || runs.at(-1);
   if (!current) return { available: false, reason: 'execution-session-unavailable' };
+  const model = database.getWorkerExecutionState?.(current.run.id)?.models?.[0];
+  const nativeWorker = ['codex', 'claude'].includes(model?.harness);
   return { available: true, taskId, title: task.title || task.target, sessionId: current.run.sessionId,
     assignmentId: current.assignment.id, runId: current.run.id, status: task.status,
+    ...(nativeWorker ? { nativeWorker: true, harness: model.harness, promptable: false } : {}),
     placement: task.mandate?.project ? 'project' : 'ungrouped' };
+}
+
+export async function readNativeWorkerSession({ ctx, database, taskId, sessionId, after = 0, signal }) {
+  const remote = database.remoteExecutionBySession?.(sessionId);
+  if (remote) {
+    const task = database.getTask(taskId), target = task?.mandate?.execution;
+    const assignment = database.getAssignment(remote.assignmentId);
+    if (assignment?.taskId !== taskId || !['codex', 'claude'].includes(target?.config?.harness)) throw new Error('无法定位任务的外部执行记录');
+    const link = ctx.get?.('benchgoLink');
+    if (!link?.callDevice) throw new Error('跨设备连接不可用');
+    const reply = await link.callDevice({ deviceId: remote.deviceId, expectedHostId: remote.hostId, expectedAuthorizationId: remote.authorizationId,
+      input: { action: 'execution', version: target.protocolVersion, operation: 'get', executionId: remote.executionId, after, limit: 100 }, signal });
+    const { execution, events, cursor } = reply;
+    if (reply.version !== target.protocolVersion || execution?.executionId !== remote.executionId || execution.sessionId !== sessionId
+      || execution.identity?.taskId !== taskId || execution.identity.ownerHostId !== task.ownerHostId
+      || execution.identity.assignmentId !== remote.assignmentId || execution.identity.runId !== remote.runId || execution.identity.fence !== remote.fence)
+      throw new Error('目标执行记录身份不匹配');
+    return { status: execution.phase === 'accepted' ? 'connecting' : execution.phase, cursor, summary: execution.evidence?.summary,
+      events: events.filter(event => event.kind === 'progress' && typeof event.data?.text === 'string')
+        .map(event => ({ seq: event.seq, text: event.data.text.slice(-12_000) })) };
+  }
+  const owned = findExecutionSessionOwner(database, sessionId);
+  const model = owned && database.getWorkerExecutionState?.(owned.run.id)?.models?.[0];
+  const commander = ctx.get?.('commander');
+  const session = owned && commander?.executionSession(owned.run.id);
+  if (owned?.task.id !== taskId || !['codex', 'claude'].includes(model?.harness) || session?.id !== sessionId) {
+    throw new Error('无法定位任务的外部执行记录');
+  }
+  const page = commander.events(sessionId, after, 200);
+  return { status: session.status, cursor: page.cursor, truncated: page.truncated, events: page.events
+    .filter(event => event.type === 'text.delta' && typeof event.data?.text === 'string')
+    .map(event => ({ seq: event.seq, text: event.data.text.slice(-12_000) })) };
 }
 
 /** Official membership validates the bound project's execution cwd against

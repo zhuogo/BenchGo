@@ -7,7 +7,7 @@ import { syncDesktopArtifacts } from './desktop/sync-browser-artifacts.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const { values } = parseArgs({ options: { profile: { type: 'string' }, 'no-desktop-sync': { type: 'boolean', default: false } } });
-const child = spawn(process.execPath, [fileURLToPath(new URL('../plugins/benchgo/scripts/build-client.mjs', import.meta.url)), '--client'], {
+const child = spawn(process.execPath, [fileURLToPath(new URL('../plugins/base/scripts/build-client.mjs', import.meta.url)), '--client'], {
   cwd: root,
   stdio: 'inherit',
 });

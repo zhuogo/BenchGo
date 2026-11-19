@@ -1,4 +1,4 @@
-import { officialTooltipSource } from '../../benchgo/test/official-tooltip-source.mjs';
+import { officialTooltipSource } from '../../base/test/official-tooltip-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -7,11 +7,11 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { loadChannelModules, channelDefinition, channelIds } from '../src/channel-catalog.mjs';
-import { sharedUiStyles } from '../../benchgo/scripts/shared-ui.mjs';
+import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
 
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
-const { build } = createRequire(new URL('../../benchgo/package.json', import.meta.url))('esbuild');
+const { build } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || (existsSync(chromium.executablePath()) ? chromium.executablePath() : 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe');
 const output = fileURLToPath(new URL('../../../artifacts/channels-fusion/', import.meta.url));
 
@@ -21,7 +21,7 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
   const reactRequire = createRequire(new URL('../../../deepseek-harness/packages/client/ui-renderer/package.json', import.meta.url));
   const bundle = await build({ stdin: { contents: `
     import React from 'react'; import {createRoot} from 'react-dom/client';
-    import {Connections} from './connections.jsx'; import css from './style.css'; import shellCss from '../../benchgo/client/style.css';
+    import {Connections} from './connections.jsx'; import css from './style.css'; import shellCss from '../../base/client/style.css';
     const style=document.createElement('style');style.textContent=shellCss+css;document.head.append(style);
     const catalog=${JSON.stringify(catalog)};
     const configs=Object.fromEntries(catalog.map(d=>[d.id,{...d.defaults}]));
@@ -54,7 +54,7 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
     window.setConnectionsActive(true);
   `, resolveDir: fileURLToPath(new URL('../client/', import.meta.url)), loader: 'jsx' },
     bundle: true, write: false, outdir: 'unused-connections-ui-test', format: 'iife', platform: 'browser', jsx: 'automatic',
-    nodePaths: [fileURLToPath(new URL('../../benchgo/node_modules/', import.meta.url))],
+    nodePaths: [fileURLToPath(new URL('../../base/node_modules/', import.meta.url))],
     alias: { react: dirname(reactRequire.resolve('react/package.json')), 'react-dom': dirname(reactRequire.resolve('react-dom/package.json')) },
     loader: { '.css': 'text', '.svg': 'text' }, plugins: [sharedUiStyles(), officialTooltipSource()], logLevel: 'silent',
   });

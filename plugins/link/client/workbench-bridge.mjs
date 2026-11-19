@@ -1,4 +1,8 @@
 /* Installed before the shared Harness shell. The paired cookie is HttpOnly. */
+import { inheritWorkbenchTheme } from './device-theme.mjs';
+
+inheritWorkbenchTheme();
+
 (() => {
   const base = new URL(document.baseURI);
   const originalFetch = globalThis.fetch.bind(globalThis);

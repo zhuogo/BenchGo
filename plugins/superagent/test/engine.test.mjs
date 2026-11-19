@@ -14,6 +14,8 @@ import { createAssistantOrchestrationStore } from '../src/orchestration-store.mj
 import { createDesktopDelegationService, currentHumanInstruction } from '../src/desktop-delegation-service.mjs';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
+import { createRouterTools } from '../src/router-tools.mjs';
+import { serverSshTool } from '../../base/shared/server-ssh-tool.mjs';
 import { taskCleanupNoticeKey } from '../src/task-cleanup-continuation.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 import { taskReplySignal } from '../src/task-reply.mjs';
@@ -28,6 +30,7 @@ import { promisify } from 'node:util';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { installRoleHost } from './role-host-fixture.mjs';
+import { mountLiveReasoning } from '../../base/shared/live-reasoning.mjs';
 
 const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
 const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
@@ -72,7 +75,7 @@ async function fixture(t, script, options = {}) {
       yield* events;
     }
   }
-  ctx.llm.registerAdapter(['test'], new Adapter());
+  const adapterRegistration = ctx.llm.registerAdapter(['test'], new Adapter());
   if (options.officialSessionQuery) await ctx.plugin((await loadPackage('session-query/session-query-sqlite', '@deepseek-ai/dsh-session-query-sqlite')).default, { path: ':memory:', openAt: 'first-search' });
   else ctx.provide('sessionQuery', { listSessions: async () => options.persistenceRoot ? ctx.sessionPersistence.list() : ctx.sessions.list().map(session => ({ header: session.header })), readSession: async id => {
     const live = ctx.sessions.get(id);
@@ -102,10 +105,26 @@ async function fixture(t, script, options = {}) {
   });
   else engine = await createEngine(ctx);
   t.after(async () => { await engine.dispose(); await ctx.fiber.dispose(); if (options.store?.close) options.store.close(); ownedOrchestration?.close(); });
-  return { ctx, engine, store, requests, state: () => state,
+  return { ctx, engine, store, requests, adapterRegistration, state: () => state,
     async reloadEngine() { await engine.dispose(); engine = await createEngine(ctx); this.engine = engine; return engine; },
     setConfig: value => { config = value; }, setProfile: value => { profile = value; } };
 }
+
+test('assistant catalog omits providers with no discoverable models and preserves errors for diagnostics', async t => {
+  const f = await fixture(t, () => text('unused'));
+  class CatalogAdapter extends LlmAdapter {
+    async listModels(provider) {
+      if (provider === 'unreachable') throw new Error('directory unavailable');
+      return [{ provider, id: 'Exact:/Model', name: 'Exact model' }];
+    }
+  }
+  f.ctx.llm.registerAdapter(['deepseek-account'], new LlmAdapter());
+  f.ctx.llm.registerAdapter(['Router/Exact', 'commander-excluded', 'unreachable'], new CatalogAdapter());
+  const catalog = await f.engine.catalog();
+  assert.deepEqual(catalog.map(provider => provider.id), ['Router/Exact', 'unreachable']);
+  assert.deepEqual(catalog[0].models.map(model => model.id), ['Exact:/Model']);
+  assert.deepEqual({ available: catalog[1].available, error: catalog[1].error }, { available: false, error: 'directory unavailable' });
+});
 
 test('builtin layer reads only prompt body and reloads changed files without a module cache', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-builtin-'));
@@ -1365,30 +1384,22 @@ test('Router model context strips comments and refreshes while the separate raw 
   assert.deepEqual(await store.getSessionContext(agent.id), frozen);
 });
 
-test('runtime context exposes the full current name card as data and refreshes after edits', async t => {
-  const f = await fixture(t, () => text('Card reply'));
+test('runtime context keeps the current identity without retired HTML content or instructions', async t => {
+  const f = await fixture(t, () => text('Identity reply'));
   const models = [{ providerId: 'test', modelId: 'exact-card-model' }];
-  const cardHtml = `<span>${'card-source '.repeat(1000)}</span>`;
-  f.setConfig({ name: 'Display name', cardHtml, cardMotion: false, models });
-  await f.engine.send({ text: 'Read my card' });
+  f.setConfig({ name: 'Display name', cardHtml: '<b>LEGACY_HTML_BODY</b>', cardMotion: false, models });
+  await f.engine.send({ text: '看一下侧栏名片' });
   const agent = await f.engine.ensureSession();
   await agent.whenIdle();
   const first = JSON.stringify(f.requests[0].messages);
-  assert.ok(first.includes(cardHtml));
-  assert.match(first, /assistantCardHtml/);
-  assert.ok(first.includes('assistantCardMotion\\\":false'));
-  assert.match(first, /Edit cardHtml with assistant_settings/);
-  assert.match(first, /separate from your name/);
-  f.setConfig({ name: 'Display name', cardHtml: '<b>Changed card</b>', models });
-  await f.engine.send({ text: 'Read changed card' });
+  assert.match(first, /Display name/);
+  assert.doesNotMatch(first, /LEGACY_HTML_BODY|assistantCardHtml|assistantCardMotion|cardHtml|sidebar HTML card/);
+  f.setConfig({ name: 'Updated name', cardHtml: '<b>UPDATED_HTML_BODY</b>', models });
+  await f.engine.send({ text: 'Read my card' });
   await agent.whenIdle();
   const changed = JSON.stringify(f.requests[1].messages);
-  assert.ok(changed.includes('<b>Changed card</b>'));
-  assert.ok(changed.lastIndexOf('<b>Changed card</b>') > changed.lastIndexOf(cardHtml));
-  f.setConfig({ name: 'Display name', models });
-  await f.engine.send({ text: 'Default card' });
-  await agent.whenIdle();
-  assert.ok(JSON.stringify(f.requests[2].messages).includes('assistantCardHtml\\\":null'));
+  assert.match(changed, /Updated name/);
+  assert.doesNotMatch(changed, /LEGACY_HTML_BODY|UPDATED_HTML_BODY|assistantCardHtml|cardHtml/);
 });
 
 for (const document of ['MEMORY.md', 'USER.md']) test(`live session rereads a privacy-redacted snapshot after forgetting ${document}`, async t => {
@@ -1696,6 +1707,53 @@ test('inbox selects and freezes each Router queue before official step preparati
   await agent.whenIdle();
   assert.equal(f.requests.at(-1).model, 'Next Router/opaque');
   assert.equal(captured.at(-1).model, 'Next Router/opaque');
+});
+
+test('ordinary sessions drop a removed effort on live adapter updates and cold resume', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'benchgo-reasoning-session-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const f = await fixture(t, () => text('Done'), {
+    persistenceRoot: root, install: mountLiveReasoning,
+    reasoning: { efforts: [{ id: 'high', name: 'High' }] },
+  });
+  const provider = 'test', model = 'Exact/Model';
+  const handle = await f.ctx.agents.create({ sessionId: 'ordinary-live-effort', provider, model });
+  const cold = await f.ctx.agents.create({ sessionId: 'ordinary-cold-effort', provider, model });
+  for (const { agent } of [handle, cold]) agent.model.select({ provider, model, reasoningEffort: 'high' });
+  await cold.dispose();
+  class Adapter extends LlmAdapter {
+    async resolveModel() { return { provider, id: model, name: model, context: { contextWindow: 131072 } }; }
+    async *stream(request) { f.requests.push(request); yield* text('Done'); }
+  }
+  const changed = new Promise(resolve => {
+    const select = handle.agent.model.select.bind(handle.agent.model);
+    t.mock.method(handle.agent.model, 'select', selection => { select(selection); resolve(); });
+  });
+  f.adapterRegistration();
+  f.ctx.llm.registerAdapter([provider], new Adapter());
+  await changed;
+  const resumed = await f.ctx.agents.resume({ resumeSessionId: 'ordinary-cold-effort' });
+  const errors = [];
+  f.ctx.on('agent/error', ({ error }) => { errors.push(error); });
+  for (const { agent } of [handle, resumed]) {
+    assert.deepEqual(agent.model.current(), { provider, model });
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Continue.' }], source: { kind: 'user' } }));
+    await agent.whenIdle();
+  }
+  assert.deepEqual(errors, []);
+  assert.deepEqual(f.requests.map(request => [request.provider, request.model, request.reasoningEffort]), [
+    [provider, model, undefined], [provider, model, undefined],
+  ]);
+});
+
+test('a saved Router queue with a removed effort keeps its model and output limit', async t => {
+  const f = await fixture(t, () => text('Done'));
+  const model = 'Saved/Exact:Flash';
+  f.setConfig({ models: [{ providerId: 'test', modelId: model, options: { reasoningEffort: 'high', maxTokens: 321 } }] });
+  await f.engine.send({ text: 'Continue the saved conversation' });
+  const agent = await f.engine.ensureSession();
+  await agent.whenIdle();
+  assert.deepEqual(f.requests.map(request => [request.model, request.reasoningEffort, request.maxTokens]), [[model, undefined, 321]]);
 });
 
 test('request failure switches once without replaying input and every new message restores primary', async t => {
@@ -2067,6 +2125,68 @@ test('native prompt serializes admission and rejects changed request IDs without
   assert.equal(reached, false);
   const routes = agent.session.snapshotEvents().filter(event => event.type === 'plugin:benchgo-plugin/model-route');
   assert.equal(routes.length, 1); assert.doesNotMatch(JSON.stringify(routes), /PRIVATE-native-content/);
+});
+
+test('native SSH maintenance executes from the official prompt without a separate confirmation', async t => {
+  const args = { deviceId: 'example-server', command: 'printf ready' };
+  const result = { exitCode: 0, stdout: 'ready', stderr: '' };
+  const commands = [];
+  let setup;
+  const f = await fixture(t, (_request, index) => index === 1 ? [
+    { type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'ssh-call', name: 'assistant_server_ssh', arguments: JSON.stringify(args) } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
+  ] : text('Done'), {
+    setupTools: (...input) => setup(...input),
+    install: async ctx => await ctx.plugin((await loadPackage('interaction/user-questions', '@deepseek-ai/dsh-user-questions')).default),
+  });
+  f.ctx.provide('benchgoLink', {
+    sshTarget: async () => ({ name: 'Example', username: 'operator', host: 'server.example.test', port: 22, revision: 'trusted-settings' }),
+    sshCommand: async input => { commands.push(input); return result; },
+  });
+  setup = createRouterTools({ ctx: f.ctx, store: f.store, engine: f.engine, goals: { goals: () => [] }, shutdown: new AbortController() });
+  const agent = await f.engine.ensureSession();
+  assert.equal(f.ctx.approval.overrideOf(agent.session), 'never');
+  f.ctx.on('user-questions/request', () => assert.fail('unexpected SSH confirmation'));
+  const content = [{ type: 'text', text: 'Run the server connectivity check' }];
+  const request = { sessionId: agent.id, requestId: 'ssh-registered', mode: 'queue', content };
+  await f.engine.nativePrompt({ request, dispatch() {
+    agent.followup(createUserMessage({ content, source: { kind: 'user', rpcId: request.requestId } }));
+    return { accepted: true };
+  } });
+  const toolResults = () => agent.session.snapshotEvents().filter(event => event.type === 'tool/result');
+  await agent.whenIdle();
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].expectedRevision, 'trusted-settings');
+  assert.equal(f.ctx.approval.overrideOf(agent.session), 'never');
+  assert.match(JSON.stringify(toolResults()), /"stdout.*ready/);
+});
+
+test('SSH maintenance is available in an ordinary native project conversation', async t => {
+  const commands = [];
+  const args = { deviceId: 'example-server', command: 'printf ready' };
+  const f = await fixture(t, (request, index) => {
+    if (index !== 1) return text('Done');
+    assert.ok(request.tools.some(tool => tool.name === 'assistant_server_ssh'));
+    return [
+      { type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'ssh-command', name: 'assistant_server_ssh', arguments: JSON.stringify(args) } },
+      { type: 'finish', reason: { kind: 'tool-calls' } },
+    ];
+  }, { install(ctx) {
+    const link = {
+      sshTarget: async () => ({ revision: 'project-target' }),
+      sshCommand: async ({ signal, ...input }) => { commands.push(input); return { code: 0, stdout: 'ready' }; },
+    };
+    ctx.tools.register(serverSshTool(ctx, () => link));
+  } });
+  const handle = await f.ctx.agents.create({ sessionId: 'ordinary-ssh', provider: 'test', model: 'first', meta: { cwd: process.cwd() } });
+  t.after(() => handle.dispose());
+  handle.agent.model.select({ provider: 'test', model: 'first' });
+  handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Run the SSH readiness check' }], source: { kind: 'user' } }));
+  await handle.agent.whenIdle();
+  assert.deepEqual(commands, [{ ...args, expectedRevision: 'project-target' }],
+    JSON.stringify(handle.agent.session.snapshotEvents().filter(event => /^(tool\/|turn\/end|approval\/)/.test(event.type))));
 });
 
 test('native steering cannot mix a changed model queue into an active claimed batch', async t => {

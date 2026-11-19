@@ -1,1 +1,1 @@
-﻿export { questionBatch, questionAnswers, questionReplyText, isChatUserMessage, questionCalls, readAdmittedQuestionReply, readQuestionReply, readBoundQuestionReply } from '../../benchgo/shared/question-reply.mjs';
+﻿export { questionBatch, questionAnswers, questionReplyText, isChatUserMessage, questionCalls, readAdmittedQuestionReply, readQuestionReply, readBoundQuestionReply } from '../../base/shared/question-reply.mjs';

@@ -13,8 +13,8 @@
   "id": "00",
   "title": "一个工作台，六个能力板块",
   "eyebrow": "SYSTEM / OVERVIEW",
-  "subtitle": "业务工单留在发起宿主，执行跟着项目所属设备走；A 统一管理，B 只执行，无需启用 B 的 SuperAgent。",
-  "boundary": "当前图依据本地工作区源码（含未提交改动）与 upstream.json：官方 DeepSeek Harness 0.2.2-rc.1，pin fcc0ad462172。BenchGo 只安装 benchgo-plugin；六个文档板块是职责划分，与五个 Cordis 服务入口并非一一对应。各板块详情区单独标注实现和规划的差距。 2026-11-15 已接通 A 唯一业务 Task → Link v1 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v1 仅 official 单模型、无二级子代理委派，执行会话只读，跨设备产物传输不支持。 设备 AI 管理仍限既有设备和中继有限修改申请，首次配对与秘密继续走设备中心。  统一安装、共同实例登记与所有权、生产闭包和部署资源服务已有源码；未知旧 Harness profile 保守拒绝，只显式复用精确兼容 runtime。三平台原生安装、GUI 交接、真实模型推理和公开发行不由源码状态推断，细节见更新与发布图。",
+  "subtitle": "A 持有工单，项目所属设备执行。Router 固定官方 Harness，Worker 可按设备能力选择执行器。",
+  "boundary": "本图对应发布候选源码。upstream.json 记录官方 DeepSeek Harness 0.2.2-rc.5（2e39e70496aa），运行兼容性待验。BenchGo 只安装 benchgo-plugin，由五个 Cordis 入口装配，六个设计板块按产品职责组织。A 持有唯一业务工单，Link v2 将冻结的 Harness 与模型组合交给 B 的 benchgoExecution，执行事实回到 A。受控测试范围及物理双机、实际供应商和安装版验收条件见各板块。公开发行证据见更新与发布板块的 v0.1.5，本轮候选仍在验证。",
   "zones": [
     {
       "x": 40,
@@ -74,11 +74,11 @@
       "input": "可信设备、直连地址与中继路线",
       "output": "经认证的远程工作台与协议转发",
       "sources": [
-        "plugins/benchgo/src/link-plugin.mjs",
+        "plugins/base/src/link-plugin.mjs",
         "plugins/link/src/index.mjs"
       ],
       "state": "implemented",
-      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。 跨设备资源/有限操作服务已接线，沿用配对、路线与服务生命周期，不增加插件入口。 工作台 benchgo 与中继 benchgo-relay 保持独立入口；三平台工作台安装、现有实例接入与部署资源交付的唯一契约在更新与发布板块，中继仍限 Linux/systemd。",
+      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。 跨设备资源/有限操作服务已接线，沿用配对、路线与服务生命周期，不增加插件入口。 工作台 benchgo 与中继 benchgo-relay 保持独立入口；三平台工作台安装、现有实例接入与部署资源交付的唯一契约在更新与发布板块，中继仍限 Linux/systemd。 设备中心用实例身份关联 SSH 和 Link。设备中心提供 SSH 登记和终端，当前工作台的对话直接使用该登记执行 AI 运维；Link 通过目标签发的连接码授权手机，公网 HTTPS 或中继独立于本机隧道。",
       "page": "docs/01-设备与远程连接/架构.html",
       "doc": "docs/01-设备与远程连接/设计.md"
     },
@@ -96,8 +96,8 @@
       "input": "项目、会话投影、模块可用性",
       "output": "工作区界面、会话输入与产物预览",
       "sources": [
-        "plugins/benchgo/client/index.jsx",
-        "plugins/benchgo/client/modules.mjs"
+        "plugins/base/client/index.jsx",
+        "plugins/base/client/modules.mjs"
       ],
       "state": "implemented",
       "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。 项目/最近跨设备显示范围已接线，默认仍是当前工作台所属设备。",
@@ -128,7 +128,7 @@
         "plugins/superagent/test/owned-remote-execution-integration.test.mjs"
       ],
       "state": "partial",
-      "note": "使用者权限只在对应渠道适配器区分，核心不设主人/其他用户权限角色；Router/Worker 是职责与模型上下文分工，宿主权限统一为官方 Full，装配与业务动作许可见 SuperAgent 模型与上下文、任务与执行。渠道专用共享策略已集中，适配器入口准入与按需研判尚有迁移缺口，不能写成全部已下沉；详见 SuperAgent 入口与研判。来源真实性和任务归属仍须准确处理。目标只是清单，不委派；基于目标的主动性机制待实施。自我迭代源码已接线并有定向覆盖，真实付费模型效果及安装版运行未验，详见记忆与技能。 跨设备 A 唯一工单、统一管理与 B 纯执行已有源码及定向 fixture；旧目标 Task 链、专用工具与引用旁账已删除。A 按 B 真实 Harness/模型目录选择冻结执行配置，B 用本机凭据校验，不读取 B SuperAgent 工作模型。",
+      "note": "使用者权限只在对应渠道适配器区分，核心不设主人/其他用户权限角色；Router/Worker 是职责与模型上下文分工，宿主权限统一为官方 Full，装配与业务动作许可见 SuperAgent 模型与上下文、任务与执行。渠道专用共享策略已集中，适配器入口准入与按需研判尚有迁移缺口，不能写成全部已下沉；详见 SuperAgent 入口与研判。来源真实性和任务归属仍须准确处理。目标只是清单，不委派；基于目标的主动性机制待实施。自我迭代源码已接线并有定向覆盖，真实付费模型效果及安装版运行未验，详见记忆与技能。 跨设备 A 唯一工单、统一管理与 B 纯执行已有源码及定向 fixture；旧目标 Task 链、专用工具与引用旁账已删除。A 按 B 真实 Harness/模型目录选择冻结执行配置，B 用本机凭据校验，不读取 B SuperAgent 工作模型。 Router 与辅助角色固定使用官方 Harness，Worker 可选 Codex 或 Claude Code。",
       "page": "docs/06-superagent/架构.html",
       "doc": "docs/06-superagent/设计.md"
     },
@@ -146,10 +146,10 @@
       "input": "麦克风音频、转写与会话事件",
       "output": "原会话文本输入、音频回复与语音记录",
       "sources": [
-        "plugins/voice/src/plugin.mjs",
-        "plugins/voice/src/conversation-bridge.mjs",
-        "plugins/voice/client/controller.mjs",
-        "plugins/voice/client/call-host.jsx",
+        "plugins/media/src/plugin.mjs",
+        "plugins/media/src/conversation-bridge.mjs",
+        "plugins/media/client/controller.mjs",
+        "plugins/media/client/call-host.jsx",
         "scripts/desktop/prepare-background.mjs"
       ],
       "state": "implemented",
@@ -171,9 +171,9 @@
       "input": "Cordis 配置、官方服务与数据目录",
       "output": "公共服务、模块可用性与基础路由",
       "sources": [
-        "plugins/benchgo/src/plugin.mjs",
-        "plugins/benchgo/src/settings-management.mjs",
-        "plugins/benchgo/cordis.patch.yml"
+        "plugins/base/src/plugin.mjs",
+        "plugins/base/src/settings-management.mjs",
+        "plugins/base/cordis.patch.yml"
       ],
       "state": "implemented",
       "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。"
@@ -185,22 +185,25 @@
       "kind": "execution",
       "x": 440,
       "y": 455,
-      "sub": "外部原生会话、委派、适配与 MCP",
+      "sub": "04 · 共享 API 与原生工具调度",
       "symbol": "commander / Commander",
-      "plain": "把不同原生编码 Agent 接进同一套会话接口。",
-      "role": "管理原生运行时、会话句柄、事件、委派与权限转接；官方 Agent 服务与这个原生聚合服务各有职责。SuperAgent 注入 commander，Router 与 Worker 均使用官方 Agent。 跨设备执行接收器随现有 Harness 能力装配：仅接受认证委托并驱动既有官方 Worker/会话，不创建目标业务 Task，不经过目标 SuperAgent，不新增 Cordis 入口。",
-      "input": "原生 provider、工作目录、模型与消息",
+      "plain": "统一调度 Codex、Claude Code 等原生工具，各驱动处理对应协议。",
+      "role": "Commander 以隔离 API 配置启动原生工具，管理会话、事件、提问与停止。工作台、本机 Worker 与 B 的执行服务复用 Commander。外部执行默认 Full access。",
+      "input": "原生工具、工作目录、会话绑定与消息",
       "output": "原生会话、工具事件与运行结果",
       "sources": [
         "plugins/harness/src/plugin.mjs",
+        "plugins/harness/src/adapter.mjs",
         "plugins/harness/src/runtime.mjs",
+        "plugins/harness/src/web.mjs",
         "plugins/harness/src/delegation.mjs",
         "plugins/harness/src/remote-execution.mjs",
         "plugins/harness/test/remote-execution.test.mjs"
       ],
-      "state": "implemented",
-      "note": "原生聚合与独立 benchgoExecution 已接线；B 仅需 Link 与可用 Harness 执行服务，停用 B SuperAgent 不阻断 A 委托。当前远端 v1 仅 official 单模型，无二级子代理委派，真实供应商、安装版和物理双机待验。",
-      "page": "docs/02-工作台与Agent/架构.html"
+      "state": "partial",
+      "note": "Windows 真实 CLI 版本入口已验证。委派去重、父子停止和 A→B→A 回传已有协议测试。实机双设备与付费模型待验。",
+      "page": "docs/04-模型与工具/架构.html#native-dispatch",
+      "doc": "docs/04-模型与工具/原生工具与会话.md#调度边界"
     },
     {
       "id": "official",
@@ -211,7 +214,7 @@
       "y": 455,
       "sub": "Agent、Session、审批、工具与调度",
       "symbol": "agents / sessions / llm",
-      "plain": "真正承载官方对话与 Worker 执行的引擎。",
+      "plain": "承载 Router、辅助请求及官方 Worker 的运行时。",
       "role": "直接复用官方 Agent、会话存储、权限、模型与工具服务，不在 BenchGo 中另写一套推理循环；官方子模块只维护版本 pin。",
       "input": "消息、工具配置、权限与模型路由",
       "output": "真实执行、会话事件及持久化记录",
@@ -230,21 +233,21 @@
       "kind": "model",
       "x": 1200,
       "y": 455,
-      "sub": "供应商、凭据、技能、工具与压缩",
+      "sub": "共享 API 目录、工具卡片与技能",
       "symbol": "benchgoTooling / benchgoEfficiency",
       "plain": "为会话提供准确的模型选择与可用工具。",
-      "role": "复用官方 settings、credentials 与 llm；保留供应商模型 ID 原值；组合执行增强和压缩，技能复用官方发现路径，原生 Agent 不因此自动获得官方工具。",
+      "role": "基础层维护供应商、模型及 API 凭据。执行目录为工作台和 Worker 筛选兼容组合，外部工具使用隔离配置。",
       "input": "显式供应商、模型 ID、技能与工具档案",
       "output": "会话模型配置、技能目录与执行增强",
       "sources": [
-        "plugins/benchgo/src/model-providers.mjs",
-        "plugins/benchgo/src/tooling.mjs",
-        "plugins/efficiency/src/plugin.mjs"
+        "plugins/base/src/model-providers.mjs",
+        "plugins/base/src/tooling.mjs",
+        "plugins/base/efficiency/src/plugin.mjs"
       ],
       "state": "implemented",
       "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。",
       "page": "docs/04-模型与工具/架构.html",
-      "doc": "docs/04-模型与工具/设计.md"
+      "doc": "docs/04-模型与工具/模型与供应商.md#共享-api-目录与执行选择"
     },
     {
       "id": "release",
@@ -260,15 +263,15 @@
       "input": "源码、官方 pin、发布配置与签名包",
       "output": "桌面或插件版本、服务端种子与更新状态",
       "sources": [
-        "plugins/benchgo/src/updates.mjs",
+        "plugins/base/src/updates.mjs",
         "scripts/desktop/package-windows.mjs",
         "scripts/desktop/package-plugin-update.mjs",
         "docs/05-更新与发布/设计.md",
         "packages/benchgo-cli/src/cli.mjs",
-        "plugins/benchgo/shared/workbench-installation.mjs",
+        "plugins/base/shared/workbench-installation.mjs",
         "scripts/desktop/workbench-desktop.mjs",
         "scripts/desktop/payload-policy.mjs",
-        "plugins/benchgo/shared/server-resources.mjs"
+        "plugins/base/shared/server-resources.mjs"
       ],
       "state": "partial",
       "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。 安装发现、三平台 CLI、生产闭包及资源服务已有源码；三平台原生安装、GUI 交接、真实模型推理与公开发行仍须分别验收。包体、运行实例和资源缓存的复用分开核实，不以代码完成冒称已经发布。",
@@ -289,12 +292,12 @@
       "input": "基础层上下文、连接与工具服务",
       "output": "客户端组件、执行增强与工作台接口",
       "sources": [
-        "plugins/interactive/src/prompt.mjs",
-        "plugins/efficiency/src/plugin.mjs",
-        "plugins/workbench/src/plugin.mjs"
+        "plugins/base/interactive/src/prompt.mjs",
+        "plugins/base/efficiency/src/plugin.mjs",
+        "plugins/base/workbench/src/plugin.mjs"
       ],
       "state": "implemented",
-      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。"
+      "note": "标记表示存在对应源码，不代表真实设备、模型或安装环境已经通过运行验收。 设备卡终端与本机 AI 使用设备中心的 SSH 服务；服务器登记与手机配对归设备中心和 Link。"
     },
     {
       "id": "storage",
@@ -334,11 +337,11 @@
       "input": "自有源码包、官方依赖与静态资源",
       "output": "benchgo-plugin 及完整发布闭包",
       "sources": [
-        "plugins/benchgo/package.json",
-        "plugins/benchgo/cordis.patch.yml",
-        "plugins/benchgo/scripts/build-modules.mjs",
-        "plugins/benchgo/scripts/build-client.mjs",
-        "plugins/workbench/scripts/sidebar-runtime.mjs",
+        "plugins/base/package.json",
+        "plugins/base/cordis.patch.yml",
+        "plugins/base/scripts/build-modules.mjs",
+        "plugins/base/scripts/build-client.mjs",
+        "plugins/base/workbench/scripts/sidebar-runtime.mjs",
         "scripts/desktop/payload-policy.mjs"
       ],
       "state": "implemented",
@@ -563,7 +566,7 @@
       "sub": "当前任务要求与输入账 · 执行时注入",
       "symbol": "",
       "plain": "一个官方执行会话接收当前任务上下文。",
-      "role": "自动注入当前 target、acceptance、原始 Mandate、要求版本、执行范围、任务/分派 ID、目录与请求时间；任务输入账提供当前任务已经应用的补充与答复，每步更新当前任务切片。当前执行器不直接注入 Router 的四份档案和全量记忆。 当前接线仅飞书可补取原来源历史，最近最多 20 条、每条最多 4000 字符、总计默认 12000 字符；无服务或读取失败则标明不可用。它是参考资料，不是新增授权。 Worker 自行使用官方 subagent 工具，BenchGo 只用提示词鼓励适当拆分；子会话上下文、模型、工具与结果回送均复用官方能力，不另开子任务。任务包要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题。 跨设备由 A 冻结任务包，经 v1 execution 交给 B；当前远端只支持 official 单模型，不提供二级子代理委派，通用子代理说明仅适用于本机执行。",
+      "role": "自动注入当前 target、acceptance、原始 Mandate、要求版本、执行范围、任务/分派 ID、目录与请求时间；任务输入账提供当前任务已经应用的补充与答复，每步更新当前任务切片。当前执行器不直接注入 Router 的四份档案和全量记忆。 当前接线仅飞书可补取原来源历史，最近最多 20 条、每条最多 4000 字符、总计默认 12000 字符；无服务或读取失败则标明不可用。它是参考资料，不是新增授权。 Worker 自行使用官方 subagent 工具，BenchGo 只用提示词鼓励适当拆分；子会话上下文、模型、工具与结果回送均复用官方能力，不另开子任务。任务包要求结束时用几句话写清做成了什么、产出在哪、还剩什么问题。 跨设备由 A 冻结任务包，经 v2 execution 交给 B；远端执行按目标目录冻结一个 Harness 与模型组合，不提供二级子代理委派，通用子代理说明仅适用于本机执行。",
       "input": "当前消息、当前任务要求或按需检索参数",
       "output": "当前任务 Worker 上下文与官方委派指导",
       "sources": [
@@ -614,7 +617,7 @@
         "plugins/link/src/devices/resources.mjs",
         "plugins/link/src/session/adapter.mjs"
       ],
-      "note": "资源目录、有限查询及 Link v1 execution 协议已接线；execution catalog 真实 TLS/身份测试通过。目标目录不冒充实时可用性，只认同版协议和真实身份，不回退旧目标 Task 链。一次配对反向通道及真实物理双机仍待验。",
+      "note": "资源目录、有限查询及 Link v2 execution 协议已接线；execution catalog 真实 TLS/身份测试通过。目标目录不冒充实时可用性，只认同版协议和真实身份，不回退旧目标 Task 链。一次配对反向通道及真实物理双机仍待验。",
       "state": "implemented",
       "x": 60,
       "y": 1400,
@@ -656,7 +659,7 @@
       "sub": "执行实例 · 官方会话 · 有序回执",
       "symbol": "executionId / Run / fence / cursor",
       "plain": "B 运行 Worker、保存执行事实，无需 B 的 SuperAgent。",
-      "role": "B 的 Harness 接收器校验 Link 身份、目标项目和 A 冻结的执行配置，持久受理执行实例后驱动原官方会话；仅保存会话、日志、产物、已应用版本及操作回执，不创建业务 Task、目标清单、Router 回合或任务调度。执行事件与问题按代际和水位回 A；本机紧急停止只产生执行事实，不接管 A 工单。",
+      "role": "B 校验 Link 身份、项目和 A 冻结的 Harness、供应商、模型组合。官方运行时或 Commander 在 B 使用本机凭据执行，保留执行实例、会话和有序回执。执行事件和问题回到 A 的原工单。",
       "input": "A Task/Assignment/Run、执行代际、要求快照与稳定命令",
       "output": "B 的执行实例、应用/停止确认、事件与产物引用",
       "sources": [
@@ -666,7 +669,7 @@
         "plugins/harness/src/remote-execution-store.mjs",
         "plugins/harness/test/remote-execution.test.mjs"
       ],
-      "note": "B 独立 benchgoExecution 已接线，不需要 SuperAgent；受理、输入应用、原 session 暂停恢复、控制、事件回流及重启不重放有定向覆盖。当前 v1 仅 official 单模型，不开放二级子代理委派和调度类工具；执行会话只读，业务输入回 A。uncertain 中断只核实；跨设备产物传输未实现，真实双机/安装版/供应商请求待验。",
+      "note": "Link v2 接入官方与外部 Worker。外部 Worker 支持提问、取消和只读记录，暂停、在途补充与修订仍待支持。执行状态不明时只核实原记录，跨设备产物传输待实施。真实双机、安装版和供应商请求仍待验。",
       "state": "implemented",
       "x": 820,
       "y": 1400,
@@ -732,7 +735,7 @@
       "b": "harness",
       "from": "b",
       "to": "t",
-      "label": "原生会话接口"
+      "label": "选择工具 / 会话操作"
     },
     {
       "a": "superagent",
@@ -758,11 +761,11 @@
       "kind": "support"
     },
     {
-      "a": "harness",
-      "b": "official",
-      "from": "r",
-      "to": "l",
-      "label": "官方适配 / 工具"
+      "a": "official",
+      "b": "harness",
+      "from": "l",
+      "to": "r",
+      "label": "原生工具适配器"
     },
     {
       "a": "models",
@@ -888,7 +891,7 @@
     {
       "node": "workspace",
       "title": "从同一个工作台开始",
-      "text": "用户在项目里打开聊天。普通官方会话直接进入官方运行时；需要总助手时进入 Router 主聊。"
+      "text": "用户在项目里打开聊天。普通会话选用 API 模型时由官方运行时请求模型，选用 Codex 或 Claude Code 时经原生工具适配器进入 Commander。总助手对话从 Router 主聊进入。"
     },
     {
       "node": "superagent",
@@ -909,14 +912,14 @@
     },
     {
       "node": "official",
-      "title": "Worker 使用官方执行能力",
-      "text": "Router 通过专属工具创建或恢复官方 Worker。文件、命令、网页、技能、插件、MCP 与官方 subagents 等环境执行能力由 Worker 使用，Router 的角色工具门排除通用执行工具；双方均遵守实际来源授权和审批，默认不必启动外部原生 CLI。",
+      "title": "按角色选择执行路径",
+      "text": "Router 与辅助模型固定官方 Harness。Worker 可按目标设备目录选择官方 Harness、Codex 或 Claude Code。",
       "edge": 5
     },
     {
       "node": "models",
       "title": "模型、工具与上下文来自既有服务",
-      "text": "显式选择的供应商和模型 ID 原样进入路由；工具、技能和压缩按会话的真实能力装配。",
+      "text": "模型页存一份 API 供应商配置，工作台与 Worker 按协议和入口能力选择，外部工具只读取本次执行绑定。",
       "edge": 9
     },
     {
@@ -945,12 +948,12 @@
     {
       "node": "cross-resources",
       "title": "已接线：一个入口发现各设备资源",
-      "text": "侧边栏和助手共用设备资源服务；Link v1 execution 单独声明目录、冻结配置和执行能力，真实 TLS/身份测试通过。仅支持旧目标 Task 链的设备明确要求升级，不兼容回退。"
+      "text": "侧边栏和助手共用设备资源服务；Link v2 execution 单独声明目录、冻结配置和执行能力，真实 TLS/身份测试通过。仅支持旧目标 Task 链的设备明确要求升级，不兼容回退。"
     },
     {
       "node": "cross-owner",
       "title": "已接线：A 工单，B 执行",
-      "text": "A 先保存正式工单与稳定执行委托，按 B catalog 冻结 official 单模型配置，再经 Link 派发。B 无需 SuperAgent，不创建业务 Task。列表、修订与控制始终用 A taskId；五项 A/B 服务 fixture 验证新链，真物理双机与供应商待验。"
+      "text": "A 保存唯一工单，从 B 的目录冻结一个 Harness、供应商和模型组合。B 使用本机配置执行并回传。"
     },
     {
       "node": "cross-receipt",
@@ -961,6 +964,11 @@
       "node": "cross-manage",
       "title": "已接线：对话即可配置设备与中继",
       "text": "已有设备通过共享服务连接、重连和诊断。远端中继只申请已有节点优先级/启停修改，目标主人确认具体差异后执行。首次配对、秘密、新节点和部署仍走设备中心；待确认不冒充已应用。"
+    },
+    {
+      "node": "link",
+      "title": "同一服务器的运维与访问",
+      "text": "设备中心用实例身份关联 SSH 和 Link。设备中心提供 SSH 登记和终端，当前工作台的对话直接使用该登记执行 AI 运维；Link 通过目标签发的连接码授权手机，公网 HTTPS 或中继独立于本机隧道。"
     }
   ],
   "docs": [
@@ -987,9 +995,13 @@
     {
       "label": "跨设备资源导航",
       "path": "docs/02-工作台与Agent/跨设备资源导航.md"
+    },
+    {
+      "label": "SSH 服务器运维",
+      "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
-  "version": "2026-11-16-installation-implementation-1",
+  "version": "2026-11-18-external-harness-api-2",
   "context": {
     "intro": "上下文按固定层、会话层与按需层装配。Router 使用四份稳定档案、短 MEMORY 总纲、小量对象 INDEX 和每次启动的简短协作对齐，详细事实、对象页与复盘按需；Worker 按需读取技能正文。当前回合后续可在安全边界刷新纠正，源码已接线，真实付费模型效果未验，边界见记忆与技能；全量 token 预算仍待实施。",
     "groups": [
@@ -1035,7 +1047,7 @@
           ],
           [
             "官方 subagents",
-            "本机 Worker 可按需使用官方 subagents；远端 v1 不提供二级子代理委派。Router 通过既有任务工具委派，不直接调用官方子代理。Worker 的任务包与 Router 档案各守归属，子会话的上下文、工具与模型遵循官方服务，不另建平行的子任务机制。"
+            "本机 Worker 可按需使用官方 subagents；远端执行 不提供二级子代理委派。Router 通过既有任务工具委派，不直接调用官方子代理。Worker 的任务包与 Router 档案各守归属，子会话的上下文、工具与模型遵循官方服务，不另建平行的子任务机制。"
           ],
           [
             "渠道研判",

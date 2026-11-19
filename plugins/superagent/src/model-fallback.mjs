@@ -1,1 +1,1 @@
-﻿export { modelFallbackType, modelFallbackSource, modelRouteType, fallbackCallSignature, requestExecutionEvents, dispatchedCallSignatures, isRouterQuery, readModelFallbacks, fallbackRequestIds } from '../../benchgo/shared/model-fallback.mjs';
+﻿export { modelFallbackType, modelFallbackSource, modelRouteType, fallbackCallSignature, requestExecutionEvents, dispatchedCallSignatures, isRouterQuery, readModelFallbacks, fallbackRequestIds } from '../../base/shared/model-fallback.mjs';

@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
-import { compareVersions } from '../../plugins/benchgo/shared/update-feed.mjs';
+import { compareVersions } from '../../plugins/base/shared/update-feed.mjs';
 import { assetBytes, findPreviousRelease, github, githubJson, repository } from './github.mjs';
 
 export function selectLegacyInstaller(releases, currentVersion) {

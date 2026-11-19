@@ -1,4 +1,4 @@
-import { AgentFeed } from '../../voice/client/agent-feed.mjs';
+import { AgentFeed } from '../../media/client/agent-feed.mjs';
 import { retainAssistantSession } from './session-retain.mjs';
 import { notificationKeys, notificationSound } from './notification-sound.mjs';
 

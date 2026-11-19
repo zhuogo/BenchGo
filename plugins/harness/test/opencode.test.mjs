@@ -5,14 +5,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Commander } from '../src/runtime.mjs';
+import { fixtureRoute, fixtureRouteService } from './fixtures/api-route.mjs';
 
 const fixture = { command: process.execPath, commandArgs: [fileURLToPath(new URL('./opencode-fixture.mjs', import.meta.url))] };
 
 test('OpenCode v1: authenticated loopback server, SSE ready before prompt, Full permission reply and resume', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'commander-opencode-'));
-  const runtime = await new Commander({ dataDir: directory, providers: { opencode: fixture } }).open();
+  const runtime = await new Commander({ dataDir: directory, routeService: fixtureRouteService, providers: { opencode: fixture } }).open();
   t.after(async () => { await runtime.close(); await rm(directory, { recursive: true, force: true }); });
-  const { id } = await runtime.create({ provider: 'opencode' });
+  const { id } = await runtime.create({ provider: 'opencode', route: fixtureRoute() });
   await runtime.submit(id, 'hello'); await runtime.wait(id);
   assert.ok(runtime.events(id).events.some(e => e.type === 'text.delta' && e.data.text === 'fixture-opencode'));
   await runtime.submit(id, 'approval'); await runtime.wait(id);
@@ -25,7 +26,7 @@ test('OpenCode v1: authenticated loopback server, SSE ready before prompt, Full 
 
 test('OpenCode v2 cannot be mistaken for a compatible v1 server', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'commander-opencode-v2-'));
-  const runtime = await new Commander({ dataDir: directory, providers: { opencode: { ...fixture, env: { FIXTURE_VERSION: '2.0.0' } } } }).open();
+  const runtime = await new Commander({ dataDir: directory, routeService: fixtureRouteService, providers: { opencode: { ...fixture, env: { FIXTURE_VERSION: '2.0.0' } } } }).open();
   t.after(async () => { await runtime.close(); await rm(directory, { recursive: true, force: true }); });
-  await assert.rejects(runtime.create({ provider: 'opencode' }), /Unsupported OpenCode/);
+  await assert.rejects(runtime.create({ provider: 'opencode', route: fixtureRoute() }), /隔离工具启动失败/);
 });

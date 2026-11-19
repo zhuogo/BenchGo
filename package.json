@@ -1,20 +1,20 @@
 {
   "name": "benchgo",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "bin": {
     "benchgo": "./bin/benchgo.mjs"
   },
-  "description": "BenchGo plugin, voice and paired remote clients for the official DeepSeek Harness",
+  "description": "BenchGo plugin, media and paired remote clients for the official DeepSeek Harness",
   "license": "MIT",
   "dsh": {
     "bundle": {
-      "patch": "./plugins/benchgo/cordis.patch.yml"
+      "patch": "./plugins/base/cordis.patch.yml"
     }
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": ">=24.9.0"
   },
   "packageManager": "pnpm@11.28.5",
   "scripts": {
@@ -32,14 +32,13 @@
     "package:mac:x64": "node scripts/harness.mjs package:desktop:mac:x64",
     "package:win:x64": "node scripts/harness.mjs package:desktop:win:x64",
     "check": "node scripts/harness.mjs check",
-    "commander": "node plugins/benchgo/src/cli.mjs",
-    "test:commander": "npm --prefix plugins/benchgo test",
+    "test:commander": "npm --prefix plugins/base test",
     "test:harness": "node --import ./scripts/source-loader.mjs --test plugins/harness/test/*.test.mjs",
     "test:superagent": "node --import ./scripts/source-loader.mjs --test plugins/superagent/test/*.test.mjs",
-    "test:voice": "node --import ./scripts/source-loader.mjs --test plugins/voice/test/*.test.mjs",
-    "build:voice": "npm --prefix plugins/benchgo run build:client",
+    "test:media": "node --import ./scripts/source-loader.mjs --test plugins/media/test/*.test.mjs",
+    "build:media": "npm --prefix plugins/base run build:client",
     "test:link": "npm --prefix plugins/link test",
-    "build:plus": "npm --prefix plugins/benchgo run build:client",
+    "build:plus": "npm --prefix plugins/base run build:client",
     "build:android": "node scripts/build-link-android.mjs",
     "package:plus:win": "node scripts/desktop/package-windows.mjs",
     "package:plus:mac:arm64": "node scripts/desktop/package-macos.mjs arm64",

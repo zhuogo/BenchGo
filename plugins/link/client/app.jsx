@@ -2,7 +2,7 @@ import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { Select } from '../../shared/client/select.jsx';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import { managementCall as call } from './api.mjs';
 import { PairQr } from './qr.jsx';
 import { connectionDefaults, pairingConnection } from './connection-mode.mjs';

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSettingsManagement, applySettingsOps, settingsFingerprint } from '../../benchgo/src/settings-management.mjs';
+import { createSettingsManagement, applySettingsOps, settingsFingerprint } from '../../base/src/settings-management.mjs';
 import { createAssistantStore } from '../src/store.mjs';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
@@ -67,9 +67,18 @@ test('settings HTTP freezes exact safety changes, blocks prohibited paths and pr
   const current = await read();
   await assert.rejects(f.http.dispatch({ action: 'settingsPrepare', ...ref, expectedRevision: current.revision,
     ops: [set(['pet'], null)] }, owner), { code: 'SETTINGS_BLOCKED' });
+  assert.equal(Object.hasOwn(current.value, 'cardHtml'), false);
+  await assert.rejects(f.http.dispatch({ action: 'settingsPrepare', ...ref, expectedRevision: current.revision,
+    ops: [set(['cardHtml'], '<b>Old card</b>')] }, owner), { code: 'SETTINGS_SCHEMA_REJECTED' });
+  await assert.rejects(f.http.patchAssistant({ patch: { cardHtml: null }, revision: current.backendRevision }, owner), { code: 'SETTINGS_SCHEMA_REJECTED' });
+  const catalog = await f.http.dispatch({ action: 'settingsCatalog', adapterId: ref.adapterId }, owner);
+  assert.equal(Object.hasOwn(catalog.entries.find(entry => entry.namespace === ref.namespace).schema.properties, 'cardHtml'), false);
+  await assert.rejects(f.http.patchAssistant({ patch: { cardMotion: false }, revision: current.backendRevision }, owner), { code: 'SETTINGS_SCHEMA_REJECTED' });
   await f.http.patchAssistant({ patch: { workerConcurrency: 3 }, revision: current.backendRevision }, owner);
   const saved = await f.store.getConfig();
-  assert.equal(saved.workerConcurrency, 3); assert.equal(saved.capabilities.proactive, true);
+  assert.equal(saved.workerConcurrency, 3);
+  assert.equal(saved.capabilities.proactive, true);
+  assert.equal(Object.hasOwn(saved, 'cardMotion'), false);
 });
 
 test('page Save retries reuse the same request without another configuration write', async t => {

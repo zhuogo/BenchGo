@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 
-const validName = value => typeof value === 'string' && /^assistant_(?:profile|generate_image|pet)$/.test(value);
+const modelActionTools = new Set(['assistant_profile', 'assistant_pet', 'generate_image', 'generate_video', 'generate_audio']);
 const validId = (value, name) => {
   if (typeof value !== 'string' || !value.trim() || value.length > 512) throw new Error(`Model action requires ${name}`);
   return value;
@@ -35,7 +35,7 @@ export function createModelActionTaskExecutor({ ctx, database, readPolicy, perfo
 
   async function execute(input = {}) {
     const { name: toolName, args = {}, exec, ownerAgent, threadId = 'main' } = input;
-    if (!validName(toolName)) throw new Error('Unsupported model persistent action');
+    if (!modelActionTools.has(toolName)) throw new Error('Unsupported model persistent action');
     if (!ownerAgent || exec?.agent !== ownerAgent) throw new Error('Model action owner mismatch');
     const sessionId = validId(String(ownerAgent.id || ownerAgent.session?.id || ''), 'session identity');
     const callId = validId(exec.callId, 'callId');
@@ -105,7 +105,7 @@ export function createModelActionTaskExecutor({ ctx, database, readPolicy, perfo
       if (afterReserve?.desktopVersion !== desktopVersion || !validateMandate(mandate)) throw Object.assign(new Error('Model action policy changed before execution'), { code: 'MODEL_ACTION_POLICY_CHANGED' });
       const dispatchInstruction = currentHumanInstruction(ctx, ownerAgent);
       if (!dispatchInstruction || digest(JSON.stringify([dispatchInstruction.turn, dispatchInstruction.message])) !== instructionHash) throw Object.assign(new Error('User instruction changed before model-action dispatch'), { code: 'MODEL_ACTION_INSTRUCTION_CHANGED' });
-      const actionResult = await perform({ name: toolName, args, exec, task: reservation.task, assignment: reservation.assignment, run: reservation.run, actionKey: reservation.actionKey });
+      const actionResult = await perform({ name: toolName, args, exec, sourceMessage, task: reservation.task, assignment: reservation.assignment, run: reservation.run, actionKey: reservation.actionKey });
       observedReceipt = asEvidence({ value: actionResult });
       const afterAction = await readPolicy();
       if (afterAction?.desktopVersion !== desktopVersion) throw Object.assign(new Error('Model action policy changed before verification'), { code: 'MODEL_ACTION_POLICY_CHANGED' });

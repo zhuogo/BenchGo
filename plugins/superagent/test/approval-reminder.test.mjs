@@ -5,7 +5,7 @@ import { createRequire, registerHooks } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { approvalReminderSignal, currentApprovalReminderSignal } from '../src/approval-reminder.mjs';
 
-const requireBenchgo = createRequire(new URL('../../benchgo/package.json', import.meta.url));
+const requireBenchgo = createRequire(new URL('../../base/package.json', import.meta.url));
 const { transformSync } = requireBenchgo('esbuild');
 const approvalSource = new URL('../../../deepseek-harness/packages/interaction/user-approval/src/', import.meta.url).href;
 // Read the official service in memory, preserving the same installed Session /

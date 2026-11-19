@@ -14,6 +14,7 @@ import { taskExecutionBlocked, taskPaused } from './task-lifecycle.mjs';
 import { executionUncertainty, executionStopConfirmation } from './execution-uncertainty.mjs';
 import { requestInterruptedContinuation } from './interrupted-continuation.mjs';
 import { createRemoteAssignmentExecutor } from './remote-assignment-executor.mjs';
+import { roleModels } from './routing.mjs';
 
 /** One local control plane for Task and Goal execution. */
 export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, notifyTaskResult, notifyExecutionInput, onDelivered, maintainTasks, execute, intervalMs = 1000, now = Date.now }) {
@@ -189,7 +190,11 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       await currentPolicy();
       const remote = task.mandate?.execution;
       const schedulingBlocker = !validateTaskMandate(task.mandate, { policy }) ? 'MANDATE_REVOKED'
-        : !(remote ? remote.config?.models?.length : policy.workerModels?.length) ? 'WORKER_MODEL_ROUTE' : null;
+        : !(remote ? remote.config?.models?.length : roleModels(undefined, policy, 'worker').length)
+          ? 'WORKER_MODEL_ROUTE'
+          : !remote && ['codex', 'claude'].includes(policy.workerHarness) && !ctx.get?.('commander')?.drivers
+            ? 'WORKER_MODEL_ROUTE'
+            : null;
       database.setSchedulingBlocker(task.id, { code: schedulingBlocker, now: now() });
       if (schedulingBlocker) continue;
       // The Router's persisted acceptance carries the task package. Scheduling
@@ -409,6 +414,10 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     const projections = database.executionProjections({ taskId: task.id, ...(run ? { runId: run.id } : {}) });
     const source = projections.find(row => row.sessionId === run?.sessionId);
     const agent = run && ctx.agents?.get?.(run.sessionId);
+    const external = run && ['codex', 'claude'].includes(database.getWorkerExecutionState(run.id)?.models[0]?.harness);
+    const native = external && ctx.get?.('commander')?.executionSession(run.id);
+    const nativeAlive = native?.status === 'running' ? 'running' : ['idle', 'waiting'].includes(native?.status) ? 'idle'
+      : native?.status === 'closed' ? 'absent' : 'unknown';
     const uncertainty = executionUncertainty(database, task, { now: now() });
     const stopping = executionStopConfirmation(database, task, { now: now() });
     const attention = database.attentions(task.id).find(row => row.state === 'waiting');
@@ -436,8 +445,8 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       assignment: assignment ? { id: assignment.id, state: assignment.state, owner: assignment.owner ?? null, fence: assignment.fence,
         leaseUntil: assignment.leaseUntil ?? null, updatedAt: assignment.updatedAt } : null,
       run: run ? { id: run.id, state: run.state, sessionId: run.sessionId, instructionRevision: run.instructionRevision ?? assignment.instructionRevision ?? 1, updatedAt: run.updatedAt } : null,
-      executionAlive: { status: !run || !ctx.agents?.get ? 'unknown' : agent?.status === 'running' ? 'running' : agent?.status === 'idle' ? 'idle' : 'absent',
-        observedAt: timestamp(now()), bootId: executionProgress.bootId },
+      executionAlive: { status: external ? nativeAlive : !run || !ctx.agents?.get ? 'unknown' : agent?.status === 'running' ? 'running' : agent?.status === 'idle' ? 'idle' : 'absent',
+        observedAt: external ? timestamp(native?.updatedAt) : timestamp(now()), bootId: external ? null : executionProgress.bootId },
       request, wait: { kind: waitKind, since: waitKind === 'background-job' ? backgroundJobs.map(job => job.startedAt).filter(Boolean).sort()[0] || null
         : timestamp(attention?.createdAt || task.pauseReason?.at || task.continuationWait?.at), expectedUntil: null },
       stop: { requestedAt: stopping.stopRequestedAt || assignment?.stopRequest?.at || null,

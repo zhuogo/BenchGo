@@ -3,20 +3,33 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createRemoteAssignmentExecutor } from '../src/remote-assignment-executor.mjs';
 import { commitWorkerResult } from '../src/result-commit.mjs';
 import { createRemoteExecutionService } from '../../harness/src/remote-execution.mjs';
 import { remoteExecutionFixture } from '../../harness/test/fixtures/remote-execution.mjs';
+import { Commander } from '../../harness/src/runtime.mjs';
+import { fixtureRouteService } from '../../harness/test/fixtures/api-route.mjs';
+import { readNativeWorkerSession } from '../src/execution-session.mjs';
 
 const waitFor = async predicate => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); } throw new Error('Execution boundary timed out'); };
-async function fixture(t) {
+async function fixture(t, { external = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-owned-dual-'));
-  const official = remoteExecutionFixture(), peer = await createRemoteExecutionService({ ctx: official.ctx, directory });
+  const official = remoteExecutionFixture();
+  const config = external ? { harness: 'codex', models: [{ providerId: 'exact-provider', modelId: 'opaque-model/1' }] }
+    : { harness: 'official', models: [{ providerId: 'exact-provider', modelId: 'opaque-model/1' }] };
+  let commander;
+  if (external) {
+    const script = fileURLToPath(new URL('../../harness/test/codex-fixture.mjs', import.meta.url));
+    commander = await new Commander({ dataDir: join(directory, 'commander'), providers: { codex: { command: process.execPath, commandArgs: [script] } },
+      routeService: fixtureRouteService }).open();
+    commander.pickerCatalog = { list: async () => ({ routes: [{ tool: 'codex', providerId: 'exact-provider', nativeModelId: 'opaque-model/1' }] }) };
+  }
+  const peer = await createRemoteExecutionService({ ctx: official.ctx, directory, ...(commander ? { commander } : {}) });
   const database = createAssistantOrchestrationStore({ filename: ':memory:', ownerHostId: 'host-A' });
   let clock = Date.now();
-  const calls = [], execution = { deviceId: 'device-B', hostId: 'host-B', authorizationId: 'A-B-grant',
-    config: { harness: 'official', models: [{ providerId: 'exact-provider', modelId: 'opaque-model/1' }] } };
+  const calls = [], execution = { deviceId: 'device-B', hostId: 'host-B', authorizationId: 'A-B-grant', protocolVersion: 2, config };
   const ctx = { logger: { warn() {} }, get: name => name === 'benchgoLink' ? { callDevice: async input => {
     assert.equal(input.expectedHostId, execution.hostId); assert.equal(input.expectedAuthorizationId, execution.authorizationId);
     calls.push(structuredClone(input.input));
@@ -33,12 +46,12 @@ async function fixture(t) {
     readPolicy: async () => ({ desktopVersion: 'policy' }), commitResult: async (result, { assignment, task }) => commitWorkerResult({
       database, result, assignment, task, uniqueKey: `assignment-result:${assignment.id}:${result.runId}:${assignment.fence}` }) });
   let owner = create();
-  t.after(async () => { await owner.stop(); await peer.close(); database.close(); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { await owner.stop(); await peer.close(); await commander?.close(); database.close(); await rm(directory, { recursive: true, force: true }); });
   const human = (text, key) => database.ingest({ dedupeKey: key, thread: { id: 'desktop:owner-session', source: { type: 'desktop', id: source.sessionId } },
     source: { ...source, messageId: key }, actor: { kind: 'human', id: 'desktop-owner' }, content: text, mode: 'direct' }).trigger;
   await owner.execute(assignment, { task });
-  await waitFor(() => official.instances[0]?.pending.length);
-  return { database, peer, official, task, assignment, calls, human,
+  if (!external) await waitFor(() => official.instances[0]?.pending.length);
+  return { ctx, commander, database, peer, official, task, assignment, calls, human,
     get owner() { return owner; },
     async tick() { clock += 100000; await owner.tick(); },
     async restartOwner() { await owner.stop(); owner = create(); },
@@ -51,6 +64,27 @@ async function fixture(t) {
     },
   };
 }
+
+test('A observes one Codex run on B through actual Commander and reads its original output', async t => {
+  const app = await fixture(t, { external: true });
+  const remote = app.database.remoteExecution(app.assignment.id);
+  for (let i = 0; i < 100; i++) {
+    const result = await app.peer.dispatch({ action: 'execution', version: 2, operation: 'get', executionId: remote.executionId },
+      { principal: { kind: 'device', deviceId: 'B-sees-A' } });
+    if (result.execution.phase === 'completed') break;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  await app.restartOwner();
+  await app.tick();
+  const observed = app.database.remoteExecution(app.assignment.id);
+  assert.equal(app.database.getTask(app.task.id).status, 'completed', JSON.stringify({ phase: observed.phase, code: observed.code, error: observed.observed?.error }));
+  assert.match(app.database.results(app.task.id)[0].summary, /fixture/);
+  const view = await readNativeWorkerSession({ ctx: app.ctx, database: app.database, taskId: app.task.id, sessionId: remote.sessionId });
+  assert.equal(view.status, 'completed');
+  assert.match(view.events.map(event => event.text).join(''), /fixture/);
+  assert.equal(app.calls.filter(row => row.operation === 'submit').length, 1);
+  assert.equal(app.official.instances.length, 0);
+});
 
 test('actual A coordinator and independent B service complete one host Task through the official lifecycle', async t => {
   const app = await fixture(t), instance = app.official.instances[0];

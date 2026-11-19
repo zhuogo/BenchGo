@@ -13,7 +13,7 @@ const helperRoot = existsSync(join(localShared, 'plugin-install.mjs'))
   ? localShared
   : packagedShared && existsSync(join(packagedShared, 'plugin-install.mjs'))
     ? packagedShared
-    : resolve(import.meta.dirname, '../../plugins/benchgo/shared');
+    : resolve(import.meta.dirname, '../../plugins/base/shared');
 const importShared = name => import(pathToFileURL(join(helperRoot, name)).href);
 const { activateRelease, getInstallState, prepareRelease, releaseBundleName } = await importShared('plugin-install.mjs');
 const { compareVersions } = await importShared('update-feed.mjs');
@@ -85,7 +85,7 @@ export function assertBrowserPlatformPeer(name, spec, metadata, { officialRoot =
 }
 
 /** Copy published plugin files and required JS dependencies without duplicating Cordis or official services. */
-export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/benchgo'), platform = process.platform, arch = process.arch, serverResources = 'full', includeServerResources = true }) {
+export function stagePluginBundle({ runtime, output, plugin = resolve(import.meta.dirname, '../../plugins/base'), platform = process.platform, arch = process.arch, serverResources = 'full', includeServerResources = true }) {
   runtime = runtime ? resolve(runtime) : null; plugin = resolve(plugin);
   const manifest = readJson(join(plugin, 'package.json'));
   if (!['benchgo', 'benchgo-plugin'].includes(manifest.name) || !manifest.dsh?.bundle?.patch) throw new Error('Plus bundle: expected the BenchGo bundle package');
@@ -99,7 +99,7 @@ export function stagePluginBundle({ runtime, output, plugin = resolve(import.met
   if (existsSync(destination)) throw new Error(`Plus bundle: destination already exists: ${destination}`);
   // npm supplies the package's own files allowlist; never ship the source workspace or private config.
   const files = packedPluginFiles(plugin);
-  for (const required of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/voice/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) {
+  for (const required of ['src/plugin.mjs', 'lib/modules/harness/src/plugin.mjs', 'lib/modules/superagent/src/plugin.mjs', 'lib/modules/harness/src/runtime.mjs', 'lib/modules/harness/src/mcp.mjs', 'lib/modules/superagent/src/service.mjs', 'lib/client.js', 'lib/link.mjs', 'lib/link-web/index.html', 'lib/relay/run-relay-server.cjs', 'lib/relay/ip-certificate.mjs', 'lib/relay/relay.example.json', 'lib/modules/media/src/plugin.mjs', 'lib/modules/interactive/src/prompt.mjs', 'lib/modules/efficiency/src/plugin.mjs', 'lib/modules/workbench/src/plugin.mjs', 'lib/modules/workbench/lib/ssh-host.mjs', 'cordis.patch.yml']) {
     if (!files.includes(required) || !existsSync(join(plugin, required))) throw new Error(`Plus bundle: missing built file ${required}; run build:plus first`);
   }
   assertSidebarPayload(plugin);

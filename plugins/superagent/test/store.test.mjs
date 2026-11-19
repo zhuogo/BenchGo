@@ -19,12 +19,12 @@ test('independent configuration survives restart and preserves opaque models and
   assert.ok((await stat(store.paths.workspace)).isDirectory());
   const models = [{ providerId: 'provider/@x', modelId: 'Exact Model:07', options: { reasoningEffort: 'custom-value' } }];
   await store.updateConfig({ models, tts: { providerId: 'voice', modelId: 'Exact TTS:07', credentialRef: 'PRIVATE_REF', voice: 'A' } }, { revision: 0 });
-  await store.updateConfig({ tts: { voice: 'B' }, image: { providerId: 'image', modelId: 'image-v2' } });
+  await store.updateConfig({ tts: { voice: 'B' }, asr: { providerId: 'voice', modelId: 'asr-v2' } });
   const restarted = await openStore();
   const result = await restarted.getConfig();
   assert.deepEqual(result.models, models);
   assert.deepEqual(result.tts, { providerId: 'voice', modelId: 'Exact TTS:07', credentialRef: 'PRIVATE_REF', voice: 'B' });
-  assert.equal(result.image.modelId, 'image-v2');
+  assert.equal(result.asr.modelId, 'asr-v2');
   assert.equal(result.revision, 2);
   await assert.rejects(store.updateConfig({ asr: { apiKey: 'secret' } }), /credentialRef/);
   assert.equal((await store.getConfig()).revision, 2);
@@ -62,11 +62,11 @@ test('concurrent stores serialize edits and reject stale revisions without parti
   const results = await Promise.allSettled([store.updateConfig({ name: 'A' }, { revision: 0 }), other.updateConfig({ name: 'B' }, { revision: 0 })]);
   assert.equal(results.filter((item) => item.status === 'fulfilled').length, 1);
   assert.equal(results.find((item) => item.status === 'rejected').reason.code, 'REVISION_CONFLICT');
-  await Promise.all([store.updateConfig({ image: { providerId: 'images', modelId: 'image' } }), other.updateConfig({ asr: { providerId: 'voice', modelId: 'asr' } })]);
+  await Promise.all([store.updateConfig({ tts: { providerId: 'voice', modelId: 'tts' } }), other.updateConfig({ asr: { providerId: 'voice', modelId: 'asr' } })]);
   assert.equal((await store.getConfig()).asr.modelId, 'asr');
   await assert.rejects(store.updateConfig({ asr: { language: 'zh' } }), /不支持/);
   await assert.rejects(store.updateConfig({ models: [{ providerId: 'p', modelId: 'm', options: { temperature: 1 } }] }), /不支持/);
-  assert.equal((await store.getConfig()).image.modelId, 'image');
+  assert.equal((await store.getConfig()).tts.modelId, 'tts');
   assert.ok(!(await readdir(store.paths.directory)).some((name) => name.endsWith('.tmp')));
 });
 
@@ -90,57 +90,56 @@ test('Windows temporary target sharing refusal is handled by the official atomic
   assert.ok(!(await readdir(store.paths.directory)).some(name => name.endsWith('.tmp')));
 });
 
-test('HTML name cards survive reload independently of names and opaque model settings', async t => {
+test('legacy HTML is ignored on reload and removed on the next settings write', async t => {
   const { store, openStore } = await fixture(t);
-  assert.equal((await store.getConfig()).cardHtml, null);
   const models = [{ providerId: 'provider/@x', modelId: 'Exact Model:07', options: { reasoningEffort: 'custom-value' } }];
   const html = '<span style="font-family:cursive;color:#ca2563">My assistant</span>';
-  await store.updateConfig({ name: 'Display name', models, tts: { providerId: 'voice', modelId: 'Exact TTS:07', voice: 'A' } });
-  await store.updateConfig({ cardHtml: html });
+  const saved = await store.updateConfig({ name: 'Display name', models, tts: { providerId: 'voice', modelId: 'Exact TTS:07', voice: 'A' } });
+  const legacy = JSON.stringify({ ...JSON.parse(await readFile(store.paths.config, 'utf8')), cardHtml: html });
+  await writeFile(store.paths.config, legacy);
   const restarted = await openStore();
   const config = await restarted.getConfig();
-  assert.equal(config.cardHtml, html);
-  assert.equal(config.name, 'Display name');
-  assert.deepEqual(config.models, models);
-  assert.deepEqual(config.tts, { providerId: 'voice', modelId: 'Exact TTS:07', voice: 'A' });
-  await restarted.updateConfig({ name: 'New name' });
-  assert.equal((await store.getConfig()).cardHtml, html);
-  for (const cardHtml of [false, 1, [], {}, 'x'.repeat(16001)]) await assert.rejects(store.updateConfig({ cardHtml }), /Invalid/);
-  assert.equal((await store.getConfig()).cardHtml, html);
-  await store.updateConfig({ cardHtml: 'x'.repeat(16000) });
-  await store.updateConfig({ cardHtml: '' });
-  assert.equal((await restarted.getConfig()).cardHtml, null);
-  await restarted.updateConfig({ cardHtml: null });
-  const legacy = await store.getConfig();
-  delete legacy.cardHtml;
-  await writeFile(store.paths.config, JSON.stringify(legacy));
-  assert.equal((await (await openStore()).getConfig()).cardHtml, null);
-  assert.deepEqual((await store.updateConfig({ cardHtml: html })).models, models);
+  assert.deepEqual(config, saved);
+  const bundle = await restarted.profileExport();
+  assert.equal(Object.hasOwn(bundle.config, 'cardHtml'), false);
+  await assert.rejects(restarted.updateConfig({ cardHtml: html }), { code: 'CARD_HTML_REMOVED' });
+  assert.equal(await readFile(restarted.paths.config, 'utf8'), legacy);
+  const renamed = await restarted.updateConfig({ name: 'New name' }, { revision: saved.revision });
+  assert.deepEqual(renamed, { ...saved, revision: saved.revision + 1, name: 'New name' });
+  assert.equal(Object.hasOwn(JSON.parse(await readFile(restarted.paths.config, 'utf8')), 'cardHtml'), false);
+  await restarted.profileImport({ ...bundle, config: { ...bundle.config, cardHtml: html } }, { apply: true, overwrite: true });
+  const imported = await (await openStore()).getConfig();
+  assert.equal(Object.hasOwn(imported, 'cardHtml'), false);
+  assert.equal(imported.name, 'Display name');
+  assert.deepEqual(imported.models, models);
 });
 
-test('card motion migrates, persists independently and rejects invalid or stale edits', async t => {
+test('retired appearance motion is ignored on read and legacy profile import, then removed on save', async t => {
   const { store, openStore } = await fixture(t);
+  const models = [{ providerId: 'exact/provider', modelId: 'Opaque/Model' }];
+  const pet = { kind: 'builtin', assetId: 'builtin', expression: 'happy', palette: 'default', decorations: ['scarf'] };
+  await store.updateConfig({ name: 'Legacy identity', models, pet }, { petWrite: true });
   const original = await store.getConfig();
-  assert.equal(original.cardMotion, true);
-  const legacy = { ...original, cardHtml: '  \n ' };
-  delete legacy.cardMotion;
-  await writeFile(store.paths.config, JSON.stringify(legacy));
-  const migrated = await (await openStore()).getConfig();
-  assert.equal(migrated.cardMotion, true);
-  assert.equal(migrated.cardHtml, null);
-  const saved = await store.updateConfig({ cardMotion: false, cardHtml: '<b>Card</b>' }, { revision: migrated.revision });
-  assert.equal((await (await openStore()).getConfig()).cardMotion, false);
-  for (const cardMotion of [null, 0, 'false', {}]) await assert.rejects(store.updateConfig({ cardMotion }), /Invalid assistant cardMotion/);
-  await assert.rejects(store.updateConfig({ cardMotion: true }, { revision: migrated.revision }), { code: 'REVISION_CONFLICT' });
-  assert.deepEqual(await store.getConfig(), saved);
-  const reset = await store.updateConfig({ cardHtml: '\n\t ' });
-  assert.equal(reset.cardHtml, null);
-  assert.equal(reset.cardMotion, false);
+  const disk = JSON.parse(await readFile(store.paths.config, 'utf8'));
+  await writeFile(store.paths.config, JSON.stringify({ ...disk, cardMotion: false }));
+  const restarted = await openStore();
+  assert.deepEqual(await restarted.getConfig(), original);
+  assert.equal(JSON.parse(await readFile(store.paths.config, 'utf8')).cardMotion, false);
+  for (const cardMotion of [false, true, null, 'legacy']) {
+    await assert.rejects(restarted.updateConfig({ cardMotion }), { code: 'CARD_MOTION_REMOVED' });
+  }
+  const bundle = await restarted.profileExport();
+  assert.equal(Object.hasOwn(bundle.config, 'cardMotion'), false);
+  const saved = await restarted.updateConfig({ workerConcurrency: 3 }, { revision: original.revision });
+  assert.deepEqual(saved, { ...original, revision: original.revision + 1, workerConcurrency: 3 });
+  assert.equal(Object.hasOwn(JSON.parse(await readFile(store.paths.config, 'utf8')), 'cardMotion'), false);
+  await restarted.profileImport({ ...bundle, config: { ...bundle.config, cardMotion: 'legacy' } }, { apply: true, overwrite: true });
+  assert.deepEqual(await restarted.getConfig(), { ...original, revision: saved.revision + 1 });
 });
 
 test('media requires full references, duplicate models and dangerous nested keys are rejected without saving', async t => {
   const { store } = await fixture(t);
-  for (const field of ['image', 'video', 'tts', 'asr']) {
+  for (const field of ['tts', 'asr']) {
     await assert.rejects(store.updateConfig({ [field]: { modelId: 'only-model' } }), /providerId/);
     await store.updateConfig({ [field]: { providerId: 'p', modelId: 'exact-model' } });
     await store.updateConfig({ [field]: null });
@@ -155,24 +154,27 @@ test('media requires full references, duplicate models and dangerous nested keys
   assert.equal({}.polluted, undefined);
 });
 
-test('video selection migrates legacy configs and preserves image/model settings without exporting credentials', async t => {
+test('legacy image and video settings transfer once after successful import and stay out of assistant settings', async t => {
   const { store, openStore } = await fixture(t);
   const config = await store.getConfig();
-  delete config.video;
-  await writeFile(store.paths.config, JSON.stringify(config));
-  assert.equal((await store.getConfig()).video, null);
   const image = { providerId: 'images/@main', modelId: 'Exact Image:07', protocol: 'openai-compatible', size: '1536x1024' };
   const video = { providerId: 'video/@cloud', modelId: 'Exact Video:08', protocol: 'provider-protocol', credentialRef: 'VIDEO_REF' };
-  await store.updateConfig({ image, video, models: [{ providerId: 'text', modelId: 'Exact Text:09' }] });
-  await store.updateConfig({ video: { modelId: 'Exact Video:10' } });
+  await writeFile(store.paths.config, JSON.stringify({ ...config, image, video }));
+  await store.updateConfig({ models: [{ providerId: 'text', modelId: 'Exact Text:09' }] });
   const restarted = await openStore();
   const result = await restarted.getConfig();
-  assert.deepEqual(result.image, image);
-  assert.deepEqual(result.video, { ...video, modelId: 'Exact Video:10' });
+  assert.equal(result.image, undefined);
+  assert.equal(result.video, undefined);
   assert.equal(result.models[0].modelId, 'Exact Text:09');
-  assert.equal((await store.profileExport()).config.video.credentialRef, undefined);
-  await assert.rejects(store.updateConfig({ video: { apiKey: 'private' } }), /credentialRef/);
-  await assert.rejects(store.updateConfig({ video: { modelId: ' Exact Video:10' } }), /modelId/);
+  assert.equal((await store.profileExport()).config.video, undefined);
+  await assert.rejects(restarted.migrateGenerationSettings(async () => { throw Error('media unavailable'); }), /media unavailable/);
+  assert.deepEqual(JSON.parse(await readFile(store.paths.config, 'utf8')).video, video);
+  let imports = 0;
+  const migrate = () => restarted.migrateGenerationSettings(async value => { imports++; assert.deepEqual(value, { image, video }); });
+  await Promise.all([migrate(), migrate()]);
+  assert.equal(imports, 1);
+  assert.deepEqual(JSON.parse(await readFile(store.paths.config, 'utf8')), { ...result, revision: result.revision + 1 });
+  await assert.rejects(store.updateConfig({ video }), { code: 'MEDIA_SETTINGS_MOVED' });
 });
 test('profiles, thread metadata and explicit memories persist and corrected/deleted memories disappear', async (t) => {
   const { store, openStore } = await fixture(t);

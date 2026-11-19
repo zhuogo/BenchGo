@@ -5,7 +5,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import { ChannelBrandIcon } from '../../shared/client/channel-brand-icon.jsx';
 import { CustomSelect } from '../../shared/client/custom-select.jsx';
-import { UIIcon } from '../../benchgo/client/iconsax.jsx';
+import { UIIcon } from '../../base/client/iconsax.jsx';
 import css from './connections.css';
 import feishuCss from './feishu-settings.css';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';

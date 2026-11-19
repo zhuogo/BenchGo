@@ -32,7 +32,7 @@ async function fixture(t, options = {}) {
 function remoteFixture(f) {
   const model = { providerId: 'B/Opaque Provider', modelId: 'B:Model/v7', params: { temperature: 0.25 } };
   const device = { id: 'device-b', hostId: 'sha256:B', authorizationId: 'authorized-A', name: 'B' };
-  const catalog = { version: 1, hostId: device.hostId, available: true, models: [model], projects: [{ id: 'project-b', path: '/workspace/b', title: 'B project' }] };
+  const catalog = { version: 2, hostId: device.hostId, available: true, models: [{ harness: 'official', ...model }], projects: [{ id: 'project-b', path: '/workspace/b', title: 'B project' }] };
   const calls = [];
   let reads = 0;
   f.ctx.get = name => name === 'benchgoLink' ? {
@@ -50,7 +50,7 @@ test('remote delegation creates only an A-owned Task and freezes exact B executi
   assert.equal(f.database.listTasks().length, 1);
   assert.equal(task.mandate.source.channel, 'desktop');
   assert.equal(task.mandate.source.sessionId, f.ownerAgent.id);
-  assert.deepEqual(task.mandate.execution, { deviceId: b.device.id, hostId: b.device.hostId, authorizationId: b.device.authorizationId, config: b.input.executionConfig });
+  assert.deepEqual(task.mandate.execution, { deviceId: b.device.id, hostId: b.device.hostId, authorizationId: b.device.authorizationId, protocolVersion: 2, config: b.input.executionConfig });
   assert.deepEqual(task.mandate.project, { deviceId: b.device.id, hostId: b.device.hostId, id: 'project-b', path: '/workspace/b' });
   assert.deepEqual(f.database.assignments(task.id)[0].model, b.model);
   assert.equal(f.database.assignments(task.id)[0].executor, 'remote');
@@ -117,6 +117,29 @@ test('desktop instruction atomically admits one Task without redundant approval 
   assert.equal(f.modelRequests.length, 0);
   assert.equal(task.mandate.scopeCheck, undefined);
   await assert.rejects(f.service.delegate({ ...f.input, text: 'different' }, f.exec, f.options), /不同任务/);
+});
+
+test('desktop admission and linked redispatch inherit the current Router model when the official work queue is empty', async t => {
+  const f = await fixture(t);
+  const first = { ...f.policy.model, options: { maxTokens: 432, reasoningEffort: 'low' } };
+  const second = { providerId: 'Router Backup/@', modelId: 'Exact: Router/2' };
+  const resolved = [];
+  f.ctx.llm.resolveModelInfo = async (provider, id) => { resolved.push([provider, id]); return { provider, id }; };
+  Object.assign(f.policy, { workerHarness: 'official', workerModels: [], models: [first, second] });
+  const task = await f.service.delegate(f.input, f.exec, f.options);
+  assert.deepEqual(resolved, [[first.providerId, first.modelId]]);
+  assert.deepEqual(f.database.assignments(task.id)[0].model, { ...first, harness: 'official' });
+
+  f.database.updateTask(task.id, { status: 'completed' });
+  f.policy.models = [second, first];
+  f.events.push({ type: 'user/message', data: { id: 'adjust', source: { kind: 'user' }, content: [{ type: 'text', text: '基于结果增加兼容性检查' }] } });
+  const revision = createTaskRevisionService({ ctx: f.ctx, database: f.database, readPolicy: async () => f.policy });
+  const task2 = await revision.change({ id: task.id, operation: 'adjustment', target: '增加兼容性检查', reason: '补充检查' }, f.exec, f.options);
+  assert.deepEqual(f.database.assignments(task2.id)[0].model, { ...second, harness: 'official' });
+
+  f.policy.workerHarness = 'codex';
+  await assert.rejects(f.service.delegate({ ...f.input, requestId: 'external' }, f.exec, f.options), { code: 'WORKER_MODEL_NOT_CONFIGURED' });
+  assert.deepEqual(resolved, [[first.providerId, first.modelId]]);
 });
 
 test('desktop admission wakes the existing scheduler after commit without waiting for work or waking duplicate requests', { timeout: 10000 }, async t => {
@@ -244,18 +267,18 @@ test('daily research delegates without a project or redundant approval while pre
   const f = await fixture(t);
   f.policy.projects = [];
   f.events[1].data.content = [{ type: 'text', text: '今天热点搜一下' }];
-  const { projectId, ...input } = f.input;
-  const task = await f.service.delegate({ ...input, text: '查找当天热点并附来源', acceptance: '' }, f.exec, f.options);
+  const { projectId, acceptance, ...input } = f.input;
+  const task = await f.service.delegate({ ...input, text: '查找当天热点并附来源' }, f.exec, f.options);
   assert.equal(task.mandate.project, undefined);
   assert.equal(task.mandate.instruction, '今天热点搜一下');
-  assert.equal(task.acceptance, '今天热点搜一下');
+  assert.equal(task.acceptance, '');
   assert.equal(task.mandate.source.threadId, 'side-chat');
   assert.equal(f.approvals(), 0);
   assert.equal(f.database.assignments(task.id).length, 1);
   await assert.rejects(f.service.delegate({ ...input, requestId: 'invalid-project', projectId: 'unknown' }, f.exec, f.options), /项目不存在/);
 });
 
-test('opening a news task persists concrete original criteria without a review request', async t => {
+test('opening a news task preserves the original message and reference when acceptance is blank', async t => {
   const f = await fixture(t);
   const original = '请调研2026年11月4日当天新闻，输出6–10条简明中文热点，每条1–2句，附来源和时间，标注多源/待确认，最后一句概览；无法访问渠道如实说明，不要生成文件。';
   f.events[1].data.content = [{ type: 'text', text: original }];
@@ -263,10 +286,13 @@ test('opening a news task persists concrete original criteria without a review r
   const task = await f.service.delegate({ ...input, title: '当天新闻摘要', text: '整理当天新闻摘要并保留全部原始要求', acceptance: '' }, f.exec, f.options);
   assert.equal(task.title, '当天新闻摘要');
   assert.equal(task.target, '整理当天新闻摘要并保留全部原始要求');
-  assert.equal(task.acceptance, original);
-  assert.equal(task.mandate.acceptance, original);
+  assert.equal(task.acceptance, '');
+  assert.equal(task.mandate.acceptance, '');
   assert.equal(task.mandate.instruction, original);
-  assert.match(f.database.assignments(task.id)[0].acceptance, /6–10条/);
+  const trigger = f.database.getTrigger(task.mandate.triggerId);
+  assert.equal(trigger.content, original);
+  assert.deepEqual(trigger.source, task.mandate.source);
+  assert.equal(f.database.assignments(task.id)[0].acceptance, '');
   assert.equal(f.database.results(task.id).length, 0);
 });
 
@@ -297,7 +323,7 @@ for (const original of ['做任务进度看板', '检查网站状态']) test(`ne
   const task = await f.service.delegate({ ...f.input, text: original, acceptance: '' }, f.exec, f.options);
   assert.equal(task.target, original);
   assert.equal(task.mandate.instruction, original);
-  assert.equal(task.mandate.acceptance, original);
+  assert.equal(task.mandate.acceptance, '');
   assert.equal(task.mandate.policyVersion, f.policy.desktopVersion);
   assert.equal(task.mandate.source.messageId, 'original');
   assert.equal(task.mandate.controlledActions, 'require-current-policy-and-harness-approval');

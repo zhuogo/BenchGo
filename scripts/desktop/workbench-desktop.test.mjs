@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beginDesktopWorkbench, assertDesktopEnrollmentAvailable, createDesktopWorkbenchOwner, desktopWorkbenchInstallation } from './workbench-desktop.mjs';
-import * as shared from '../../plugins/benchgo/shared/workbench-installation.mjs';
+import * as shared from '../../plugins/base/shared/workbench-installation.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-desktop-workbench-'));
@@ -14,7 +14,7 @@ async function fixture(t) {
   const put = async (file, value) => { await mkdir(join(file, '..'), { recursive: true }); await writeFile(file, typeof value === 'string' ? value : JSON.stringify(value)); };
   await put(join(resources, 'app.asar', 'package.json'), { name: 'benchgo-desktop', version: '0.1.3' });
   for (const name of ['dsh', 'dsh-app-boot', 'dsh-official-bundles']) await put(join(runtime, 'node_modules', '@deepseek-ai', name, 'package.json'), { name: `@deepseek-ai/${name}`, version: '0.2.2-rc.1' });
-  await put(join(paths.profile, 'package.json'), { private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } });
+  await put(join(paths.profile, 'package.json'), { private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] }, plusInstall: { version: '0.1.3' } } });
   await put(join(paths.profile, 'cordis.patch.yml'), '# user configuration\n');
   return { root, home, resources, runtime, paths, put };
 }
@@ -26,6 +26,8 @@ test('desktop and CLI use the identical profile and preserve the installation id
   } });
   let webRunning = true;
   const api = { ...shared,
+    createProfileIntegrityGuard: async ({ paths }) => { events.push('profile-guard'); assert.deepEqual(paths, [join(f.paths.profile, 'cordis.patch.yml'), join(f.home, 'cordis.patch.yml')]); },
+    createProfileIntegrityServices: { withFileLock: async (_path, callback) => callback(), writeFileAtomic: async () => {} },
     readWorkbenchLease: args => webRunning ? { pid: process.pid + 100000, kind: 'web', active: true } : shared.readWorkbenchLease(args),
     requestWorkbenchControl: async (installation, options) => {
       assert.equal(installation.id, old.id); assert.equal(options.action, 'stop');
@@ -40,7 +42,7 @@ test('desktop and CLI use the identical profile and preserve the installation id
     return { profile: options.profile, enrolled: false };
   } }, api);
   t.after(() => workbench.dispose());
-  assert.deepEqual(events, ['graceful-stop', 'stopped', 'enroll']);
+  assert.deepEqual(events, ['graceful-stop', 'stopped', 'enroll', 'profile-guard']);
   const current = await shared.readWorkbenchInstallation({ home: f.home });
   assert.equal(current.id, old.id); assert.equal(current.kind, 'desktop');
   assert.equal(current.profile, old.profile); assert.equal(current.runtime, f.runtime);
@@ -62,6 +64,19 @@ test('busy Web handoff fails before acquiring Desktop ownership or enrolling', a
   }), /有任务运行中/);
   assert.equal(enrolled, false); assert.equal(acquired, false);
   assert.equal((await shared.readWorkbenchInstallation({ home: f.home })).kind, 'web');
+});
+
+test('profile integrity recovery must finish before Desktop ownership is registered', async t => {
+  const f = await fixture(t);
+  let registered = false;
+  await assert.rejects(beginDesktopWorkbench({ ...f, initialize: async () => ({ profile: f.paths.profile }) }, {
+    ...shared,
+    createProfileIntegrityGuard: async () => { throw Object.assign(new Error('profile restored'), { code: 'PROFILE_CONFIG_RESTORED' }); },
+    createProfileIntegrityServices: { withFileLock: async (_path, callback) => callback(), writeFileAtomic: async () => {} },
+    registerWorkbenchInstallation: async () => { registered = true; },
+  }), { code: 'PROFILE_CONFIG_RESTORED' });
+  assert.equal(registered, false);
+  assert.equal(await shared.readWorkbenchLease({ home: f.home }), null);
 });
 
 test('unknown or Desktop owner is never killed or replaced by startup', async t => {
@@ -92,6 +107,28 @@ test('runtime validation rejects a second profile and incompatible engine before
   await assert.rejects(desktopWorkbenchInstallation({ ...f, profile: join(f.home, 'profiles', 'web') }), /未创建第二套工作区/);
   await f.put(join(f.runtime, 'node_modules', '@deepseek-ai', 'dsh-app-boot', 'package.json'), { name: '@deepseek-ai/dsh-app-boot', version: '0.3.0' });
   await assert.rejects(desktopWorkbenchInstallation(f), /依赖身份不一致/);
+});
+
+test('unchanged Desktop startup keeps its installation record and checks runtime packages on the next startup', async t => {
+  const f = await fixture(t);
+  const engine = '0.2.2-rc.1';
+  const host = '@deepseek-ai/dsh-desktop-host';
+  const hostManifest = join(f.runtime, 'node_modules', host, 'package.json');
+  await f.put(hostManifest, { name: host, version: engine });
+  const sharedPackages = ['@deepseek-ai/dsh', host].map(name => ({ name, version: engine, path: `node_modules/${name}` }));
+  await f.put(join(f.runtime, 'desktop-runtime.json'), { schemaVersion: 1, platform: process.platform, arch: process.arch,
+    release: { version: engine }, sharedPackages, files: [] });
+  const initialize = async ({ profile }) => ({ profile });
+  const api = { ...shared, createProfileIntegrityGuard: async () => {}, createProfileIntegrityServices: {} };
+  const start = () => beginDesktopWorkbench({ ...f, initialize }, api);
+  await (await start()).dispose();
+  await utimes(f.paths.registryFile, 1_600_000_000, 1_600_000_000);
+  const initial = await stat(f.paths.registryFile);
+  await (await start()).dispose();
+  assert.equal((await stat(f.paths.registryFile)).mtimeMs, initial.mtimeMs);
+  await f.put(hostManifest, { name: host, version: '0.3.0' });
+  await assert.rejects(start(), /共享服务身份不一致/);
+  assert.equal(await shared.readWorkbenchLease({ home: f.home }), null);
 });
 
 test('Desktop status capability publishes only authenticated loopback ready state and cannot stop Desktop', async t => {

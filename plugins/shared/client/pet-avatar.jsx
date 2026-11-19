@@ -7,9 +7,11 @@ const actions = new Set(['acknowledge','focus','happy','waiting']);
 /** One identity, arbitrary appearance. Custom images never inherit builtin face overlays. */
 export function PetAvatar({pet,src,expression,action='idle',motion=true,size=80,alt='助手形象',className='',style,...props}) {
   const ref = useRef(null);
+  const img = useRef(null);
   const [visible,setVisible] = useState(true);
   const [failed,setFailed] = useState(false);
   const source = src || pet?.url || pet?.src || pet?.assetUrl || defaultSrc;
+  const recipe = pet?.appearance?.actions?.[action];
   useEffect(() => { setFailed(false); },[source]);
   useEffect(() => {
     let intersecting = true;
@@ -19,9 +21,22 @@ export function PetAvatar({pet,src,expression,action='idle',motion=true,size=80,
     document.addEventListener('visibilitychange',update); update();
     return () => { observer?.disconnect(); document.removeEventListener('visibilitychange',update); };
   },[]);
+  useEffect(() => {
+    const element = img.current;
+    if (!motion || !visible || !recipe || !element?.animate) return;
+    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (preference.matches) return;
+    const frames = recipe.frames.map(({ at, x = 0, y = 0, rotate = 0, scale = 1, opacity = 1 }) => ({
+      offset: at, transform: `translate(${x}%,${y}%) rotate(${rotate}deg) scale(${scale})`, opacity,
+    }));
+    const animation = element.animate(frames, { duration: recipe.duration, easing: 'cubic-bezier(.23,1,.32,1)' });
+    const cancel = () => animation.cancel();
+    preference.addEventListener('change', cancel);
+    return () => { preference.removeEventListener('change', cancel); cancel(); };
+  }, [motion, visible, recipe, source]);
   return <span {...props} ref={ref} className={`benchgo-pet-avatar ${className}`} data-action={motion && visible && actions.has(action) ? action : 'idle'} data-expression={expression || pet?.expression || 'standard'} style={{width:size,height:size,...style}}>
     <style>{css}</style>
-    {failed ? <span className="benchgo-pet-unavailable" role="img" aria-label="形象暂时无法加载">形象不可用</span> : <img key={`${source}:${action}`} src={source} alt={alt} draggable={false} onError={() => setFailed(true)}/>}
+    {failed ? <span className="benchgo-pet-unavailable" role="img" aria-label="形象暂时无法加载">形象不可用</span> : <img ref={img} key={`${source}:${action}`} src={source} alt={alt} draggable={false} onError={() => setFailed(true)}/>}
   </span>;
 }
 export default PetAvatar;

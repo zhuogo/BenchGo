@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { createRequire } from 'node:module';
 import { syncDevelopmentPlugin } from './sync-dev-plugin.mjs';
-import { releaseBundleName } from '../../plugins/benchgo/shared/plugin-install.mjs';
+import { releaseBundleName } from '../../plugins/base/shared/plugin-install.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-dev-sync-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const directory = join(root, 'selected-release');
-  const source = join(root, 'plugins/benchgo');
+  const source = join(root, 'plugins/base');
   const target = join(directory, 'node_modules/benchgo-plugin');
   const wrapper = join(directory, 'node_modules', releaseBundleName('0.1.0'));
   await mkdir(wrapper, { recursive: true });
@@ -21,7 +21,7 @@ async function fixture(t) {
     await writeFile(join(base, 'assets/icon.svg'), base === source ? '<svg>BenchGo</svg>' : 'old icon');
     await mkdir(join(base, 'lib/link-web'), { recursive: true });
     await mkdir(join(base, 'lib/relay'), { recursive: true });
-    for (const directory of ['src', 'shared', 'locale', 'lib/modules/harness/src', 'lib/modules/superagent/src', 'lib/modules/voice/src']) {
+    for (const directory of ['src', 'shared', 'locale', 'lib/modules/harness/src', 'lib/modules/superagent/src', 'lib/modules/media/src']) {
       await mkdir(join(base, directory), { recursive: true });
       await writeFile(join(base, directory, 'entry.mjs'), base === source ? `local:${directory}` : 'old source');
     }
@@ -268,7 +268,7 @@ test('copies local plugin sources and outputs to the enrolled release while pres
     assert.equal(await readFile(join(setup.target, 'lib', file), 'utf8'), `local:${file}`);
   }
   assert.equal(await readFile(join(setup.target, 'settings.json'), 'utf8'), 'preserved');
-  for (const directory of ['src', 'shared', 'locale', 'lib/modules/harness/src', 'lib/modules/superagent/src', 'lib/modules/voice/src']) {
+  for (const directory of ['src', 'shared', 'locale', 'lib/modules/harness/src', 'lib/modules/superagent/src', 'lib/modules/media/src']) {
     assert.equal(await readFile(join(setup.target, directory, 'entry.mjs'), 'utf8'), `local:${directory}`);
   }
   assert.equal(await readFile(join(setup.target, 'assets/icon.svg'), 'utf8'), '<svg>BenchGo</svg>');

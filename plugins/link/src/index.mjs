@@ -14,10 +14,10 @@ import { createCloudAccess } from './cloud-access.mjs';
 import { createCloudDeviceGateway } from './devices/cloud-gateway.mjs';
 import { createRelayHost } from './transport/relay-host.mjs';
 import { testRelayConnection } from './transport/relay-probe.mjs';
-import { defaultLinkTransport, LINK_TRANSPORT_SCHEMA, LINK_RELAY_SCHEMA, normalizeLinkRelayPool } from './config.mjs';
+import { defaultLinkTransport, LINK_TRANSPORT_SCHEMA, editLinkRelayPool, normalizeLinkRelayPool } from './config.mjs';
 import { createLinkSettingsAdapter, LINK_TRANSPORT_NAMESPACE, LINK_RELAY_NAMESPACE } from './settings-adapter.mjs';
-import { settingsSnapshot, settingsFingerprint, assertSettingsExpected, applySettingsOps, notifySettings } from '../../benchgo/shared/settings-adapter-utils.mjs';
-import { captureHostScope, hostScope } from '../../benchgo/shared/host-scope.mjs';
+import { settingsSnapshot, settingsFingerprint, assertSettingsExpected, applySettingsOps, notifySettings } from '../../base/shared/settings-adapter-utils.mjs';
+import { captureHostScope, hostScope } from '../../base/shared/host-scope.mjs';
 
 /** Owner admin uses Harness Connection; remote devices get a distinct TLS carrier. */
 export function mountLink(ctx, config = {}) {
@@ -26,25 +26,30 @@ export function mountLink(ctx, config = {}) {
 
 async function mountLinkHost(ctx, config) {
   const env = config.env ?? process.env;
-  let relayError = '';
-  let relayUrl, relayToken;
   const directory = config.directory ?? join(ctx.get('benchgo').directory, 'link');
   const store = await openStore(directory);
   const managementOperations = store.state.managementOperations ??= [];
   for (const operation of managementOperations) if (['applying','approved'].includes(operation.state)) operation.state = 'unknown';
   const managementView = operation => ({ id: operation.id, operationId: operation.id, requestId: operation.requestId, deviceId: operation.deviceId, deviceName: store.state.devices.find(row => row.id === operation.deviceId)?.name || operation.deviceId, namespace: operation.namespace, expected: operation.expected, ops: operation.ops, createdAt: operation.createdAt, expiresAt: operation.expiresAt, state: operation.state === 'pending' && operation.expiresAt < Date.now() ? 'expired' : operation.state, ...(operation.result ? { result: operation.result } : {}), ...(operation.error ? { error: operation.error } : {}) });
-  const relayPool = Array.isArray(store.state.relayPool)
+  const legacyRelay = store.state.relay;
+  if (!Array.isArray(store.state.relayPool) && legacyRelay?.url) {
+    store.state.relayPool = [{ id: 'primary', url: legacyRelay.url, token: legacyRelay.token || env.DSH_LINK_RELAY_TOKEN, priority: 0, enabled: legacyRelay.enabled !== false }];
+  }
+  delete store.state.relay;
+  let relayPool = Array.isArray(store.state.relayPool)
     ? store.state.relayPool
-    : ((store.state.relay?.url || env.DSH_LINK_RELAY_URL) ? [{ id: 'primary', url: store.state.relay?.url || env.DSH_LINK_RELAY_URL, token: store.state.relay?.token || env.DSH_LINK_RELAY_TOKEN, priority: 0, enabled: store.state.relay?.enabled !== false }] : []);
+    : (env.DSH_LINK_RELAY_URL ? [{ id: 'primary', url: env.DSH_LINK_RELAY_URL, token: env.DSH_LINK_RELAY_TOKEN, priority: 0, enabled: true }] : []);
   const relayNodes = new Map();
-  const stopRelay = async () => { await Promise.all([...relayNodes.values()].map(node => node.instance?.close())); relayNodes.clear(); };
-  relayUrl = relayPool[0]?.url ?? '';
-  relayToken = relayPool[0]?.token ?? '';
-  let relayEnabled = relayPool.some(node => node.enabled !== false);
-  const connectedRelay = () => relayPool
-    .map((node, index) => ({ ...node, priority: Number.isInteger(node.priority) ? node.priority : index, runtime: relayNodes.get(node.id || `relay-${index + 1}`) }))
-    .filter(node => node.enabled !== false && node.runtime?.instance.status().connected)
-    .sort((a, b) => a.priority - b.priority)[0];
+  const stopRelay = async () => {
+    const active = [...relayNodes.values()];
+    relayNodes.clear();
+    await Promise.allSettled(active.map(node => node.instance?.close()));
+  };
+  const enabledRelay = () => relayPool.some(node => node.enabled !== false);
+  const rankedRelays = () => [...relayPool].sort((a, b) => a.priority - b.priority);
+  const connectedRelay = id => rankedRelays().find(node => node.enabled !== false && (!id || node.id === id)
+    && relayNodes.get(node.id)?.instance?.status().connected);
+  const probeRelay = node => (config.testRelayConnection ?? testRelayConnection)(node, config.relayTestOptions);
   validateConfig({}, store.state);
   const sessions = createSessionAdapter(ctx, { deletedIds: async () => {
     try { return JSON.parse(await readFile(join(config.directory ? join(directory, '..') : ctx.get('benchgo').directory, 'dismissed-harness.json'), 'utf8')); }
@@ -62,9 +67,9 @@ async function mountLinkHost(ctx, config) {
     if (owner && ['send', 'cancel', 'respond', 'sessionAction'].includes(input.action)) throw Object.assign(new Error('远端执行会话只读，请在业务宿主的原工单提交输入或控制'), { status: 403, code: 'EXECUTION_INPUT_REQUIRES_OWNER' });
     if (input?.action === 'sessionAction') return sessionActions.dispatch(input, device);
     if (input?.action === 'execution') {
-      if (input.version !== 1 || !['catalog','submit','get','input','control','ack'].includes(input.operation)) throw Object.assign(new Error('不支持的执行协议版本或操作'), { status: 422, code: 'UNSUPPORTED_EXECUTION_PROTOCOL' });
+      if (input.version !== 2 || !['catalog','submit','get','input','control','ack'].includes(input.operation)) throw Object.assign(new Error('不支持的执行协议版本或操作'), { status: 422, code: 'UNSUPPORTED_EXECUTION_PROTOCOL' });
       const execution = ctx.get?.('benchgoExecution');
-      if (typeof execution?.dispatch !== 'function') throw Object.assign(new Error('目标官方执行服务尚不可用'), { status: 422, code: 'UNSUPPORTED' });
+      if (typeof execution?.dispatch !== 'function') throw Object.assign(new Error('目标执行服务尚不可用'), { status: 422, code: 'UNSUPPORTED' });
       const { principal, ...safe } = input;
       const value = await execution.dispatch(safe, { hostId: 'sha256:' + identity.pin, principal: { kind: 'device', deviceId: device.id, capabilities: [...PAIRED_DEVICE_CAPABILITIES] } });
       return { ...value, hostId: 'sha256:' + identity.pin, authorizationId: device.id };
@@ -104,7 +109,7 @@ async function mountLinkHost(ctx, config) {
       const capabilities = [
         { id: 'resources', available: true, operations: ['projects','sessions','recent','models','capabilities'] },
         ...sessionActions.capabilities(device),
-        { id: 'execution', version: 1, available: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function', reason: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function' ? null : '目标官方执行服务尚不可用', operations: ['catalog','submit','get','input','control','ack'] },
+        { id: 'execution', version: 2, available: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function', reason: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function' ? null : '目标执行服务尚不可用', operations: ['catalog','submit','get','input','control','ack'] },
         { id: 'management', available: true, reason: null, operations: ['status','relay-test','settings-read','settings-prepare','operation'] },
         { id: 'reverse', available: false, reason: '反向协作需要另一设备明确配对并建立回程目录', operations: [] },
       ];
@@ -150,32 +155,64 @@ async function mountLinkHost(ctx, config) {
   const notifyConfiguration = () => notifySettings(settingsListeners, { namespace: null });
   const webRoot = config.webRoot ?? new URL('../dist/web/', import.meta.url);
   const connectRelays = async () => {
-    if (!listener || !relayEnabled || !relayPool.length) return;
+    if (!listener) return;
     const targetHost = ['::', '::1'].includes(store.state.host) ? '[::1]' : store.state.host === '0.0.0.0' ? '127.0.0.1' : store.state.host;
-    for (const [index, node] of relayPool.entries()) if (node.enabled !== false && node.url && node.token) {
-      try { const instance = await (config.createRelayHost ?? createRelayHost)({ relayUrl: node.url, token: node.token, relayHeaders: listener.relayHeaders, target: { url: `https://${targetHost}:${listener.port}`, pin: identity.pin }, onError: () => {} }); relayNodes.set(node.id || `relay-${index + 1}`, { ...node, id: node.id || `relay-${index + 1}`, instance }); }
-      catch { relayError = '中继配置无效，请检查 HTTPS 地址、主机密钥及本机监听地址'; }
+    const desired = new Map(relayPool.filter(node => node.enabled !== false && node.url && node.token).map(node => [node.id, node]));
+    const retired = [];
+    for (const [id, runtime] of relayNodes) {
+      const next = desired.get(id);
+      if (next && next.url === runtime.url && next.token === runtime.token) {
+        desired.delete(id);
+      } else {
+        relayNodes.delete(id);
+        retired.push(runtime.instance?.close());
+      }
+    }
+    await Promise.allSettled(retired);
+    for (const [id, node] of desired) {
+      const runtime = { url: node.url, token: node.token };
+      try {
+        runtime.instance = await (config.createRelayHost ?? createRelayHost)({
+          relayUrl: node.url, token: node.token, relayHeaders: listener.relayHeaders,
+          target: { url: `https://${targetHost}:${listener.port}`, pin: identity.pin },
+        });
+      } catch {
+        runtime.lastError = '中继配置无效，请检查 HTTPS 地址、主机密钥及本机监听地址';
+        runtime.checkedAt = Date.now();
+      }
+      relayNodes.set(id, runtime);
     }
   };
   const start = () => hostScope(ctx)(async () => {
     identity ??= await loadIdentity(directory);
     workbench = createWorkbench(ctx, store, { webRoot, workbenchRoot: config.workbenchRoot });
-    listener = await listen({ identity, config: { ...store.state }, webRoot, store, dispatch, workbench, runRequest: operation => hostScope(ctx)(operation), routes: () => [
-      ...connectionAddresses(store.state.host).filter(address => !['localhost', '::1'].includes(address) && !/^127\./.test(address)).slice(0, 15).map(address => ({ url: `https://${authority(address, listener?.port ?? store.state.port)}`, pin: identity.pin, kind: 'direct' })),
-      ...relayPool.filter(node => node.enabled !== false && node.url && node.token).map((node, index) => ({ url: node.url, kind: 'relay', relayId: node.id || `relay-${index + 1}`, priority: Number.isInteger(node.priority) ? node.priority : index })),
-    ], onError: e => { error = e.message; } });
+    listener = await listen({ identity, config: { ...store.state }, webRoot, store, dispatch, workbench, runRequest: operation => hostScope(ctx)(operation), routes: () => {
+      const relays = rankedRelays().filter(node => node.enabled && node.url && node.token)
+        .map(({ url, id, priority }) => ({ url, kind: 'relay', relayId: id, priority }));
+      const direct = connectionAddresses(store.state.host).filter(address => !['localhost', '::1'].includes(address) && !/^127\./.test(address))
+        .slice(0, 16 - relays.length).map(address => ({ url: `https://${authority(address, listener?.port ?? store.state.port)}`, pin: identity.pin, kind: 'direct' }));
+      return [...direct, ...relays];
+    }, onError: e => { error = e.message; } });
     error = '';
-    relayError = '';
     await connectRelays();
   });
   const status = () => {
     const selectedRelay = connectedRelay();
+    const ranked = rankedRelays();
+    const preferred = ranked.find(node => node.enabled !== false);
+    const nodes = ranked.map(({ token, ...node }) => {
+      const runtime = relayNodes.get(node.id), channel = runtime?.instance?.status();
+      return { ...node, connected: channel?.connected ?? false,
+        lastError: channel?.lastError ?? runtime?.lastError ?? null, checkedAt: channel?.checkedAt ?? runtime?.checkedAt ?? null };
+    });
     return {
     enabled: Boolean(listener), host: store.state.host, port: listener?.port ?? store.state.port, publicUrl: store.state.publicUrl,
-    hostName: store.state.name, hostId: 'sha256:' + identity.pin, error: error || null,
+    hostName: store.state.name, hostId: 'sha256:' + identity.pin, scopedPairing: true, error: error || null,
     addresses: connectionAddresses(store.state.host).map(a => `https://${authority(a, listener?.port ?? store.state.port)}`),
     devices: store.state.devices.map(({ tokenHash, alias, ...device }) => ({ ...device, capabilities: [...PAIRED_DEVICE_CAPABILITIES], name: alias || device.name, ...(alias ? { originalName: device.name } : {}) })), pending: store.pending(), pendingManagement: managementOperations.filter(row => row.state === 'pending' && row.expiresAt > Date.now()).map(managementView),
-    relay: { configured: Boolean(relayPool.length || relayUrl), enabled: relayEnabled, url: selectedRelay?.url ?? relayUrl, nodes: relayPool.map((node, index) => { const runtime = relayNodes.get(node.id || `relay-${index + 1}`); const { token, instance, ...publicNode } = node; return { ...publicNode, id: node.id || `relay-${index + 1}`, ...(runtime?.instance?.status() ?? { connected: false, lastError: relayError || null }) }; }), ...(selectedRelay?.runtime.instance.status() ?? { connected: false, lastError: relayNodes.values().next().value?.instance.status().lastError || relayError || null }) },
+    relay: { configured: Boolean(nodes.length), enabled: Boolean(preferred), url: selectedRelay?.url || preferred?.url || nodes[0]?.url || '',
+      preferredId: preferred?.id ?? null, selectedId: selectedRelay?.id ?? null, fingerprint: configurationSnapshot(LINK_RELAY_NAMESPACE).fingerprint,
+      connected: Boolean(selectedRelay), lastError: selectedRelay ? null : nodes.find(node => node.enabled)?.lastError ?? null, nodes },
     };
   };
   const serializeChange = operation => {
@@ -210,38 +247,45 @@ async function mountLinkHost(ctx, config) {
     notifyConfiguration();
     return transaction ? { ...configurationSnapshot(LINK_TRANSPORT_NAMESPACE), application: { state: 'applied' } } : status();
   });
-  const configureRelayPool = (inputNodes, transaction) => serializeChange(async () => {
+  const configureRelayPool = (input, transaction) => serializeChange(async () => {
     if (closed) throw new Error('Link 已关闭');
     transaction?.authorize?.();
+    assertSettingsExpected(configurationSnapshot(LINK_RELAY_NAMESPACE), transaction?.expected ?? input?.expected, transaction?.signal);
+    let inputNodes;
     if (transaction) {
-      assertSettingsExpected(configurationSnapshot(LINK_RELAY_NAMESPACE), transaction.expected, transaction.signal);
-      // Whole-node writes contain credentials; only existing public fields use this seam.
-      const publicFields = new Set(Object.keys(LINK_RELAY_SCHEMA.properties.nodes.items.properties).filter(key => key !== 'token'));
-      if (!Array.isArray(transaction.ops) || transaction.ops.some(op => op.path?.length !== 3 || op.path[0] !== 'nodes' || !publicFields.has(op.path[2]))) throw Object.assign(new Error('中继节点与密钥请使用安全入口'), { code: 'SETTINGS_PATH_BLOCKED' });
+      if (!Array.isArray(transaction.ops) || transaction.ops.some(op => op.path?.length !== 3 || op.path[0] !== 'nodes' || !['priority', 'enabled'].includes(op.path[2]))) throw Object.assign(new Error('中继地址、节点与密钥请使用设备中心安全入口'), { code: 'SETTINGS_PATH_BLOCKED' });
       inputNodes = applySettingsOps({ nodes: relayPool }, transaction.ops).nodes;
+    } else {
+      inputNodes = editLinkRelayPool(relayPool, input);
     }
     const normalized = normalizeLinkRelayPool(inputNodes, relayPool);
     if (transaction && settingsFingerprint(normalized) !== settingsFingerprint(inputNodes)) throw new Error('请使用规范化的中继节点字段');
-    if (relayPool.some(node => node.enabled !== false && !normalized.some(next => next.id === node.id))) throw new Error('请先停用中继，再删除');
-    const previous = store.state.relayPool, previousRelay = store.state.relay;
+    if (normalized.some(node => node.enabled) && !['0.0.0.0', '::', '127.0.0.1', 'localhost', '::1'].includes(store.state.host)) throw new Error('启用中继需要 Link 监听全部网卡或 loopback');
+    if (input && ['add', 'update'].includes(input.operation)) {
+      const next = normalized.find(node => node.id === input.id.trim()), prior = relayPool.find(node => node.id === next.id);
+      if (!prior || next.url !== prior.url || next.token !== prior.token) {
+        const result = await probeRelay({ url: next.url, token: next.token });
+        if (!result.ok) throw new Error(result.message);
+      }
+    }
+    if (closed) throw new Error('Link 已关闭');
+    transaction?.signal?.throwIfAborted();
+    const previous = store.state.relayPool;
     store.state.relayPool = normalized;
-    store.state.relay = normalized[0] ? { url: normalized[0].url, token: normalized[0].token, enabled: normalized[0].enabled } : { url: '', token: '', enabled: false };
-    try { await store.persist(); } catch (reason) { store.state.relayPool = previous; store.state.relay = previousRelay; throw reason; }
-    await stopRelay();
-    relayPool.splice(0, relayPool.length, ...normalized);
-    relayUrl = normalized[0]?.url || ''; relayToken = normalized[0]?.token || '';
-    relayEnabled = normalized.some(node => node.enabled); relayError = '';
-    if (relayEnabled && !listener) { store.state.enabled = true; try { await start(); } catch (reason) { error = reason.message; } }
-    else if (relayEnabled && listener) await connectRelays();
+    try { await store.persist(); } catch (reason) { store.state.relayPool = previous; throw reason; }
+    relayPool = normalized;
+    if (listener) await connectRelays();
+    else if (enabledRelay()) try { await start(); } catch (reason) { error = reason.message; }
     notifyConfiguration();
-    return transaction ? { ...configurationSnapshot(LINK_RELAY_NAMESPACE), application: relayEnabled && !connectedRelay()
+    return transaction ? { ...configurationSnapshot(LINK_RELAY_NAMESPACE), application: enabledRelay() && !connectedRelay()
       ? { state: 'pending', reason: '中继配置已保存，连接状态尚未就绪，请查看设备页面实时状态' }
       : { state: 'applied' } } : status();
   });
   const admin = async input => {
     if (closed) throw new Error('Link 已关闭');
     const action = text(input?.action, '操作');
-    if (action === 'status') return status();
+    if (action === 'status') return input.pairingCode === undefined ? status() : { pending: store.pending(input.pairingCode) };
+    if (action === 'pairing-probe') return store.beginProbe();
     if (action === 'management-decide') {
       const decision = await serializeChange(async () => {
       if (typeof input.allow !== 'boolean') throw new Error('需要明确批准或拒绝');
@@ -268,41 +312,11 @@ async function mountLinkHost(ctx, config) {
     if (action === 'relay-test') {
       const previous = input.id ? relayPool.find(node => node.id === input.id) : undefined;
       if (input.id && !previous) return { ok: false, latencyMs: 0, message: '中继不存在，请刷新后重试' };
-      return testRelayConnection({ url: input.url ?? previous?.url, token: input.token || previous?.token }, config.relayTestOptions);
+      const url = input.url ?? previous?.url;
+      if (previous && url !== previous.url && !input.token) return { ok: false, latencyMs: 0, message: '更换中继地址时请重新输入主机密钥' };
+      return probeRelay({ url, token: input.token || previous?.token });
     }
-    if (action === 'relay-pool-configure') {
-      return configureRelayPool(input.nodes);
-    }
-    if (action === 'relay-configure') {
-      const task = changes.then(async () => {
-        if (closed) throw new Error('Link 已关闭');
-        const url = input.url === undefined ? relayUrl : text(input.url, '中继地址', 2048);
-        let parsed; try { parsed = new URL(url); } catch { throw new Error('中继地址无效'); }
-        if (parsed.protocol !== 'https:' || parsed.origin !== url || parsed.username || parsed.password) throw new Error('中继必须使用独立 HTTPS origin');
-        const token = input.token === undefined ? relayToken : text(input.token, '中继主机密钥', 256);
-        if (token.length < 6) throw new Error('中继主机密钥至少需要 6 个字符');
-        const enabled = input.enabled === undefined ? true : input.enabled;
-        if (typeof enabled !== 'boolean') throw new Error('中继启用状态无效');
-        if (enabled && !['0.0.0.0', '::', '127.0.0.1', 'localhost', '::1'].includes(store.state.host)) throw new Error('启用中继需要 Link 监听全部网卡或 loopback');
-        const previous = store.state.relay;
-        store.state.relay = { url, token, enabled };
-        const primary = { id: relayPool[0]?.id || 'primary', url, token, priority: 0, enabled };
-        relayPool.splice(0, relayPool.length, primary);
-        store.state.relayPool = relayPool.map(({ instance, ...node }) => node);
-        try { await store.persist(); } catch (error) { store.state.relay = previous; throw error; }
-        relayUrl = url; relayToken = token; relayEnabled = enabled;
-        store.clearPairings(); await stopRelay();
-        if (enabled) {
-          if (!listener) { store.state.enabled = true; await start(); await store.persist(); }
-          else {
-            relayError = '';
-            await connectRelays();
-          }
-        }
-        notifyConfiguration(); return status();
-      });
-      changes = task.catch(() => {}); return task;
-    }
+    if (action === 'relay-pool-configure') return configureRelayPool(input);
     if (action === 'configure') {
       return configureTransport(input);
     }
@@ -310,7 +324,9 @@ async function mountLinkHost(ctx, config) {
       if (!listener) throw new Error(error || '设备连接服务暂不可用，请检查监听地址和端口');
       const mode = input.mode ?? 'lan';
       if (!['lan', 'public', 'relay'].includes(mode)) throw new Error('连接模式无效');
-      const selectedRelay = mode === 'relay' ? connectedRelay() : undefined;
+      const relayId = input.relayId === undefined ? undefined : text(input.relayId, '中继 ID', 128);
+      if (relayId && mode !== 'relay') throw new Error('仅中继配对可指定中继节点');
+      const selectedRelay = mode === 'relay' ? connectedRelay(relayId) : undefined;
       if (mode === 'relay' && !selectedRelay) throw new Error('自有中继尚未连接，请检查中继配置和网络');
       const addresses = status().addresses;
       let url = mode === 'relay' ? selectedRelay.url : mode === 'public' ? store.state.publicUrl : addresses[0];
@@ -324,7 +340,12 @@ async function mountLinkHost(ctx, config) {
       const query = new URLSearchParams({ url, pin: mode === 'lan' ? identity.pin : '', code: pair.code, name: store.state.name });
       return { ...pair, mode, uri: `benchgo://pair?${query}`, ...(mode !== 'lan' ? { webUrl: `${url}/link/#code=${encodeURIComponent(pair.code)}` } : {}), url };
     }
-    if (action === 'confirm' || action === 'reject') { await store.decide(text(input.id, '设备 ID'), action === 'confirm'); return status(); }
+    if (action === 'confirm' || action === 'reject') {
+      const id = text(input.id, '设备 ID');
+      if (input.pairingCode !== undefined && !store.pending(input.pairingCode).some(row => row.id === id)) throw new Error('配对申请已过期或不存在');
+      await store.decide(id, action === 'confirm');
+      return status();
+    }
     if (action === 'rename-device') { await store.renameDevice(text(input.id, '设备 ID'), input.name); return status(); }
     if (action === 'revoke') { const id = text(input.id, '设备 ID'); await store.revoke(id); await Promise.all([sessions.revoke(id), workbench?.revoke(id), sessionActions.revoke(id), ctx.get?.('benchgoExecution')?.revokePrincipal?.(id)]); return status(); }
     throw new Error('不支持的管理操作');
@@ -404,7 +425,7 @@ async function mountLinkHost(ctx, config) {
         if (input.action === 'cloud-access' && ['enable', 'rotate'].includes(input.operation) && request.headers.get('origin') === cloudAccess.origin) headers['set-cookie'] = cloudAccess.sessionCookie();
         return Response.json(value, { headers });
       }
-      catch (e) { return Response.json({ error: e.message }, { status: 400, headers: { 'cache-control': 'no-store' } }); }
+      catch (e) { return Response.json({ error: e.message, ...(e.code ? { code: e.code } : {}) }, { status: e.status ?? 400, headers: { 'cache-control': 'no-store' } }); }
     },
   }));
   const service = {
@@ -412,6 +433,8 @@ async function mountLinkHost(ctx, config) {
     devices: async () => { const snapshot = (await getCenter()).devices(); const hostId = 'sha256:' + identity.pin; return { ...snapshot, hostId, devices: snapshot.devices.map(device => device.id === 'local' ? { ...device, hostId, authorizationId: null } : device) }; },
     resources: async input => (await getCenter()).resources(input),
     callDevice: async input => (await getCenter()).callDevice(input),
+    sshTarget: async input => (await getCenter()).sshTarget(input),
+    sshCommand: async input => (await getCenter()).sshCommand(input),
     deviceAction,
     configureSettings(namespace, transaction) {
       if (namespace === LINK_TRANSPORT_NAMESPACE) return configureTransport({}, transaction);

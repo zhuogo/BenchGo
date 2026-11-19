@@ -1,5 +1,5 @@
 import { isChatUserMessage, readAdmittedQuestionReply } from '../src/question-reply.mjs';
-import { isTaskResultReplyRequest } from '../../benchgo/shared/public-chat-record.mjs';
+import { isTaskResultReplyRequest } from '../../base/shared/public-chat-record.mjs';
 
 /** Display only facts in the official projection; never inspect private tool arguments. */
 export function conversationActivity(session = {}, chat, pendingInteraction, history) {

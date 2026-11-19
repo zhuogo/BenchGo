@@ -1,4 +1,4 @@
-import { readJsonResponse } from '../../benchgo/client/http-response.mjs';
+import { readJsonResponse } from '../../base/client/http-response.mjs';
 export const resourceKey = row => JSON.stringify([row.deviceId, row.kind, row.resourceId ?? row.id]);
 /** A target advertises management separately for official and native sessions. */
 export function sessionActionAccess(navigation, row, operation) {

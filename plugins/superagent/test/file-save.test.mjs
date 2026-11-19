@@ -81,6 +81,20 @@ test('Web resolves Link-relative URLs and keeps same-origin credentials', async 
   assert.equal(f.calls.anchors[0].download, 'report.jpg');
 });
 
+test('official attachment object URLs can be saved from their own view', async () => {
+  const browser = fixture();
+  const url = 'blob:https://benchgo.test/original';
+  await assert.rejects(saveOriginalFile({ url }, browser.environment), /不支持此文件地址/u);
+  await assert.rejects(saveOriginalFile({ url: 'blob:https://other.test/original', localObjectUrl: true }, browser.environment), /不支持此文件地址/u);
+  await saveOriginalFile({ url, localObjectUrl: true, name: 'photo.jpg' }, browser.environment);
+  assert.deepEqual(browser.calls.fetches, [[url, { credentials: 'omit', referrerPolicy: 'no-referrer' }]]);
+  assert.equal(browser.calls.anchors[0].download, 'photo.jpg');
+
+  const desktop = fixture('dsh-app://app/'); desktop.native();
+  await saveOriginalFile({ url: 'blob:null/original', name: 'photo.jpg', localObjectUrl: true }, desktop.environment);
+  assert.equal(desktop.calls.saves[0].url, 'blob:null/original');
+});
+
 test('filename priority, parameter leaf selection and platform-safe names', async () => {
   for (const [file, expected] of [
     [{ filename: 'explicit.jpg', name: 'label', url: 'https://images.test/url.jpg?file=param.jpg' }, 'explicit.jpg'],

@@ -1,12 +1,10 @@
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { workbenchLoadingMarkup } from './workbench-loading.mjs';
 
 /** Add presentation before the workbench entry executes, without editing upstream. */
 export function workbenchLoadingPlugin(documentPath) {
   const target = resolve(documentPath);
-  const css = readFileSync(new URL('../../plugins/shared/client/ui/loading.css', import.meta.url), 'utf8');
-  const markup = workbenchLoadingMarkup(css);
+  const markup = workbenchLoadingMarkup();
   let transformed = 0;
   return {
     name: 'benchgo-workbench-loading',
@@ -25,7 +23,7 @@ export function workbenchLoadingPlugin(documentPath) {
 }
 
 export function verifyWorkbenchLoadingBundle(source) {
-  for (const required of ['data-benchgo-workbench-loading', 'data-dsh-boot-spinner', 'bg-loading-hit']) {
+  for (const required of ['data-benchgo-workbench-loading', 'data-dsh-boot-spinner', 'benchgo-boot-rail', '--dsh-boot-arc']) {
     if (!source.includes(required)) throw new Error(`Compiled desktop is missing workbench loading presentation: ${required}`);
   }
 }

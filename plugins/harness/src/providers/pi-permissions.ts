@@ -3,6 +3,27 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 import { Type } from '@sinclair/typebox';
 
+async function mountMediaTools(pi: ExtensionAPI, url: string) {
+  const headers = { authorization: 'Bearer ' + process.env.COMMANDER_DELEGATE_TOKEN, 'content-type': 'application/json' };
+  const tools = await fetch(new URL('/media/tools', url), { headers, signal: AbortSignal.timeout(5000) })
+    .then(reply => reply.ok ? reply.json() : [], () => []).catch(() => []);
+  for (const definition of tools) {
+    const { name, description, parameters } = definition;
+    pi.registerTool({
+      name, label: 'BenchGo', description,
+      parameters: Type.Unsafe(parameters),
+      async execute(callId, args, signal) {
+        const body = JSON.stringify({ name, args, callId });
+        const limit = AbortSignal.timeout(240000);
+        const reply = await fetch(new URL('/media/call', url), { method: 'POST', headers, body, signal: signal ? AbortSignal.any([signal, limit]) : limit });
+        const value = await reply.json();
+        if (!reply.ok) throw new Error(value.error || 'BenchGo media tool failed');
+        return { content: [{ type: 'text', text: JSON.stringify(value) }], details: {} };
+      },
+    });
+  }
+}
+
 export default function commanderPermissions(pi: ExtensionAPI) {
   if (process.env.COMMANDER_DELEGATE_URL) pi.registerTool({
     name: 'commander_delegate', label: 'BenchGo', description: 'Delegate a task to another coding engine in the same project under the owning conversation permissions.',
@@ -21,4 +42,5 @@ export default function commanderPermissions(pi: ExtensionAPI) {
     );
     if (!allowed) return { block: true, reason: 'Denied by BenchGo user' };
   });
+  if (process.env.COMMANDER_DELEGATE_URL) return mountMediaTools(pi, process.env.COMMANDER_DELEGATE_URL);
 }

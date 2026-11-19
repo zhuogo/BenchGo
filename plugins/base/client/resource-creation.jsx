@@ -1,0 +1,58 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { CustomSelect } from '../../shared/client/custom-select.jsx';
+import { Button } from '../../shared/client/ui/index.jsx';
+import { Loading } from '../../shared/client/ui/loading.jsx';
+import { createProjectBridge } from '../../link/client/project-bridge.mjs';
+import { deviceIcon, deviceStatus } from '../../link/client/device-state.mjs';
+import { ProjectDialog, ProjectPicker } from './project-picker.jsx';
+import { UIIcon } from './iconsax.jsx';
+
+function useProjectBridge(device) {
+  const frame = useRef(null), [url, setUrl] = useState('');
+  const identity = JSON.stringify([device.id, device.hostId, device.authorizationId]);
+  const bridge = useMemo(() => createProjectBridge({ deviceId: device.id, expectedDevice: device, onEntry: setUrl, getFrame: () => frame.current }), [identity]);
+  useEffect(() => () => bridge.dispose(), [bridge]);
+  return { frame, url, bridge };
+}
+function RemoteProjectPicker({ device, ...props }) {
+  const { frame, url, bridge } = useProjectBridge(device);
+  return <><ProjectPicker {...props} api={bridge.api} allowDesktop={false} />{url && <iframe hidden ref={frame} src={url} title={device.name + '的项目连接'} onLoad={() => bridge.probe()} referrerPolicy="no-referrer" />}</>;
+}
+
+/** The existing confirmation dialog owns consent; this frame discovers and runs target APIs. */
+export function RemoteProjectConnection({ device, onReady, onError }) {
+  const { frame, url, bridge } = useProjectBridge(device);
+  const callbacks = useRef({ onReady, onError }); callbacks.current = { onReady, onError };
+  useEffect(() => {
+    let current = true;
+    void bridge.supports('deleteProject').then(available => {
+      if (!current) return;
+      if (available) callbacks.current.onReady(bridge);
+      else callbacks.current.onError(Error('目标设备尚不支持删除项目，请升级该设备的 BenchGo 后重试'));
+    }).catch(error => { if (current) callbacks.current.onError(error); });
+    return () => { current = false; };
+  }, [bridge]);
+  return url && <iframe hidden ref={frame} src={url} title={device.name + '的项目连接'} onLoad={() => bridge.probe()} referrerPolicy="no-referrer" />;
+}
+
+/** Project creation belongs to the chosen device; display scope only supplies the initial choice. */
+export function ResourceCreationDialog({ navigation: n, api, onClose, onSelected }) {
+  const localOnly = n.enabled === false;
+  const devices = localOnly ? [{ id: n.activeId, name: '当前设备', kind: 'local', status: 'online' }] : n.devices;
+  const preferred = n.selected.length === 1 ? n.selected[0].id : devices.find(device => device.id === n.activeId)?.id || devices[0]?.id || '';
+  const [chosen, setChosen] = useState(preferred || null), [busy, setBusy] = useState(false), [draft, setDraft] = useState({ tab: 'browse', url: '' });
+  useEffect(() => { if (chosen === null && preferred) setChosen(preferred); }, [chosen, preferred]);
+  const device = devices.find(item => item.id === (chosen ?? preferred));
+  const local = device?.id === n.activeId;
+  useEffect(() => { if (!device) setBusy(false); }, [device]);
+  const deviceControl = locked => <div className="cmd-creation-device">
+    <CustomSelect id="cmd-creation-device" aria-label="目标设备" value={device?.id || ''} placeholder="选择设备" disabled={locked || !devices.length || (devices.length === 1 && !!device)} onChange={setChosen} options={devices.map(item => ({ value: item.id, label: <>{item.name}{(item.id === n.activeId || deviceStatus(item)) && <span className="cmd-creation-device-status"> · {item.id === n.activeId ? '当前工作台' : deviceStatus(item)}</span>}</>, searchText: item.name, icon: <span data-device-available={['online', 'connected'].includes(item.status)}><UIIcon name={deviceIcon(item)} size={16} /></span> }))} />
+  </div>;
+  const pickerProps = { embedded: true, onBusyChange: setBusy, draft, onDraftChange: setDraft, onClose, onSelected: project => onSelected(project, device), toolbarEnd: deviceControl(busy) };
+  const key = JSON.stringify([device?.id, device?.hostId, device?.authorizationId]);
+  return <ProjectDialog busy={busy} onClose={onClose}>
+    {!device && <div className="cmd-creation-device-row"><label htmlFor="cmd-creation-device">设备</label>{deviceControl(busy)}</div>}
+    {device && (local ? <ProjectPicker key={key} {...pickerProps} api={api} /> : <RemoteProjectPicker key={key} {...pickerProps} device={device} />)}
+    {!device && <div className="cmd-creation-empty">{n.ready === false ? <Loading label="正在读取设备…" /> : <><UIIcon name="devices" size={24} /><strong>{devices.length ? '目标设备已移除' : n.error ? '无法读取设备' : '暂无可用设备'}</strong><p>{devices.length ? '请重新选择设备，或在设备中心检查连接。' : n.error || '在设备中心连接设备后，即可在这里创建。'}</p>{n.error && <Button variant="ghost" onClick={n.retry}>重试</Button>}<Button variant="ghost" onClick={() => { onClose(); document.querySelector('.dsh-device-launcher')?.click(); }}>打开设备中心</Button></>}</div>}
+  </ProjectDialog>;
+}
