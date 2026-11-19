@@ -30,6 +30,7 @@ const capabilityEditor = fileURLToPath(new URL('../client/model-capabilities.jsx
 const profileMatch = fileURLToPath(new URL('../client/model-profile.jsx', import.meta.url));
 const catalogFilter = fileURLToPath(new URL('../client/model-catalog-filter.jsx', import.meta.url));
 const profileFacts = fileURLToPath(new URL('../shared/model-profile-match.mjs', import.meta.url));
+const textSearch = fileURLToPath(new URL('packages/util/text-search/src/index.ts', harness));
 const loading = fileURLToPath(new URL('../../shared/client/ui/loading.jsx', import.meta.url));
 const select = fileURLToPath(new URL('../../shared/client/select.jsx', import.meta.url));
 const disclosure = fileURLToPath(new URL('../../shared/client/ui/collapsible.jsx', import.meta.url));
@@ -229,7 +230,7 @@ export function officialModelsUi() {
       source = 'import { useRef } from "react";\nimport { resolveModelProfiles } from ' + JSON.stringify(profileMatch) + ';\n' + source;
       source = once(source, '  const [models, setModels] = useState<readonly ModelDraft[]>([])', '  const [models, setModels] = useState<readonly ModelDraft[]>([])\n  const discoveredModels = useRef(new Map<string, ModelDraft>()).current', 'new provider model defaults');
       source = once(source, '        onChange={setModels}', '        onChange={setModels}\n        discoveredModels={discoveredModels}', 'new provider discovery defaults');
-      source = once(source, 'models: models.map(model => ({ ...model })),', 'models: await resolveModelProfiles(models, true, false, discoveredModels),', 'save new provider with public model defaults');
+      source = once(source, 'models: models.map(model => ({ ...model })),', 'models: reasoning.levelsOnly ? models : await resolveModelProfiles(models, true, false, discoveredModels),', 'save new provider with public model defaults');
       source = 'import { validateModelReasoning } from ' + JSON.stringify(reasoningState) + ';\n' + source;
       const identityStart = source.indexOf("      <div className={styles['field']}>\n        <span className={styles['fieldLabel']}>{t('customRoute')}");
       const identityEnd = source.indexOf("      <div className={styles['field']}>\n        <span className={styles['fieldLabel']}>{t('baseUrl')}", identityStart);
@@ -266,25 +267,22 @@ export function officialModelsUi() {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
       source = adaptProtocolSelect(source);
       source = 'import { useRef } from "react";\nimport { resolveModelProfiles } from ' + JSON.stringify(profileMatch) + ';\n' + source;
-      source = once(source, "  const [keyDraft, setKeyDraft] = useState('')", "  const [keyDraft, setKeyDraft] = useState('')\n  const discoveredModels = useRef(new Map<string, Record<string, unknown>>()).current", 'provider model defaults');
+      source = once(source, '  const [busy, setBusy] = useState(false)', '  const discoveredModels = useRef(new Map<string, Record<string, unknown>>()).current\n  const [busy, setBusy] = useState(false)', 'provider model defaults');
       source = 'import { validateModelReasoning, reasoningLevelLabels } from ' + JSON.stringify(reasoningState) + ';\n' + source;
       source = 'import { ProviderBrandIcon } from ' + JSON.stringify(selector) + ';\n' + source;
       source = 'import { isRouterGoAccountReference } from ' + JSON.stringify(accountReference) + ';\n' + source;
       source = 'import { routerGo } from ' + JSON.stringify(selector) + ';\n' + source;
-      source = once(source, '  const keyValue = keyDraft.trim()', [
-        '  const keyValue = keyDraft.trim()',
+      source = once(source, "  const probeApi = stringAt(draft, 'api') ?? stringAt(fallback, 'api')", [
         '  const managedRouterGo = props.provider === routerGo.id && isRouterGoAccountReference(keyRef)',
+        "  const probeApi = managedRouterGo ? routerGo.protocol : stringAt(draft, 'api') ?? stringAt(fallback, 'api')",
       ].join('\n'), 'identify RouterGo account credentials');
       source = once(source, "  const probeBaseURL = stringAt(draft, 'baseURL') ?? stringAt(fallback, 'baseURL')", [
         "  const probeBaseURL = managedRouterGo ? routerGo.baseURL : stringAt(draft, 'baseURL') ?? stringAt(fallback, 'baseURL')",
       ].join('\n'), 'RouterGo account discovery stays on official endpoint');
-      source = once(source, "  const probeApi = stringAt(draft, 'api') ?? stringAt(fallback, 'api')", "  const probeApi = managedRouterGo ? routerGo.protocol : stringAt(draft, 'api') ?? stringAt(fallback, 'api')", 'RouterGo account discovery protocol');
-      source = once(source, "    const next = layout === 'pi-ai' && stringAt(draft, 'apiKeyEnv') === undefined\n      && stringAt(fallback, 'apiKeyEnv') === undefined && keyValue.length > 0\n      ? schema.setPath(draft, ['apiKeyEnv'], keyRef)\n      : draft", [
-        "    let next = layout === 'pi-ai' && stringAt(draft, 'apiKeyEnv') === undefined",
-        "      && stringAt(fallback, 'apiKeyEnv') === undefined && keyValue.length > 0",
-        "      ? schema.setPath(draft, ['apiKeyEnv'], keyRef)",
-        '      : draft',
-        "    if (!props.credentialOnly && layout !== 'unknown') {",
+      source = once(source, '    const next = layout ===', '    let next = layout ===', 'extend official provider draft');
+      source = once(source, '      : profileDraft', [
+        '      : profileDraft',
+        "    if (!props.credentialOnly && layout !== 'unknown' && !reasoning.levelsOnly) {",
         "      const owned = schema.getPath(next, ['models'])",
         "      const rows = Array.isArray(owned) ? owned : inheritedModels()",
         "      const models = modelDrafts(rows)",
@@ -317,17 +315,28 @@ export function officialModelsUi() {
       source = once(source, "defaultMaxTokens={typeof defaultMaxTokens === 'number' ? defaultMaxTokens : undefined}\n                />", "defaultMaxTokens={typeof defaultMaxTokens === 'number' ? defaultMaxTokens : undefined}\n                />\n                </>", 'direct DeepSeek reasoning layout');
       source = once(source, '                  catalogProvider={props.declared === true ? undefined : props.provider}', '                  catalogProvider={props.declared === true ? undefined : props.provider}\n                  defaultReasoningEffort={defaultReasoningEffort}', 'reasoning provider editor properties');
       source = once(source, '        {keylessNativeAuth\n', '        {!managedRouterGo && <div className="cmd-provider-fields">\n        {keylessNativeAuth\n', 'connection fields opening');
+      source = once(source, '  const [customizedOpen, setCustomizedOpen] = useState(false)\n', '', 'inline retry settings state');
       source = once(source, [
-        "        {props.credentialOnly === true ? null : <details className={styles['customized']}>",
+        '        {props.credentialOnly === true ? null : <details',
+        "          className={styles['customized']}",
+        '          onToggle={(event) => { setCustomizedOpen(event.currentTarget.open) }}',
+        '        >',
         "          <summary className={styles['customizedSummary']}>{t('customized')}</summary>",
         "          <div className={styles['customizedBody']}>",
       ].join('\n'), '        {props.credentialOnly === true ? null : <>', 'inline provider fields');
-      source = once(source, '            {/* Both families edit the same rows', '        </>}\n        </div>}\n        {props.credentialOnly === true ? null : <>\n            {/* Both families edit the same rows', 'separate model list from connection fields');
+      source = once(source, '            {retryDefaults === undefined', '        </>}\n        </div>}\n        {props.credentialOnly === true ? null : <>\n            {retryDefaults === undefined', 'keep retry policy and models available for managed RouterGo');
+      source = once(source, '                  showFailure={customizedOpen}', '                  showFailure', 'show inline retry errors');
+      source = once(source, [
+        '      {/* A closed fold hides the fields, so a refused stored policy still explains a disabled Apply. */}',
+        '      {retryFailure === undefined || customizedOpen',
+        '        ? null',
+        "        : <p id={`${props.provider}-retry-failure`} className={styles['error']}>{retryFailure.message}</p>}",
+      ].join('\n') + '\n', '', 'remove folded retry error');
       source = once(source, '          </div>\n        </details>}', '        </>}', 'inline model list');
       source = foldProtocolField(source, '                ');
       source = once(source, "            <span className={styles['editorTitle']}>{props.displayName}</span>", "            <ProviderBrandIcon id={props.provider} name={props.displayName} declared={props.declared === true} />\n            <span className={styles['editorTitle']}>{props.displayName}</span>", 'provider editor brand');
-      source = once(source, "  const modelFailure = validateModels(schema.getPath(draft, ['models']))", "  const reasoningFailure = layout === 'pi-ai' && props.credentialOnly !== true ? validateModelReasoning(schema.getPath(draft, ['models'])) : undefined\n  const modelFailure = validateModels(schema.getPath(draft, ['models']))", 'provider reasoning validation');
-      source = once(source, '    if (props.credentialOnly !== true) {', '    if (props.credentialOnly !== true) {\n      if (reasoningFailure !== undefined) return reasoningFailure', 'provider reasoning write gate');
+      source = once(source, '  const modelFailure = validateModels(', "  const reasoningFailure = layout === 'pi-ai' && props.credentialOnly !== true ? validateModelReasoning(schema.getPath(draft, ['models'])) : undefined\n  const modelFailure = validateModels(", 'provider reasoning validation');
+      source = once(source, '    if (props.credentialOnly !== true) {', '    if (props.credentialOnly !== true) {\n      if (reasoningFailure !== undefined) return reasoningFailure\n      if (retryFailure !== undefined) return retryFailure.message\n      if (modelFailure !== undefined) return `${t(\'model\')} ${String(modelFailure.index + 1)}: ${t(modelFailure.key)}`', 'provider write validation');
       source = once(source, "      {failure !== undefined ? <p className={styles['error']}>{failure}</p> : null}", "      {failure !== undefined ? <p className={styles['error']}>{failure}</p> : null}\n      {props.credentialOnly !== true && reasoningFailure !== undefined ? <p role=\"alert\" className={styles['error']}>{reasoningFailure}</p> : null}", 'provider reasoning failure hint');
       source = once(source, "          || (props.credentialOnly !== true && modelFailure !== undefined)", "          || (props.credentialOnly !== true && (modelFailure !== undefined || reasoningFailure !== undefined))", 'provider reasoning submit gate');
       const footer = source.match(/      <EditorFooter\n[\s\S]*?\n      \/>/)?.[0];
@@ -396,24 +405,18 @@ export function officialModelsUi() {
       source = once(source, '          {props.expanded ? <IconChevronDownOutlineRegular /> : <IconChevronRightOutlineRegular />}', '          <span title={displayName}>{displayName}</span>\n          {expanded ? <IconChevronDownOutlineRegular /> : <IconChevronRightOutlineRegular />}', 'model disclosure content');
       source = once(source, "        {modelField('name')}\n        {props.expanded", '        {expanded', 'show details on expansion');
       source = once(source, "            <div className={styles['modelAdvanced']}>", "            <div className={styles['modelAdvanced']}>\n              {modelField('name')}\n              {modelField('id')}", 'editable display name and ID');
-      source = once(source, [
-        '              {props.reasoningLevels !== undefined && props.reasoningLevels.length > 0',
-        '                ? (',
-        '                  <ModelReasoningEfforts',
-        '                    model={model} levels={props.reasoningLevels} position={position} disabled={disabled} t={t} onChange={props.onChange}',
-        '                  />',
-        '                )',
-        '                : null}',
-      ].join('\n'), '              {props.extraSettings}', 'expanded model extension');
+      source = once(source, '              {props.reasoningLevels !== undefined && props.reasoningLevels.length > 0',
+        '              {props.extraSettings}\n              {props.reasoningLevelsOnly === true && props.reasoningLevels !== undefined && props.reasoningLevels.length > 0', 'expanded model extension');
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
     });
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ModelListEditor\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
+      source = once(source, "from '@deepseek-ai/dsh-util-text-search'", 'from ' + JSON.stringify(textSearch), 'bundle official model discovery search');
       source = 'const installedReasoning = JSON.parse(' + JSON.stringify(JSON.stringify(installedReasoning())) + ')\n' + source;
       source = 'import { useModelProfiles } from ' + JSON.stringify(profileMatch) + ';\nimport { ModelReasoningEditor } from ' + JSON.stringify(reasoningEditor) + ';\n' + source;
       source = 'import { ModelCapabilityEditor, useModelCapabilities } from ' + JSON.stringify(capabilityEditor) + ';\n' + source;
       source = once(source, 'export interface ModelListEditorProps {', 'export interface ModelListEditorProps {\n  actions?: ReactNode\n  discoveredModels?: Map<string, ModelDraft>\n  defaultReasoningEffort?: string', 'model reasoning and actions props');
-      source = once(source, '  const { catalogProvider } = props', '  const { catalogProvider, discoveredModels } = props\n  useModelProfiles(models, onChange, disabled, true, props.overridden === false, discoveredModels)\n  const capabilityCatalog = useModelCapabilities(probe.provider)', 'public model profiles');
+      source = once(source, '  const { catalogProvider } = props', '  const { catalogProvider, discoveredModels } = props\n  useModelProfiles(models, onChange, disabled || props.reasoningLevelsOnly === true, true, props.overridden === false, discoveredModels)\n  const capabilityCatalog = useModelCapabilities(probe.provider)', 'public model profiles');
       source = once(source, '    onChange([...keptRows, ...addedRows])', "    for (const index of removedRows) discoveredModels?.delete(textOf(models[index], 'id'))\n    for (const model of addedRows) discoveredModels?.set(textOf(model, 'id'), model)\n    onChange([...keptRows, ...addedRows])", 'record engine defaults for adopted models');
       source = once(source, '              onChange(models.filter((_model, at) => at !== index))', "              discoveredModels?.delete(textOf(model, 'id'))\n              onChange(models.filter((_model, at) => at !== index))", 'discard removed model defaults');
       const resetStart = source.indexOf('        {props.overridden === true && props.onReset !== undefined');
@@ -436,13 +439,13 @@ export function officialModelsUi() {
     return previous?.id === id ? previous?.mapping : undefined
   }`, 'reasoning draft options');
       source = once(source, '            onFieldChange={(field, value)', `            extraSettings={<><ModelCapabilityEditor modelId={model.id} catalog={capabilityCatalog} disabled={disabled} styles={styles} />
-              <ModelReasoningEditor model={model} position={index + 1} disabled={disabled} styles={styles}
+              {props.reasoningLevelsOnly !== true && <ModelReasoningEditor model={model} position={index + 1} disabled={disabled} styles={styles}
                 inherited={typeof model.id === 'string' && providerReasoning && Object.hasOwn(providerReasoning, model.id) ? providerReasoning[model.id] : undefined}
                 retained={retainedReasoning(key, model.id)} defaultEffort={props.defaultReasoningEffort}
                 onChange={(next: ModelDraft, mapping: Record<string, string | null>) => {
                   setReasoningDrafts(current => new Map(current).set(key, { id: model.id, mapping }))
                   onChange(models.map((row, at) => at === index ? next : row))
-                }} /></>}
+                }} />}</>}
             onFieldChange={(field, value)`, 'per-model capability and reasoning settings');
       source = adaptModelCatalog(source, false);
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
@@ -454,7 +457,7 @@ export function officialModelsUi() {
       source = once(source, "className={styles['primaryButton']}", "className={props.catalogActions ? styles['secondaryButton'] : styles['primaryButton']}", 'unified catalog button style');
       const buttons = source.match(/^(      <button\n[\s\S]*?^      <\/button>)\n(      <button\n[\s\S]*?^      <\/button>)/m);
       if (!buttons) throw Error('Provider action buttons changed');
-      source = once(source, buttons[0], () => buttons[2] + '\n      {props.catalogActions ? null : (\n' + buttons[1] + '\n      )}', 'omit catalog cancel');
+      source = once(source, buttons[0], () => buttons[2] + "\n      {props.catalogActions && props.cancelLabelKey !== 'close' ? null : (\n" + buttons[1] + '\n      )}', 'omit redundant catalog cancel');
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
     });
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ModelsSection\.module\.css$/ }, async args => {

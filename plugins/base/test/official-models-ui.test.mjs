@@ -8,6 +8,8 @@ import { officialModelsUi } from '../scripts/official-models-ui.mjs';
 import * as reasoning from '../client/model-reasoning-state.mjs';
 import { routerGo } from '../shared/builtin-providers.mjs';
 import * as routerGoAccount from '../shared/routergo-account.mjs';
+import * as protocolRules from '../../../deepseek-harness/packages/client/ui-settings-models/src/client/protocol-rules.ts';
+import { TextSearchIndex } from '../../../deepseek-harness/packages/util/text-search/src/index.ts';
 
 const upstream = new URL('../../../deepseek-harness/packages/client/ui-settings-models/src/client/', import.meta.url);
 const handlers = [];
@@ -28,7 +30,7 @@ test('model adoption never waits on external metadata and loading is explicit', 
   assert.doesNotMatch(contents, /withPublicProfile|api\/x\/public\/models/);
   assert.match(contents, /catch \(error\)/);
   assert.match(contents, /aria-busy=\{busy\}/);
-  assert.match(contents, /useModelProfiles\(models, onChange, disabled, true, props.overridden === false, discoveredModels\)/);
+  assert.match(contents, /useModelProfiles\(models, onChange, disabled \|\| props.reasoningLevelsOnly === true, true, props.overridden === false, discoveredModels\)/);
   assert.doesNotMatch(contents, /t\('resetModels'\)/);
   assert.match(contents, /cmd-model-discover/);
   assert.match((await transform('ModelsSection.tsx')).contents, /正在加载供应商与模型/);
@@ -140,10 +142,19 @@ async function componentHarness(filename) {
     useMemo: compute => compute(), useEffect() {},
   };
   const primitives = new Proxy({ useRowDragPreview: () => ({ start() {}, clear() { return true; } }) }, { get: (target, key) => target[key] ?? key });
+  const deepSeekModels = { modelDrafts: models => models || [], validateDeepSeekModels: () => undefined, formatCapacity: String, parseCapacity: Number, DeepSeekModelsEditor: 'DeepSeekModelsEditor' };
   const jsx = (type, props) => ({ type, props });
   const module = { exports: {} };
   const { contents } = await transform(filename);
   const code = transformSync(contents, { loader: 'tsx', jsx: 'automatic', format: 'cjs' }).code;
+  const reasoningEfforts = { exports: {} }, retryPolicy = { exports: {} };
+  for (const [file, dependency] of [['ModelReasoningEfforts.tsx', reasoningEfforts], ['RetryPolicyEditor.tsx', retryPolicy]]) {
+    const source = await readFile(new URL(file, upstream), 'utf8');
+    runInNewContext(transformSync(source, { loader: 'tsx', jsx: 'automatic', format: 'cjs' }).code, {
+      module: dependency, exports: dependency.exports,
+      require: id => id === 'react' ? react : id.endsWith('DeepSeekModelsEditor.tsx') ? deepSeekModels : primitives,
+    });
+  }
   runInNewContext(code, {
     module, exports: module.exports, structuredClone, URL,
     require: id => {
@@ -155,7 +166,10 @@ async function componentHarness(filename) {
       if (id.endsWith('model-capabilities.jsx')) return { useModelCapabilities() {}, ModelCapabilityEditor: 'ModelCapabilityEditor' };
       if (id.endsWith('model-reasoning-state.mjs')) return reasoning;
       if (id.endsWith('model-reasoning.jsx')) return { ModelReasoningEditor: 'ModelReasoningEditor' };
-      if (id.endsWith('ModelReasoningEfforts.tsx')) return { validateReasoningEfforts: () => undefined, ModelReasoningEfforts: 'ModelReasoningEfforts' };
+      if (id.endsWith('text-search/src/index.ts') || id.endsWith('text-search\\src\\index.ts')) return { TextSearchIndex };
+      if (id.endsWith('protocol-rules.ts')) return protocolRules;
+      if (id.endsWith('RetryPolicyEditor.tsx')) return { ...retryPolicy.exports, RetryPolicyEditor: 'RetryPolicyEditor' };
+      if (id.endsWith('ModelReasoningEfforts.tsx')) return { ...reasoningEfforts.exports, ModelReasoningEfforts: 'ModelReasoningEfforts' };
       if (id.endsWith('useModelRows.ts')) return { useModelRows(models) {
         const [expanded, setExpanded] = react.useState(new Set());
         return { rows: models.map((model, key) => ({ model, key, expanded: expanded.has(key), order: {}, editing: new Map() })),
@@ -164,7 +178,7 @@ async function componentHarness(filename) {
       } };
       if (id.endsWith('provider-settings.jsx')) return { ProviderBrandIcon: 'ProviderBrandIcon', routerGo };
       if (id.endsWith('routergo-account.mjs')) return routerGoAccount;
-      if (id.endsWith('DeepSeekModelsEditor.tsx')) return { modelDrafts: models => models || [], validateDeepSeekModels: () => undefined, formatCapacity: String, parseCapacity: Number, DeepSeekModelsEditor: 'DeepSeekModelsEditor' };
+      if (id.endsWith('DeepSeekModelsEditor.tsx')) return deepSeekModels;
       if (id.endsWith('apiKey.ts')) return { apiKeyFailure: () => undefined };
       if (id.endsWith('store.ts')) return { deriveKeyRef: () => 'ROUTERGO_API_KEY', protocolChoices: () => ['openai-completions'], reasoningLevelChoices: () => ['off', 'low', 'medium', 'high'] };
       if (id.endsWith('protocol-label.ts')) return { protocolLabel: (_, name) => name };
@@ -317,4 +331,68 @@ test('editing models saves and reloads opaque IDs without dropping other provide
   const reload = await componentHarness('ProviderEditor.tsx');
   const reloadedModels = pick(reload(props()), 'ModelListEditor').props.models;
   assert.deepEqual(plain(reloadedModels), [{ id: 'vendor/model:v1', maxTokens: 2000, input: ['text', 'image'] }]);
+});
+
+test('Gemini renders fixed protocol levels and writes only supported mappings', async () => {
+  const render = await componentHarness('ProviderEditor.tsx');
+  const original = { api: 'google-generative-ai', apiKeyEnv: 'GEMINI_API_KEY', models: [{ id: 'vendor/opaque:v1' }] };
+  const config = { providers: { gemini: original } }, writes = [];
+  const props = { provider: 'gemini', displayName: 'Gemini', declared: true, namespace: { ns: 'llm-pi-ai', user: config, value: config, schema: {}, revision: 1 }, schema,
+    settingsPath: ['providers', 'gemini'], operations: { async writeSettings(_ns, ops) {
+      writes.push(plain(ops)); return { kind: 'written', view: { user: config, revision: 2 } };
+    } }, t: key => key, readOnly: false, onClose() {} };
+  let list = pick(render(props), 'ModelListEditor');
+  assert.equal(list.props.reasoningLevelsOnly, true);
+  assert.deepEqual(plain(list.props.reasoningLevels), ['low', 'medium', 'high']);
+  const renderList = await componentHarness('ModelListEditor.tsx');
+  const row = pick(renderList(list.props), 'ModelRow');
+  assert.equal(pick(row.props.extraSettings, 'ModelReasoningEditor'), undefined);
+  const renderRow = await componentHarness('ModelRow.tsx');
+  assert.equal(pick(renderRow({ ...row.props, expanded: true }), 'ModelReasoningEfforts').props.levelsOnly, true);
+
+  list.props.onChange([{ id: original.models[0].id, reasoningEfforts: { high: 'deep' } }]);
+  assert.equal(pick(render(props), 'EditorFooter').props.submitDisabled, true);
+  list = pick(render(props), 'ModelListEditor');
+  list.props.onChange([{ id: original.models[0].id, reasoningEfforts: { high: 'high' } }]);
+  const footer = pick(render(props), 'EditorFooter');
+  assert.equal(footer.props.submitDisabled, false);
+  footer.props.onSubmit();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(writes, [[{ op: 'set', path: ['providers', 'gemini', 'models'], value: [{ id: 'vendor/opaque:v1', reasoningEfforts: { high: 'high' } }] }]]);
+});
+
+test('a retry after credential removal keeps official path operations and does not remove twice', async () => {
+  const render = await componentHarness('ProviderEditor.tsx');
+  const original = { api: 'openai-completions', apiKeyEnv: 'ROUTERGO_API_KEY', retryPolicy: { mode: 'off', maxRetries: 3 } };
+  const config = { providers: { openai: original } };
+  const calls = [], closes = [];
+  const props = { provider: 'openai', displayName: 'OpenAI', nativeAuth: { env: ['OPENAI_API_KEY'] },
+    credential: { configured: true, source: 'file', writable: true, masked: '••••' },
+    namespace: { ns: 'llm-pi-ai', user: config, value: config, schema: {}, revision: 1 }, schema, settingsPath: ['providers', 'openai'],
+    operations: {
+      async removeCredential(ref) { calls.push(ref); },
+      async writeSettings(_ns, ops, rev) {
+        calls.push([rev, plain(ops)]);
+        if (calls.length === 2) return { kind: 'failed', message: 'Settings unavailable' };
+        return { kind: 'written', view: { user: config, revision: 2 } };
+      },
+    }, t: key => key, readOnly: false, onClose: value => closes.push(value) };
+  let tree = render(props);
+  pick(tree, 'ApiKeyInput').props.saved.clear();
+  pick(tree, 'RetryPolicyEditor').props.onChange({ ...original.retryPolicy, maxRetries: 4 });
+  tree = render(props);
+  assert.equal(pick(tree, 'ModelListEditor').props.probeBlocked, 'keyRemovePending');
+  pick(tree, 'EditorFooter').props.onSubmit();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(closes, []);
+  const retry = pick(render(props), 'EditorFooter');
+  assert.equal(retry.props.cancelLabelKey, 'close');
+  retry.props.onSubmit();
+  await new Promise(resolve => setImmediate(resolve));
+  const expected = [1, [
+    { op: 'set', path: ['providers', 'openai', 'retryPolicy', 'maxRetries'], value: 4 },
+    { op: 'unset', path: ['providers', 'openai', 'apiKeyEnv'] },
+  ]];
+  assert.deepEqual(calls, ['ROUTERGO_API_KEY', expected, expected]);
+  assert.deepEqual(closes, [true]);
 });
