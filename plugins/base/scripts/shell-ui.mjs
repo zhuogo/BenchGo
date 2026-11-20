@@ -44,6 +44,7 @@ export function shellUi(){return {name:'commander-shell-ui',setup(build){
       '  const legacyIcon = <LegacyPanelIcon {...iconProps} renderSlot={renderSlot} />');
     source=once(source,"{renderFactorySlot('sidebar.panel.icon', { id, size: wide ? 16 : 18, active })}",
       "{renderFactorySlot?.('sidebar.panel.icon', iconProps, { fallback: legacyIcon }) ?? legacyIcon}");
+    source=source.replace("{renderFactorySlot('sidebar.panel.trailing',", "{renderFactorySlot?.('sidebar.panel.trailing',");
     source=once(source,'                  renderFactorySlot={renderFactorySlot}',
       '                  renderFactorySlot={renderFactorySlot}\n                  renderSlot={renderSlot}');
     source=once(source,"import clsx from 'clsx'", "import { createPortal } from 'react-dom'\nimport clsx from 'clsx'");

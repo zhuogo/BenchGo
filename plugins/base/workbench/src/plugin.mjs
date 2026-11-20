@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { contextFacade, ownerWebServer } from './boundary.mjs';
+import { admittedWorkbenchRejection, contextFacade, ownerWebServer } from './boundary.mjs';
 import { openPreferences, SIDEBAR_NS } from './preferences.mjs';
 import { openSshTrust, probeFingerprint } from './ssh-trust.mjs';
 import { mountWorkbenchMedia } from './media.mjs';
@@ -62,6 +62,7 @@ export async function mountWorkbench(ctx, { directory, loadSidebar = () => impor
     });
   };
   mount('sidebar', loadSidebar, ['connection', 'webServer', 'sessions', 'tools'], child => ({
+    connection: contextFacade(child.connection, { requestRejection: admittedWorkbenchRejection }),
     settings: preferences,
     loader: { entries: () => [{ options: { id: SIDEBAR_NS, name: 'dsh-better-sidebar' }, fiber: child.fiber }], await: async () => {} },
     profileContext: undefined,

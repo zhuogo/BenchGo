@@ -1,4 +1,5 @@
 import { Button } from '../../shared/client/ui/index.jsx';
+import { sessionStatusSource } from './session-status.mjs';
 import { Tooltip as SharedTooltip } from '../../shared/client/ui/tooltip.jsx';
 import { readJsonResponse } from './http-response.mjs';
 import { mountShellUi } from './shell-ui.jsx';
@@ -46,6 +47,7 @@ const listeners = new Set();
 let defaultWorkspaceId;
 let data = { projects: [], sessions: [], selected: null, projectId: null, error: '', loaded: false };
 const NO_FORK_ACCESS = { getSnapshot: () => false, subscribe: () => () => {} };
+const EMPTY_SESSION_STATUSES = new Map();
 const STATE_TIMEOUT_MS = 45_000;
 const connectionMessage = error => {
   const message = String(error?.message || error || '');
@@ -209,7 +211,11 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
   const modules = useSyncExternalStore(moduleSource.subscribe, moduleSource.getSnapshot);
   const harness = useSyncExternalStore(fn => host.sessions.list.subscribe(fn), () => host.sessions.list.getSnapshot());
   const workspaces = useSyncExternalStore(fn => host.workspaces.list.subscribe(fn), () => host.workspaces.list.getSnapshot());
-  const statuses = useSyncExternalStore(fn => host.uiSession.sessionStatus.subscribe(fn), () => host.uiSession.sessionStatus.getSnapshot());
+  const statusSource = sessionStatusSource(host);
+  const statuses = useSyncExternalStore(
+    listener => statusSource?.subscribe(listener) ?? (() => {}),
+    () => statusSource?.getSnapshot() ?? EMPTY_SESSION_STATUSES,
+  );
   const archivedIds = new Set(workspaces.archivedSessionIds ?? []);
   const snapshot = useData();
   const d = modules.harness ? snapshot : { ...snapshot, sessions: [] };

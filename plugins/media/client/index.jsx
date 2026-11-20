@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { IconChevronDownOutlineRegular, IconChevronUpOutlineRegular, IconMicrophoneOutlineMedium, IconStopFillRegular, Menu, Switch } from '@deepseek-ai/dsh-client-ui-primitives';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
+import { sessionStatusSource } from '../../base/client/session-status.mjs';
 import { createVoiceController } from './controller.mjs';
 import { CallOrb, CallStageIcon } from './call-stage.jsx';
 import { createCallPresentation } from './call-presentation.mjs';
@@ -12,6 +13,7 @@ import { registerMediaGenerationResults } from './generation-results.jsx';
 import { callStreamingReason } from '../src/call-streaming.mjs';
 import { mediaSettingsPayload, voiceSettingsPatch, listeningDraft } from './settings-state.mjs';
 import { moduleSource } from '../../base/client/modules.mjs';
+import { openSettingsSection } from '../../base/client/settings-shell.mjs';
 import { providerOption } from '../../base/client/provider-brand-icon.jsx';
 import { prioritizeRouterGo } from '../../base/client/provider-options.mjs';
 import { routerGo } from '../../base/shared/builtin-providers.mjs';
@@ -41,36 +43,29 @@ function selectSettingsTab(tab) {
 }
 
 export function apply(ctx) {
+  const sessionStatus = sessionStatusSource(ctx);
   registerVoiceConversationRows(ctx);
   registerMediaGenerationResults(ctx);
-  const controller = createVoiceController(ctx);
+  const controller = createVoiceController(ctx, { sessionStatus });
   const callView = createCallPresentation(controller, { title: id => ctx.sessions.list.getSnapshot().byId[id]?.title, subscribeTitle: listener => ctx.sessions.list.subscribe(listener), openSession: id => ctx.uiWorkspace.openSession(id) });
   activeController = controller;
   const micTargets = createMicTargets();
   ctx.effect(() => async () => { if (activeController === controller) activeController = undefined; callView.dispose(); await controller.dispose(); });
   const openSettings = () => {
     selectSettingsTab('voice');
-    if (!openSettingsSection(ctx, 'media')) throw Error('请打开设置 → 媒体 → 语音。');
+    if (!openSettingsSection(ctx.slots, 'media')) throw Error('请打开设置 → 媒体 → 语音。');
   };
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'benchgo-voice-call', inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus, openSettings }) }, VoiceCallHost));
-  ctx.slots.inject('conversation.input.activity', () => ctx.slots.register({ name: 'conversation.input.activity', priority: -10, inject: () => ({ controller, callView, sessionStatus: ctx.uiSession.sessionStatus, micTargets }) }, VoiceActivity));
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'benchgo-voice-call', inject: () => ({ controller, callView, sessionStatus, openSettings }) }, VoiceCallHost));
+  ctx.slots.inject('conversation.input.activity', () => ctx.slots.register({ name: 'conversation.input.activity', priority: -10, inject: () => ({ controller, callView, sessionStatus, micTargets }) }, VoiceActivity));
   ctx.inject(['shortcuts'], scope => { scope.effect(() => installMicShortcut({ shortcuts: scope.shortcuts, controller, targets: micTargets }), 'voice: microphone shortcut'); });
   void controller.load().catch(() => {});
 }
-function openSettingsSection(ctx, id) {
-  const shell = ctx.slots.entries('sidebar.settings').find(entry => entry.children?.['settings.section']);
-  const actions = shell?.store?.create().actions;
-  if (!actions?.openSection) return false;
-  actions.openSection(id);
-  return true;
-}
-
 export function mountMediaSettings(ctx) {
   const style = document.createElement('style'); style.textContent = css + mediaCss; document.head.append(style);
   ctx.effect(() => () => style.remove());
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section', id: 'media', order: 35, label: () => '媒体',
-    inject: () => ({ openModels: () => openSettingsSection(ctx, 'models') }),
+    inject: () => ({ openModels: () => openSettingsSection(ctx.slots, 'models') }),
   }, MediaSettings));
 }
 function useVoice(controller) { return useSyncExternalStore(fn => controller.state.subscribe(fn), () => controller.state.getSnapshot()); }

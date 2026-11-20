@@ -27,6 +27,7 @@ import { PetSettings } from './pet-settings.jsx';
 import { petDesignIntent, petActionForSession, petExpressionForAction } from './pet-state.mjs';
 import { assistantConfigSync, saveConfigPatch } from './config-sync.mjs';
 import { AssistantConversation, assistantConversationChildren, mountAssistantConversation } from './conversation.jsx';
+import { sessionStatusSource } from '../../base/client/session-status.mjs';
 import { ChatNoticeFeed } from './chat-notice.jsx';
 import { mountSessionRoleControls } from './session-role-controls.jsx';
 import { ApprovalReview, reviewApprovalChildren, mountApprovalReview } from './approval-review.jsx';
@@ -109,7 +110,7 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
     setAssistantExpanded(next); setMenu(null);
     try { localStorage.setItem(SIDEBAR_EXPANDED_KEY, String(next)); } catch { /* Embedded sessions may not provide storage. */ }
   };
-  const statusSource = ctx.uiSession?.sessionStatus;
+  const statusSource = sessionStatusSource(ctx);
   const statuses = useSyncExternalStore(listener => statusSource?.subscribe(listener) || (() => {}), () => statusSource?.getSnapshot() || EMPTY_STATUSES);
   const sessionSource = ctx.sessions?.list;
   const sessions = useSyncExternalStore(listener => sessionSource?.subscribe(listener) || (() => {}), () => sessionSource?.getSnapshot() || EMPTY_SESSIONS);
@@ -369,7 +370,7 @@ function PendingCard({ pending, title }) {
 const EMPTY_STATUSES = new Map();
 const EMPTY_SESSIONS = { byId: {} };
 function PendingInteractions({ ctx, threads, currentSessionId }) {
-  const source = ctx.uiSession?.sessionStatus;
+  const source = sessionStatusSource(ctx);
   const statuses = useSyncExternalStore(listener => source?.subscribe(listener) || (() => {}), () => source?.getSnapshot() || EMPTY_STATUSES);
   return <div className="ba-pending-list">{threads.filter(thread => thread.sessionId !== currentSessionId).map(thread => {
     const pending = statuses.get(thread.sessionId)?.pendingInteraction;
@@ -641,7 +642,7 @@ function mergeHistory(previous, incoming, earlier = false) {
 // subscriptions here keeps unrelated sessions from re-rendering the open transcript.
 function BackgroundSessions({ ctx, state, selectedSessionId }) {
   const retained = useRef(new Map());
-  const statusSource = ctx.uiSession?.sessionStatus, sessionSource = ctx.sessions?.list;
+  const statusSource = sessionStatusSource(ctx), sessionSource = ctx.sessions?.list;
   const statuses = useSyncExternalStore(listener => statusSource?.subscribe(listener) || (() => {}), () => statusSource?.getSnapshot() || EMPTY_STATUSES);
   const sessions = useSyncExternalStore(listener => sessionSource?.subscribe(listener) || (() => {}), () => sessionSource?.getSnapshot() || EMPTY_SESSIONS);
   const ensureScope = async (sessionId, id) => {

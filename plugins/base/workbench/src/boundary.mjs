@@ -1,8 +1,12 @@
 /** Third-party operations stay on the authenticated local owner surface. */
-export function localOwnerRejection(request, connection) {
-  const rejection = connection?.requestRejection?.(request);
-  if (rejection !== undefined) return rejection;
-  if (typeof connection?.requestRejection !== 'function') return 503;
+export function localOwnerRejection(request, connection, peer) {
+  if (peer !== undefined) {
+    if (peer?.principal?.kind !== 'owner' || peer.signal?.aborted) return 403;
+  } else {
+    if (typeof connection?.requestRejection !== 'function') return 503;
+    const rejection = connection.requestRejection(request);
+    if (rejection !== undefined) return rejection;
+  }
   const headers = request.headers ?? {};
   if (['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'cf-connecting-ip', 'x-benchgo-device', 'x-dsh-link-device'].some(key => headers[key] !== undefined)) return 403;
   const address = request.socket?.remoteAddress?.replace(/^::ffff:/, '');
@@ -17,24 +21,33 @@ export function localOwnerRejection(request, connection) {
   return undefined;
 }
 
+const admittedRequests = new WeakSet();
+
+/** The vendor's own fence accepts only requests admitted by our route wrapper. */
+export function admittedWorkbenchRejection(request) {
+  return admittedRequests.has(request) ? undefined : 403;
+}
+
 export function ownerWebServer(webServer, connection, { projectOnly = false } = {}) {
   return {
     register(route) {
       return webServer.register({ ...route, async handler(req, res, ...rest) {
-        const status = localOwnerRejection(req, connection);
+        const status = localOwnerRejection(req, connection, rest[0]);
         if (status) { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify({ error: '此运维入口仅供已登录的本机用户使用，请从设备中心打开目标工作台。' })); return; }
         const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
         if (projectOnly && (/^\/sidebar\/api\/(?:sidechat|subagents|workflows|teams)\./.test(pathname) || pathname === '/sidebar/sidechat-image')) {
           res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' });
           res.end(JSON.stringify({ ok: false, error: { code: 'forbidden', message: '对话和任务请使用 BenchGo 现有入口' } })); return;
         }
+        admittedRequests.add(req);
         return route.handler(req, res, ...rest);
       } });
     },
     registerUpgrade(route) {
       return webServer.registerUpgrade({ ...route, handler(req, socket, ...rest) {
-        const status = localOwnerRejection(req, connection);
+        const status = localOwnerRejection(req, connection, rest[1]);
         if (status) { socket.end(`HTTP/1.1 ${status} Forbidden\r\nConnection: close\r\n\r\n`); return; }
+        admittedRequests.add(req);
         return route.handler(req, socket, ...rest);
       } });
     },

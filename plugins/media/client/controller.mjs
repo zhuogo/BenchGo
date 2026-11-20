@@ -11,6 +11,7 @@ import { transcriptSourceId } from '../src/transcript-source.mjs';
 import { transcriptMessage } from '../src/transcript-message.mjs';
 import { protocolDescriptor } from '../shared/protocol-catalog.mjs';
 import { readJsonResponse } from '../../base/client/http-response.mjs';
+import { sessionStatusSource } from '../../base/client/session-status.mjs';
 const url=path=>new URL(path,document.baseURI);
 const endpointRoute=({detection,resolvedProtocol,...rest}={})=>rest;
 const ttsRoute=({speed,...rest}={})=>JSON.stringify(endpointRoute(rest));
@@ -23,6 +24,8 @@ async function json(action,args={},signal) {
 }
 function observable(initial) { let value=initial;const listeners=new Set();return {getSnapshot:()=>value,subscribe:fn=>{listeners.add(fn);return ()=>listeners.delete(fn);},patch:patch=>{value={...value,...patch};for(const fn of listeners)fn();}}; }
 export function createVoiceController(ctx,deps={}) {
+  const sessionStatus = deps.sessionStatus ?? sessionStatusSource(ctx);
+  if (!sessionStatus) throw Error('Official session status is unavailable');
   // RealtimeRecognizer calls request as an instance method; Window.fetch needs
   // its own receiver rather than the recognizer instance.
   const request=deps.fetch||globalThis.fetch.bind(globalThis),requestJson=deps.json||json,environment=deps.window||globalThis.window;
@@ -79,14 +82,14 @@ export function createVoiceController(ctx,deps={}) {
   }
   const fail=error=>patch({error:error?.message||String(error)});
   const callHeaders=()=>lease?{'x-voice-call-id':lease.callId}:{};
-  const status=(sessionId=state.getSnapshot().sessionId)=>ctx.uiSession.sessionStatus.getSnapshot().get(sessionId);
+  const status=(sessionId=state.getSnapshot().sessionId)=>sessionStatus.getSnapshot().get(sessionId);
   const refreshPhase=()=>{
     // Synthesis gaps and an empty render buffer do not finish the reply.
     // Keep interruption protection independent of the visible speaking phase.
     capture?.setPlaybackActive?.(!!connectionCue||speaking||!blocked&&(replyActive||played.size>0));
     patch({phase:state.getSnapshot().phase==='starting'&&starting?'starting':inputActive?'listening':awaitingFinal.size?'transcribing':continuationTimer!==null?'listening':speaking?'speaking':callConversation?conversationPhase:status()?.pendingInteraction?'waiting':status()?.running?'thinking':state.getSnapshot().mode!=='idle'?'listening':'idle'});
   };
-  const statusOff=ctx.uiSession.sessionStatus.subscribe(()=>{
+  const statusOff=sessionStatus.subscribe(()=>{
     refreshPhase();
     if(waitingForInteraction&&!status()?.pendingInteraction&&!status()?.running){
       const gen=generation,sequence=inputSequence;

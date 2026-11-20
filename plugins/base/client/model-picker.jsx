@@ -15,6 +15,7 @@ import css from './model-picker.css';
 import effortCss from './model-effort-slider.css';
 import { ModelEffortSlider } from './model-effort-slider.jsx';
 import { nativeActivityLabel } from './native-activity.mjs';
+import { openSettingsSection } from './settings-shell.mjs';
 import { IconPinOutlineRegular, IconPinFillRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 
 function sameModelBinding(previous, next) {
@@ -50,12 +51,7 @@ export function mountModelPicker(ctx) {
       return { sessionId, available: ctx.sessions.subagentAddress(sessionId) === undefined, hooks: { directory: directory.store }, binding: async () => {
         const response = await fetch(new URL('api/commander', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'binding', harnessSessionId: sessionId }) });
         const value = await readJsonResponse(response, new URL('api/commander', document.baseURI)); if (value.error) throw Error(value.error || '会话绑定状态读取失败'); return value;
-      }, openSettingsSection: id => {
-        const shell = ctx.slots.entries('sidebar.settings').find(entry => entry.children?.['settings.section']);
-        const actions = shell?.store?.create().actions;
-        if (!actions?.openSection) throw Error('请从侧栏设置打开对应页面。');
-        actions.openSection(id);
-      } };
+      }, openSettingsSection: id => openSettingsSection(ctx.slots, id) };
     },
   }, ModelEmptyBanner));
 }
@@ -131,7 +127,7 @@ function ModelEmptyBanner({ sessionId, available, useDirectory, binding, openSet
   const configuredProviders = providersForTool(state.groups, catalog, currentTool).filter(entry => catalog?.providers?.some(row => row.id === entry.id) && entry.models.length);
   const noProvider = available && catalog !== null && !catalogError && !configuredProviders.length && !sessionBinding?.bound;
   if (!noProvider && !harnessUnavailable) return null;
-  return <div className="cmd-model-empty" role="status"><span>{harnessUnavailable ? 'Harness 聚合未启用，请启用模块或切换模型' : '无模型可用，请先配置模型供应商'}</span>{!harnessUnavailable && <button type="button" aria-label="前往配置模型供应商" onClick={() => { try { openSettingsSection('models'); } catch { /* The model trigger keeps its own error. */ } }}><UIIcon name="external" size={13} />前往</button>}</div>;
+  return <div className="cmd-model-empty" role="status"><span>{harnessUnavailable ? 'Harness 聚合未启用，请启用模块或切换模型' : '无模型可用，请先配置模型供应商'}</span>{!harnessUnavailable && <button type="button" aria-label="前往配置模型供应商" onClick={() => openSettingsSection('models')}><UIIcon name="external" size={13} />前往</button>}</div>;
 }
 
 function ModelPicker({ sessionId, locked, available, useDirectory, load, select, binding, startNewSession }) {

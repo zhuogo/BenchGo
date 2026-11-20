@@ -46,6 +46,7 @@ test('sidebar keeps panel navigation below quick actions across rail, drawer and
       await page.setViewportSize({width,height:900});
       for(const mode of ['loading','error','empty','data']){
         await page.evaluate(args=>window.scenario(...args),[mode,collapsed,drawer]);
+        await page.locator(collapsed&&!drawer?'.cmd-projects.cmd-narrow':'.cmd-projects:not(.cmd-narrow)').waitFor();
         await page.getByRole('button',{name:'定时任务',exact:true}).waitFor().catch(async error=>{throw new Error(JSON.stringify({width,collapsed,mode,errors,body:await page.locator('body').innerText()}),{cause:error})});
         const geometry=await page.evaluate(()=>{
           const quick=document.querySelector('.cmd-sidebar-nav'),panels=document.querySelector('.cmd-sidebar-panels'),footer=document.querySelector('[class*="_footArea"]');

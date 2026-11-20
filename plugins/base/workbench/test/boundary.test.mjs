@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { localOwnerRejection, ownerWebServer, contextFacade } from '../src/boundary.mjs';
+import { admittedWorkbenchRejection, localOwnerRejection, ownerWebServer, contextFacade } from '../src/boundary.mjs';
 import { openPreferences, SIDEBAR_NS } from '../src/preferences.mjs';
 import { localWorkbenchPage } from '../client/local-surface.mjs';
 
@@ -48,6 +48,29 @@ test('HTTP and official websocket upgrade signatures preserve request identity',
   upgrade.handler(req, socket, head); assert.deepEqual(received, [req, socket, head]);
   let rejected; upgrade.handler(request({ socket: { remoteAddress: '10.0.0.1' } }), { end: value => { rejected = value; } }, head);
   assert.match(rejected, /^HTTP\/1.1 403/);
+});
+test('new Hosts admit only local owner peers and pass that admission to the vendor fence', async () => {
+  let http, upgrade;
+  const server = ownerWebServer({ register: route => { http = route; }, registerUpgrade: route => { upgrade = route; } }, {});
+  const admit = req => assert.equal(admittedWorkbenchRejection(req), undefined);
+  server.register({ kind: 'exact', path: '/test', handler: admit });
+  server.registerUpgrade({ path: '/ws', handler: admit });
+  const owner = { principal: { kind: 'owner' }, signal: new AbortController().signal };
+  const req = request();
+  assert.equal(admittedWorkbenchRejection(req), 403);
+  await http.handler(req, {}, owner);
+  upgrade.handler(request(), {}, Buffer.alloc(0), owner);
+  for (const [input, peer, expected] of [
+    [request(), undefined, 503],
+    [request(), { principal: { kind: 'linked' } }, 403],
+    [request(), { ...owner, signal: AbortSignal.abort() }, 403],
+    [request({ socket: { remoteAddress: '192.168.1.2' } }), owner, 403],
+  ]) {
+    let status;
+    await http.handler(input, { writeHead: value => { status = value; }, end() {} }, peer);
+    assert.equal(status, expected);
+    assert.equal(admittedWorkbenchRejection(input), 403);
+  }
 });
 test('Cordis injection keeps adapted faces and real method ownership', () => {
   const original = { value: 'real', get() { return this.value; }, inject(services, callback) { callback(this); }, owned() { return this === original; } };

@@ -5,6 +5,16 @@ import {fileURLToPath} from 'node:url';
 import {transform} from 'esbuild';
 import {shellUi} from '../scripts/shell-ui.mjs';
 import {createResponsiveLayoutActions} from '../client/responsive-layout.mjs';
+import * as settingsShell from '../client/settings-shell.mjs';
+import {sessionStatusSource} from '../client/session-status.mjs';
+
+test('session status reads the new Cordis service or the legacy owned field', () => {
+  const status = { getSnapshot: () => new Map(), subscribe: () => () => {} };
+  const session = Object.create({ get sessionStatus() { throw Error('without inject'); } });
+  assert.equal(sessionStatusSource({ get: name => name === 'uiSession.sessionStatus' && status, uiSession: session }), status);
+  assert.equal(sessionStatusSource({ uiSession: { sessionStatus: status } }), status);
+  assert.equal(sessionStatusSource({ uiSession: session }), undefined);
+});
 const handlers=[];shellUi().setup({onLoad:(meta,callback)=>handlers.push({...meta,callback})});
 test('viewport commits at both shell breakpoints and coalesces continuous resizing',()=>{
   const commits=[], scheduled=new Map();let next=0;
@@ -28,7 +38,7 @@ test('narrow viewport changes settle to their actual width and returning cancels
   actions.setViewportWidth(800);assert.deepEqual(commits,[740,700,800]);
   actions.setViewportWidth(810);actions.dispose();assert.deepEqual(commits,[740,700,800,810]);
 });
-for(const [pkg,file]of [['ui-settings-general','SettingsRoot.tsx'],['ui-sidebar','SidebarRoot.tsx'],['ui-layout','AppFrame.tsx']])test('build-only '+file+' adapter compiles without modifying upstream',async()=>{const path=fileURLToPath(new URL('../../../deepseek-harness/packages/client/'+pkg+'/src/client/'+file,import.meta.url)),before=await readFile(path,'utf8'),handler=handlers.find(h=>h.filter.test(path)),result=await handler.callback({path});assert.equal(result.loader,'tsx');await transform(result.contents,{loader:'tsx'});assert.equal(await readFile(path,'utf8'),before);if(file==='SettingsRoot.tsx'){assert.match(result.contents,/css.overlay \+ ' cmd-settings-overlay'/);assert.match(result.contents,/id === "harness-tools"/);assert.match(result.contents,/id === "voice"/);}if(file==='SidebarRoot.tsx'){assert.match(result.contents,/const wide = drawer \|\| !collapsed/);assert.doesNotMatch(result.contents,/css\.railIn,/);}});
+for(const [pkg,file]of [['ui-settings-general','SettingsRoot.tsx'],['ui-sidebar','SidebarRoot.tsx'],['ui-layout','AppFrame.tsx']])test('build-only '+file+' adapter compiles without modifying upstream',async()=>{const path=fileURLToPath(new URL('../../../deepseek-harness/packages/client/'+pkg+'/src/client/'+file,import.meta.url)),before=await readFile(path,'utf8'),handler=handlers.find(h=>h.filter.test(path)),result=await handler.callback({path});assert.equal(result.loader,'tsx');await transform(result.contents,{loader:'tsx'});assert.equal(await readFile(path,'utf8'),before);if(file==='SettingsRoot.tsx'){assert.match(result.contents,/css.overlay \+ ' cmd-settings-overlay'/);assert.match(result.contents,/id === "harness-tools"/);assert.match(result.contents,/id === "media"/);}if(file==='SidebarRoot.tsx'){assert.match(result.contents,/const wide = drawer \|\| !collapsed/);assert.doesNotMatch(result.contents,/css\.railIn,/);}});
 test('locale adapter preserves existing bound translators and forwards all other keys',async()=>{
   const {transformSync}=await import('esbuild'),{runInNewContext}=await import('node:vm');const source=await readFile(new URL('../client/shell-ui.jsx',import.meta.url),'utf8');const code=transformSync(source,{loader:'jsx',format:'cjs'}).code,module={exports:{}};runInNewContext(code,{module,exports:module.exports,require:()=>({}),Error});const locale={getLocale:()=>({active:'zh'}),translate:(ns,key)=>ns+':'+key},oldBound=key=>locale.translate('workspace',key);locale.translate=module.exports.recentTranslation(locale,locale.translate);assert.equal(oldBound('workspace.defaultName'),'最近');assert.equal(oldBound('other'),'workspace:other');
 });
@@ -56,30 +66,58 @@ test('only connection recovery occupies the status seat above the unified BenchG
   assert.match(css,/.cmd-narrow \.cmd-sidebar-nav \{ flex-direction: column; padding: 36px 0 0;/);
   assert.match(css,/\.cmd-shell-sidebar \.cmd-sidebar-panels\s*\{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);[^}]*order: 0;/);
 });
-test('the native update rail badge is hidden reversibly without suppressing other badges or its service',async()=>{
+test('the settings shell and native badge adapt to both Host layouts and late registrations',async()=>{
   const {transformSync}=await import('esbuild'),{runInNewContext}=await import('node:vm');
   const source=await readFile(new URL('../client/shell-ui.jsx',import.meta.url),'utf8'),module={exports:{}};
-  runInNewContext(transformSync(source,{loader:'jsx',format:'cjs'}).code,{module,exports:module.exports,Error,require:id=>id==='./tools-page.jsx'?{mountToolsPage(){}}:{AppFrame(){},SidebarRoot(){},SettingsRoot(){}}});
+  function SettingsRoot() {}
+  runInNewContext(transformSync(source,{loader:'jsx',format:'cjs'}).code,{module,exports:module.exports,Error,require:id=>id==='./tools-page.jsx'?{mountToolsPage(){}}:id==='./settings-shell.mjs'?settingsShell:{AppFrame(){},SidebarRoot(){},SettingsRoot}});
   const native=()=> '重试更新',other=()=> '其它提示',cleanups=[];
   const coreModule={exports:{}};
   const coreSource=await readFile(new URL('../../../deepseek-harness/packages/client/ui-slots/src/index.ts',import.meta.url),'utf8');
   runInNewContext(transformSync(coreSource,{loader:'ts',format:'cjs'}).code,{module:coreModule,exports:coreModule.exports,queueMicrotask,require:()=>({})});
   const core=new coreModule.exports.SlotCore();
-  core.register({name:'root',children:{'sidebar.toggle.badge':{kind:'single',scope:'root'}}},()=>null);
+  const single={kind:'single',scope:'root'};
+  core.register({name:'root',children:{sidebar:single}},()=>null);
+  core.register({name:'sidebar',children:{'sidebar.toggle.badge':single,'sidebar.settings':single,'sidebar.workspaces':single}},()=>null);
   const ownerSource=await readFile(new URL('../../../deepseek-harness/packages/client/ui-settings-general/src/client/index.ts',import.meta.url),'utf8');
   const registration=ownerSource.match(/ctx\.slots\.register\(\{\s*name: 'sidebar\.toggle\.badge'[\s\S]*?\}, DesktopUpdateBadge\)/u)?.[0];
   assert(registration,'the official settings registration is present');
-  runInNewContext(registration,{ctx:{slots:core},NS:'settings',desktopUpdate:{store:{}},connection:{state:{}},DesktopUpdateBadge:native});
+  let disposeBadge;
+  runInNewContext(registration,{ctx:{slots:{register:(options,view)=>{disposeBadge=core.register(options,view);}}},NS:'settings',desktopUpdate:{store:{}},connection:{state:{}},DesktopUpdateBadge:native});
   core.register({name:'sidebar.toggle.badge',locale:'another-plugin',priority:1},other);
-  const entries={root:[{component(){},children:{sidebar:{}}}],sidebar:[{component(){},children:{'sidebar.workspaces':{}}}],'sidebar.settings':[{component(){},children:{'settings.section':{}}}],'sidebar.toggle.badge':core.entries('sidebar.toggle.badge')};
-  assert.equal(entries['sidebar.toggle.badge'][0].locale,'settings','the actual official registry exposes its declared locale');
-  const originalInject=entries['sidebar.toggle.badge'][0].inject;
-  module.exports.mountShellUi({slots:{entries:key=>entries[key]||[],inject(){}},effect:effect=>cleanups.push(effect()),locale:{getLocale:()=>({active:'zh'}),translate:(_ns,key)=>key}});
-  for(const phase of ['error','checking','available','downloading','ready','installing']) assert.equal(entries['sidebar.toggle.badge'][0].component({presentation:{phase},failed:phase==='error'}),null);
-  assert.equal(entries['sidebar.toggle.badge'][0].inject,originalInject,'native service injection remains owned by its official registration');
-  assert.equal(entries['sidebar.toggle.badge'][1].component,other,'other registrants keep their badge');
+  const [badge, otherBadge]=core.entries('sidebar.toggle.badge');
+  assert.equal(badge.locale,'settings','the actual official registry exposes its declared locale');
+  const originalInject=badge.inject;
+  module.exports.mountShellUi({slots:{entries:core.entries.bind(core),subscribe:core.subscribe.bind(core),inject(){}},effect:effect=>cleanups.push(effect()),locale:{getLocale:()=>({active:'zh'}),translate:(_ns,key)=>key}});
+  assert.equal(badge.component(),null);
+  assert.equal(badge.inject,originalInject,'native service injection remains owned by its official registration');
+  assert.equal(otherBadge.component,other,'other registrants keep their badge');
+
+  const sectionIds=[], official=()=>null;
+  const store={create:()=>({actions:{openSection:id=>sectionIds.push(id)}})};
+  const registerShell = legacy => core.register({name:'sidebar.settings',locale:'settings',store,children:{
+    'settings.launcher':single,
+    ...(legacy ? {'settings.section':{kind:'list',scope:'root'}} : {}),
+  }},official);
+  assert.equal(settingsShell.openSettingsSection(core,'models'),false);
+  for (const [legacy, id] of [[true,'models'],[false,'media']]) {
+    const dispose=registerShell(legacy);
+    const shell=settingsShell.findSettingsShell(core);
+    await Promise.resolve();
+    assert.equal(shell.component,SettingsRoot);
+    assert.equal(settingsShell.openSettingsSection(core,id),true);
+    assert.equal(sectionIds.at(-1),id);
+    dispose();
+    await Promise.resolve();
+    assert.equal(shell.component,official);
+    assert.equal(settingsShell.openSettingsSection(core,id),false);
+  }
+  registerShell(false);
+  await Promise.resolve();
   for(const cleanup of cleanups.reverse()) cleanup?.();
-  assert.equal(entries['sidebar.toggle.badge'][0].component,native,'unloading BenchGo restores the official badge');
+  assert.equal(settingsShell.findSettingsShell(core).component,official);
+  assert.equal(badge.component,native,'unloading BenchGo restores the official badge');
+  disposeBadge();
 });
 
 test('BenchGo skips only the browser preview notice and completes it once per mount', async () => {

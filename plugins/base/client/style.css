@@ -29,6 +29,9 @@ html[data-benchgo-desktop-embedded] .cmd-narrow .cmd-sidebar-nav { padding-top: 
 [class*="_root"]:has(.cmd-projects) > [class*="_logoRow"] > [class*="_brand"],
 [class*="_root"]:has(.cmd-projects) button[class*="_newSession"],
 [class*="_root"]:has(.cmd-projects) [class*="_railMark"] { display: none; }
+/* The official action slot may still contain controls after its button is hidden. */
+.cmd-shell-sidebar:has(.cmd-projects) > [class*="_newSessionRow"],
+[data-windows-titlebar] .cmd-shell-sidebar:has(.cmd-projects) > [class*="_newSessionRow"] { margin: 0; }
 [class*="_root"]:has(.cmd-projects) [class*="_toggle"] [class*="_panelIcon"] { display: inline; }
 .cmd-shell-sidebar:has(.cmd-projects) [class*="_scrollArea"] {
   display: flex;
@@ -60,6 +63,8 @@ html[data-benchgo-desktop-embedded] .cmd-narrow .cmd-sidebar-nav { padding-top: 
 /* BenchGo keeps both panel entries pinned on one row, without the official More menu. */
 [class*="_root"]:has(.cmd-projects) [class*="_panelList"] > [class*="_moreAnchor"],
 [class*="_root"]:has(.cmd-projects) [class*="_panelUnpin"] { display: none; }
+.cmd-shell-sidebar .cmd-sidebar-panels [class*="_panelTrailing"] { min-width: 0; }
+.cmd-shell-sidebar .cmd-sidebar-panels [class*="_panelTrailing"]:is(:empty, :has(> [data-slot="sidebar.panellist.trailing"]:only-child:empty)) { display: none; }
 [class*="_root"]:has(.cmd-projects:not(.cmd-narrow)) [class*="_panelEntry"] { flex: 1; min-width: 0; border-inline: 0; }
 [class*="_root"]:has(.cmd-projects:not(.cmd-narrow)) [class*="_panelEntryWide"] [class*="_panelRow"] { padding-right: 9px; }
 [class*="_root"]:has(.cmd-projects) [class*="_panelRow"] {

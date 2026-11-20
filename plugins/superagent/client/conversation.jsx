@@ -1,4 +1,5 @@
 import { Button } from '../../shared/client/ui/button.jsx';
+import { sessionStatusSource } from '../../base/client/session-status.mjs';
 import { UIIcon } from '../../base/client/iconsax.jsx';
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AssistantHome } from './home.jsx';
@@ -173,7 +174,7 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
     if (active && retained?.sessionId === sessionId) return activateWorkbenchSessionSurface(ctx, sessionId);
   }, [ctx, sessionId, retained, active]);
   const reconnect = useCallback(() => setRetry(value => value + 1), []);
-  const sessionStatus = ctx.uiSession?.sessionStatus;
+  const sessionStatus = sessionStatusSource(ctx);
   // Every consumer of this context re-renders when its value changes identity.
   const home = useMemo(() => api ? { ctx, api, SessionProvider, renderSlot, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, channel, history, onLoadEarlier, onRefresh, reconnect, sessionStatus, sessionId, loadError, onRetryLoad, onDismissLoadError, onClear, onConfigureModel } : null,
     [ctx, api, SessionProvider, renderSlot, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, channel, history, onLoadEarlier, onRefresh, reconnect, sessionStatus, sessionId, loadError, onRetryLoad, onDismissLoadError, onClear, onConfigureModel]);

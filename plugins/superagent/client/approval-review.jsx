@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
+import { sessionStatusSource } from '../../base/client/session-status.mjs';
 import { UIIcon } from '../../base/client/iconsax.jsx';
 import { ResourceIcon } from '../../shared/client/resource-icon.jsx';
 import { ResourceState } from './resource-state.jsx';
@@ -78,7 +79,7 @@ export function useApprovalIndex({ ctx, api, enabled = true, ownerThreadId }) {
   const [connections, setConnections] = useState(new Map());
   const [lastFailure, setLastFailure] = useState('');
   const originsSnapshot = useRef(null), manualRetry = useRef(false);
-  const source = ctx?.uiSession?.sessionStatus;
+  const source = sessionStatusSource(ctx);
   const subscribe = useCallback(listener => enabled && source ? source.subscribe(listener) : () => {}, [enabled, source]);
   const getStatuses = useCallback(() => enabled ? source?.getSnapshot() || EMPTY_STATUSES : EMPTY_STATUSES, [enabled, source]);
   const statuses = useSyncExternalStore(subscribe, getStatuses);
