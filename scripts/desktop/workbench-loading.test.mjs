@@ -27,7 +27,7 @@ test('workbench presentation is compiled into the document before boot and fails
   assert.throws(() => verifyWorkbenchLoadingBundle(source), /missing workbench loading/);
 });
 
-test('upstream boot page renders the themed progress trace and retains failure and handoff', async t => {
+test('upstream boot page renders themed progress dots and retains failure and handoff', async t => {
   const { chromium } = require('playwright');
   const executablePath = [process.env.CHROMIUM_EXECUTABLE_PATH, chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(value => value && existsSync(value));
   if (!executablePath) return t.skip('Chromium/Edge is required');
@@ -52,7 +52,8 @@ test('upstream boot page renders the themed progress trace and retains failure a
   await shot('empty');
   await page.evaluate(() => { window.boot = new window.BootPage(document.getElementById('root')); });
   const status = page.getByRole('status', { name: '正在加载工作台…' });
-  const rail = page.locator('.benchgo-boot-rail');
+  const dots = page.locator('.startup-loading');
+  const completed = () => dots.locator('span').evaluateAll(items => items.filter(item => getComputedStyle(item, '::after').opacity === '1').length);
   for (const theme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: theme });
     await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme', dark), theme === 'dark');
@@ -64,7 +65,8 @@ test('upstream boot page renders the themed progress trace and retains failure a
     assert(Math.abs(box.y + box.height / 2 - 350) < 1);
     assert.equal(await page.locator('[data-dsh-boot]').evaluate(el => getComputedStyle(el).backgroundColor), theme === 'dark' ? 'rgb(16, 18, 24)' : 'rgb(243, 246, 246)');
     assert.equal(await page.locator('[data-dsh-boot-spinner]').evaluate(el => getComputedStyle(el).animationName), 'none');
-    assert.equal(await rail.evaluate(el => getComputedStyle(el, '::after').animationName), 'benchgo-boot-signal');
+    assert.equal(await dots.evaluate(el => getComputedStyle(el, '::after').animationName), 'startup-dot-lift');
+    assert.equal(await dots.evaluate(el => getComputedStyle(el, '::after').backgroundColor), theme === 'dark' ? 'rgb(241, 132, 116)' : 'rgb(196, 78, 62)');
     await shot(theme);
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -72,9 +74,13 @@ test('upstream boot page renders the themed progress trace and retains failure a
     window.boot.setTotal(2);
     window.boot.setState('fixture-ready', 'active');
   });
-  assert.equal(await rail.evaluate(el => getComputedStyle(el, '::before').transform), 'matrix(0.5, 0, 0, 1, 0, 0)');
-  assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+  assert.equal(await completed(), 3);
+  assert.equal(await dots.evaluate(el => getComputedStyle(el, '::after').translate), '48px');
   await shot('reduced');
+  await page.evaluate(() => window.boot.setState('fixture-plugin', 'active'));
+  assert.equal(await completed(), 6);
+  assert.equal(await dots.evaluate(el => getComputedStyle(el, '::after').opacity), '0');
+  assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
   await page.setViewportSize({ width: 260, height: 410 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 260);
   assert.equal(await status.isVisible(), true);

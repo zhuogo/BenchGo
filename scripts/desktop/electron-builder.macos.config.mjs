@@ -17,7 +17,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 
 export function createMacOSConfig(arch = process.env.DSH_DESKTOP_TARGET_ARCH ?? process.arch) {
   if (!['arm64', 'x64'].includes(arch)) throw new Error('Unsupported BenchGo macOS architecture');
-  const version = JSON.parse(readFileSync(join(root, 'package.json'))).version;
+  const version = process.env.BENCHGO_MACOS_PACKAGE_VERSION ?? JSON.parse(readFileSync(join(root, 'package.json'))).version;
   const target = join(root, 'deepseek-harness/apps/desktop/.desktop-build/targets', `mac-${arch}`);
   const brand = join(root, '.local/desktop/brand');
   const config = createElectronBuilderConfig({ ...process.env, DSH_DESKTOP_APP_ID: 'cn.draftgo.benchgo',

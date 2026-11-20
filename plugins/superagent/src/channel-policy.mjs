@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { personalChannels } from './channel-personal-scope.mjs';
 
 export const sourceTypes = Object.freeze(['direct', 'group', 'topic', 'system']);
 export const channelExternalSendInputSchema = Object.freeze({
@@ -10,6 +11,7 @@ export const channelExternalSendInputSchema = Object.freeze({
   required: Object.freeze(['targetTriggerId', 'text']),
 });
 const id = value => typeof value === 'string' && value.length > 0;
+export const ownerChannelActorId = 'desktop-owner';
 export function channelGroupMode(config, conversationId) {
   if (config.groups == null) return !config.chatIds?.length || config.chatIds.includes(conversationId) ? 'all' : 'disabled';
   return config.groups.find(group => group.chatId === conversationId)?.mode || config.otherGroups || 'disabled';
@@ -22,19 +24,25 @@ export function channelSourceAllowed(config, source, row) {
   const account = config.accountId || config.botId || config.appId || config.phoneNumberId;
   if (account && (source.accountId || source.appId) !== account) return false;
   const conversation = source.conversationId;
+  if (source.channel === 'api' && source.sourceType !== 'direct') return false;
   if (source.sourceType === 'system') return !source.topicId && (!config.chatIds?.length || config.chatIds.includes(conversation));
   if (!id(conversation) || !id(source.chatId)) return false;
   if (source.sourceType !== 'topic' && source.chatId !== conversation) return false;
   if (source.sourceType === 'topic' ? !id(source.topicId) : !!source.topicId) return false;
+  if (source.channel === 'weixin' && source.sourceType !== 'direct') return false;
   if (source.sourceType === 'direct' && config.directMessages === false) return false;
+  if (personalChannels.has(source.channel) && source.sourceType !== 'direct') return config.chatIds?.includes(conversation) === true;
   if (config.groups != null) return source.sourceType === 'direct' || channelGroupMode(config, conversation) !== 'disabled';
+  if (personalChannels.has(source.channel) && source.channel !== 'weixin' && config.ownerIds?.includes(conversation)) return true;
   return !config.chatIds?.length || config.chatIds.includes(conversation);
 }
 export function connectionPolicy(row) {
   const config = row.config;
+  if (row.channel === 'api') return { version: `api:${row.revision}`, config, connection: row, ownerIds: [ownerChannelActorId], actorIds: [], machineIds: [], allowHumanRequests: false };
+  const personal = personalChannels.has(row.channel);
   return { version: `${row.channel}:${row.revision}`, config, connection: row,
     ownerIds: config.ownerOpenIds || config.ownerIds || [], actorIds: config.ownerOpenIds || config.ownerIds || [],
-    machineIds: config.machineOpenIds || config.machineIds || [], allowHumanRequests: config.accessMode === 'platform' };
+    machineIds: personal ? [] : config.machineOpenIds || config.machineIds || [], allowHumanRequests: !personal && config.accessMode === 'platform' };
 }
 export function authorizeChannelConnection(readConnection, channel, { operation, source, actor } = {}) {
   const row = { ...readConnection(channel), channel };
@@ -91,14 +99,16 @@ export function assessChannelAdmission({ policy, candidate, trigger, decision })
   const config = channel === 'feishu' ? policy.connection : policy.connections?.[channel]?.config;
   if (!config) return { allowed: false, reason: 'unknown-channel' };
   if (!['direct', 'group', 'topic', 'system'].includes(trigger.source?.sourceType)) return { allowed: false, reason: 'source-evidence-expired-recollect-required' };
-  if (decision.outcome === 'accept' && trigger.source.sourceType === 'group' && trigger.source.mentioned !== true) return { allowed: false, reason: 'group-new-task-requires-mention' };
+  const personal = personalChannels.has(channel);
+  if ((trigger.source.sourceType === 'group' && decision.outcome === 'accept' || personal && ['group', 'topic'].includes(trigger.source.sourceType))
+    && trigger.source.mentioned !== true) return { allowed: false, reason: 'group-new-task-requires-mention' };
   const channelAllowed = channelScope(config, trigger.source, policy.connections?.[channel]);
-  const platformHuman = connectionPolicy({ config }).allowHumanRequests && trigger.actor.kind === 'human';
-  const explicit = trigger.actor.kind === 'human' && (platformHuman || (config.ownerOpenIds || config.ownerIds || []).includes(trigger.actor.id)) && candidate.gate.strength === 'explicit';
-  const inferred = trigger.actor.kind === 'machine' && (config.machineOpenIds || config.machineIds || []).includes(trigger.actor.id)
+  const actorPolicy = connectionPolicy({ config, channel });
+  const explicit = trigger.actor.kind === 'human' && (actorPolicy.allowHumanRequests || actorPolicy.ownerIds.includes(trigger.actor.id)) && candidate.gate.strength === 'explicit';
+  const inferred = !personal && trigger.actor.kind === 'machine' && (config.machineOpenIds || config.machineIds || []).includes(trigger.actor.id)
     && candidate.gate.strength === 'inferred' && decision.outcome === 'accept' && (channel === 'feishu' ? policy.mode : config.admissionMode) === 'auto'
     && validRuleReferences(decision.ruleIds, channel === 'feishu' ? policy.enabledRuleIds : policy.connections?.[channel]?.enabledRuleIds);
-  const machineAttention = decision.outcome === 'stop' && trigger.source.sourceType !== 'direct'
+  const machineAttention = !personal && decision.outcome === 'stop' && trigger.source.sourceType !== 'direct'
     && trigger.actor.kind === 'machine' && (config.machineOpenIds || config.machineIds || []).includes(trigger.actor.id)
     && candidate.gate.allowed === true && candidate.gate.strength === 'inferred' && candidate.gate.evidence?.sourceVerified === true;
   if (!channelAllowed || candidate.gate.allowed === false || (!explicit && !inferred && !machineAttention)) return { allowed: false, reason: 'current-channel-actor-or-rule-denied' };

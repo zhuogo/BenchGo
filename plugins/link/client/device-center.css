@@ -56,9 +56,21 @@ html[data-dsh-device-theme=dark] :is(.dc-root,.link-dialog-backdrop){--dc-button
 .dc-relay-success>p+p{margin-top:6px}
 .dc-relay-card>.dc-progress-message{grid-column:1/-1}
 
-@media(max-width:767px){.dc-topbar.dc-topbar-integrated{display:none}.dc-relay-card{grid-template-columns:minmax(0,1fr);gap:12px}.dc-relay-card>.dc-service-actions{justify-content:flex-start}.dc-relay-card>.dc-test-result{margin:0}}
-@media(max-width:580px){.dc-topbar{min-height:48px;padding:max(8px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) 8px max(14px,env(safe-area-inset-left));gap:8px}.dc-content{padding:20px 18px max(28px,env(safe-area-inset-bottom))}.dc-device-list{grid-template-columns:minmax(0,1fr)}.dc-device-open{padding:14px 11px}.dc-device-symbol{width:36px;height:36px}.dc-sheet{padding:20px;max-height:calc(100dvh - 36px)}.dc-backdrop{align-items:flex-end}.dc-section-heading{gap:8px}.dc-directory-header{margin:18px 0 14px;gap:8px}.dc-directory-tabs{gap:18px}.dc-connection-panel{align-items:flex-start;flex-wrap:wrap;gap:12px 16px}.dc-root .dc-connection-panel .link-status-panel>.link-panel-head{flex-wrap:wrap;gap:10px}.dc-root .dc-connection-panel .link-connection-controls{flex-wrap:wrap;gap:10px}.dc-root :is(.dc-connection-panel,.dc-connection-details) .link-pair-row{gap:12px}.dc-root :is(.dc-connection-panel,.dc-connection-details) .link-pair-row>.link-button{width:100%}.dc-root .dc-connection-details .link-panel-head{flex-wrap:wrap}.dc-relay-card>.dc-device-open{padding:0}.dc-relay-card .dc-service-actions{gap:6px}}
-@media(max-width:380px){.dc-topbar{padding-right:12px;padding-left:12px}.dc-center-home{padding:6px}.dc-content{padding-right:14px;padding-left:14px}.dc-sheet{padding:18px}.dc-form-grid{grid-template-columns:minmax(0,1fr) 88px;gap:12px 10px}}
+@media(max-width:767px){
+  .dc-topbar.dc-topbar-integrated{display:none}
+  .dc-topbar{min-height:44px;padding:env(safe-area-inset-top,0px) max(8px,env(safe-area-inset-right,0px)) 0 max(8px,env(safe-area-inset-left,0px));gap:8px}
+  .dc-topbar .dc-back,.dc-section-heading .dc-service-actions>.dc-button{min-width:44px;min-height:44px;touch-action:manipulation}
+  .dc-content{padding-block:8px max(28px,env(safe-area-inset-bottom,0px))}
+  .dc-directory-header{margin:12px 0 8px;gap:8px}
+  .dc-directory-header:first-child{margin-top:0}
+  .dc-directory-tabs{gap:18px}
+  .dc-directory-tab{min-width:44px;min-height:44px;touch-action:manipulation}
+  .dc-relay-card{grid-template-columns:minmax(0,1fr);gap:12px}
+  .dc-relay-card>.dc-service-actions{justify-content:flex-start}
+  .dc-relay-card>.dc-test-result{margin:0}
+}
+@media(max-width:580px){.dc-content{padding-inline:max(18px,env(safe-area-inset-left,0px)) max(18px,env(safe-area-inset-right,0px))}.dc-device-list{grid-template-columns:minmax(0,1fr)}.dc-device-open{padding:14px 11px}.dc-device-symbol{width:36px;height:36px}.dc-sheet{padding:20px;max-height:calc(100dvh - 36px)}.dc-backdrop{align-items:flex-end}.dc-section-heading{gap:8px}.dc-connection-panel{align-items:flex-start;flex-wrap:wrap;gap:12px 16px}.dc-root .dc-connection-panel .link-status-panel>.link-panel-head{flex-wrap:wrap;gap:10px}.dc-root .dc-connection-panel .link-connection-controls{flex-wrap:wrap;gap:10px}.dc-root :is(.dc-connection-panel,.dc-connection-details) .link-pair-row{gap:12px}.dc-root :is(.dc-connection-panel,.dc-connection-details) .link-pair-row>.link-button{width:100%}.dc-root .dc-connection-details .link-panel-head{flex-wrap:wrap}.dc-relay-card>.dc-device-open{padding:0}.dc-relay-card .dc-service-actions{gap:6px}}
+@media(max-width:380px){.dc-content{padding-inline:max(14px,env(safe-area-inset-left,0px)) max(14px,env(safe-area-inset-right,0px))}.dc-sheet{padding:18px}.dc-form-grid{grid-template-columns:minmax(0,1fr) 88px;gap:12px 10px}}
 @media(min-width:768px){.dc-topbar-switch{display:none}}
 @media(prefers-reduced-motion:reduce){.dc-spinner{animation:none}.dc-root *{transition:none!important}}
 
@@ -72,5 +84,6 @@ html[data-dsh-device-theme=dark] :is(.dc-root,.link-dialog-backdrop){--dc-button
 .dc-sheet .bg-segments [role=tab]:disabled{background:transparent}
 
 .dc-empty-devices{display:grid;justify-items:center;gap:10px;padding:28px 12px;color:var(--dc-muted);text-align:center}.dc-empty-devices strong{font-size:14px;color:var(--dc-ink)}.dc-empty-devices .dc-actions{justify-content:center;margin:0}
+.dc-device-open:not(button){cursor:default}
 .dc-root .dc-device>.dc-button{flex:none;width:36px;min-height:36px}.dc-terminal-icon{font:600 14px/1 ui-monospace,monospace;white-space:nowrap}
 .dc-terminal-sheet{width:min(840px,100%)}.dc-terminal-screen{height:min(56dvh,420px);padding:8px;border-radius:8px;background:#16181d;color:#f4f4f5}.dc-terminal-screen .xterm{height:100%}

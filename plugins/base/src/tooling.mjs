@@ -6,6 +6,7 @@ import { createRuntimeSettings } from './runtime-settings.mjs';
 import { assertSameOrigin } from '../shared/http.mjs';
 import { readLimited } from '../shared/http.mjs';
 import { fetchPublicModelProfiles } from './model-providers.mjs';
+import { hasTextCapability } from '../shared/model-capabilities.mjs';
 
 /** Owner-only management surface; credentials are resolved only inside adapters. */
 export async function mountTooling(ctx, commander, providers, options = {}) {
@@ -31,9 +32,20 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
         yield { type: 'finish', reason: { kind: 'error', failure: { code: error.code || 'API_CREDENTIAL_REQUIRED', message: '请在模型设置中配置可用的 API 凭据。' } } };
         return;
       }
+      if (!access.managedRouterGo && providers.modelCapabilities) {
+        let message;
+        try {
+          const override = (await providers.modelCapabilities(options.provider)).find(row => row.modelId === options.model);
+          if (override && !hasTextCapability(override.capabilities)) message = '此模型未启用文本能力。';
+        } catch { message = '无法读取模型能力设置，请重试。'; }
+        if (message) {
+          yield { type: 'finish', reason: { kind: 'error', failure: { code: 'MODEL_TEXT_UNAVAILABLE', message } } };
+          return;
+        }
+      }
       if (access.managedRouterGo) {
         let reason;
-        try { reason = routerGoModelProtocolReason('deepseek', (await providers.routerGoProtocolModels()).get(options.model)); }
+        try { reason = routerGoModelProtocolReason('deepseek', (await providers.routerGoProtocolModels()).get(options.model), access.modelProtocol); }
         catch { reason = '无法读取 RouterGo 账号支持的模型，请重试。'; }
         if (reason) {
           yield { type: 'finish', reason: { kind: 'error', failure: { code: 'ROUTERGO_MODEL_UNAVAILABLE', message: reason } } };

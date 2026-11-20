@@ -74,13 +74,17 @@ test('configurable provider requests require model settings API credentials', as
 
 test('managed RouterGo chat checks the exact model supports Responses before calling the engine', async () => {
   let gate;
+  let modelProtocol = 'responses';
   const ctx = { effect() {}, on(_event, listener) { gate = listener; }, llm: { listConfigurableProviders: () => [{ provider: 'routergo' }] } };
   const providers = {
     resolve: async () => ({}),
-    describeAccess: async () => ({ authMode: 'api', managedRouterGo: true }),
+    describeAccess: async () => ({ authMode: 'api', managedRouterGo: true, modelProtocol }),
     routerGoProtocolModels: async () => new Map([
       ['Exact/Model', { capabilities: ['responses'] }],
       ['chat-only', { capabilities: ['chat'] }],
+      ['messages-only', { capabilities: ['anthropic-messages'] }],
+      ['text-only-override', { capabilities: ['text'], providerCapabilities: ['image-generation'] }],
+      ['text-disabled', { capabilities: [], providerCapabilities: ['responses'] }],
     ]),
   };
   await mountTooling(ctx, null, providers, { directory: '/unused', installer: {} });
@@ -93,4 +97,12 @@ test('managed RouterGo chat checks the exact model supports Responses before cal
   assert.deepEqual(await collect('Exact/Model'), [{ type: 'passthrough' }]);
   assert.equal((await collect('chat-only'))[0].reason.failure.code, 'ROUTERGO_MODEL_UNAVAILABLE');
   assert.match((await collect('exact/model'))[0].reason.failure.message, /未提供此模型/);
+  assert.match((await collect('text-only-override'))[0].reason.failure.message, /未为此模型开放 Responses/);
+  assert.match((await collect('text-disabled'))[0].reason.failure.message, /未启用文本能力/);
+  modelProtocol = 'openai';
+  assert.deepEqual(await collect('chat-only'), [{ type: 'passthrough' }]);
+  assert.match((await collect('Exact/Model'))[0].reason.failure.message, /Chat Completions/);
+  modelProtocol = 'anthropic';
+  assert.deepEqual(await collect('messages-only'), [{ type: 'passthrough' }]);
+  assert.match((await collect('chat-only'))[0].reason.failure.message, /Anthropic Messages/);
 });

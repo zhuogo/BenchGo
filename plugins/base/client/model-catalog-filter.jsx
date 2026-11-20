@@ -5,13 +5,13 @@ import { UIIcon } from './iconsax.jsx';
 import { ModelVendorIcon } from './provider-brand-icon.jsx';
 import chatIcon from './assets/icon-library/Chat_Line.svg';
 import { IconDatabaseOutlineRegular, IconPlayOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
-import { modelCapabilityLabels, structuredCapabilities } from '../shared/model-capabilities.mjs';
-import { normalizeInputModalities } from '../shared/model-profile-match.mjs';
+import { hasTextCapability, modelCapabilityLabels } from '../shared/model-capabilities.mjs';
+import { modelCatalogFacts } from './model-capabilities.jsx';
 
-const modalityLabels = { text: '文本', image: '图片 图片输入 视觉 vision', audio: '音频', video: '视频' };
+const modalityLabels = { text: '文本', image: '图片 图片输入 视觉 vision', audio: '音频', video: '视频', pdf: 'PDF' };
 const normalized = value => String(value ?? '').normalize('NFKC').toLowerCase();
 const categories = [
-  { id: 'language', label: '大语言模型', artwork: chatIcon.replaceAll('black', 'currentColor'), capabilities: ['chat', 'responses', 'decision'] },
+  { id: 'language', label: '大语言模型', artwork: chatIcon.replaceAll('black', 'currentColor'), capabilities: ['text'] },
   { id: 'image', label: '图片生成与编辑模型', icon: 'picture', capabilities: ['image-generation', 'image-edit', 'image-mask'] },
   { id: 'voice', label: '语音模型', icon: 'mic', capabilities: ['tts', 'asr', 'realtime'] },
   { id: 'knowledge', label: '知识库模型', Icon: IconDatabaseOutlineRegular, capabilities: ['embedding', 'rerank'] },
@@ -25,7 +25,7 @@ function modelCategories(id, capabilities, outputs, hasOverride) {
   if (knowledgeId && !groups.some(group => group.id === 'knowledge')) return [categories[3], ...groups.filter(group => group.id !== 'language')];
   if (groups.length) return groups;
   return outputs.flatMap(output => {
-    const group = categories.find(({ id }) => id === ({ audio: 'voice', text: 'language' }[output] ?? output));
+    const group = categories.find(({ id }) => id === ({ audio: 'voice' }[output] ?? output));
     return group ? [group] : [];
   });
 }
@@ -53,17 +53,14 @@ export function filterModelRows(rows, filter, profiles, catalog, defaults = new 
     if (!tokens.length && !filter.category) return true;
     if (!model.id) return true;
     const remote = catalog?.models.get(model.id);
-    const publishedInputs = normalizeInputModalities(profile?.input_modalities);
+    const { input, output, capabilities, overridden } = modelCatalogFacts(model.id, profile, catalog);
     const configured = model.input ?? model.inputModalities;
     const inputs = Array.isArray(configured) && configured.length ? configured
-      : remote?.inputModalities ?? (publishedInputs.length ? publishedInputs : defaults.get(model.id) ?? defaultInput ?? ['text']);
-    const outputs = remote?.outputModalities ?? (Array.isArray(profile?.output_modalities) ? profile.output_modalities : []);
-    const override = catalog?.overrides.get(model.id);
-    const declared = remote?.capabilities;
-    const capabilities = override ?? (declared?.length ? declared : structuredCapabilities(profile ?? {}, inputs, outputs));
-    const groups = modelCategories(model.id, capabilities, outputs, override !== undefined);
+      : input.length ? input : defaults.get(model.id) ?? defaultInput ?? ['text'];
+    const groups = modelCategories(model.id, capabilities, output, overridden);
     if (filter.category && !groups.some(group => group.id === filter.category)) return false;
-    const labels = [...inputs, ...publishedInputs.filter(input => input === 'audio' || input === 'video')].flatMap(input => [input, modalityLabels[input]]);
+    const labels = hasTextCapability(capabilities)
+      ? [...inputs, ...input.filter(value => value !== 'text' && value !== 'image')].flatMap(value => [value, modalityLabels[value]]) : [];
     const searchable = [model.id, model.name, remote?.name, profile?.model_name, ...labels, ...groups.map(group => group.label),
       ...(groups.some(group => group.id === 'knowledge') ? ['RAG', '嵌入', '重排序', 'embedding', 'rerank'] : []),
       ...capabilities.flatMap(capability => [capability, modelCapabilityLabels[capability]])];

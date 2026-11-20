@@ -43,22 +43,24 @@ function Sheet({ title, children, onClose, busy, terminal = false }) {
 
 function AddComputer({ runtime, onAdded }) {
   const [uri, setUri] = useState(''), [error, setError] = useState(''), [phase, setPhase] = useState('idle');
-  const operation = useRef(0), timer = useRef(), mounted = useRef(true), lastScan = useRef(''), inFlight = useRef('');
+  const operation = useRef(0), timer = useRef(), mounted = useRef(true), lastScan = useRef(''), inFlight = useRef(''), request = useRef(null);
   const connect = useCallback(async input => {
     if (!input.trim()) { setError('请粘贴目标设备的连接信息'); return; }
     if (inFlight.current === input.trim()) return;
     inFlight.current = input.trim();
     const generation = ++operation.current; clearTimeout(timer.current); setError(''); setPhase('sending'); setUri(input);
     try {
-      const result = await runtime.call('pair', { uri: input.trim(), name: runtime.clientName() });
+      const current = request.current;
+      const result = current?.input === input.trim() && (current.expiresAt === undefined || current.expiresAt > Date.now()) ? current : await runtime.call('pair', { uri: input.trim(), name: runtime.clientName() });
       if (!mounted.current || operation.current !== generation) return;
+      request.current = { ...result, input: input.trim() };
       setPhase('pending');
       const poll = async () => {
         try {
           const status = await runtime.call('pairStatus', { requestId: result.requestId });
           if (!mounted.current || operation.current !== generation) return;
-          if (status.status === 'approved') { setPhase('approved'); await onAdded(status.device); return; }
-          if (['rejected', 'expired', 'revoked'].includes(status.status)) throw new Error(status.status === 'rejected' ? '目标设备未允许连接，请生成新的连接信息' : '配对已过期，请重新扫码或粘贴地址');
+          if (status.status === 'approved') { request.current = null; setPhase('approved'); await onAdded(status.device); return; }
+          if (['rejected', 'expired', 'revoked'].includes(status.status)) { request.current = null; throw new Error(status.status === 'rejected' ? '目标设备未允许连接，请生成新的连接信息' : '配对已过期，请重新扫码或粘贴地址'); }
           timer.current = setTimeout(poll, 1500);
         } catch (reason) { if (mounted.current && operation.current === generation) { inFlight.current = ''; setError(reason.message); setPhase('failed'); } }
       };
@@ -371,6 +373,7 @@ function RelayPool({ runtime, refreshToken = 0, active = true, currentDevice, on
   const [tests, setTests] = useState({});
   const [draftTest, setDraftTest] = useState(null);
   const [testing, setTesting] = useState('');
+  const [receipt, setReceipt] = useState(null), [feedback, setFeedback] = useState('');
   const gate = useRef(false), request = useRef(0);
   const load = useCallback(async () => {
     const generation = ++request.current;
@@ -386,13 +389,43 @@ function RelayPool({ runtime, refreshToken = 0, active = true, currentDevice, on
   }, [load, refreshToken, active]);
   const nodes = status?.relay?.nodes || [];
   const fingerprint = status?.relay?.fingerprint;
-  const save = async (change, expected = fingerprint) => {
-    if (gate.current) return false;
+  const applyReceipt = value => {
+    if (value.state === 'applying' || value.state === 'unknown') {
+      setError(value.state === 'applying' ? '修改正在保存，请稍后查询。' : '保存结果待核实，请刷新中继状态核对。');
+      return false;
+    }
+    setReceipt(null);
+    if (value.state !== 'applied') { setError(value.error?.message || '未能保存中继设置'); return false; }
+    setFeedback(value.result?.application?.reason || '中继设置已保存');
+    return true;
+  };
+  const checkReceipt = async () => {
+    if (gate.current || !receipt) return;
     gate.current = true; setBusy(true); setError('');
+    try { applyReceipt(await runtime.hostCall('hostRelayOperation', { requestId: receipt })); await load(); }
+    catch (reason) {
+      if (reason.code === 'NOT_FOUND') { setReceipt(null); await load(); }
+      setError(reason.message);
+    } finally { gate.current = false; setBusy(false); }
+  };
+  const save = async (change, expected = fingerprint) => {
+    if (gate.current || receipt) return false;
+    gate.current = true; setBusy(true); setError(''); setFeedback('');
+    const requestId = runtime.paired ? crypto.randomUUID() : undefined;
     try {
-      const value = await runtime.hostCall('hostRelayPoolConfigure', { ...change, expected: { fingerprint: expected } });
-      ++request.current; setStatus(value); onChanged?.(); return true;
-    } catch (reason) { setError(reason.message); return false; }
+      const value = await runtime.hostCall('hostRelayPoolConfigure', { ...change, expected: { fingerprint: expected }, ...(requestId ? { requestId } : {}) });
+      if (requestId) {
+        const saved = applyReceipt(value);
+        if (value.state === 'applying') setReceipt(requestId);
+        await load();
+        if (!saved) return false;
+      } else { ++request.current; setStatus(value); }
+      onChanged?.(); return true;
+    } catch (reason) {
+      if (requestId && (!reason.status || reason.status >= 500)) { setReceipt(requestId); setError('连接中断，保存结果待查询。'); }
+      else setError(reason.message);
+      return false;
+    }
     finally { gate.current = false; setBusy(false); }
   };
   const refreshStatus = async () => {
@@ -439,6 +472,8 @@ function RelayPool({ runtime, refreshToken = 0, active = true, currentDevice, on
     </div></div>
     {refreshing && <p className="dc-note" role="status">正在刷新中继…</p>}
     {!editing && <ErrorLine error={error} />}
+    {feedback && <p className="dc-note" role="status">{feedback}</p>}
+    {receipt && <Button disabled={busy} onClick={() => void checkReceipt()}>查询保存结果</Button>}
     {statusError && <div className="dc-relay-status-error"><ErrorLine error={'无法读取中继状态 · ' + statusError} /><Button disabled={refreshing} onClick={() => void refreshStatus()}>重试读取</Button></div>}
     {currentDevice?.currentPath === 'relay' && currentDevice.currentRelayUrl && <p className="dc-note dc-relay-current">当前工作台使用 · <strong>{currentDevice.currentRelayUrl}</strong></p>}
     {!status && !statusError ? <DeviceLoading label="正在读取中继…" /> : nodes.length ? <div className="dc-device-list dc-relay-list">{nodes.map(node => {
@@ -461,10 +496,10 @@ function RelayPool({ runtime, refreshToken = 0, active = true, currentDevice, on
         </div>
         <div className="dc-service-actions">
           <Button icon="refresh" disabled={busy} onClick={() => void testNode(node)}>{node.lastError && !disabled ? '重试检测' : '测试连接'}</Button>
-          <Button icon="settings" disabled={busy} onClick={() => edit(node)}>编辑</Button>
-          <Button disabled={busy} onClick={() => void save({ operation: 'update', id: node.id, enabled: disabled })}>{disabled ? '启用' : '停用'}</Button>
-          {!preferred && !disabled && <Button disabled={busy} onClick={() => void save({ operation: 'prefer', id: node.id })}>设为首选</Button>}
-          <Button icon="trash" title="删除中继" aria-label={'删除中继 ' + new URL(node.url).host} danger disabled={busy || !disabled} onClick={() => void remove(node.id)} />
+          {!runtime.paired && <Button icon="settings" disabled={busy} onClick={() => edit(node)}>编辑</Button>}
+          <Button disabled={busy || !!receipt} onClick={() => void save({ operation: 'update', id: node.id, enabled: disabled })}>{disabled ? '启用' : '停用'}</Button>
+          {!preferred && !disabled && <Button disabled={busy || !!receipt} onClick={() => void save({ operation: 'prefer', id: node.id })}>设为首选</Button>}
+          {!runtime.paired && <Button icon="trash" title="删除中继" aria-label={'删除中继 ' + new URL(node.url).host} danger disabled={busy || !disabled} onClick={() => void remove(node.id)} />}
         </div>
         {testing === node.id && <p className="dc-progress-message" role="status"><i className="dc-spinner" />正在测试连接…</p>}
         <ConnectionTest result={test?.result} />
@@ -660,6 +695,9 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
   const [relayRevision, setRelayRevision] = useState(0);
   const [relayJob, setRelayJob] = useState(null);
   const [directoryTab, setDirectoryTab] = useState('devices'), [detailsTarget, setDetailsTarget] = useState(null);
+  const [refreshingDevices, setRefreshingDevices] = useState(false);
+  const relayManagement = data.capabilities?.hostAdmin || data.capabilities?.relayManagement;
+  const directoryReady = loaded && (!runtime.paired || relayManagement);
   const serverManagement = !runtime.isNative() && data.capabilities?.serverManagement === true;
   const agentAvailable = serverManagement && data.capabilities?.sshAgent === true;
   useEffect(() => {
@@ -722,6 +760,13 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     return () => { pending = null; window.removeEventListener('message', receive); };
   }, [refresh]);
   const relayChanged = useCallback(() => setRelayRevision(value => value + 1), []);
+  const refreshDevices = async () => {
+    if (refreshingDevices) return;
+    setRefreshingDevices(true); setError('');
+    try { await refresh(); relayChanged(); }
+    catch (reason) { setError(reason.message); }
+    finally { setRefreshingDevices(false); }
+  };
   useJob(runtime, modal?.type === 'relay' ? null : relayJob, setRelayJob, setError);
   const completedRelay = useRef('');
   useEffect(() => {
@@ -798,7 +843,7 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
   }, [frames, data.devices, activeId, busy, error, select, switchReady]);
-  const added = useCallback(async device => { const next = await refresh(); if (device?.id) await select(device); else { setModal(null); setShowDevices(true); setData(next); } }, [refresh, select]);
+  const added = useCallback(async device => { const next = await refresh(); if (device?.id && !device.pairingNotice) await select(device); else { setModal(null); setShowDevices(true); setData(next); } }, [refresh, select]);
   const modalDevice = data.devices.find(item => item.id === modal?.device?.id) || modal?.device;
   const active = data.devices.find(item => item.id === activeId);
   // Keep the owner device in the same list so every device shares one scan path.
@@ -811,18 +856,19 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     event.preventDefault(); tabs[next].focus(); setDirectoryTab(tabs[next].dataset.tab);
   };
   const renderDevice = device => {
-    const status = busy === device.id ? '正在打开…' : device.kind === 'local' ? (runtime.isNative() ? '本机' : '本机工作台') : deviceStatus(device);
+    const status = busy === device.id ? '正在打开…' : device.kind === 'local' ? (runtime.paired ? '' : runtime.isNative() ? '本机' : '本机工作台') : deviceStatus(device);
     const managed = serverManagement && device.sshManaged;
+    const Open = runtime.paired ? 'div' : 'button';
     return <article key={device.id} className="dc-device">
-      <button className="dc-device-open" disabled={!!busy} onClick={() => select(device)}>
+      <Open className="dc-device-open" {...(runtime.paired ? {} : { disabled: !!busy, onClick: () => select(device) })}>
         <span className="dc-device-symbol"><UIIcon name={deviceIcon(device)} size={22} /></span>
         <span className="dc-device-copy"><Tooltip label={device.name}><strong>{device.name}</strong></Tooltip>
-          <small>{deviceKind(device)}{(status || managed) && <><span aria-hidden="true"> · </span><span data-status={device.status}>{managed ? `工作台 ${status || '待检查'}` : status}</span></>}{managed && <><span aria-hidden="true"> · </span><span data-status={device.sshStatus}>SSH {sshStatus(device)}</span></>}</small>
-          {device.warning && <span className="dc-device-error">{device.warning}</span>}{device.lastError && <span className="dc-device-error">{device.lastError}</span>}
+          <small>{deviceKind(device)}{(status || managed) && <><span aria-hidden="true"> · </span><span data-status={device.status}>{managed ? `工作台 ${status || '待检查'}` : status}</span></>}{managed && <><span aria-hidden="true"> · </span><span data-status={device.sshStatus}>SSH {sshStatus(device)}</span></>}{runtime.paired && device.kind === 'paired' && ' · 已配对'}</small>
+          {device.pairingNotice && <span className="dc-note">{device.pairingNotice}</span>}{device.warning && <span className="dc-device-error">{device.warning}</span>}{device.lastError && <span className="dc-device-error">{device.lastError}</span>}
         </span>
-      </button>
+      </Open>
       {managed && <Button icon="terminal" title="打开 SSH 终端" aria-label={`打开 ${device.name} 的 SSH 终端`} onClick={() => setModal({ type: 'terminal', device })} disabled={!!busy} />}
-      <Button icon="more" title="设备设置" aria-label={`${device.name}设置`} onClick={() => setModal({ type: 'manage', device })} disabled={!!busy} />
+      {!runtime.paired && <Button icon="more" title="设备设置" aria-label={`${device.name}设置`} onClick={() => setModal({ type: 'manage', device })} disabled={!!busy} />}
     </article>;
   };
   const closeWorkbench = device => {
@@ -864,19 +910,20 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
         {loaded && data.capabilities?.hostAdmin && <section id="dc-panel-connection" className="dc-connection-panel" aria-label="连接">
           <div className="dc-section-heading"><h1>连接</h1></div><LinkSettings embedded management={runtime.hostCall} refreshToken={relayRevision} detailsTarget={detailsTarget} />
         </section>}
-        {loaded && <div className="dc-directory-header"><div className="dc-directory-tabs" role="tablist" aria-label="设备与中继">
+        {loaded && !directoryReady && <Button disabled={refreshingDevices} onClick={refreshDevices}>{refreshingDevices ? '正在重试…' : '重试读取设备'}</Button>}
+        {directoryReady && <div className="dc-directory-header"><div className="dc-directory-tabs" role="tablist" aria-label="设备与中继">
           <button type="button" id="dc-tab-devices" className="dc-directory-tab" role="tab" data-tab="devices" aria-controls="dc-panel-devices" aria-selected={directoryTab === 'devices'} tabIndex={directoryTab === 'devices' ? 0 : -1} onClick={() => setDirectoryTab('devices')} onKeyDown={directoryKey}>设备</button>
-          {data.capabilities?.hostAdmin && <button type="button" id="dc-tab-relay" className="dc-directory-tab" role="tab" data-tab="relay" aria-controls="dc-panel-relay" aria-selected={directoryTab === 'relay'} tabIndex={directoryTab === 'relay' ? 0 : -1} onClick={() => setDirectoryTab('relay')} onKeyDown={directoryKey}>中继池</button>}
+          {relayManagement && <button type="button" id="dc-tab-relay" className="dc-directory-tab" role="tab" data-tab="relay" aria-controls="dc-panel-relay" aria-selected={directoryTab === 'relay'} tabIndex={directoryTab === 'relay' ? 0 : -1} onClick={() => setDirectoryTab('relay')} onKeyDown={directoryKey}>中继池</button>}
         </div></div>}
-        <section id="dc-panel-devices" className="dc-device-directory" role="tabpanel" aria-labelledby="dc-tab-devices" hidden={!loaded || directoryTab !== 'devices'}>
-          <div className="dc-section-heading"><h2>我的设备 <span className="dc-count">{devices.length}</span></h2><div className="dc-service-actions"><Button icon="refresh" aria-label="刷新设备" disabled={!!busy} onClick={() => { setError(''); refresh().catch(reason => setError(reason.message)); relayChanged(); }} /><Button primary onClick={() => setModal({ type: 'add' })}>添加设备</Button></div></div>
+        <section id="dc-panel-devices" className="dc-device-directory" role="tabpanel" aria-labelledby="dc-tab-devices" hidden={!directoryReady || directoryTab !== 'devices'}>
+          <div className="dc-section-heading"><h2>我的设备 <span className="dc-count">{devices.length}</span></h2><div className="dc-service-actions"><Button icon="refresh" aria-label="刷新设备" disabled={!!busy || refreshingDevices} onClick={refreshDevices} />{!runtime.paired && <Button primary onClick={() => setModal({ type: 'add' })}>添加设备</Button>}</div></div>
           <div className="dc-device-list">{devices.map(renderDevice)}</div>
-          {loaded && !devices.some(device => device.kind !== 'local') && !error && <div className="dc-empty-devices"><UIIcon name="devices" size={28} /><strong>尚未添加远程设备</strong><div className="dc-actions"><Button onClick={() => setModal({ type: 'add', path: 'server' })}>添加服务器</Button><Button onClick={() => setModal({ type: 'add', path: 'existing' })}>连接已有设备</Button></div></div>}
+          {loaded && !devices.some(device => device.kind !== 'local') && !error && <div className="dc-empty-devices"><UIIcon name="devices" size={28} /><strong>{runtime.paired ? '没有其他已配对设备' : '尚未添加远程设备'}</strong>{!runtime.paired && <div className="dc-actions"><Button onClick={() => setModal({ type: 'add', path: 'server' })}>添加服务器</Button><Button onClick={() => setModal({ type: 'add', path: 'existing' })}>连接已有设备</Button></div>}</div>}
           {data.capabilities?.ssh === false && <p className="dc-footnote">此客户端支持连接已有设备。SSH 安装请使用新版桌面或 Android 客户端。</p>}
           {loaded && data.capabilities?.hostAdmin && <div className="dc-connection-details link-settings" ref={setDetailsTarget} />}
         </section>
-        {loaded && data.capabilities?.hostAdmin && <section id="dc-panel-relay" className="dc-relay-section" role="tabpanel" aria-labelledby="dc-tab-relay" hidden={directoryTab !== 'relay'}>
-          <RelayPool runtime={runtime} refreshToken={relayRevision} active={showDevices && directoryTab === 'relay'} currentDevice={active ?? data.devices.find(item => item.id === data.activeId)} onChanged={relayChanged} onAdd={() => setModal({ type: 'relay' })} />
+        {loaded && relayManagement && <section id="dc-panel-relay" className="dc-relay-section" role="tabpanel" aria-labelledby="dc-tab-relay" hidden={directoryTab !== 'relay'}>
+          <RelayPool runtime={runtime} refreshToken={relayRevision} active={showDevices && directoryTab === 'relay'} currentDevice={active ?? data.devices.find(item => item.id === data.activeId)} onChanged={relayChanged} onAdd={data.capabilities?.hostAdmin ? () => setModal({ type: 'relay' }) : undefined} />
           {relayJob && <div className="dc-relay-job-status"><span role="status">{jobFailed(relayJob) ? '中继部署失败' : jobFinished(relayJob) ? '中继部署完成' : '中继正在后台部署'}</span><Button onClick={() => setModal({ type: 'relay', progress: true })}>查看部署进度</Button></div>}
         </section>}
       </section>

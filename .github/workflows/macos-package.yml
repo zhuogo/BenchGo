@@ -58,7 +58,7 @@ jobs:
           ulimit -n 65536
           npm run build:plus
           node --test scripts/desktop/package-macos.test.mjs scripts/server/package-seed.test.mjs
-          node scripts/desktop/package-macos.mjs "$TARGET_ARCH"
+          node scripts/desktop/package-macos.mjs "$TARGET_ARCH" --version "$RELEASE_VERSION"
       - name: Require clean official source after packaging
         run: npm run check
       - uses: actions/upload-artifact@v4

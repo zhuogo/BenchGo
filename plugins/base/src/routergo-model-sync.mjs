@@ -12,6 +12,8 @@ const fingerprint = models => createHash('sha256').update(canonical(models)).dig
 function modelConfig(model) {
   return applyModelProfile({ id: model.id, name: model.name }, {
     context: model.contextWindow, max_output: model.maxTokens,
+    capabilities: model.capabilities?.length ? model.capabilities : undefined,
+    output_modalities: model.outputModalities,
     input_modalities: model.inputModalities, thinking_levels: model.thinkingLevels,
   }, { reasoning: true }).model;
 }

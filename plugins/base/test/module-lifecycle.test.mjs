@@ -14,6 +14,7 @@ import * as Harness from '../../harness/src/plugin.mjs';
 import * as SuperAgent from '../../superagent/src/plugin.mjs';
 import * as Voice from '../../media/src/plugin.mjs';
 import { mountLink } from '../../link/src/index.mjs';
+import { registerOrdinaryServerSshTool } from '../shared/server-ssh-tool.mjs';
 import { createSessionAdapter } from '../../link/src/session/adapter.mjs';
 import { createNativeAdapter } from '../../link/src/session/native.mjs';
 import { fixtureRoute, fixtureRouteService, fixtureInstaller } from '../../harness/test/fixtures/api-route.mjs';
@@ -171,6 +172,7 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   const Link = { inject: ['benchgo', 'connection', 'workspaceRegistry', 'typertGateway', 'sessionController', 'webServer', 'clientModules'], async apply(child) {
     linkService = await mountLink(child, { directory: linkPath, env: {} });
     child.provide('benchgoLink', linkService);
+    registerOrdinaryServerSshTool(child, linkService);
     linkSessions = createSessionAdapter(child); nativeSessions = createNativeAdapter(child);
     child.effect(() => () => linkSessions.close());
   } };
@@ -183,6 +185,24 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   assert.equal(ctx.llm.listProviders().filter(row => row.id.startsWith('commander-')).length, 7);
   assert.equal(ctx.tools.schemas().filter(row => row.name.startsWith('commander_')).length, 14);
   const oldCommander = ctx.get('commander'), oldHarness = ctx.get('benchgoHarnessWeb'), oldAssistant = ctx.get('assistant');
+  const worker = { providerId: 'fixture-worker', modelId: 'Opaque/Worker:01' };
+  const workerCatalog = () => ctx.get('benchgoExecution').dispatch({ action: 'execution', version: 2, operation: 'catalog' },
+    { principal: { kind: 'device', deviceId: 'paired-device' } });
+  assert.equal((await workerCatalog()).workerPreference, undefined);
+  oldCommander.pickerCatalog = { list: async () => ({ routes: [{ tool: 'deepseek', providerId: worker.providerId, nativeModelId: worker.modelId }] }) };
+  t.mock.method(ctx.llm, 'resolveModelInfo', async (provider, id) => ({ provider, id }));
+  await oldAssistant.store.updateConfig({ workerModels: [{ ...worker, options: { maxTokens: 2048 } }] });
+  assert.deepEqual((await workerCatalog()).workerPreference, { config: { harness: 'official', models: [{ ...worker, params: { maxTokens: 2048 } }] } });
+  const sshAvailable = async (id, header = {}) => {
+    const agent = { id, session: { header } };
+    const toolSet = await ctx.tools.resolve({ agent, modelSelection: { provider: 'fixture', model: 'Opaque:Model/01' },
+      signal: new AbortController().signal });
+    try { return !!ctx.tools.get('assistant_server_ssh', agent, toolSet); } finally { toolSet.dispose(); }
+  };
+  await oldAssistant.store.updateState({ mainSessionId: 'cold-router' });
+  assert.equal(await sshAvailable('official-session'), true);
+  assert.equal(await sshAvailable('cold-router'), false);
+  assert.equal(await sshAvailable('child', { origin: 'subagent', parentSession: 'official-session' }), false);
   oldCommander.routeService = fixtureRouteService;
   oldCommander.toolInstaller = fixtureInstaller;
   oldCommander.providers.set('codex', { config: {}, constructor: { capabilities: {} }, async connect() { return { nativeId: 'fixture-native', async close() {} }; } });
@@ -202,7 +222,9 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   await availability({ base: true, harness: true, superagent: false, voice: true, link: true });
   await checkBase(); await officialSessions();
   assert(!routes.has('/api/commander/assistant'));
+  assert.equal(await sshAvailable('official-session'), true);
   await assert.rejects(oldAssistant.dispatch({ action: 'state' }), error => error.code === 'ASSISTANT_UNAVAILABLE');
+  assert.equal((await workerCatalog()).workerPreference, undefined);
   await assert.rejects(linkSessions.dispatch({ action: 'notifications' }, { id: 'paired-device' }), error => error.status === 503);
   assistant = ctx.plugin(SuperAgent); await assistant;
   await availability({ superagent: true });
@@ -241,7 +263,7 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   await checkBase();
   assert.equal(peers.size, 0);
   assert(!routes.has('/api/commander-link')); assert(!routes.has('/api/commander-devices'));
-  assert.equal(linkService.status().enabled, false);
+  assert.throws(() => linkService.status(), /Link 已关闭/);
   link = ctx.plugin(Link); await link;
   await availability({ link: true });
   await officialSessions(); await checkBase();
@@ -250,7 +272,7 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   assert.equal(projectionRegistrations.size, 0);
   assert.equal(routes.size, 0); assert.equal(upgrades.size, 0); assert.equal(peers.size, 0);
   assert.deepEqual(duplicateRoutes, []);
-  assert.equal(linkService.status().enabled, false);
+  assert.throws(() => linkService.status(), /Link 已关闭/);
   assert.equal(networkAttempts, 0);
   await assert.rejects(access(join(directory, 'owner.lock')), { code: 'ENOENT' });
 });

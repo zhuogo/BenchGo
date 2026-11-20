@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mountLink } from '../src/index.mjs';
+import { createDeviceProxy } from '../src/devices/proxy.mjs';
+import { connectionAddresses } from '../src/transport/server.mjs';
 import { mountWeb } from '../../base/src/web.mjs';
 
 async function host(t, name, projects, assistant, stored = {}) {
@@ -50,6 +52,58 @@ async function pair(source, target) {
   assert.equal(new URL(saved.url).hostname, '127.0.0.1', 'explicit local pairing endpoint remains usable independently of advertised routes');
   return result.device;
 }
+
+test('one approval pairs both Link hosts over real TLS and each host can revoke its grant', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const a = await host(t, 'A', [{ id: 'a-project', title: 'A project', path: '/a/work', sessionIds: [] }], null, { host: '::' });
+  const b = await host(t, 'B', [{ id: 'b-project', title: 'B project', path: '/b/work', sessionIds: [] }], null);
+  const invitation = await b.link.admin({ action: 'pairing' });
+  const pending = await a.deviceApi({ action: 'pair', uri: invitation.uri });
+  assert.deepEqual(await a.deviceApi({ action: 'pairStatus', requestId: pending.requestId }), { status: 'pending' });
+  assert.equal(a.link.status().devices.length, 0);
+  assert.equal(b.link.status().devices.length, 0);
+  const [request] = b.link.status().pending;
+  assert.equal(request.reciprocal, true);
+  assert.deepEqual(a.link.status().pending, []);
+  await b.link.admin({ action: 'confirm', id: request.id });
+  const finish = () => a.deviceApi({ action: 'pairStatus', requestId: pending.requestId });
+  const [forward, duplicate] = await Promise.all([finish(), finish()]);
+  assert.equal(forward.direction, 'mutual');
+  assert.deepEqual(duplicate, forward);
+  assert.equal(a.link.status().devices.length, 1);
+  assert.equal(b.link.status().devices.length, 1);
+  const back = (await b.link.devices()).devices.find(device => device.name === 'A');
+  assert.equal(back.hostId, a.link.status().hostId);
+  assert.equal(back.authorizationId, a.link.status().devices[0].id);
+  assert.equal(a.link.status().devices[0].pairingReturn, 'mutual');
+  assert.equal(b.link.status().devices[0].pairingReturn, 'mutual');
+  assert.equal(b.link.status().devices[0].id, (await a.link.devices()).devices.find(device => device.id === forward.device.id).authorizationId);
+  const projects = async (source, id) => (await source.link.resources({ deviceId: id, kind: 'projects' })).devices[0];
+  assert.deepEqual((await projects(a, forward.device.id)).items.map(project => project.resourceId), ['b-project']);
+  assert.deepEqual((await projects(b, back.id)).items.map(project => project.resourceId), ['a-project']);
+  await a.link.admin({ action: 'revoke', id: back.authorizationId });
+  assert.equal((await projects(b, back.id)).code, 'UNAUTHORIZED');
+  assert.deepEqual((await projects(a, forward.device.id)).items.map(project => project.resourceId), ['b-project']);
+  await b.link.admin({ action: 'revoke', id: b.link.status().devices[0].id });
+  assert.equal((await projects(a, forward.device.id)).code, 'UNAUTHORIZED');
+});
+
+test('an unreachable return route leaves a usable one-way pairing without a reverse grant', async t => {
+  const a = await host(t, 'A', [], null, { publicUrl: 'https://pairing-link-test.invalid' });
+  const b = await host(t, 'B', [{ id: 'b-project', title: 'B project', path: '/b/work', sessionIds: [] }], null);
+  const invitation = await b.link.admin({ action: 'pairing' });
+  const pending = await a.deviceApi({ action: 'pair', uri: invitation.uri });
+  const [request] = b.link.status().pending;
+  assert.equal(request.reciprocal, true);
+  await b.link.admin({ action: 'confirm', id: request.id });
+  const result = await a.deviceApi({ action: 'pairStatus', requestId: pending.requestId });
+  assert.equal(result.direction, 'unreachable');
+  assert.match(result.device.pairingNotice, /单向连接/);
+  assert.equal((await b.link.devices()).devices.length, 1);
+  assert.equal(b.link.status().devices[0].pairingReturn, 'unreachable');
+  assert.equal(a.link.status().devices.length, 0);
+  assert.deepEqual((await a.link.resources({ deviceId: result.device.id, kind: 'projects' })).devices[0].items.map(project => project.resourceId), ['b-project']);
+});
 
 async function sessionHost(t, name) {
   const project = { id: 'same-project', title: `${name} project`, path: `/${name}/work`, sessionIds: ['same-session'] };
@@ -291,6 +345,9 @@ test('execution works without SuperAgent and binds the real paired principal and
   assert.equal(calls[0].access.principal.kind, 'device');
   assert.equal(calls[0].access.principal.deviceId, inboundId);
   assert.deepEqual(calls[0].access.principal.capabilities, ['collaboration','management']);
+  await call({ ...input, operation: 'submit', requestId: 'example-request', executionId: 'example-execution', identity: { ownerHostId: 'business-host' } });
+  assert.equal(calls[1].access.verifiedSourceHostId, a.link.status().hostId);
+  assert.equal(calls[1].input.sourceProof, undefined);
   const capabilities = (await a.link.resources({ deviceId: device.id, kind: 'capabilities' })).devices[0].items;
   assert.equal(capabilities.find(item => item.id === 'execution').version, 2);
   assert.equal(capabilities.some(item => item.id === 'collaboration'), false);
@@ -298,10 +355,10 @@ test('execution works without SuperAgent and binds the real paired principal and
   assert.equal((await a.link.callDevice({ deviceId: device.id, input: { action: 'management', operation: 'status' } })).enabled,true);
   await b.link.admin({action:'revoke',id:inboundId});
   await assert.rejects(call(input),error=>error.statusCode===401);
-  assert.equal(calls.length,1,'revoked pairing cannot invoke execution again');
+  assert.equal(calls.length,2,'revoked pairing cannot invoke execution again');
 });
 
-test('remote relay changes require one exact local decision and preserve unrelated configuration', async t => {
+test('remote relay settings apply once, with a durable receipt and independent concurrent intent', async t => {
   const a = await host(t, 'A', []), b = await host(t, 'B', []);
   for (const node of [
     { id: 'first', url: 'https://relay-one.example', token: 'test-first-secret' },
@@ -311,71 +368,80 @@ test('remote relay changes require one exact local decision and preserve unrelat
   const call = input => a.link.callDevice({ deviceId: device.id, input: { action: 'management', ...input } });
   const snapshot = await call({ operation: 'settings-read', namespace: 'benchgo-link-relay' });
   assert.ok(!JSON.stringify(snapshot).includes('test-first-secret'));
-  const request = { operation: 'settings-prepare', requestId: 'same-relay-change', namespace: 'benchgo-link-relay', expected: { fingerprint: snapshot.fingerprint }, ops: [{ op: 'set', path: ['nodes', '0', 'priority'], value: 8 }] };
-  const prepared = await call(request);
-  assert.equal(prepared.state, 'pending');
-  assert.equal((await call(request)).operationId, prepared.operationId);
-  assert.equal(b.link.status().relay.nodes[0].priority, 0);
-  assert.equal(b.link.status().pendingManagement.length, 1);
-  const applied = await b.deviceApi({ action: 'hostManagementDecide', operationId: prepared.operationId, allow: true });
-  assert.equal(applied.state, 'applied', JSON.stringify(applied.error));
-  assert.equal((await call({ operation: 'operation', operationId: prepared.operationId })).state, 'applied');
+  const request = { operation: 'settings-apply', requestId: 'same-relay-change', namespace: 'benchgo-link-relay', expected: { fingerprint: snapshot.fingerprint }, ops: [{ op: 'set', path: ['nodes', '0', 'priority'], value: 8 }] };
+  const [receipt, repeat] = await Promise.all([call(request), call(request)]);
+  assert.equal(receipt.state, 'applied', JSON.stringify(receipt.error));
+  assert.deepEqual(repeat, receipt);
+  assert.equal((await call({ operation: 'operation', operationId: receipt.operationId })).state, 'applied');
+  assert.equal((await call({ operation: 'operation', requestId: request.requestId })).operationId, receipt.operationId);
+  await assert.rejects(call({ ...request, ops: [{ ...request.ops[0], value: 9 }] }), { code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
+  const conflict = await call({ ...request, requestId: 'stale' });
+  assert.equal(conflict.state, 'failed');
+  assert.equal(conflict.error.code, 'REVISION_CONFLICT');
+  await assert.rejects(call({ ...request, requestId: 'secret', ops: [{ op: 'set', path: ['nodes', '0', 'token'], value: 'other-secret' }] }), { code: 'UNSUPPORTED' });
   assert.deepEqual(b.link.status().relay.nodes.map(({ id, priority, enabled }) => ({ id, priority, enabled })), [
     { id: 'second', priority: 1, enabled: false }, { id: 'first', priority: 8, enabled: false },
   ]);
-  assert.equal((await b.deviceApi({ action: 'hostManagementDecide', operationId: prepared.operationId, allow: true })).state, 'applied');
-  assert.equal(b.link.status().pendingManagement.length, 0);
-});
-
-test('remote management rejects changed intent, owner refusal, stale CAS and revoked grants without applying', async t => {
-  const a = await host(t, 'A', []), b = await host(t, 'B', []);
-  await b.link.admin({ action: 'relay-pool-configure', operation: 'add', expected: { fingerprint: b.link.status().relay.fingerprint },
-    id: 'only', url: 'https://relay.example', token: 'private-relay-secret', enabled: false });
-  const device = await pair(a, b);
-  const call = input => a.link.callDevice({ deviceId: device.id, input: { action: 'management', ...input } });
-  const prepare = async (requestId, value = 4) => {
-    const snapshot = await call({ operation: 'settings-read', namespace: 'benchgo-link-relay' });
-    return { operation: 'settings-prepare', requestId, namespace: 'benchgo-link-relay', expected: { fingerprint: snapshot.fingerprint }, ops: [{ op: 'set', path: ['nodes', '0', 'priority'], value }] };
-  };
-  const request = await prepare('rejected');
-  const pending = await call(request);
-  await assert.rejects(call({ ...request, ops: [{ ...request.ops[0], value: 9 }] }), { code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
-  const rejected = await b.deviceApi({ action: 'hostManagementDecide', operationId: pending.id, allow: false });
-  assert.equal(rejected.state, 'rejected');
-  assert.equal((await b.deviceApi({ action: 'hostManagementDecide', operationId: pending.id, allow: true })).state, 'rejected');
-  assert.equal((await call(request)).state, 'rejected');
-  assert.equal(b.link.status().relay.nodes[0].priority, 0);
-
-  const conflict = await call(await prepare('conflict'));
-  await b.link.admin({ action: 'relay-pool-configure', operation: 'update', expected: { fingerprint: b.link.status().relay.fingerprint },
-    id: 'only', token: 'replacement-relay-secret' });
-  const failed = await b.deviceApi({ action: 'hostManagementDecide', operationId: conflict.id, allow: true });
-  assert.equal(failed.state, 'failed'); assert.equal(failed.error.code, 'REVISION_CONFLICT');
-  assert.equal(b.link.status().relay.nodes[0].priority, 0);
-  const revoked = await call(await prepare('revoked'));
+  const saved = JSON.parse(await readFile(join(b.directory, 'devices.json'), 'utf8'));
+  assert.equal(saved.managementOperations.filter(row => row.requestId === request.requestId).length, 1);
+  assert.equal(saved.managementOperations.find(row => row.requestId === request.requestId).state, 'applied');
+  assert.equal(saved.relayPool[0].token, 'test-first-secret');
   await b.link.admin({ action: 'revoke', id: b.link.status().devices[0].id });
-  assert.equal((await b.deviceApi({ action: 'hostManagementDecide', operationId: revoked.id, allow: true })).state, 'revoked');
-  await assert.rejects(call({ operation: 'operation', operationId: revoked.id }), error=>error.statusCode===401);
-  await assert.rejects(a.link.callDevice({ deviceId: device.id, input: { action: 'admin', operation: 'relay-pool-configure' } }), { code: 'UNSUPPORTED' });
-  assert.equal(b.link.status().relay.nodes[0].priority, 0);
+  await assert.rejects(call({ operation: 'operation', operationId: receipt.id }), error => error.statusCode === 401);
 });
 
-test('completed management receipts do not permanently exhaust the bounded operation queue', async t => {
-  const completed = Array.from({ length: 128 }, (_, i) => ({ id: `old-${i}`, requestId: `old-request-${i}`, deviceId: 'retired-device', state: 'applied', createdAt: i, expiresAt: Date.now() + 60000 }));
+test('completed management receipts leave capacity for a new relay change', async t => {
+  const completed = Array.from({ length: 128 }, (_, i) => ({ id: `old-${i}`, requestId: `old-request-${i}`, deviceId: 'retired-device', state: 'applied', createdAt: i }));
   const a = await host(t, 'A', []), b = await host(t, 'B', [], undefined, { managementOperations: completed });
   await b.link.admin({ action: 'relay-pool-configure', operation: 'add', expected: { fingerprint: b.link.status().relay.fingerprint },
     id: 'only', url: 'https://relay.example', token: 'private-relay-secret', enabled: false });
   const device = await pair(a, b);
   const call = input => a.link.callDevice({ deviceId: device.id, input: { action: 'management', ...input } });
   const snapshot = await call({ operation: 'settings-read', namespace: 'benchgo-link-relay' });
-  const request = { operation: 'settings-prepare', requestId: 'next-change', namespace: 'benchgo-link-relay', expected: { fingerprint: snapshot.fingerprint }, ops: [{ op: 'set', path: ['nodes', '0', 'priority'], value: 3 }] };
-  const pending = await call(request);
-  assert.equal(pending.state, 'pending');
-  assert.equal((await call(request)).operationId, pending.operationId);
-  assert.equal(b.link.status().pendingManagement.length, 1);
-  assert.equal(b.link.status().relay.nodes[0].priority, 0);
+  const request = { operation: 'settings-apply', requestId: 'next-change', namespace: 'benchgo-link-relay', expected: { fingerprint: snapshot.fingerprint }, ops: [{ op: 'set', path: ['nodes', '0', 'priority'], value: 3 }] };
+  const receipt = await call(request);
+  assert.equal(receipt.state, 'applied');
+  assert.equal((await call(request)).operationId, receipt.operationId);
+  assert.equal(b.link.status().relay.nodes[0].priority, 3);
   const saved = JSON.parse(await readFile(join(b.directory, 'devices.json'), 'utf8'));
   assert.equal(saved.managementOperations.length, 128);
   assert.equal(saved.managementOperations.some(row => row.id === 'old-0'), false);
   assert.equal(saved.managementOperations.some(row => row.id === 'old-127'), true);
+});
+
+test('paired workbench device center uses the target session without granting access to a third device', async t => {
+  const a = await host(t, 'A', []), b = await host(t, 'B', []), c = await host(t, 'C', []);
+  b.ctx.connection.createPeer = () => ({ dispose() {} });
+  const device = await pair(a, b);
+  await pair(b, c);
+  await b.link.admin({ action: 'relay-pool-configure', operation: 'add', expected: { fingerprint: b.link.status().relay.fingerprint },
+    id: 'relay', url: 'https://relay.example', token: 'private-relay-secret', enabled: false });
+  const target = (JSON.parse(await readFile(join(a.directory, 'outgoing', 'connections.json'), 'utf8')).devices).find(row => row.id === device.id);
+  const proxy = await createDeviceProxy(target);
+  t.after(() => proxy.close());
+  const entry = await fetch(await proxy.enter(), { redirect: 'manual' });
+  assert.equal(entry.status, 303);
+  const base = new URL(entry.headers.get('location'), proxy.origin);
+  const post = async (path, body) => {
+    const response = await fetch(new URL(path, base), { method: 'POST', headers: { 'content-type': 'application/json', origin: base.origin }, body: JSON.stringify(body) });
+    return { status: response.status, value: await response.json() };
+  };
+  const call = input => post('device-center/api/devices', input);
+  const directory = await call({ action: 'list' });
+  assert.equal(directory.status, 200);
+  assert.deepEqual(directory.value.devices.map(row => row.name), ['B', 'A']);
+  assert.deepEqual(directory.value.capabilities, { relayManagement: true });
+  assert.ok(!JSON.stringify(directory).includes(target.token));
+  const status = await call({ action: 'hostStatus' });
+  assert.ok(!JSON.stringify(status).includes('private-relay-secret'));
+  const change = { action: 'hostRelayPoolConfigure', operation: 'update', id: 'relay', enabled: false, requestId: 'paired-center-update', expected: { fingerprint: status.value.relay.fingerprint } };
+  const updated = await call(change);
+  assert.equal(updated.value.state, 'applied');
+  assert.deepEqual(await call(change), updated);
+  assert.deepEqual(await call({ action: 'hostRelayOperation', requestId: change.requestId }), updated);
+  assert.equal((await call({ ...change, token: 'forged-secret' })).status, 422);
+  for (const action of ['select', 'pair', 'hostPairing', 'hostRevoke', 'callDevice', 'sshProbe']) assert.equal((await call({ action })).status, 403);
+  assert.equal((await post('api/commander-devices', { action: 'launch' })).status, 403);
+  await b.link.admin({ action: 'revoke', id: directory.value.devices[1].id });
+  assert.equal((await call({ action: 'list' })).status, 401);
 });

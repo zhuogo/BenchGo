@@ -29,8 +29,8 @@ const reasoningState = fileURLToPath(new URL('../client/model-reasoning-state.mj
 const capabilityEditor = fileURLToPath(new URL('../client/model-capabilities.jsx', import.meta.url));
 const profileMatch = fileURLToPath(new URL('../client/model-profile.jsx', import.meta.url));
 const catalogFilter = fileURLToPath(new URL('../client/model-catalog-filter.jsx', import.meta.url));
-const profileFacts = fileURLToPath(new URL('../shared/model-profile-match.mjs', import.meta.url));
 const textSearch = fileURLToPath(new URL('packages/util/text-search/src/index.ts', harness));
+const capabilityFacts = fileURLToPath(new URL('../shared/model-capabilities.mjs', import.meta.url));
 const loading = fileURLToPath(new URL('../../shared/client/ui/loading.jsx', import.meta.url));
 const select = fileURLToPath(new URL('../../shared/client/select.jsx', import.meta.url));
 const disclosure = fileURLToPath(new URL('../../shared/client/ui/collapsible.jsx', import.meta.url));
@@ -51,6 +51,7 @@ function adaptProtocolSelect(source) {
   source = once(source, '<select\n', '<Select\n', 'protocol select opening');
   source = once(source, '</select>', '</Select>', 'protocol select closing');
   source = once(source, "className={`${styles['input']} ${styles['selectInput']}`}", 'className="cmd-provider-protocol" placeholder={t(\'customApiUnset\')}', 'protocol select style');
+  source = once(source, 'protocolLabel(t, choice)', 't("modelInputImage") === "图片" && choice === "openai-responses" ? "OpenAI 响应" : protocolLabel(t, choice)', 'Chinese Responses protocol label');
   return 'import { Select } from ' + JSON.stringify(select) + ';\n' + source;
 }
 
@@ -85,7 +86,10 @@ function adaptModelCatalog(source, deepSeek) {
   source = once(source, '</AnimatedRows>', '</div>', 'close model grid');
   source = once(source, 'AnimatedRows, ', '', 'remove unused row animation');
   source = once(source, '{rowState.rows.map(({ model, key, expanded, order }, index) => (', `{${prefix}models.length > 0 && visibleRows.length === 0 ? <p className={styles['modelEmpty']} role="status">没有匹配的模型</p> : null}
-        {visibleRows.map(({ model, key, expanded, order, index }) => (`, 'render filtered rows');
+        {visibleRows.map(({ model, key, expanded, order, index }) => {
+          const facts = modelCatalogFacts(model.id, profiles.get(model.id), capabilityCatalog?.current)
+          return (`, 'render filtered rows');
+  source = once(source, '          />\n        ))}', '          />\n          )\n        })}', 'close filtered model rows');
   const add = deepSeek ? "props.onChange([...props.models.map(model => ({ ...model })), { id: '' }])" : "onChange([...models, { id: '' }])";
   return once(source, 'onClick={() => { ' + add + ' }}', "onClick={() => { setFilter({ query: '', category: '', vendor: '' }); " + add + ' }}', 'reveal newly added model');
 }
@@ -349,7 +353,7 @@ export function officialModelsUi() {
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]DeepSeekModelsEditor\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
       source = 'import { useModelProfiles } from ' + JSON.stringify(profileMatch) + ';\n' + source;
-      source = 'import { ModelCapabilityEditor, useModelCapabilities } from ' + JSON.stringify(capabilityEditor) + ';\n' + source;
+      source = 'import { ModelCapabilityEditor, modelCatalogFacts, useModelCapabilities } from ' + JSON.stringify(capabilityEditor) + ';\n' + source;
       source = once(source, 'export interface DeepSeekModelsEditorProps {', 'export interface DeepSeekModelsEditorProps {\n  providerId?: string', 'deepseek model label provider');
       source = once(source, '  const reset = (): void => {\n    rowState.reset()\n    props.onReset()\n  }\n\n', '', 'remove unused deepseek reset');
       const resetStart = source.indexOf('        {props.overridden\n          ? (');
@@ -357,34 +361,40 @@ export function officialModelsUi() {
       if (resetStart < 0 || resetEnd < 0) throw Error('Official DeepSeek reset control changed');
       source = source.slice(0, resetStart) + source.slice(resetEnd + '          : null}'.length);
       source = once(source, 'export function DeepSeekModelsEditor(props: DeepSeekModelsEditorProps): ReactNode {', 'export function DeepSeekModelsEditor(props: DeepSeekModelsEditorProps): ReactNode {\n  useModelProfiles(props.models, props.onChange, props.disabled, false, !props.overridden)\n  const capabilityCatalog = useModelCapabilities(props.providerId)', 'deepseek profile match');
-      source = once(source, '            onFieldChange={(field, value)', '            extraSettings={<ModelCapabilityEditor modelId={model.id} catalog={capabilityCatalog} disabled={props.disabled} styles={styles} />}\n            onFieldChange={(field, value)', 'deepseek model labels');
+      source = once(source, '            onFieldChange={(field, value)', '            capabilityFacts={facts}\n            extraSettings={<ModelCapabilityEditor modelId={model.id} capabilities={facts.capabilities} catalog={capabilityCatalog} disabled={props.disabled} styles={styles} />}\n            onFieldChange={(field, value)', 'deepseek model labels');
       source = adaptModelCatalog(source, true);
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
     });
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ModelInputTypes\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
-      source = 'import { useModelProfile } from ' + JSON.stringify(profileMatch) + ';\nimport { normalizeInputModalities } from ' + JSON.stringify(profileFacts) + ';\n' + source;
-      source = once(source, '  const modalities = model[field]', [
-        '  const declared = normalizeInputModalities(useModelProfile(model.id)?.input_modalities)',
-        '  const supported = declared.filter(value => value === "text" || value === "image")',
-        '  const additional = declared.filter(value => value === "audio" || value === "video")',
-        '  const chinese = t("modelInputImage") === "图片"',
-        '  const names = new Map([["audio", chinese ? "音频" : "Audio"], ["video", chinese ? "视频" : "Video"]])',
-        '  const unavailable = chinese ? "当前对话引擎暂不支持" : "Unsupported by the current chat engine"',
-        '  const modalities = model[field]',
-      ].join('\n'), 'directory input types');
-      source = once(source, "fallback ?? ['text']", "(supported.length ? supported : fallback ?? ['text'])", 'show supported directory input defaults');
-      source = once(source, '        ))}\n      </div>', [
-        '        ))}',
-        '        {additional.map(modality => <Checkbox key={modality} label={names.get(modality) ?? modality}',
-        '          checked disabled title={unavailable} onChange={() => {}} />)}',
-        '      </div>',
-      ].join('\n'), 'show additional directory inputs');
+      source = once(source, '  /** Section copy. */', '  declared: readonly string[]\n  /** Section copy. */', 'declared input prop');
+      source = once(source, 'disabled, fallback, t,', 'disabled, fallback, declared, t,', 'directory input types');
+      source = once(source, "fallback ?? ['text']", "(declared.some(value => value === 'text' || value === 'image') ? declared : fallback ?? ['text'])", 'show supported directory input defaults');
+      const oldChoices = source.match(/        \{\(\['text', 'image'\] as const\)\.map\(modality => \([\s\S]*?\n        \)\)\}/u)?.[0];
+      if (!oldChoices) throw Error('Official Models UI changed: input modality controls');
+      source = once(source, oldChoices, [
+        '        {([["pdf", "PDF"], ["audio", t("modelInputImage") === "图片" ? "音频" : "Audio"],',
+        '          ["video", t("modelInputImage") === "图片" ? "视频" : "Video"]] as const).map(([modality, label]) =>',
+        '          <Checkbox key={modality} label={label} checked={declared.includes(modality)} disabled onChange={() => {}} />)}',
+        '        <Checkbox label={t("modelInputImage")} checked={selected.includes("image")} disabled={disabled}',
+        '          onChange={(checked) => {',
+        '            const next = { ...model, [field]: checked ? ["text", "image"] : ["text"] }',
+        '            if (field === "inputModalities" && !checked) {',
+        '              Reflect.deleteProperty(next, "imagePixelBudget")',
+        '              Reflect.deleteProperty(next, "imageMaxBytes")',
+        '            }',
+        '            onChange(next)',
+        '          }} />',
+        '        <Checkbox label={t("modelInputText")} checked disabled onChange={() => {}} />',
+      ].join('\n'), 'input modality controls');
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
     });
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ModelRow\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
-      source = once(source, 'interface ModelRowProps {', 'interface ModelRowProps {\n  extraSettings?: ReactNode', 'model extension prop');
+      source = 'import { hasTextCapability } from ' + JSON.stringify(capabilityFacts) + ';\n' + source;
+      source = once(source, 'interface ModelRowProps {', 'interface ModelRowProps {\n  extraSettings?: ReactNode\n  capabilityFacts: { capabilities: readonly string[]; input: readonly string[] }', 'model extension prop');
+      source = once(source, '              <ModelInputTypes\n', '              {hasTextCapability(props.capabilityFacts.capabilities) && <ModelInputTypes\n                declared={props.capabilityFacts.input}\n', 'show input types for text models');
+      source = once(source, 't={t} onChange={props.onChange}\n              />', 't={t} onChange={props.onChange}\n              />}', 'close text model inputs');
       source = once(source, "  return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'", `  const grid = event.currentTarget.parentElement
   const columns = grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').length : 1
   if (columns > 1 && event.currentTarget.dataset.expanded === undefined) {
@@ -414,7 +424,7 @@ export function officialModelsUi() {
       source = once(source, "from '@deepseek-ai/dsh-util-text-search'", 'from ' + JSON.stringify(textSearch), 'bundle official model discovery search');
       source = 'const installedReasoning = JSON.parse(' + JSON.stringify(JSON.stringify(installedReasoning())) + ')\n' + source;
       source = 'import { useModelProfiles } from ' + JSON.stringify(profileMatch) + ';\nimport { ModelReasoningEditor } from ' + JSON.stringify(reasoningEditor) + ';\n' + source;
-      source = 'import { ModelCapabilityEditor, useModelCapabilities } from ' + JSON.stringify(capabilityEditor) + ';\n' + source;
+      source = 'import { ModelCapabilityEditor, modelCatalogFacts, useModelCapabilities } from ' + JSON.stringify(capabilityEditor) + ';\n' + source;
       source = once(source, 'export interface ModelListEditorProps {', 'export interface ModelListEditorProps {\n  actions?: ReactNode\n  discoveredModels?: Map<string, ModelDraft>\n  defaultReasoningEffort?: string', 'model reasoning and actions props');
       source = once(source, '  const { catalogProvider } = props', '  const { catalogProvider, discoveredModels } = props\n  useModelProfiles(models, onChange, disabled || props.reasoningLevelsOnly === true, true, props.overridden === false, discoveredModels)\n  const capabilityCatalog = useModelCapabilities(probe.provider)', 'public model profiles');
       source = once(source, '    onChange([...keptRows, ...addedRows])', "    for (const index of removedRows) discoveredModels?.delete(textOf(models[index], 'id'))\n    for (const model of addedRows) discoveredModels?.set(textOf(model, 'id'), model)\n    onChange([...keptRows, ...addedRows])", 'record engine defaults for adopted models');
@@ -438,7 +448,8 @@ export function officialModelsUi() {
     const previous = reasoningDrafts.get(key)
     return previous?.id === id ? previous?.mapping : undefined
   }`, 'reasoning draft options');
-      source = once(source, '            onFieldChange={(field, value)', `            extraSettings={<><ModelCapabilityEditor modelId={model.id} catalog={capabilityCatalog} disabled={disabled} styles={styles} />
+      source = once(source, '            onFieldChange={(field, value)', `            capabilityFacts={facts}
+            extraSettings={<><ModelCapabilityEditor modelId={model.id} capabilities={facts.capabilities} catalog={capabilityCatalog} disabled={disabled} styles={styles} />
               {props.reasoningLevelsOnly !== true && <ModelReasoningEditor model={model} position={index + 1} disabled={disabled} styles={styles}
                 inherited={typeof model.id === 'string' && providerReasoning && Object.hasOwn(providerReasoning, model.id) ? providerReasoning[model.id] : undefined}
                 retained={retainedReasoning(key, model.id)} defaultEffort={props.defaultReasoningEffort}

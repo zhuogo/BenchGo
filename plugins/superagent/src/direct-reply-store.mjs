@@ -7,6 +7,9 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 const time = value => { if (!Number.isSafeInteger(value) || value < 0) throw new Error('Invalid delivery time'); return value; };
 const ownerId = value => { if (typeof value !== 'string' || !value.trim() || value.length > 512) throw new Error('Invalid delivery owner'); return value; };
 const limitValue = (value, fallback) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, 1000) : fallback;
+const replyScope = ['channel', 'connectionId', 'connectionRevision', 'accountId', 'appId', 'conversationId', 'chatId', 'sourceType', 'topicId', 'chatType', 'targetType'];
+const replyAnchorFields = ['messageId', 'replyRequestId', 'messageOccurredAt'];
+const sameReplyScope = (a, b) => replyScope.every(key => (a[key] ?? null) === (b[key] ?? null));
 function objectJson(value) {
   if (!record(value)) throw new Error('Direct reply metadata must be an object');
   const encoded = JSON.stringify(value);
@@ -22,12 +25,16 @@ export function installDirectReplyStore({ db, tx, api }) {
     text TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, actor TEXT NOT NULL, gate TEXT NOT NULL,
     policy_version TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
     next_at INTEGER NOT NULL, owner TEXT, lease_until INTEGER, last_error TEXT, receipt TEXT,
+    reply_window_anchor_id TEXT REFERENCES sa_triggers(id),
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS sa_direct_replies_ready ON sa_direct_replies(state,next_at,created_at);
     CREATE TABLE IF NOT EXISTS sa_direct_reply_reconciliations(
       id INTEGER PRIMARY KEY, reply_id TEXT NOT NULL REFERENCES sa_direct_replies(id), attempts INTEGER NOT NULL,
       outcome TEXT NOT NULL, evidence TEXT NOT NULL, receipt TEXT, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS sa_direct_reply_reconciliation_reply ON sa_direct_reply_reconciliations(reply_id,id);`);
+  if (!db.prepare('PRAGMA table_info(sa_direct_replies)').all().some(column => column.name === 'reply_window_anchor_id')) {
+    db.exec('ALTER TABLE sa_direct_replies ADD COLUMN reply_window_anchor_id TEXT REFERENCES sa_triggers(id)');
+  }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS sa_direct_reply_owner_trigger ON sa_direct_replies(trigger_id) WHERE kind='owner'");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS sa_direct_reply_router_identity ON sa_direct_replies(json_extract(gate,'$.requestId')) WHERE kind='router'");
   const routerCurrent = row => row?.kind === 'router' && currentTaskReplySignal(api, row.gate.signal);
@@ -37,10 +44,20 @@ export function installDirectReplyStore({ db, tx, api }) {
     actor: JSON.parse(row.actor), gate: JSON.parse(row.gate), policyVersion: row.policy_version,
     state: row.state, attempts: row.attempts, nextAt: row.next_at, owner: row.owner,
     leaseUntil: row.lease_until, lastError: row.last_error, receipt: row.receipt ? JSON.parse(row.receipt) : null,
+    ...(row.reply_window_anchor_id ? { replyWindowAnchorId: row.reply_window_anchor_id } : {}),
     createdAt: row.created_at, updatedAt: row.updated_at,
     reconciliations: db.prepare('SELECT attempts,outcome,evidence,receipt,created_at FROM sa_direct_reply_reconciliations WHERE reply_id=? ORDER BY id').all(row.id)
       .map(item => ({ attempts: item.attempts, outcome: item.outcome, evidence: item.evidence,
         receipt: item.receipt ? JSON.parse(item.receipt) : null, createdAt: item.created_at })) });
+  const nextReplyAnchor = `(SELECT next.id FROM sa_triggers next
+    JOIN sa_trigger_admissions admission ON admission.trigger_id=next.id
+    WHERE next.thread_id=origin.thread_id AND next.seq>COALESCE(anchor.seq,origin.seq)
+    AND json_extract(next.actor,'$.kind')='human' AND json_extract(next.actor,'$.id')=json_extract(origin.actor,'$.id')
+    AND json_extract(admission.gate,'$.strength')='explicit' AND json_extract(admission.gate,'$.evidence.sourceVerified')=1
+    AND (json_extract(next.source,'$.sourceType')='direct' OR json_extract(next.source,'$.mentioned')=1)
+    AND json_extract(next.source,'$.messageId')<>json_extract(COALESCE(anchor.source,origin.source),'$.messageId')
+    AND ${replyScope.map(key => `json_extract(next.source,'$.${key}') IS json_extract(r.source,'$.${key}')`).join(' AND ')}
+    ORDER BY next.seq DESC LIMIT 1)`;
   return {
     enqueue(candidate, trigger, input) {
       const reply = input.reply;
@@ -72,13 +89,15 @@ export function installDirectReplyStore({ db, tx, api }) {
             return { ...value(existing), duplicate: true };
           }
           const task = api.getTask(signal.taskId);
-          const trigger = db.prepare('SELECT t.* FROM sa_triggers t JOIN sa_task_triggers tt ON tt.trigger_id=t.id WHERE tt.task_id=? ORDER BY t.seq LIMIT 1').get(task.id);
+          const source = objectJson(signal.source);
+          const trigger = db.prepare(`SELECT t.* FROM sa_triggers t JOIN sa_task_triggers tt ON tt.trigger_id=t.id
+            WHERE tt.task_id=? ORDER BY (t.source=?) DESC,t.seq LIMIT 1`).get(task.id, source);
           if (!trigger) throw new Error('Router reply original trigger is unavailable');
           const replyId = randomUUID(), at = new Date(time(now)).toISOString();
           const gate = { signal, sessionId, requestId, messages: messages.map(row => ({ id: row.id, text: row.text })) };
           db.prepare(`INSERT INTO sa_direct_replies(id,candidate_id,trigger_id,thread_id,text,kind,source,actor,gate,policy_version,state,next_at,created_at,updated_at)
             VALUES (?,NULL,?,?,?,'router',?,?,?,?,'queued',?,?,?)`).run(replyId, trigger.id, task.threadId, text,
-              objectJson(signal.source), objectJson({ kind: 'machine', id: 'router' }), objectJson(gate), 'saved-result', now, at, at);
+              source, objectJson({ kind: 'machine', id: 'router' }), objectJson(gate), 'saved-result', now, at, at);
           return value(get(replyId));
         });
       },
@@ -122,19 +141,44 @@ export function installDirectReplyStore({ db, tx, api }) {
         return tx(() => {
           const at = new Date(now).toISOString();
           db.prepare("UPDATE sa_direct_replies SET state='uncertain',owner=NULL,lease_until=NULL,last_error='delivery-lease-expired',updated_at=? WHERE state='claimed' AND lease_until<=?").run(at, now);
-          const rows = db.prepare("SELECT id FROM sa_direct_replies WHERE state='queued' AND next_at<=? ORDER BY created_at,id LIMIT ?").all(now, limitValue(limit, 20));
-          for (const row of rows) db.prepare("UPDATE sa_direct_replies SET state='claimed',owner=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?").run(owner, now + leaseMs, at, row.id);
-          return rows.map(row => value(get(row.id)));
+          const rows = db.prepare(`SELECT id, reply_window_anchor_id AS anchor_id, created_at FROM sa_direct_replies WHERE state='queued' AND next_at<=?
+            UNION ALL
+            SELECT id, anchor_id, created_at FROM (
+              SELECT r.id, ${nextReplyAnchor} AS anchor_id, r.created_at FROM sa_direct_replies r
+                JOIN sa_triggers origin ON origin.id=r.trigger_id
+                LEFT JOIN sa_triggers anchor ON anchor.id=r.reply_window_anchor_id
+              WHERE r.state='waiting_reply_window'
+            ) WHERE anchor_id IS NOT NULL
+            ORDER BY created_at,id LIMIT ?`).all(now, limitValue(limit, 20));
+          return rows.map(row => {
+            db.prepare("UPDATE sa_direct_replies SET state='claimed',owner=?,lease_until=?,attempts=attempts+1,updated_at=?,reply_window_anchor_id=? WHERE id=?")
+              .run(owner, now + leaseMs, at, row.anchor_id, row.id);
+            return value(get(row.id));
+          });
         });
+      },
+      directReplyWindowTarget(row, source) {
+        if (!row.replyWindowAnchorId) return source;
+        const anchor = db.prepare('SELECT source FROM sa_triggers WHERE id=?').get(row.replyWindowAnchorId);
+        if (!anchor) throw new Error('Reply window anchor is missing');
+        const next = JSON.parse(anchor.source);
+        if (!sameReplyScope(source, next)) throw new Error('Reply window anchor changed scope');
+        const target = { ...source };
+        for (const field of replyAnchorFields) {
+          if (Object.hasOwn(next, field)) target[field] = next[field];
+          else delete target[field];
+        }
+        return target;
       },
       renewDirectReply(id, { owner, leaseMs = 60000, now = Date.now() } = {}) {
         const updated = db.prepare("UPDATE sa_direct_replies SET lease_until=? WHERE id=? AND state='claimed' AND owner=? AND lease_until>?")
           .run(now + leaseMs, id, owner, now);
         if (!updated.changes) throw fail('DIRECT_REPLY_LEASE_CONFLICT', 'Direct reply lease is no longer owned');
       },
-      finishDirectReply(id, { owner, sent = false, suppressed = false, uncertain = false, receipt, error, retryMs = 5000, now = Date.now() } = {}) {
+      finishDirectReply(id, { owner, sent = false, suppressed = false, uncertain = false, waitForReplyWindow = false, receipt, error, retryMs = 5000, now = Date.now() } = {}) {
         ownerId(owner); time(now); time(retryMs);
-        if ([sent, suppressed, uncertain].some(flag => typeof flag !== 'boolean') || [sent, suppressed, uncertain].filter(Boolean).length > 1) throw new Error('Invalid direct reply outcome');
+        const outcomes = [sent, suppressed, uncertain, waitForReplyWindow];
+        if (outcomes.some(flag => typeof flag !== 'boolean') || outcomes.filter(Boolean).length > 1 || waitForReplyWindow && receipt !== undefined) throw new Error('Invalid direct reply outcome');
         const receiptJson = receipt === undefined ? null : objectJson(receipt);
         return tx(() => {
           const row = get(id);
@@ -143,7 +187,7 @@ export function installDirectReplyStore({ db, tx, api }) {
           if (row.state === 'sent' && sent && receipt?.status === 'accepted' && receipt.messageId
             && priorReceipt?.status === receipt.status && priorReceipt.messageId === receipt.messageId) return value(row);
           if (row.state !== 'claimed' || row.owner !== owner || row.lease_until <= now) throw fail('DIRECT_REPLY_LEASE_CONFLICT', 'Direct reply lease is no longer owned');
-          const state = sent ? 'sent' : suppressed ? 'suppressed' : uncertain ? 'uncertain' : 'queued';
+          const state = sent ? 'sent' : suppressed ? 'suppressed' : uncertain ? 'uncertain' : waitForReplyWindow ? 'waiting_reply_window' : 'queued';
           db.prepare('UPDATE sa_direct_replies SET state=?,owner=NULL,lease_until=NULL,last_error=?,receipt=COALESCE(?,receipt),next_at=?,updated_at=? WHERE id=?')
             .run(state, sent ? null : String(error || (suppressed ? 'delivery-suppressed' : 'delivery-failed')).slice(0, 1000), receiptJson,
               state === 'queued' ? now + retryMs : row.next_at, new Date(now).toISOString(), id);

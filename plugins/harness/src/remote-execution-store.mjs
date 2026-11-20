@@ -14,18 +14,29 @@ export const executionTerminal = phase => ['completed', 'stopped', 'failed', 'un
 export function openRemoteExecutionStore(directory) {
   mkdirSync(directory, { recursive: true });
   const db = new DatabaseSync(join(directory, 'executions.db'));
-  db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
-    CREATE TABLE IF NOT EXISTS execution_owners(principal TEXT PRIMARY KEY, owner_host_id TEXT NOT NULL UNIQUE);
-    CREATE TABLE IF NOT EXISTS executions(id TEXT PRIMARY KEY, principal TEXT NOT NULL, owner_host_id TEXT NOT NULL,
-      task_id TEXT NOT NULL, assignment_id TEXT NOT NULL, run_id TEXT NOT NULL, fence INTEGER NOT NULL,
-      session_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, UNIQUE(owner_host_id,task_id,assignment_id,run_id,fence));
-    CREATE INDEX IF NOT EXISTS execution_assignment ON executions(owner_host_id,task_id,assignment_id,fence);
-    CREATE TABLE IF NOT EXISTS execution_commands(principal TEXT NOT NULL, request_id TEXT NOT NULL,
-      fingerprint TEXT NOT NULL, execution_id TEXT NOT NULL REFERENCES executions(id), payload TEXT NOT NULL,
-      PRIMARY KEY(principal,request_id));
-    CREATE TABLE IF NOT EXISTS execution_events(execution_id TEXT NOT NULL REFERENCES executions(id), seq INTEGER NOT NULL,
-      kind TEXT NOT NULL, data TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(execution_id,seq));`);
   const tx = fn => { db.exec('BEGIN IMMEDIATE'); try { const value = fn(); db.exec('COMMIT'); return value; } catch (error) { db.exec('ROLLBACK'); throw error; } };
+  try {
+    db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+    tx(() => {
+      db.exec(`CREATE TABLE IF NOT EXISTS execution_owners(principal TEXT PRIMARY KEY, owner_host_id TEXT NOT NULL, verified_source_host_id TEXT);`);
+      if (!db.prepare("SELECT 1 FROM pragma_table_info('execution_owners') WHERE name='verified_source_host_id'").get()) {
+        db.exec(`ALTER TABLE execution_owners RENAME TO execution_owners_legacy;
+          CREATE TABLE execution_owners(principal TEXT PRIMARY KEY, owner_host_id TEXT NOT NULL, verified_source_host_id TEXT);
+          INSERT INTO execution_owners(principal,owner_host_id) SELECT principal,owner_host_id FROM execution_owners_legacy;
+          DROP TABLE execution_owners_legacy;`);
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS execution_owner_host ON execution_owners(owner_host_id);
+        CREATE TABLE IF NOT EXISTS executions(id TEXT PRIMARY KEY, principal TEXT NOT NULL, owner_host_id TEXT NOT NULL,
+          task_id TEXT NOT NULL, assignment_id TEXT NOT NULL, run_id TEXT NOT NULL, fence INTEGER NOT NULL,
+          session_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, UNIQUE(owner_host_id,task_id,assignment_id,run_id,fence));
+        CREATE INDEX IF NOT EXISTS execution_assignment ON executions(owner_host_id,task_id,assignment_id,fence);
+        CREATE TABLE IF NOT EXISTS execution_commands(principal TEXT NOT NULL, request_id TEXT NOT NULL,
+          fingerprint TEXT NOT NULL, execution_id TEXT NOT NULL REFERENCES executions(id), payload TEXT NOT NULL,
+          PRIMARY KEY(principal,request_id));
+        CREATE TABLE IF NOT EXISTS execution_events(execution_id TEXT NOT NULL REFERENCES executions(id), seq INTEGER NOT NULL,
+          kind TEXT NOT NULL, data TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(execution_id,seq));`);
+    });
+  } catch (error) { db.close(); throw error; }
   const decode = row => row && JSON.parse(row.payload);
   const get = id => decode(db.prepare('SELECT payload FROM executions WHERE id=?').get(id));
   const save = row => { row.updatedAt = new Date().toISOString(); db.prepare('UPDATE executions SET payload=? WHERE id=?').run(JSON.stringify(row), row.id); return row; };
@@ -44,23 +55,32 @@ export function openRemoteExecutionStore(directory) {
     db.prepare('INSERT INTO execution_commands VALUES(?,?,?,?,?)').run(principal, input.requestId, commandFingerprint(input), id, JSON.stringify(result));
     return result;
   };
-  const bind = (principal, ownerHostId) => {
-    const existing = db.prepare('SELECT owner_host_id FROM execution_owners WHERE principal=?').get(principal);
-    if (existing && existing.owner_host_id !== ownerHostId) throw executionError('EXECUTION_OWNER_CHANGED', '认证设备已绑定其他业务宿主，拒绝改变工单归属', 403);
-    const other = db.prepare('SELECT principal FROM execution_owners WHERE owner_host_id=?').get(ownerHostId);
-    if (other && other.principal !== principal) throw executionError('EXECUTION_OWNER_CHANGED', '业务宿主已绑定其他设备授权，需显式迁移', 403);
-    if (!existing) db.prepare('INSERT INTO execution_owners VALUES(?,?)').run(principal, ownerHostId);
+  const bindOwner = (principal, ownerHostId, verifiedSourceHostId) => {
+    const existing = db.prepare('SELECT owner_host_id,verified_source_host_id FROM execution_owners WHERE principal=?').get(principal);
+    if (existing) {
+      if (existing.owner_host_id !== ownerHostId || existing.verified_source_host_id && verifiedSourceHostId && existing.verified_source_host_id !== verifiedSourceHostId)
+        throw executionError('EXECUTION_OWNER_CHANGED', '认证设备已绑定其他来源或业务宿主，拒绝改变工单归属', 403);
+      if (verifiedSourceHostId && !existing.verified_source_host_id) db.prepare('UPDATE execution_owners SET verified_source_host_id=? WHERE principal=?').run(verifiedSourceHostId, principal);
+      return;
+    }
+    const owners = db.prepare(`SELECT count(*) AS total,count(verified_source_host_id) AS verified,
+      count(CASE WHEN verified_source_host_id=? THEN 1 END) AS matching FROM execution_owners WHERE owner_host_id=?`).get(verifiedSourceHostId, ownerHostId);
+    if (owners.total && (!verifiedSourceHostId || owners.verified && !owners.matching))
+      throw executionError('EXECUTION_OWNER_CHANGED', '业务宿主已绑定其他设备授权，需要核验同一来源宿主', 403);
+    db.prepare('INSERT INTO execution_owners VALUES(?,?,?)').run(principal, ownerHostId, verifiedSourceHostId);
   };
   return {
-    tx, get, save, event, receipt, recordCommand,
+    tx, get, save, event, receipt, recordCommand, bindOwner,
     updateCommand(principal, requestId, result) { db.prepare('UPDATE execution_commands SET payload=? WHERE principal=? AND request_id=?').run(JSON.stringify(result), principal, requestId); },
     latest: id => db.prepare('SELECT coalesce(max(seq),0) AS seq FROM execution_events WHERE execution_id=?').get(id).seq,
     bySession: sessionId => decode(db.prepare('SELECT payload FROM executions WHERE session_id=?').get(sessionId)),
     rows: () => db.prepare('SELECT payload FROM executions').all().map(decode),
     owned(id, principal) { const row = get(id); if (!row || row.principal !== principal) throw executionError('EXECUTION_NOT_FOUND', '执行实例不存在或不属于当前认证设备', 404); return row; },
-    create(principal, input, extra) {
-      bind(principal, input.identity.ownerHostId);
+    create(principal, input, extra, verifiedSourceHostId = null) {
       const i = input.identity;
+      bindOwner(principal, i.ownerHostId, verifiedSourceHostId);
+      if (db.prepare('SELECT 1 FROM executions WHERE owner_host_id=? AND task_id=? AND principal<>? LIMIT 1').get(i.ownerHostId, i.taskId, principal))
+        throw executionError('EXECUTION_OWNER_CHANGED', '原工单仍归原设备授权，重新配对后可派发新工单', 403);
       const prior = db.prepare('SELECT id,fence,payload FROM executions WHERE owner_host_id=? AND task_id=? AND assignment_id=? ORDER BY fence DESC LIMIT 1').get(i.ownerHostId, i.taskId, i.assignmentId);
       if (prior && prior.fence >= i.fence) throw executionError('EXECUTION_FENCE_CONFLICT', '执行租约已存在或已过期');
       const previous = prior && JSON.parse(prior.payload);

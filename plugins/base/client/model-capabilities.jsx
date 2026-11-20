@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from '../../shared/client/ui/index.jsx';
 import { Loading } from '../../shared/client/ui/loading.jsx';
-import { modelCapabilityLabels } from '../shared/model-capabilities.mjs';
+import { modelCapabilityLabels, normalizeModelCapabilities, structuredCapabilities } from '../shared/model-capabilities.mjs';
+import { normalizeInputModalities } from '../shared/model-profile-match.mjs';
 
 const providerWrites = new Map();
 
@@ -65,25 +66,36 @@ export function useModelCapabilities(providerId) {
   };
 }
 
-export function ModelCapabilityEditor({ modelId, catalog, disabled, styles }) {
+export function modelCatalogFacts(modelId, profile, catalog) {
+  const remote = catalog?.models.get(modelId);
+  const input = normalizeInputModalities(remote?.inputModalities ?? profile?.input_modalities);
+  const output = remote?.outputModalities ?? (Array.isArray(profile?.output_modalities) ? profile.output_modalities : []);
+  const override = catalog?.overrides.get(modelId);
+  const declared = remote?.capabilities;
+  const capabilities = normalizeModelCapabilities(override ?? (declared?.length ? declared
+    : structuredCapabilities(profile ?? {}, input, output)));
+  return { input, output, capabilities, overridden: override !== undefined };
+}
+
+export function ModelCapabilityEditor({ modelId, capabilities, catalog, disabled, styles }) {
   if (typeof modelId !== 'string' || !modelId.trim() || !catalog) return null;
   const { current, retry, refreshing } = catalog;
   return <fieldset className={styles.modelInputTypes}>
     <legend className={styles.modelFieldLabel}>能力标签</legend>
     {!current ? <Loading compact label="正在加载能力标签…" />
       : current.error ? <div role="alert" className="cmd-model-capability-actions">{current.error}<Button variant="ghost" size="sm" aria-busy={refreshing} disabled={refreshing} onClick={retry}>重试</Button></div>
-        : <CapabilityTags key={JSON.stringify([current.providerId, modelId])} modelId={modelId} catalog={catalog} disabled={disabled || refreshing} styles={styles} />}
+        : <CapabilityTags key={JSON.stringify([current.providerId, modelId])} modelId={modelId}
+          capabilities={capabilities} catalog={catalog} disabled={disabled || refreshing} styles={styles} />}
   </fieldset>;
 }
 
-function CapabilityTags({ modelId, catalog, disabled, styles }) {
+function CapabilityTags({ modelId, capabilities, catalog, disabled, styles }) {
   const { current, retry, refreshing } = catalog;
   const [draft, setDraft] = useState(null);
   const [error, setError] = useState('');
   const remote = current.models.get(modelId);
-  const inherited = remote?.providerCapabilities ?? remote?.capabilities ?? [];
-  const override = current.overrides.get(modelId);
-  const selected = draft ?? override ?? inherited;
+  const inherited = normalizeModelCapabilities(remote?.providerCapabilities ?? remote?.capabilities ?? []);
+  const selected = draft ?? capabilities;
   const displayed = [...new Set([...Object.keys(modelCapabilityLabels), ...inherited, ...selected])];
   const toggle = async capability => {
     const next = selected.includes(capability) ? selected.filter(item => item !== capability) : [...selected, capability];

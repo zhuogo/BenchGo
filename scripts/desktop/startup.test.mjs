@@ -17,7 +17,7 @@ test('desktop startup keeps the local BenchGo identity and DeepSeek engine attri
   assert.ok(html.includes('<span class="startup-engine">DeepSeek</span>'));
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
   assert.ok(html.includes('class="startup-field" aria-hidden="true"'));
-  assert.ok(css.includes('animation: startup-scan'));
+  assert.ok(html.includes('href="startup-progress.css"'));
   assert.ok(css.includes('animation: startup-arrive 240ms'));
   assert.ok(css.includes('[data-part="eyes"]'));
   assert.ok(css.includes('@media (prefers-color-scheme: dark)'));
@@ -27,7 +27,7 @@ test('desktop startup keeps the local BenchGo identity and DeepSeek engine attri
   assert.ok(css.includes('animation: none;'));
 });
 
-test('native splash falls back after 20 seconds without replacing a native startup phase', async () => {
+test('native splash uses local brand assets and a separate long-wait status', async () => {
   const html = await readFile(new URL('./renderer/splash.html', import.meta.url), 'utf8');
   const script = await readFile(new URL('./renderer/splash.js', import.meta.url), 'utf8');
   assert.ok(html.includes('<img class="startup-mascot" src="../../../assets/brand/benchgo-mark.svg" alt=""'));
@@ -36,23 +36,9 @@ test('native splash falls back after 20 seconds without replacing a native start
   assert.doesNotMatch(html, /<svg[\s>]/);
   assert.ok(html.includes('href="benchgo-startup.css"'));
   assert.ok(html.includes('role="status" aria-live="polite"'));
+  assert.ok(html.includes('id="startup-wait" class="startup-wait" role="status"'));
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
   assert.doesNotMatch(script, /dshWelcome|ipcRenderer|require\(|fetch\(/);
-  const status = { textContent: '', dataset: {} };
-  let delay;
-  let waiting;
-  vm.runInNewContext(script, {
-    document: { getElementById: () => status },
-    setTimeout: (callback, milliseconds) => { waiting = callback; delay = milliseconds; },
-  });
-  assert.equal(status.textContent, '');
-  assert.equal(delay, 20000);
-  waiting();
-  assert.equal(status.textContent, '仍在准备中，请稍候…');
-  status.dataset.phase = 'host-starting';
-  status.textContent = '正在启动服务…';
-  waiting();
-  assert.equal(status.textContent, '正在启动服务…');
 });
 function startup(skip) {
   const handlers = new Map();

@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
 import * as reasoning from '../client/model-reasoning-state.mjs';
-import { withOffEffort } from '../shared/model-profile-match.mjs';
 
 const code = transformSync(readFileSync(new URL('../client/model-reasoning.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 let cursor = 0, values = [];
@@ -17,8 +16,7 @@ const react = {
 };
 const module = { exports: {} };
 runInNewContext(code, { module, exports: module.exports, require: id => id === 'react' ? react
-  : id.includes('/ui/') ? { Button: 'button' } : id.endsWith('select.jsx') ? { Select: 'select' }
-    : id.endsWith('model-profile-match.mjs') ? { withOffEffort } : reasoning });
+  : id.includes('/ui/') ? { Button: 'button' } : id.endsWith('select.jsx') ? { Select: 'select' } : reasoning });
 
 function nodes(node) {
   if (!node || typeof node !== 'object') return [];
@@ -69,20 +67,24 @@ test('the editor displays inherited levels directly and preserves wire values wh
 
 test('existing custom levels can be removed and restored in one draft', () => {
   const h = editor({ id: 'm', reasoningEfforts: { off: 'none', high: 'deep' } });
+  h.select('关闭');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.model.reasoningEfforts)), { high: 'deep' });
   h.select('高 · deep');
   assert.equal(h.model.reasoningEfforts, false);
   assert.equal(h.buttons()[0].props.disabled, true);
   h.select('高 · deep');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.model.reasoningEfforts)), { high: 'deep' });
+  h.select('关闭');
   assert.deepEqual(JSON.parse(JSON.stringify(h.model.reasoningEfforts)), { high: 'deep', off: 'none' });
 });
 
-test('custom supplier labels can be added and receive the built-in off slot', () => {
+test('custom supplier labels can be added without creating an off slot', () => {
   const h = editor({ id: 'plain', reasoningEfforts: false });
   h.select('自定义档位');
   nodes(h.render()).find(node => node.type === 'select').props.onChange({ target: { value: 'high' } });
   nodes(h.render()).find(node => node.type === 'input').props.onChange({ target: { value: 'Vendor/Ultra' } });
   h.select('应用档位');
-  assert.deepEqual(JSON.parse(JSON.stringify(h.model.reasoningEfforts)), { off: null, high: 'Vendor/Ultra' });
+  assert.deepEqual(JSON.parse(JSON.stringify(h.model.reasoningEfforts)), { high: 'Vendor/Ultra' });
   assert(nodes(editor({ id: 'm', reasoningEfforts: {} }).render()).some(node => node.props?.role === 'alert'));
   assert(editor({ id: 'm', reasoningEfforts: { high: 'deep' } }, { disabled: true }).buttons().every(node => node.props.disabled));
 });

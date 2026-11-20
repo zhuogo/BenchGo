@@ -39,9 +39,9 @@ jobs:
           npm ci --prefix plugins/base
       - name: Build and verify Linux server archive
         run: |
-          npm run build:plus
+          npm --prefix plugins/base run build:client -- --client
           node --test scripts/server/package-seed.test.mjs scripts/server/package-linux.test.mjs scripts/server/smoke-linux.test.mjs plugins/link/test/server-bootstrap.test.mjs
-          npm run package:plus:linux
+          npm run package:plus:linux -- --version "$RELEASE_VERSION"
           npm run check
       - name: Install shipped archive in a fresh user with real systemd and authenticate Link after restart
         timeout-minutes: 15

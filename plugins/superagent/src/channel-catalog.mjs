@@ -1,6 +1,7 @@
 import { feishuConfig, feishuSettingsSchema, channelDefinition as feishu } from './channels/feishu/definition.mjs';
+import { personalChannels } from './channel-personal-scope.mjs';
 
-export const channelIds = ['feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api'];
+export const channelIds = ['feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'api'];
 const field = (key, label, type = 'text', extra = {}) => ({ key, label, type, ...extra });
 const modules = new Map();
 export function normalizeChannelCapabilities(input = {}) {
@@ -21,9 +22,11 @@ export function channelDefinition(id) {
   if (id === 'feishu') return { ...structuredClone(feishu), capabilities: normalizeChannelCapabilities(feishu.capabilities) };
   const definition = modules.get(id)?.channelDefinition;
   if (!definition) throw new Error(`渠道模块尚未加载：${id}`);
+  if (id === 'api') return { ...structuredClone(definition), capabilities: normalizeChannelCapabilities(definition.capabilities) };
   const fields = [...(definition.fields || [])];
   for (const entry of [field('ownerIds', '允许使用的人员 ID', 'list'), field('chatIds', '允许的会话 ID', 'list', { advanced: true }), field('machineIds', '自动化发送人 ID', 'list', { advanced: true }), field('enabledRuleIds', '自动化消息规则 ID', 'list', { advanced: true }), field('admissionMode', '自动化消息处理', 'select', { advanced: true, options: [{ value: 'manual', label: '仅处理明确请求' }, { value: 'auto', label: '按已启用规则处理自动化消息' }] })]) if (!fields.some(item => item.key === entry.key)) fields.push(entry);
-  return { ...structuredClone(definition), capabilities: normalizeChannelCapabilities(definition.capabilities), fields, defaults: { enabled: false, ownerIds: [], chatIds: [], machineIds: [], enabledRuleIds: [], admissionMode: 'manual', ...definition.defaults } };
+  const personal = personalChannels.has(id);
+  return { ...structuredClone(definition), capabilities: normalizeChannelCapabilities({ ...definition.capabilities, ...(personal ? { personalScope: true } : {}) }), fields, defaults: { enabled: false, ownerIds: [], chatIds: [], machineIds: [], enabledRuleIds: [], admissionMode: 'manual', ...definition.defaults } };
 }
 export function connectionConfig(channel, input = {}) {
   if (channel === 'feishu') return feishuConfig(input);
@@ -34,7 +37,7 @@ export function connectionConfig(channel, input = {}) {
   if (Object.keys(input).some(key => !keys.has(key))) throw new Error('链接配置包含未知字段');
   const config = structuredClone({ ...definition.defaults, ...input });
   if (typeof config.enabled !== 'boolean') throw new Error('链接启用状态无效');
-  if (!['manual', 'auto'].includes(config.admissionMode)) throw new Error('链接准入模式无效');
+  if (config.admissionMode !== undefined && !['manual', 'auto'].includes(config.admissionMode)) throw new Error('链接准入模式无效');
   for (const [key, value] of Object.entries(config)) {
     const descriptor = fields.get(key) || {};
     const expected = definition.defaults[key];

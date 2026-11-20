@@ -14,7 +14,7 @@
   "title": "一个工作台，六个能力板块",
   "eyebrow": "SYSTEM / OVERVIEW",
   "subtitle": "A 持有工单，项目所属设备执行。Router 固定官方 Harness，Worker 可按设备能力选择执行器。",
-  "boundary": "本图对应发布候选源码。upstream.json 记录官方 DeepSeek Harness 0.2.2-rc.5（2e39e70496aa），运行兼容性待验。BenchGo 只安装 benchgo-plugin，由五个 Cordis 入口装配，六个设计板块按产品职责组织。A 持有唯一业务工单，Link v2 将冻结的 Harness 与模型组合交给 B 的 benchgoExecution，执行事实回到 A。受控测试范围及物理双机、实际供应商和安装版验收条件见各板块。公开发行证据见更新与发布板块的 v0.1.5，本轮候选仍在验证。",
+  "boundary": "当前图依据本地工作区源码（含未提交改动）与 upstream.json：官方 DeepSeek Harness 0.2.2-rc.1，pin fcc0ad462172。BenchGo 只安装 benchgo-plugin；六个文档板块是职责划分，与五个 Cordis 服务入口并非一一对应。各板块详情区单独标注实现和规划的差距。 2026-11-15 已接通 A 唯一业务 Task → Link v2 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v2 每次冻结一个 Harness 与模型组合、无二级子代理委派，执行会话只读，跨设备产物传输不支持。 已配对设备直接调用目标已开放的管理能力，首次配对与秘密继续走设备中心。  统一安装、共同实例登记与所有权、生产闭包和部署资源服务已有源码；未知旧 Harness profile 保守拒绝，只显式复用精确兼容 runtime。三平台原生安装、GUI 交接、真实模型推理和公开发行不由源码状态推断，细节见更新与发布图。 共享 API 目录、Full access 外部 Harness 及本机与跨设备外部 Worker 已接线。跨设备使用 Link v2。",
   "zones": [
     {
       "x": 40,
@@ -617,7 +617,7 @@
         "plugins/link/src/devices/resources.mjs",
         "plugins/link/src/session/adapter.mjs"
       ],
-      "note": "资源目录、有限查询及 Link v2 execution 协议已接线；execution catalog 真实 TLS/身份测试通过。目标目录不冒充实时可用性，只认同版协议和真实身份，不回退旧目标 Task 链。一次配对反向通道及真实物理双机仍待验。",
+      "note": "设备目录、资源查询和 Link v2 execution 已接线。有效配对自动补齐身份，支持回程的设备可一次批准建立双向访问。物理双机待验。",
       "state": "implemented",
       "x": 60,
       "y": 1400,
@@ -659,7 +659,7 @@
       "sub": "执行实例 · 官方会话 · 有序回执",
       "symbol": "executionId / Run / fence / cursor",
       "plain": "B 运行 Worker、保存执行事实，无需 B 的 SuperAgent。",
-      "role": "B 校验 Link 身份、项目和 A 冻结的 Harness、供应商、模型组合。官方运行时或 Commander 在 B 使用本机凭据执行，保留执行实例、会话和有序回执。执行事件和问题回到 A 的原工单。",
+      "role": "B 校验项目和 A 冻结的 Harness、供应商、模型组合。官方运行时或 Commander 在 B 使用本机 API 凭据执行，按原执行身份回传。",
       "input": "A Task/Assignment/Run、执行代际、要求快照与稳定命令",
       "output": "B 的执行实例、应用/停止确认、事件与产物引用",
       "sources": [
@@ -669,7 +669,7 @@
         "plugins/harness/src/remote-execution-store.mjs",
         "plugins/harness/test/remote-execution.test.mjs"
       ],
-      "note": "Link v2 接入官方与外部 Worker。外部 Worker 支持提问、取消和只读记录，暂停、在途补充与修订仍待支持。执行状态不明时只核实原记录，跨设备产物传输待实施。真实双机、安装版和供应商请求仍待验。",
+      "note": "Link v2 接入官方与外部 Worker。外部 Worker 支持提问、取消与只读记录。暂停、在途补充与修订暂无可确认的应用边界。",
       "state": "implemented",
       "x": 820,
       "y": 1400,
@@ -680,10 +680,10 @@
       "title": "AI 管理设备与中继",
       "kicker": "DEVICE MANAGEMENT / PARTIAL",
       "kind": "orchestration",
-      "sub": "已有设备动作 · 中继有限修改申请",
+      "sub": "已有设备动作 · 中继配置",
       "symbol": "设备中心 / 原配置事务",
       "plain": "已有连接直接管理，首次配对和秘密通过设备中心。",
-      "role": "复用原设备中心与配置服务。远端管理单独授权，只能读取脱敏配置、申请已有节点优先级/启停变更和查询原操作；目标主人确认具体差异后执行。不开放owner接口或任意代理。",
+      "role": "已配对设备复用设备中心和配置服务，可读取脱敏配置、直接修改已有中继的优先级与启停并查询回执。",
       "input": "明确设备、配置差量与版本",
       "output": "真实连接事实 / 待确认操作 / 应用结果",
       "sources": [
@@ -693,7 +693,7 @@
         "plugins/link/src/pairing/store.mjs",
         "plugins/link/client/app.jsx"
       ],
-      "note": "已接已有设备连接/重连/改名/移除/诊断；远端脱敏读取及已有中继priority/enabled申请由目标主人确认。CAS、幂等、过期和unknown可核验。首次配对、秘密、新节点及部署仍走设备中心，模型不拿owner票据。",
+      "note": "已有设备可连接、重连、改名、移除和诊断。远端中继修改保留版本校验与幂等回执。配对、秘密、新节点和部署走设备中心。",
       "state": "partial",
       "x": 1200,
       "y": 1400,
@@ -963,7 +963,7 @@
     {
       "node": "cross-manage",
       "title": "已接线：对话即可配置设备与中继",
-      "text": "已有设备通过共享服务连接、重连和诊断。远端中继只申请已有节点优先级/启停修改，目标主人确认具体差异后执行。首次配对、秘密、新节点和部署仍走设备中心；待确认不冒充已应用。"
+      "text": "已有设备通过共享服务连接、重连和诊断。已配对设备直接修改目标已有中继的优先级和启停，断线后按原请求查询回执。"
     },
     {
       "node": "link",

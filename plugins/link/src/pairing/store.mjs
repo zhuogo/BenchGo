@@ -40,7 +40,7 @@ export async function openStore(directory) {
     }).reverse();
   };
   state.workbenchSessions = pruneSessions(Array.isArray(saved.workbenchSessions) ? saved.workbenchSessions : []);
-  const pairings = new Map(), pending = new Map(), probes = new Map();
+  const pairings = new Map(), pending = new Map(), probes = new Map(), returnProofs = new Map();
   let writes = Promise.resolve();
   let sessionChanges = Promise.resolve();
   const changeSessions = operation => {
@@ -62,7 +62,21 @@ export async function openStore(directory) {
     for (const [key, value] of pairings) if (value.expiresAt <= Date.now()) pairings.delete(key);
     for (const [key, value] of pending) if (value.expiresAt <= Date.now()) pending.delete(key);
     for (const [key, value] of probes) if (value.expiresAt <= Date.now()) probes.delete(key);
+    for (const [key, value] of returnProofs) if (value.expiresAt <= Date.now()) returnProofs.delete(key);
   }
+  function pairedRequest(id, pollToken) {
+    prune();
+    const value = pending.get(id);
+    if (!value || !sameSecret(pollToken, value.pollHash)) throw new Error('配对请求已过期或验证失败');
+    return value;
+  }
+  const issueDevice = async ({ name, deviceType, pairingReturnExpiresAt }) => {
+    if (state.devices.length >= 32) throw new Error('最多配对 32 台设备，请先撤销不用的设备');
+    const token = secret(), device = { id: randomUUID(), name, deviceType, tokenHash: hash(token), pairedAt: Date.now(), lastSeenAt: Date.now(), ...(pairingReturnExpiresAt ? { pairingReturn: 'pending', pairingReturnExpiresAt } : {}) };
+    state.devices.push(device);
+    try { await persist(); } catch (error) { state.devices = state.devices.filter(row => row !== device); throw error; }
+    return { token, deviceId: device.id };
+  };
   if (retiredGrants) await persist();
   return {
     state, persist, flush: async () => { await sessionChanges; await writes; },
@@ -86,7 +100,7 @@ export async function openStore(directory) {
     pending(code) {
       prune();
       const pairingHash = code === undefined ? undefined : hash(text(code, '配对码', 128));
-      return [...pending.values()].filter(p => p.status === 'pending' && (pairingHash === undefined || p.pairingHash === pairingHash)).map(({ id, name, createdAt, expiresAt }) => ({ id, name, createdAt, expiresAt, capabilities: [...PAIRED_DEVICE_CAPABILITIES] }));
+      return [...pending.values()].filter(p => p.status === 'pending' && (pairingHash === undefined || p.pairingHash === pairingHash)).map(({ id, name, createdAt, expiresAt, returnOffer }) => ({ id, name, createdAt, expiresAt, reciprocal: Boolean(returnOffer), capabilities: [...PAIRED_DEVICE_CAPABILITIES] }));
     },
     beginProbe() {
       prune();
@@ -101,34 +115,69 @@ export async function openStore(directory) {
       probes.delete(id);
       return probe?.proof;
     },
-    begin() {
+    beginReturnProof() {
+      prune();
+      if (returnProofs.size >= 32) throw new Error('配对请求过多，请稍后重试');
+      const id = randomUUID(), proof = secret();
+      returnProofs.set(id, { proof, expiresAt: Date.now() + 300_000 });
+      return { id, digest: hash(proof) };
+    },
+    returnProof(id) { prune(); return returnProofs.get(id)?.proof; },
+    clearReturnProof(id) { returnProofs.delete(id); },
+    begin(registerReturn) {
       prune(); if (pairings.size + pending.size >= 32) throw new Error('配对请求过多，请稍后重试');
       const code = secret(), expiresAt = Date.now() + 300_000;
-      pairings.set(hash(code), { expiresAt }); return { code, expiresAt };
+      pairings.set(hash(code), { expiresAt, registerReturn }); return { code, expiresAt };
     },
-    request(code, name, deviceType = 'unknown') {
+    request(code, name, deviceType = 'unknown', returnOffer) {
       prune(); const key = hash(text(code, '配对码', 128)); const value = pairings.get(key);
       if (!value) throw new Error('配对码已使用或过期');
       pairings.delete(key);
       const pollToken = secret(), id = randomUUID();
-      pending.set(id, { id, name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pairingHash: key, pollHash: hash(pollToken), status: 'pending' });
-      return { requestId: id, pollToken, expiresAt: value.expiresAt };
+      pending.set(id, { id, name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: returnOffer ? 'computer' : ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pairingHash: key, pollHash: hash(pollToken), status: 'pending', returnOffer, registerReturn: value.registerReturn });
+      return { requestId: id, pollToken, expiresAt: value.expiresAt, ...(returnOffer ? { reciprocal: true } : {}) };
     },
     poll(id, pollToken) {
-      prune(); const p = pending.get(id);
-      if (!p || !sameSecret(pollToken, p.pollHash)) throw new Error('配对请求已过期或验证失败');
-      return { status: p.status, ...(p.status === 'approved' ? { token: p.token, deviceId: p.deviceId, hostName: state.name, name: state.name, capabilities: [...PAIRED_DEVICE_CAPABILITIES] } : {}) };
+      const p = pairedRequest(id, pollToken);
+      return { status: p.status, ...(p.status === 'approved' ? { token: p.token, deviceId: p.deviceId, hostName: state.name, name: state.name, capabilities: [...PAIRED_DEVICE_CAPABILITIES], ...(p.returnOffer ? { reciprocal: true } : {}) } : {}) };
     },
     async decide(id, allow) {
       prune(); const p = pending.get(id);
       if (!p || p.status !== 'pending') throw new Error('配对请求已失效');
       if (!allow) { p.status = 'rejected'; return; }
-      if (state.devices.length >= 32) throw new Error('最多配对 32 台设备，请先撤销不用的设备');
       p.status = 'approving';
-      const token = secret(), device = { id: randomUUID(), name: p.name, deviceType: p.deviceType, tokenHash: hash(token), pairedAt: Date.now(), lastSeenAt: Date.now() };
-      state.devices.push(device);
-      try { await persist(); } catch (e) { state.devices = state.devices.filter(d => d !== device); p.status = 'pending'; throw e; }
-      p.token = token; p.deviceId = device.id; p.status = 'approved';
+      try { Object.assign(p, await issueDevice({ name: p.name, deviceType: p.deviceType, pairingReturnExpiresAt: p.returnOffer ? p.expiresAt : undefined })); }
+      catch (error) { p.status = 'pending'; throw error; }
+      p.status = 'approved';
+    },
+    issueReturn(name, expiresAt) {
+      if (state.devices.length >= 32) return null;
+      return issueDevice({ name: text(name, '设备名称', 100), deviceType: 'computer', pairingReturnExpiresAt: expiresAt });
+    },
+    async recordReturn(id, pairingReturn) {
+      const device = state.devices.find(row => row.id === id);
+      if (!device) throw new Error('设备授权已撤销');
+      const previous = device.pairingReturn, expiresAt = device.pairingReturnExpiresAt;
+      device.pairingReturn = pairingReturn;
+      delete device.pairingReturnExpiresAt;
+      try { await persist(); } catch (error) { device.pairingReturn = previous; device.pairingReturnExpiresAt = expiresAt; throw error; }
+    },
+    async complete(id, pollToken, credential, register) {
+      const p = pairedRequest(id, pollToken);
+      if (p.status !== 'approved' || !p.returnOffer) throw new Error('配对请求尚未批准或不支持双向连接');
+      const device = () => {
+        if (pending.get(id) !== p || !state.devices.some(row => row.id === p.deviceId)) throw new Error('配对已过期或授权已撤销');
+      };
+      device();
+      if (p.completion) return p.completion;
+      const completion = (async () => {
+        const result = credential ? await (p.registerReturn || register)(p.returnOffer, credential, device, p.name) : 'source-unavailable';
+        device();
+        await this.recordReturn(p.deviceId, result);
+        return result;
+      })();
+      p.completion = completion;
+      try { return await completion; } catch (error) { delete p.completion; throw error; }
     },
     authenticate(token) {
       if (typeof token !== 'string' || token.length > 256) return;
@@ -150,6 +199,6 @@ export async function openStore(directory) {
         await persist();
       });
     },
-    clearPairings() { pairings.clear(); pending.clear(); probes.clear(); },
+    clearPairings() { pairings.clear(); pending.clear(); probes.clear(); returnProofs.clear(); },
   };
 }

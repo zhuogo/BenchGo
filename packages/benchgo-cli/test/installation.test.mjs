@@ -249,7 +249,5 @@ test('unified benchgo command has one package owner', async () => {
   const cli = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const plugin = JSON.parse(await readFile(new URL('../../../plugins/base/package.json', import.meta.url), 'utf8'));
   assert.deepEqual(cli.bin, { benchgo: './bin/benchgo.mjs' });
-  assert.equal(plugin.name, 'benchgo-plugin');
-  const pluginCommands = typeof plugin.bin === 'string' ? [plugin.name] : Object.keys(plugin.bin ?? {});
-  assert.ok(!pluginCommands.includes('benchgo'));
+  assert.deepEqual(plugin.bin, { commander: 'src/cli.mjs' });
 });

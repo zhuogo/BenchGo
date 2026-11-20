@@ -13,6 +13,7 @@ const internalReply = isHostReplyRequest;
 const conversationalReply = request => !internalReply(request) || isTaskResultReplyRequest(request);
 const executionReply = request => request?.source?.kind === executionInputSource;
 const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && (internalReply(event.data) || executionReply(event.data));
+const isRetryEvent = event => event.type === 'user/message' && event.data.source?.kind === 'retry' && event.data.content?.length === 0;
 // Resolve internal notices to their original identity so they cannot
 // accidentally become a reply to the preceding human message.
 const replyContinuations = events => {
@@ -22,6 +23,24 @@ const replyContinuations = events => {
     if (!plan.cancelled && states.has(plan.requestId)
       && events.some(event => event.type === 'user/message' && event.data?.id === plan.message.id
         && event.data.source?.fallbackId === plan.id)) result.set(plan.message.id, plan.requestId);
+  }
+  if (!events.some(isRetryEvent)) return result;
+  // The official empty prompt continues the immediately preceding failed turn.
+  let turn, requestId, failedRequestId;
+  for (const event of events) {
+    if (event.type === 'turn/start') {
+      turn = event.data.turn;
+      requestId = undefined;
+    } else if (turn !== undefined && event.type === 'user/message') {
+      if (isRetryEvent(event) && !requestId && failedRequestId) {
+        result.set(event.data.id, failedRequestId);
+      }
+      if (replyEvent(event, events)) requestId = event.data.id;
+      else if (result.has(event.data.id)) requestId = result.get(event.data.id);
+    } else if (event.type === 'turn/end' && event.data.turn === turn) {
+      failedRequestId = event.data.reason?.kind === 'error' && !states.has(requestId) ? requestId : undefined;
+      turn = undefined;
+    }
   }
   return result;
 };
@@ -35,15 +54,18 @@ const publicUsage = value => {
 /** Identity only: raw execution content is never returned as a reply draft. */
 export function activeChatReply(events, { includeInternal = false } = {}) {
   const continuations = replyContinuations(events);
-  let turn, requestId;
+  let turn, requestId, retrySeq;
   for (const event of events) {
-    if (event.type === 'turn/start') { turn = event.data?.turn; requestId = undefined; }
-    else if (turn !== undefined && replyEvent(event, events)) requestId = event.data.id;
-    else if (turn !== undefined && event.type === 'user/message' && continuations.has(event.data?.id)) requestId = continuations.get(event.data.id);
-    else if (event.type === 'turn/end' && event.data?.turn === turn) { turn = undefined; requestId = undefined; }
+    if (event.type === 'turn/start') { turn = event.data?.turn; requestId = undefined; retrySeq = undefined; }
+    else if (turn !== undefined && replyEvent(event, events)) { requestId = event.data.id; retrySeq = undefined; }
+    else if (turn !== undefined && event.type === 'user/message' && continuations.has(event.data?.id)) {
+      requestId = continuations.get(event.data.id);
+      retrySeq = isRetryEvent(event) ? event.seq : undefined;
+    } else if (event.type === 'turn/end' && event.data?.turn === turn) { turn = undefined; requestId = undefined; }
   }
   const request = events.find(event => event.type === 'user/message' && event.data?.id === requestId)?.data;
-  return turn !== undefined && requestId && (includeInternal || conversationalReply(request)) ? { turn, requestId } : null;
+  return turn !== undefined && requestId && (includeInternal || conversationalReply(request))
+    ? { turn, requestId, ...(retrySeq !== undefined ? { retrySeq } : {}) } : null;
 }
 
 /** A projection, never a replacement for the private execution transcript. */

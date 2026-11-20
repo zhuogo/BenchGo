@@ -203,7 +203,7 @@ test('real Gateway codec and SessionController admit and deduplicate native prom
   assert.equal(admitted.length, 1);
 });
 
-test('real assistant engine selects image admission models and preserves busy file queueing', async t => {
+test('real assistant engine admits native attachments and continues failed replies through the official controller', async t => {
   const requireHost = createRequire(new URL('../../../deepseek-harness/packages/api/session-controller/package.json', import.meta.url));
   const load = name => import(pathToFileURL(requireHost.resolve(name)).href);
   const requireLoop = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
@@ -223,7 +223,7 @@ test('real assistant engine selects image admission models and preserves busy fi
   const NativeTools = await loadPackage('core/tool-executor-native', '@deepseek-ai/dsh-tool-executor-native');
   const ctx = new Context();
   const orchestration = createAssistantOrchestrationStore({ filename: ':memory:' });
-  let engine, release, hold;
+  let engine, release, hold, failNext;
   t.after(async () => { release?.(); await engine?.dispose(); await ctx.fiber.dispose(); orchestration.close(); });
   await ctx.plugin(LlmRuntime);
   for (let i = 0; i < modules.length; i++) await ctx.plugin(modules[i].default, i === modules.length - 1 ? { agents: [] } : undefined);
@@ -237,6 +237,11 @@ test('real assistant engine selects image admission models and preserves busy fi
     async *stream(request) {
       requests.push(request);
       if (hold) { const current = hold; hold = undefined; current.entered.resolve(); await current.done.promise; }
+      if (failNext) {
+        failNext = false;
+        yield { type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'Fixture provider temporarily unavailable' } } };
+        return;
+      }
       yield { type: 'block-start', index: 0, blockType: 'text' };
       yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Acknowledged' } };
       yield { type: 'finish', reason: { kind: 'stop' } };
@@ -311,4 +316,43 @@ test('real assistant engine selects image admission models and preserves busy fi
   assert.deepEqual(requests.map(row => row.model), ['vision/opaque', 'vision/opaque', 'text/opaque']);
   assert.equal(bindings.filter(row => row.requestId === 'image-1').length, 1);
   assert.equal(bindings.some(row => row.requestId === 'busy-image-switch'), false);
+
+  failNext = true;
+  assert.equal((await send('needs-retry', [{ type: 'text', text: 'Original question' }])).result.ok, true);
+  await agent.whenIdle();
+  const failed = await engine.history();
+  assert.match(failed.error, /Fixture provider temporarily unavailable/u);
+  const failedUser = failed.messages.find(row => row.rpcId === 'needs-retry');
+  assert.equal(failedUser.text, 'Original question');
+  assert.equal(failed.messages.some(row => row.role === 'assistant' && row.requestId === failedUser.id), false);
+
+  const requestCount = requests.length;
+  hold = { entered: Promise.withResolvers(), done: Promise.withResolvers() };
+  const retryHold = hold;
+  release = () => retryHold.done.resolve();
+  assert.equal((await send('retry-original', [])).result.ok, true);
+  await retryHold.entered.promise;
+  const active = (await engine.history()).activeReply;
+  assert.equal(active?.requestId, failedUser.id);
+  assert.equal(agent.session.snapshotEvents()[active.retrySeq].data.source.kind, 'retry');
+  release();
+  await agent.whenIdle();
+  assert.equal((await send('retry-original', [])).result.ok, true);
+  assert.equal(requests.length, requestCount + 1);
+  const continued = await engine.history();
+  assert.equal(continued.error, null);
+  assert.equal(continued.messages.filter(row => row.role === 'user').length, failed.messages.filter(row => row.role === 'user').length);
+  assert.equal(continued.messages.find(row => row.role === 'assistant' && row.requestId === failedUser.id)?.text, 'Acknowledged');
+  assert.equal((await send('stale-retry', [])).result.error.details.reason, 'NO_CONTINUABLE_FAILURE_OR_PENDING_INPUT');
+
+  failNext = true;
+  assert.equal((await send('failed-again', [{ type: 'text', text: 'Another failed question' }])).result.ok, true);
+  await agent.whenIdle();
+  assert.equal((await send('new-question', [{ type: 'text', text: 'A new question' }])).result.ok, true);
+  await agent.whenIdle();
+  const followed = await engine.history();
+  const newUser = followed.messages.find(row => row.rpcId === 'new-question');
+  assert.equal(followed.error, null);
+  assert.equal(followed.messages.find(row => row.role === 'assistant' && row.requestId === newUser.id)?.text, 'Acknowledged');
+  assert.equal(followed.messages.some(row => row.role === 'assistant' && row.requestId === followed.messages.find(item => item.rpcId === 'failed-again')?.id), false);
 });

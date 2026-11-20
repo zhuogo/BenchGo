@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { isIP } from 'node:net';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { normalizeReturnOffer, returnCredential } from '../pairing/return.mjs';
 export { validateLinkTransport as validateConfig } from '../config.mjs';
 
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap(items => (items ?? []).filter(x => !x.internal && !x.address.includes('%')).map(x => x.address)))];
@@ -56,7 +57,7 @@ async function body(request) {
 }
 
 /** Separate encrypted carrier: it exposes only Link's allowlist, never the Host admin API. */
-export async function listen({ identity, config, webRoot, store, dispatch, workbench, onError, routes, runRequest = operation => operation() }) {
+export async function listen({ identity, config, webRoot, store, dispatch, workbench, onError, routes, registerReturn, runRequest = operation => operation() }) {
   const rates = new Map(), deviceRates = new Map();
   const relayKey = randomBytes(32);
   const signRelaySource = source => createHmac('sha256', relayKey).update(source).digest('hex');
@@ -115,6 +116,11 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
       if (req.method === 'GET') {
         if (url.pathname === '/link/api/info') {
           if (req.headers.authorization && !device) throw fail('设备授权已失效，请重新配对', 401);
+          if (url.searchParams.has('returnProof')) {
+            const proof = store.returnProof(url.searchParams.get('returnProof'));
+            if (!proof) throw fail('回程证明已失效', 404);
+            return send(res, 200, { proof });
+          }
           const probe = url.searchParams.get('probe');
           if (probe) {
             const proof = store.takeProbe(probe);
@@ -122,7 +128,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
             return send(res, 200, { proof });
           }
           return send(res, 200, { name: 'DSH Link', hostName: store.state.name, version: '0.1.0',
-            ...(device && routes ? { hostId: 'sha256:' + identity.pin, routes: routes() } : {}) });
+            ...(device ? { hostId: 'sha256:' + identity.pin, authorizationId: device.id, executionSourceProof: 1, ...(routes ? { routes: routes() } : {}) } : {}) });
         }
         const file = { '/link': 'index.html', '/link/': 'index.html', '/link/index.html': 'index.html', '/link/app.js': 'app.js', '/link/app.css': 'app.css' }[url.pathname];
         if (!file) throw fail('未找到', 404);
@@ -137,10 +143,16 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
         const input = await body(req);
         const agent = req.headers['user-agent'] || '';
         const deviceType = /iPad|Tablet/i.test(agent) ? 'tablet' : /Android|iPhone|Mobile/i.test(agent) ? 'mobile' : /Windows|Macintosh|X11/i.test(agent) ? 'computer' : 'unknown';
-        return send(res, 200, store.request(input.code, input.name, deviceType));
+        const offer = registerReturn && normalizeReturnOffer(input.returnOffer);
+        if (offer?.hostId === 'sha256:' + identity.pin) throw fail('不能配对当前设备');
+        return send(res, 200, store.request(input.code, input.name, deviceType, offer));
       }
       if (url.pathname === '/link/api/pair/status') {
         const input = await body(req);
+        if (registerReturn && Object.hasOwn(input, 'credential')) {
+          const direction = await store.complete(input.requestId, input.pollToken, returnCredential(input.credential), registerReturn);
+          return send(res, 200, { direction });
+        }
         const result = store.poll(input.requestId, input.pollToken);
         return send(res, 200, { ...result, ...(result.status === 'approved' && routes ? { routes: routes(), hostId: 'sha256:' + identity.pin } : {}) });
       }

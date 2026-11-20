@@ -7,6 +7,7 @@ import { transformSync } from 'esbuild';
 import { officialModelsUi } from '../scripts/official-models-ui.mjs';
 import * as reasoning from '../client/model-reasoning-state.mjs';
 import { routerGo } from '../shared/builtin-providers.mjs';
+import { hasTextCapability } from '../shared/model-capabilities.mjs';
 import * as routerGoAccount from '../shared/routergo-account.mjs';
 import * as protocolRules from '../../../deepseek-harness/packages/client/ui-settings-models/src/client/protocol-rules.ts';
 import { TextSearchIndex } from '../../../deepseek-harness/packages/util/text-search/src/index.ts';
@@ -161,9 +162,12 @@ async function componentHarness(filename) {
       if (id === 'react') return react;
       if (id === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' };
       if (id.endsWith('model-profile.jsx')) return { usePublicModelProfiles() {}, useModelProfiles() {}, resolveModelProfiles: async models => models };
+      if (id.endsWith('model-capabilities.mjs')) return { hasTextCapability };
       if (id.endsWith('model-catalog-filter.jsx')) return { ModelCatalogFilter: 'ModelCatalogFilter', ModelVendorFilter: 'ModelVendorFilter',
         useCatalogModelProfiles: () => new Map(), filterModelRows: rows => rows };
-      if (id.endsWith('model-capabilities.jsx')) return { useModelCapabilities() {}, ModelCapabilityEditor: 'ModelCapabilityEditor' };
+      if (id.endsWith('model-capabilities.jsx')) return { useModelCapabilities() {}, ModelCapabilityEditor: 'ModelCapabilityEditor',
+        modelCatalogFacts: () => ({ capabilities: ['text'], input: [] }) };
+      if (id.endsWith('ModelInputTypes.tsx')) return { ModelInputTypes: 'ModelInputTypes' };
       if (id.endsWith('model-reasoning-state.mjs')) return reasoning;
       if (id.endsWith('model-reasoning.jsx')) return { ModelReasoningEditor: 'ModelReasoningEditor' };
       if (id.endsWith('text-search/src/index.ts') || id.endsWith('text-search\\src\\index.ts')) return { TextSearchIndex };
@@ -189,6 +193,25 @@ async function componentHarness(filename) {
   return props => { cursor = 0; return module.exports[filename.slice(0, -4)](props); };
 }
 
+test('text model inputs show directory types and keep text selected', async () => {
+  const render = await componentHarness('ModelInputTypes.tsx');
+  let model = { id: 'gpt-6.2-sol', maxTokens: 4096, input: ['image'] };
+  const options = declared => elements(render({ model, declared, field: 'input', position: 1, disabled: false,
+    t: key => ({ modelInputTypes: '输入类型', modelInputText: '文本', modelInputImage: '图片' })[key],
+    onChange: row => { model = row; },
+  })).filter(node => node.type === 'Checkbox').map(node => node.props);
+  const declared = ['text', 'image', 'pdf'];
+  assert.deepEqual(options([]).map(({ label }) => label), ['PDF', '音频', '视频', '图片', '文本']);
+  assert.deepEqual(options([]).map(({ checked }) => checked), [false, false, false, true, true]);
+  assert.deepEqual(options(declared).map(({ checked }) => checked), [true, false, false, true, true]);
+  assert.deepEqual(options(declared).map(({ disabled }) => disabled), [true, true, true, false, true]);
+  options(declared)[3].onChange(false);
+  assert.deepEqual(plain(model.input), ['text']);
+  assert.equal(model.maxTokens, 4096);
+  assert.deepEqual(options(declared).map(({ checked }) => checked), [true, false, false, false, true]);
+  assert.deepEqual(options(['audio', 'video']).map(({ checked }) => checked), [false, true, true, false, true]);
+});
+
 test('reasoning settings change only their model and appear inside its expanded controls', async () => {
   const render = await componentHarness('ModelListEditor.tsx');
   const second = { id: 'b', reasoningEfforts: { high: 'deep' }, maxTokens: 64000 };
@@ -213,7 +236,10 @@ test('reasoning settings change only their model and appear inside its expanded 
   const renderRow = await componentHarness('ModelRow.tsx');
   const settings = row.props.extraSettings;
   assert(!elements(renderRow({ ...row.props, expanded: false })).includes(settings));
-  assert(elements(renderRow({ ...row.props, expanded: true })).includes(settings));
+  const expandedRow = renderRow({ ...row.props, expanded: true });
+  assert(elements(expandedRow).includes(settings));
+  assert(pick(expandedRow, 'ModelInputTypes'));
+  assert.equal(pick(renderRow({ ...row.props, capabilityFacts: { capabilities: ['asr'], input: ['audio'] } }), 'ModelInputTypes'), undefined);
 });
 
 test('installed reasoning metadata comes from the exact provider and model', async () => {

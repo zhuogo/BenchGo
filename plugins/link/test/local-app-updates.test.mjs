@@ -17,9 +17,9 @@ const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executa
 test('APK update trust key is copied from the canonical source and the native bridge stays local', async () => {
   const app = join(root, 'plugins/link/mobile/android/app');
   const gradle = await readFile(join(app, 'build.gradle'), 'utf8');
-  assert(gradle.includes("inputs.file(file('../../../../base/shared/update-public-key.pem'))"));
+  assert(gradle.includes("inputs.file(file('../../../../benchgo/shared/update-public-key.pem'))"));
   assert(gradle.includes("into new File(out, 'updates')"));
-  assert.equal(resolve(app, '../../../../base/shared/update-public-key.pem'), join(root, 'plugins/base/shared/update-public-key.pem'));
+  assert.equal(resolve(app, '../../../../benchgo/shared/update-public-key.pem'), join(root, 'plugins/base/shared/update-public-key.pem'));
   const native = await readFile(join(app, 'src/main/java/cn/draftgo/benchgo/link/MainActivity.kt'), 'utf8');
   assert(native.includes('webView.removeJavascriptInterface("LinkNative")'));
   assert(native.includes('"appUpdateCheck" -> appUpdates.check()'));

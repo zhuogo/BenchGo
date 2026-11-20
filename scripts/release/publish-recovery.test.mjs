@@ -130,8 +130,34 @@ async function bundle(t) {
   const inventory = async () => Promise.all((await readdir(directory)).map(async name => ({ name, size: (await stat(resolve(directory, name))).size, sha256: await fileDigest(resolve(directory, name)) })));
   const refreshSums = async () => { const rows = (await inventory()).filter(row => !['SHA256SUMS.txt', 'release-notes.md'].includes(row.name)).sort((a, b) => a.name.localeCompare(b.name));
     await writeFile(resolve(directory, 'SHA256SUMS.txt'), rows.map(row => `${row.sha256}  ${row.name}\n`).join('')); };
-  return { directory, plan, ...pair, inventory, refreshSums };
+  return { root, directory, plan, ...pair, inventory, refreshSums };
 }
+
+test('a release with skipped builds recovers from the original signed artifacts', async t => {
+  const f = await bundle(t);
+  const work = origin();
+  work.jobs = ['plan', 'publish'].map(name => work.jobs.find(job => job.name === name));
+  for (const name of ['plugin', 'windows', 'android', 'macos', 'linux']) work.jobs.push({ name, status: 'completed', conclusion: 'skipped' });
+  assert.equal(validateRecoveryContext(work)['benchgo-release-ready'].id, 2);
+  work.jobs.find(job => job.name === 'macos').conclusion = 'failure';
+  assert.throws(() => validateRecoveryContext(work), /did not succeed: macos/);
+  const previous = { tag: f.plan.tag, sourceSha: f.plan.sourceSha, releaseVersion: f.plan.releaseVersion,
+    manifest: JSON.parse(await readFile(resolve(f.directory, 'benchgo-update.json'))),
+    manifestSha256: await fileDigest(resolve(f.directory, 'benchgo-update.json')),
+    downloads: JSON.parse(await readFile(resolve(f.directory, 'downloads.json'))),
+    source: JSON.parse(await readFile(resolve(f.directory, 'release-source.json'))) };
+  const plan = { ...f.plan, previous, sourceSha: publisher, releaseVersion: '1.1.0', tag: 'v1.1.0',
+    versions: { ...f.plan.versions, macos: '1.0.0', linux: '1.0.0' },
+    builds: { plugin: false, windows: false, android: false, macos: false, linux: false } };
+  const directory = resolve(f.root, 'reuse');
+  await assembleRelease({ ...f, plan, outDir: directory, buildRoot: resolve(f.root, 'no-builds'), enforceSource: false,
+    platforms: ['mac-arm64', 'mac-x64', 'linux-server'] });
+  const inventory = await Promise.all((await readdir(directory)).map(async name => {
+    const path = resolve(directory, name);
+    return { name, size: (await stat(path)).size, sha256: await fileDigest(path) };
+  }));
+  assert.equal((await verifyRecoveryBundle({ ...f, plan, directory, inventory })).signedProductSource, publisher);
+});
 
 test('complete unchanged signed original bundle recovers; modified bytes and unsigned extras fail', async t => {
   const f = await bundle(t), inventory = await f.inventory();

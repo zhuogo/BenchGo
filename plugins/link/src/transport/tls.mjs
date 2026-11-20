@@ -1,4 +1,4 @@
-import { X509Certificate, createHash, createPrivateKey, createPublicKey, generateKeyPair } from 'node:crypto';
+import { X509Certificate, createHash, createPrivateKey, createPublicKey, generateKeyPair, sign, verify } from 'node:crypto';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import selfsigned from 'selfsigned';
@@ -30,4 +30,26 @@ export async function loadIdentity(directory) {
   // Useful when a self-hosted reverse proxy verifies its upstream certificate.
   await writeFile(join(directory, 'host-cert.pem'), value.cert, { mode: 0o600 });
   return { ...value, pin };
+}
+
+const executionSourceMessage = (targetHostId, authorizationId, input) => Buffer.from(JSON.stringify([
+  'benchgo-link-execution-source-v1', targetHostId, authorizationId, input.requestId, input.identity?.ownerHostId, input.executionId,
+]));
+
+export function signExecutionSource(identity, target, input) {
+  const publicKey = createPublicKey(identity.cert).export({ type: 'spki', format: 'der' }).toString('base64');
+  const signature = sign('sha256', executionSourceMessage(target.hostId, target.authorizationId, input), identity.key).toString('base64');
+  return { publicKey, signature };
+}
+
+export function verifyExecutionSource(proof, targetHostId, authorizationId, input) {
+  try {
+    if (typeof proof?.publicKey === 'string' && proof.publicKey.length <= 4096 && typeof proof.signature === 'string' && proof.signature.length <= 4096) {
+      const key = createPublicKey({ key: Buffer.from(proof.publicKey, 'base64'), type: 'spki', format: 'der' });
+      if (verify('sha256', executionSourceMessage(targetHostId, authorizationId, input), key, Buffer.from(proof.signature, 'base64'))) {
+        return 'sha256:' + createHash('sha256').update(key.export({ type: 'spki', format: 'der' })).digest('base64');
+      }
+    }
+  } catch { /* Invalid proof is handled below. */ }
+  throw Object.assign(new Error('无法核验远端执行的来源主机'), { status: 403, code: 'EXECUTION_SOURCE_INVALID' });
 }

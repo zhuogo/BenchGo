@@ -14,7 +14,7 @@
   "title": "设备与远程连接",
   "eyebrow": "REMOTE / LINK",
   "subtitle": "A 宿主持有业务任务，B 只提供执行；Link 复用认证、可信路线与有限协议，不依赖 B 的 SuperAgent。",
-  "boundary": "节点状态区分已有源码与待实施设计；连线表示职责关系，不代表链路已完成或通过真机验收。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。 A 唯一业务 Task → Link v2 execution → B 独立 benchgoExecution → A 事实与结果回流已接线。既有验证覆盖如下。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v2 每次冻结一个 Harness 与模型组合、无二级子代理委派，执行会话只读，跨设备产物传输不支持。  统一本机 CLI 和已登记 Desktop/Web 发现已接线：交互默认浏览器，SSH/无头保留后台；同一 canonical profile 只有一个写入宿主，检测原 SSH/systemd 服务时不另建。未知旧 Harness profile 保守拒绝，三平台原生与 GUI 交接仍待实物验收；唯一契约见更新与发布板块。",
+  "boundary": "节点状态区分已有源码与待实施设计；连线表示职责关系，不代表链路已完成或通过真机验收。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。 2026-11-15 已接通 A 唯一业务 Task → Link v2 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v2 每次冻结一个 Harness 与模型组合、无二级子代理委派，执行会话只读，跨设备产物传输不支持。  统一本机 CLI 和已登记 Desktop/Web 发现已接线：交互默认浏览器，SSH/无头保留后台；同一 canonical profile 只有一个写入宿主，检测原 SSH/systemd 服务时不另建。未知旧 Harness profile 保守拒绝，三平台原生与 GUI 交接仍待实物验收；唯一契约见更新与发布板块。",
   "nodes": [
     {
       "id": "entry",
@@ -304,7 +304,7 @@
         "plugins/link/src/devices/resources.mjs",
         "plugins/link/src/session/adapter.mjs"
       ],
-      "note": "共享资源与独立于 B SuperAgent 的 Link v2 execution 已接线；catalog 真实 TLS、认证身份和目标绑定测试通过。双方分别配对可双向访问，一次配对反向通道仍待实施；真实物理双机部署仍需核验。",
+      "note": "共享资源与 Link v2 execution 已接线。支持回程的两台设备可一次批准建立双向访问。跨设备验证见协作设计。",
       "state": "implemented",
       "x": 440,
       "y": 1040,
@@ -313,7 +313,7 @@
     {
       "id": "cross-target",
       "title": "B 的执行服务与原始记录",
-      "kicker": "EXECUTION ONLY / PARTIAL",
+      "kicker": "EXECUTION ONLY / IMPLEMENTED",
       "kind": "orchestration",
       "sub": "目标设备执行与回执",
       "symbol": "benchgoExecution / executionId",
@@ -328,7 +328,7 @@
         "plugins/harness/src/remote-execution-store.mjs",
         "plugins/harness/test/remote-execution.test.mjs"
       ],
-      "note": "B 的执行服务独立于 SuperAgent。执行记录只读，业务输入回 A。协议与双宿主 TLS 有定向覆盖，跨设备产物传输待实施。物理双机、真实 API 与安装版待验。",
+      "note": "协议和双宿主 TLS 已定向验证。物理双机与真实 API 待验。",
       "state": "partial",
       "x": 820,
       "y": 1040,
@@ -339,10 +339,10 @@
       "title": "连接与中继管理桥",
       "kicker": "DEVICE MANAGEMENT / PARTIAL",
       "kind": "orchestration",
-      "sub": "已有设备动作 · 中继有限修改申请",
+      "sub": "已有设备动作 · 中继配置",
       "symbol": "设备中心 / 原配置事务",
       "plain": "已有连接直接管理，首次配对和秘密通过设备中心。",
-      "role": "复用原设备中心与配置服务。远端管理单独授权，只能读取脱敏配置、申请已有节点优先级/启停变更和查询原操作；目标主人确认具体差异后执行。不开放owner接口或任意代理。",
+      "role": "已配对设备复用设备中心和配置服务，可读取脱敏配置、直接修改已有中继的优先级与启停并查询回执。",
       "input": "明确设备、配置差量与版本",
       "output": "真实连接事实 / 待确认操作 / 应用结果",
       "sources": [
@@ -352,7 +352,7 @@
         "plugins/link/src/pairing/store.mjs",
         "plugins/link/client/app.jsx"
       ],
-      "note": "已接已有设备连接/重连/改名/移除/诊断；远端脱敏读取及已有中继priority/enabled申请由目标主人确认。CAS、幂等、过期和unknown可核验。首次配对、秘密、新节点及部署仍走设备中心，模型不拿owner票据。",
+      "note": "已有设备可连接、重连、改名、移除和诊断。远端中继修改保留版本校验与幂等回执。配对、秘密、新节点和部署走设备中心。",
       "state": "partial",
       "x": 1200,
       "y": 1040,
@@ -672,7 +672,7 @@
     {
       "node": "cross-admin",
       "title": "已接线：用对话管理连接与中继",
-      "text": "已有设备通过共享服务连接、重连和诊断。远端中继只申请已有节点优先级/启停修改，目标主人确认具体差异后执行。首次配对、秘密、新节点和部署仍走设备中心；待确认不冒充已应用。"
+      "text": "已有设备通过共享服务连接、重连和诊断。已配对设备直接修改目标已有中继的优先级和启停，断线后按原请求查询回执。"
     },
     {
       "node": "cross-entry",

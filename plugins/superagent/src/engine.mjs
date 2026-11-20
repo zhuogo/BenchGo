@@ -619,9 +619,9 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const snapshot = await historySnapshot(record.sessionId);
       const page = historyPage(snapshot.messages, snapshot.index, { before, limit });
       const status = handles.get(threadId)?.agent.status ?? 'idle';
-      const { header, lastEnd } = snapshot.index;
+      const { header, lastEnd, lastEndSeq } = snapshot.index;
       if (status === 'running' && !Object.hasOwn(snapshot, 'activeReply')) snapshot.activeReply = activeChatReply(snapshot.events);
-      return { threadId, sessionId: record.sessionId, ...page, requests, status, running: status === 'running', activeReply: status === 'running' ? snapshot.activeReply : null, error: errors.get(threadId) ?? (lastEnd?.kind === 'error' ? lastEnd.error?.message : null), failures: failures.get(threadId) ?? [], model: models.get(threadId) ?? (header ? { providerId: header.provider, modelId: header.model } : null) };
+      return { threadId, sessionId: record.sessionId, ...page, requests, status, running: status === 'running', activeReply: status === 'running' ? snapshot.activeReply : null, lastEndSeq: lastEndSeq ?? null, error: errors.get(threadId) ?? (lastEnd?.kind === 'error' ? lastEnd.error?.message : null), failures: failures.get(threadId) ?? [], model: models.get(threadId) ?? (header ? { providerId: header.provider, modelId: header.model } : null) };
     },
     async compact(threadId = 'main') {
       const agent = await ensureSession({ threadId });

@@ -9,8 +9,8 @@ import { createRouterGoModelState, reconcileRouterGoModels } from './routergo-mo
 const namespace = 'llm-pi-ai';
 const providerPath = ['providers', routerGo.id];
 const set = (field, value) => ({ op: 'set', path: [...providerPath, field], value });
-const accountFields = { displayName: routerGo.name, baseURL: routerGo.baseURL, api: routerGo.protocol };
-const accountFieldOps = previous => Object.entries(accountFields)
+const accountFields = { displayName: routerGo.name, baseURL: routerGo.baseURL };
+const accountFieldOps = previous => Object.entries({ ...accountFields, api: previous.api || routerGo.protocol })
   .filter(([field, value]) => previous[field] !== value)
   .map(([field, value]) => set(field, value));
 const remotePath = routerGoOrigin + '/api/x/benchgo-auth';
@@ -235,7 +235,7 @@ export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discove
             ...(sameKey ? [] : [set('apiKeyEnv', keyRef)]),
             ...(changed ? [set('models', result.next)] : []),
           ] : [{ op: 'set', path: providerPath, value: {
-            ...accountFields, apiKeyEnv: keyRef, models: result.next,
+            ...accountFields, api: routerGo.protocol, apiKeyEnv: keyRef, models: result.next,
           } }];
           requireSession(id);
           if (!sameKey) await ctx.credentials.set(keyRef, apiKey);

@@ -9,19 +9,22 @@ import { readAssessmentPolicy, authorizeAssessment } from '../src/assessment-pol
 import { ingestAssistantEvent } from '../src/intake.mjs';
 import { createDirectReplyDelivery } from '../src/direct-reply-delivery.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
-import { deliveryFailure } from '../src/channels/delivery-outcome.mjs';
+import { deliveryFailure, replyWindowExpired } from '../src/channels/delivery-outcome.mjs';
+import { createUnifiedChannelIngress } from '../src/channel-ingress.mjs';
 
-async function fixture(t, { kind = 'answer', send, actorKind = 'human', available = true } = {}) {
+async function fixture(t, { kind = 'answer', send, actorKind = 'human', available = true, channel = 'feishu' } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-direct-delivery-'));
   const store = await createAssistantStore({ dataDirectory: directory });
   const shutdown = new AbortController();
   let sender, runner;
   t.after(async () => { shutdown.abort(); await sender?.stop(); await runner?.stop(); await store.close(); await rm(directory, { recursive: true, force: true }); });
   await store.updateConfig({ models: [{ providerId: 'provider', modelId: 'exact-model' }] });
-  store.connections.update({ enabled: true, appId: 'app', appSecretRef: 'ref', ownerOpenIds: ['owner'], chatIds: ['chat'] }, { revision: 0 });
+  const config = channel === 'wecom' ? { botId: 'app', secretRef: 'ref', ownerIds: ['owner'] } : { appId: 'app', appSecretRef: 'ref', ownerOpenIds: ['owner'] };
+  store.connections.update({ enabled: true, chatIds: ['chat'], ...config }, { channel, revision: 0 });
   const readPolicy = threadId => readAssessmentPolicy(store, { list: () => [] }, threadId);
-  const source = { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', mentioned: true, appId: 'app', chatId: 'chat', messageId: 'message' };
-  const event = { channel: 'feishu', kind: 'group', text: '你好', sourceKey: 'message', threadId: 'thread', mentioned: true,
+  const source = { channel, sourceType: 'group', connectionId: channel, conversationId: 'chat', mentioned: true, chatId: 'chat', messageId: 'message',
+    ...(channel === 'wecom' ? { accountId: 'app', connectionRevision: 1, replyRequestId: 'before' } : { appId: 'app' }) };
+  const event = { channel, kind: 'group', text: '你好', sourceKey: 'message', threadId: 'thread', mentioned: true,
     actor: { id: 'owner', kind: actorKind }, source };
   const policy = await readPolicy();
   const ingest = () => ingestAssistantEvent(store.orchestration, event, { version: policy.version, ownerIds: ['owner'], threadIds: ['chat'] });
@@ -47,6 +50,28 @@ for (const kind of ['answer', 'ask']) test(`${kind} commits without a Task and d
   assert.equal(rows.length, 1);
   assert.equal(rows[0].state, 'sent');
   assert.equal(rows[0].receipt.messageId, 'reply-id');
+});
+
+test('an ordinary answer waits for fresh authenticated inbound evidence on the same channel', async t => {
+  let attempts = 0;
+  const h = await fixture(t, { channel: 'wecom', send: async () => {
+    if (++attempts === 1) throw replyWindowExpired('expired');
+    return { status: 'accepted', messageId: 'accepted' };
+  } });
+  const db = h.store.orchestration;
+  await h.sender.tick();
+  await h.sender.tick();
+  assert.equal(db.directReplies()[0].state, 'waiting_reply_window');
+  assert.equal(attempts, 1);
+  await createUnifiedChannelIngress({ store: h.store }).receive('wecom', { channel: 'wecom', sourceType: 'group',
+    sourceKey: 'fresh', messageId: 'fresh', threadId: 'thread', source: { ...h.source, messageId: 'fresh', replyRequestId: 'after' },
+    actor: { kind: 'human', id: 'owner' }, text: '新消息', mentioned: true });
+  await h.sender.tick();
+  assert.equal(attempts, 2);
+  assert.equal(h.calls[1].source.replyRequestId, 'after');
+  assert.equal(db.directReplies()[0].receipt.messageId, 'accepted');
+  assert.equal(db.directReplies()[0].source.replyRequestId, 'before');
+  assert.equal(db.listTasks().length, 0);
 });
 
 test('a revoked channel suppresses queued direct replies before any send', async t => {

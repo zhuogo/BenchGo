@@ -40,6 +40,15 @@
         "responses": { "200": { "description": "助手操作结果或通知增量。", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } }, "400": { "description": "请求无效。" }, "401": { "description": "工作台会话失效。" } }
       }
     },
+    "/link/workbench/device-center/api/devices": {
+      "servers": [{ "url": "/" }],
+      "post": {
+        "summary": "已配对工作台的设备中心",
+        "description": "使用工作台 HttpOnly 会话。设备列表返回主机和确认配对的设备概要。中继支持读取、测试、启停和首选设置，保存沿用带指纹的配置事务。hostRelayOperation 按原 requestId 查询同一设备的回执。",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["action"], "properties": { "action": { "enum": ["list", "hostStatus", "hostRelayTest", "hostRelayPoolConfigure", "hostRelayOperation"] }, "id": { "type": "string" }, "operation": { "enum": ["update", "prefer"] }, "enabled": { "type": "boolean" }, "requestId": { "type": "string" }, "expected": { "$ref": "#/components/schemas/RelayPoolExpected" } } } } } },
+        "responses": { "200": { "description": "设备概要、中继状态、检测结果或管理回执。" }, "401": { "description": "工作台会话失效。" }, "403": { "description": "操作须由目标设备本机完成。" }, "409": { "description": "配置版本或请求意图冲突。" } }
+      }
+    },
     "/api/devices": {
       "post": {
         "summary": "设备保存、配对、切换与服务器管理",
@@ -48,8 +57,7 @@
           "resources": { "$ref": "#/components/schemas/ResourceAggregate" },
           "resourceScope": { "type": "object", "required": ["scope"], "properties": { "scope": { "$ref": "#/components/schemas/ResourceScope" } } },
           "setResourceScope": { "type": "object", "required": ["scope"], "properties": { "scope": { "$ref": "#/components/schemas/ResourceScope" } } },
-          "sessionAction": { "$ref": "#/components/schemas/SessionActionReceipt" },
-          "hostManagementDecide": { "$ref": "#/components/schemas/ManagementOperation" }
+          "sessionAction": { "$ref": "#/components/schemas/SessionActionReceipt" }
         },
         "x-device-naming": "rename 的 deviceId=local 修改本机持久名称并用于配对身份；其他设备 rename 仅保存本机管理备注，不修改被控端。hostRenameDevice 的 id/name 对已授权访问本机的设备保存本地备注，对应 owner rename-device；hostStatus.devices 的 name 显示备注，originalName 保留设备原始身份名。list 本机行返回真实名称。已批准配对返回 hostName 和 name（均为被控主机名称）；缺少名称生成稳定随机名。设备连接持久开启，hostConfigure.enabled 仅为旧客户端兼容字段，不再关闭连接。",
         "requestBody": {
@@ -64,7 +72,7 @@
         },
         "responses": {
           "200": {
-            "description": "list:{devices,activeId,capabilities}; pair:{requestId,expiresAt}; pairStatus:{status,device?}; select:{device,url}; sshProbe:{fingerprint}; sshConnect/reconnect/update:{jobId}; job:{id,state,steps,device?,error?}; serverAction:{operation,status?,logs?}; serverTerminal:{id,title}; serverTerminalRead:{output,offset,closed}; serverPairing:{code,expiresAt,mode,url,uri,webUrl}; serverPairingStatus:{pending}; serverPairingConfigure、serverPairingDecide 与终端写入/调整尺寸/关闭返回 {ok:true}。hostRelayTest:{ok,latencyMs,message}（只读测试，不保存输入、不抢占在线控制通道；id 节点 token 留空时复用私密配置）"
+            "description": "list:{devices,activeId,capabilities}; pair:{requestId,expiresAt}; pairStatus:{status,device?,direction?}。节点宿主批准后返回 direction 为 mutual、local-unavailable、remote-unavailable、source-unavailable 或 unreachable。select:{device,url}; sshProbe:{fingerprint}; sshConnect/reconnect/update:{jobId}; job:{id,state,steps,device?,error?}; serverAction:{operation,status?,logs?}; serverTerminal:{id,title}; serverTerminalRead:{output,offset,closed}; serverPairing:{code,expiresAt,mode,url,uri,webUrl}; serverPairingStatus:{pending}; serverPairingConfigure、serverPairingDecide 与终端写入/调整尺寸/关闭返回 {ok:true}。hostRelayTest:{ok,latencyMs,message}（只读测试，不保存输入、不抢占在线控制通道；id 节点 token 留空时复用私密配置）"
           },
           "400": {
             "description": "输入错误或操作失败"
@@ -173,7 +181,7 @@
                           "revoke",
                           "rename-device",
                           "relay-test",
-                          "relay-pool-configure", "management-decide"
+                          "relay-pool-configure"
                         ]
                       },
                       "url": {
@@ -305,16 +313,16 @@
       },
       "ResourceAggregate": { "type": "object", "required": ["devices", "partial"], "properties": { "devices": { "type": "array", "maxItems": 33, "items": { "$ref": "#/components/schemas/ResourcePage" } }, "partial": { "type": "boolean" } } },
       "ManagementOperation": {
-        "type": "object", "required": ["id", "operationId", "requestId", "deviceId", "namespace", "expected", "ops", "state", "createdAt", "expiresAt"],
+        "type": "object", "required": ["id", "operationId", "requestId", "deviceId", "namespace", "expected", "ops", "state", "createdAt"],
         "properties": {
-          "id": { "type": "string" }, "operationId": { "type": "string" }, "requestId": { "type": "string" }, "deviceId": { "type": "string" }, "deviceName": { "type": "string" },
+          "id": { "type": "string" }, "operationId": { "type": "string" }, "requestId": { "type": "string" }, "deviceId": { "type": "string" },
           "namespace": { "const": "benchgo-link-relay" }, "expected": { "type": "object", "required": ["fingerprint"], "properties": { "fingerprint": { "type": "string" } } },
           "ops": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/components/schemas/RelayManagementOp" } },
-          "state": { "enum": ["pending", "applying", "applied", "failed", "unknown", "expired", "rejected", "revoked"] },
-          "createdAt": { "type": "integer" }, "expiresAt": { "type": "integer" }, "requiresConfirmation": { "type": "boolean" },
+          "state": { "enum": ["applying", "applied", "failed", "unknown", "expired", "rejected", "revoked"] },
+          "createdAt": { "type": "integer" },
           "result": { "type": "object", "additionalProperties": true }, "error": { "type": "object", "properties": { "code": { "type": "string" }, "message": { "type": "string" } } }
         },
-        "description": "按认证device绑定，保留期内requestId+精确差异幂等；20分钟过期。target owner批准后CAS应用，断线查原operation，不重复提交。最多保留128条，容量满时先淘汰已结束或已过期记录；未决与unknown不自动删除。旧回执已淘汰时查询返回NOT_FOUND，不推断效果或自动重放。重启遇执行中记录标unknown，不自动重跑。hostStatus.pendingManagement仅返回仍待审批的非秘密摘要。"
+        "description": "按认证设备绑定，请求 ID 与精确差异作为幂等依据。已配对设备提交后直接经配置事务保存。applied 表示配置已保存，result.application 描述运行状态。断线后按原请求 ID 或回执 ID 查询。最多保留 128 条，容量满时先淘汰已结束记录。重启遇执行中回执标 unknown，历史待确认回执标 expired，均不自动重放。"
       },
       "RelayManagementOp": {
         "type": "object", "required": ["op", "path", "value"], "additionalProperties": false,
@@ -330,21 +338,21 @@
         "type": "object", "required": ["action"],
         "properties": { "action": { "enum": ["state", "models", "create", "history", "send", "cancel", "respond", "resources", "execution", "management", "sessionAction"] }, "id": { "type": "string", "maxLength": 256 }, "native": { "type": "boolean" }, "title": { "type": "string", "maxLength": 200 }, "operation": { "type": "string" }, "requestId": { "type": "string", "maxLength": 200 }, "operationId": { "type": "string" }, "kind": { "anyOf": [{ "$ref": "#/components/schemas/ResourceKind" }, { "enum": ["revision", "context", "answer"] }] }, "namespace": { "enum": ["benchgo-link-relay", "benchgo-link-transport"] }, "expected": { "type": "object", "properties": { "fingerprint": { "type": "string" } } }, "ops": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RelayManagementOp" } } },
         "additionalProperties": true,
-        "description": "有限定向协议，不接受任意HTTP/SSH或owner action。确认配对统一允许目标实际支持的BenchGo能力，撤销token仍拒绝。execution使用RemoteExecutionRequest v2，业务工单留在发起宿主，目标仅持久执行与传输记录且无需SuperAgent；入口必须绑定expectedHostId/expectedAuthorizationId并验证回执身份。management只允许status/relay-test/settings-read/settings-prepare/operation。settings-prepare仅修改relay既有节点priority/enabled并等待目标主人审批。sessionAction按显式native和原始id选择适配器，只支持能力声明的有限操作，requestId绑定完整意图。目标从认证配对记录绑定principal，JSON principal不能扩大权限。"
+        "description": "确认配对允许目标实际支持的 BenchGo 能力。management 支持 status、relay-test、settings-read、settings-apply、operation。settings-apply 仅修改已有中继的 priority 和 enabled，operation 按 requestId 或 operationId 查询持久回执。执行入口绑定 expectedHostId/expectedAuthorizationId 并验证回执身份。sessionAction 按显式 native 和原始 id 选择适配器，请求 ID 绑定完整意图。目标从认证配对记录确定 principal。"
       },
       "RemoteExecutionRequest": {
         "type": "object", "required": ["action", "version", "operation"],
         "properties": {
-          "action": { "const": "execution" }, "version": { "const": 2 },
+          "action": { "const": "execution" }, "version": { "const": 1 },
           "operation": { "enum": ["catalog", "submit", "get", "input", "control", "ack"] },
           "requestId": { "type": "string", "maxLength": 512 }, "executionId": { "type": "string", "maxLength": 512 }, "sessionId": { "type": "string", "maxLength": 512 },
           "identity": { "type": "object", "required": ["ownerHostId", "taskId", "assignmentId", "runId", "fence"], "properties": { "ownerHostId": { "type": "string" }, "taskId": { "type": "string" }, "assignmentId": { "type": "string" }, "runId": { "type": "string" }, "fence": { "type": "integer", "minimum": 1 } } },
-          "config": { "type": "object", "required": ["harness", "models"], "properties": { "harness": { "enum": ["official", "codex", "claude"] }, "models": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "object", "required": ["providerId", "modelId"], "properties": { "providerId": { "type": "string" }, "modelId": { "type": "string" }, "params": { "type": "object" } } } } } },
+          "config": { "type": "object", "required": ["harness", "models"], "properties": { "harness": { "const": "official" }, "models": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "object", "required": ["providerId", "modelId"], "properties": { "providerId": { "type": "string" }, "modelId": { "type": "string" }, "params": { "type": "object" } } } } } },
           "projectId": { "type": "string" }, "text": { "type": "string", "maxLength": 100000 }, "requirements": { "type": "object" },
           "kind": { "enum": ["revision", "context", "answer"] }, "instructionRevision": { "type": "integer", "minimum": 1 }, "questionId": { "type": "string" }, "answers": { "type": "array", "items": { "type": "object" } },
           "control": { "enum": ["pause", "resume", "cancel"] }, "after": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 200 }, "through": { "type": "integer", "minimum": 0 }
         },
-        "description": "submit由业务宿主预生成executionId/sessionId，携带完整identity、要求版本和冻结授权/模型；目标以认证principal一对一绑定ownerHostId，重复requestId只取原回执，改变命令主体冲突，after/limit不属于幂等意图。input初始received不代表应用；官方pre-step后的instruction.applied包含requestId/kind/实际instructionRevision。answer按当前questionId及逐题真实id回传。外部Harness只支持answer和cancel，模型参数使用目标设备的Harness配置。get按连续事件seq分页；result以官方turn/end及transcript或外部适配器真实结束事件为依据；ack仅确认已持久接收的事件水位，不重跑Worker。"
+        "description": "submit由业务宿主预生成executionId/sessionId，携带完整identity、要求版本和冻结授权/模型；目标以认证principal一对一绑定ownerHostId，重复requestId只取原回执，改变命令主体冲突，after/limit不属于幂等意图。input初始received不代表应用；官方pre-step后的instruction.applied包含requestId/kind/实际instructionRevision。answer按当前questionId及逐题真实id回传。get按连续事件seq分页；result须含真实官方turn/end完成原因及transcript证据；ack仅确认已持久接收的事件水位，不重跑Worker。"
       },
       "DeviceRequest": {
         "type": "object",
@@ -381,7 +389,7 @@
               "relayAction",
               "hostRelayTest",
               "hostRelayPoolConfigure",
-              "devices", "resources", "resourceScope", "setResourceScope", "callDevice", "sessionAction", "hostManagementDecide"
+              "devices", "resources", "resourceScope", "setResourceScope", "callDevice", "sessionAction"
             ]
           },
           "deviceId": {
@@ -402,10 +410,8 @@
           "expectedAuthorizationId": { "type": ["string", "null"] },
           "native": { "type": "boolean" },
           "title": { "type": "string", "maxLength": 200 },
-          "operationId": { "type": "string" },
           "expected": { "$ref": "#/components/schemas/RelayPoolExpected" },
           "relayId": { "type": "string" },
-          "allow": { "type": "boolean", "description": "hostManagementDecide真实主人单次批准或拒绝精确配置差异。" },
           "input": { "$ref": "#/components/schemas/DirectedDeviceInput" },
           "jobId": {
             "type": "string"

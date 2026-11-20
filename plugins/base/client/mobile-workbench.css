@@ -39,6 +39,9 @@
   .cmd-shell-sidebar [class*="logoRow"] { display: none; }
   .cmd-shell-sidebar [class*="topStrip"] { display: none !important; }
   .cmd-shell-sidebar [class*="railMark"] { display: none !important; }
+  .cmd-shell-sidebar .cmd-sidebar-nav :is(.dsh-device-launcher, .dsh-device-launcher-target, .dsh-device-switch) {
+    display: none;
+  }
   .cmd-shell-sidebar .cmd-session, .cmd-shell-sidebar [class*="panelRow"],
   .cmd-shell-sidebar .cmd-settings { min-height: 44px; }
   .cmd-shell-sidebar .cmd-settings-row > button { min-height: 44px; }
@@ -68,7 +71,7 @@
     background: transparent; color: inherit; cursor: pointer; touch-action: manipulation;
   }
   .cmd-mobile-device { display: flex; align-items: center; min-width: 0; }
-  .cmd-mobile-device > button { max-width: 94px; width: auto; padding-inline: 6px; gap: 4px; }
+  .cmd-mobile-device > button { min-width: 44px; max-width: 94px; width: auto; padding-inline: 6px; gap: 4px; }
   .cmd-mobile-navigation > button:active,
   .cmd-mobile-device > button:active { background: var(--dsw-alias-interactive-bg-hover); }
   .cmd-mobile-sidebar-icon-open { transform: rotate(180deg); }

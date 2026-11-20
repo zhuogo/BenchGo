@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeviceResources, projectResources, deviceConnectionFailure } from '../src/devices/resources.mjs';
+import { openDeviceRegistry } from '../src/devices/registry.mjs';
 import { hash, openStore } from '../src/pairing/store.mjs';
 import { loadIdentity } from '../src/transport/tls.mjs';
 import { createServer } from 'node:https';
@@ -18,6 +19,33 @@ function mutableRegistry() {
   };
 }
 const resourceResult = () => ({ value: { available: true, hostId: 'host', items: [{ resourceId: 'project' }] } });
+
+test('legacy records recover both identities using the saved pair and retain their directory ID', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-identity-'));
+  const registry = await openDeviceRegistry(directory);
+  const pin = Buffer.alloc(32, 1).toString('base64'), hostId = 'sha256:' + pin;
+  const record = await registry.upsert({ name: 'B', url: 'https://example.test', pin, token: 'existing-token' });
+  const paths = [];
+  const service = createDeviceResources({ registry, route: async target => target, request: async (target, path, input) => {
+    assert.equal(target.token, 'existing-token');
+    paths.push(path);
+    if (path === '/link/api/info') return { value: { hostId } };
+    assert.equal(input.operation, 'catalog');
+    return { value: { hostId, authorizationId: 'paired-a' } };
+  } });
+  t.after(async () => { service.clear(); await rm(directory, { recursive: true, force: true }); });
+  const resolve = () => service.resolveDeviceIdentity({ deviceId: record.id });
+  const [first, second] = await Promise.all([resolve(), resolve()]);
+  assert.equal(first.hostId, hostId);
+  assert.equal(first.authorizationId, 'paired-a');
+  assert.equal(first.id, record.id);
+  assert.equal(first.token, undefined);
+  assert.deepEqual(first, second);
+  assert.deepEqual(paths, ['/link/api/info', '/link/api/rpc']);
+  const reopened = await openDeviceRegistry(directory);
+  assert.equal(reopened.get(record.id).authorizationId, 'paired-a');
+  assert.equal(deviceConnectionFailure({ code: 'EXECUTION_OWNER_CHANGED', status: 403 }).status, 'online');
+});
 test('session writes require the displayed identity and reject re-pairing before probing or sending', async t => {
   const saved = mutableRegistry(), calls = [];
   const service = createDeviceResources({ registry: saved, route: async value => { calls.push('route'); return value; }, request: async (_target, _path, input) => { calls.push(input); return { value: { accepted: true } }; } });

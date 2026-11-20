@@ -6,6 +6,7 @@ import { initializeTaskCleanup } from './task-cleanup-store.mjs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { installResultNotificationStore, resultReplyDelivered } from './result-notification-store.mjs';
 import { installAttentionStore } from './attention-store.mjs';
 import { installDesktopTaskStore } from './desktop-task-store.mjs';
@@ -26,6 +27,7 @@ import { redactExecutionText } from './execution-summary-input.mjs';
 import { hasSavedCompletion } from './execution-uncertainty.mjs';
 import { initializeOwnerHostId, installRemoteExecutionStore, initializeRemoteExecutionFacts } from './remote-execution-store.mjs';
 import { usesExternalWorker } from './work-role-policy.mjs';
+import { personalChannels } from './channel-personal-scope.mjs';
 
 const json = value => JSON.stringify(value);
 const parse = value => JSON.parse(value);
@@ -34,6 +36,7 @@ const record = value => value && typeof value === 'object' && !Array.isArray(val
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const copy = value => structuredClone(value);
 const uuid = () => randomUUID();
+const immutableInboundSource = ({ connectionRevision, replyRequestId, messageOccurredAt, ...source }) => source;
 const timestamp = n => new Date(n).toISOString();
 const safeLimit = (value, fallback, max) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
 
@@ -257,7 +260,11 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         const existing = db.prepare('SELECT * FROM sa_triggers WHERE dedupe_key=?').get(input.dedupeKey);
         if (existing) {
           const previous = triggerValue(existing);
-          if (previous.threadId !== thread.id || json(previous.source) !== source || json(previous.actor) !== actor || previous.content !== input.content) throw fail('TRIGGER_CONFLICT', 'An idempotency key cannot identify different trigger content');
+          const channelReplay = input.intakeStage === 'pending' && personalChannels.has(previous.source.channel)
+            && input.gate?.evidence?.sourceVerified === true
+            && isDeepStrictEqual(immutableInboundSource(previous.source), immutableInboundSource(input.source));
+          if (previous.threadId !== thread.id || (!channelReplay && json(previous.source) !== source)
+            || json(previous.actor) !== actor || previous.content !== input.content) throw fail('TRIGGER_CONFLICT', 'An idempotency key cannot identify different trigger content');
           const candidate = db.prepare('SELECT * FROM sa_candidates WHERE trigger_id=? AND handback_task_id IS NULL ORDER BY rowid LIMIT 1').get(previous.id);
           return { trigger: previous, candidate: candidateValue(candidate), duplicate: true, requiresEval: Boolean(candidate) };
         }
@@ -432,24 +439,26 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
     createTask(input) { return tx(() => insertTask(input)); },
     getTask(taskId) { return taskValue(db.prepare('SELECT * FROM sa_tasks WHERE id=?').get(id(taskId, 'taskId'))); },
     /** Identity guard for an exact stop-and-organize intent, independent of normal execution progress. */
-    taskCleanupExecutionStamp(taskId, { excludeTriggerId } = {}) {
+    taskCleanupExecutionStamp(taskId, { excludeTriggerId, legacy = false } = {}) {
       id(taskId, 'taskId');
       if (excludeTriggerId !== undefined) id(excludeTriggerId, 'excludeTriggerId');
       // A single SQL snapshot also avoids mixing identities across a concurrent
       // claim/input transaction. State, leases, stop controls and applied receipts
-      // deliberately do not participate. pause_reason survives our own stop.
+      // deliberately do not participate. Remote Run owners are observer leases.
       const row = db.prepare(`SELECT pause_reason,
         (SELECT json_group_array(json_array(id,fence)) FROM
           (SELECT id,fence FROM sa_assignments WHERE task_id=sa_tasks.id ORDER BY id)) AS assignments,
         (SELECT json_group_array(json_array(id,fence,owner)) FROM
-          (SELECT r.id,r.fence,r.owner FROM sa_runs r JOIN sa_assignments a ON a.id=r.assignment_id
+          (SELECT r.id,r.fence,CASE WHEN ?=0 AND json_extract(a.payload,'$.executor')='remote' THEN NULL ELSE r.owner END AS owner
+            FROM sa_runs r JOIN sa_assignments a ON a.id=r.assignment_id
             WHERE a.task_id=sa_tasks.id ORDER BY r.id)) AS runs,
         (SELECT json_group_array(json_array(id,trigger_id,kind,fingerprint,snapshot_hash)) FROM
           (SELECT id,trigger_id,kind,fingerprint,benchgo_cleanup_snapshot_hash(snapshot) AS snapshot_hash
             FROM sa_task_inputs WHERE task_id=sa_tasks.id AND trigger_id IS NOT ? ORDER BY id)) AS inputs
-        FROM sa_tasks WHERE id=?`).get(excludeTriggerId ?? null, taskId);
+        FROM sa_tasks WHERE id=?`).get(legacy ? 1 : 0, excludeTriggerId ?? null, taskId);
       if (!row) throw fail('TASK_NOT_FOUND', 'Task does not exist');
-      return createHash('sha256').update(json([taskId, row.pause_reason, row.assignments, row.runs, row.inputs])).digest('hex');
+      const digest = createHash('sha256').update(json([taskId, row.pause_reason, row.assignments, row.runs, row.inputs])).digest('hex');
+      return legacy ? digest : `v2:${digest}`;
     },
     cancelTask(taskId) {
       return tx(() => cancelTaskInternal(taskId));

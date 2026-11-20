@@ -17,9 +17,7 @@ export async function readRemoteExecutionCatalog(ctx, deviceId, signal) {
   required(deviceId, '目标设备');
   if (deviceId === 'local') throw new Error('远端执行目录需要明确目标设备');
   const link = linkService(ctx);
-  const devices = await link.devices({ signal });
-  const device = devices.devices?.find(row => row.id === deviceId);
-  if (!device?.hostId || !device.authorizationId) throw Object.assign(new Error('目标设备身份或连接授权尚未核实'), { code: 'EXECUTION_TARGET_UNVERIFIED' });
+  const device = await link.resolveDeviceIdentity({ deviceId, signal });
   const catalog = await link.callDevice({ deviceId, expectedHostId: device.hostId, expectedAuthorizationId: device.authorizationId,
     input: { action: 'execution', version: 2, operation: 'catalog' }, signal });
   if (catalog?.version !== 2 || catalog.available !== true || catalog.hostId !== device.hostId
@@ -28,14 +26,17 @@ export async function readRemoteExecutionCatalog(ctx, deviceId, signal) {
 }
 
 export function selectRemoteExecution(catalog, input) {
-  const config = input.executionConfig;
+  const preference = catalog.workerPreference;
+  if (preference?.error) throw Object.assign(new Error(preference.error.message), { code: 'EXECUTION_WORKER_UNAVAILABLE' });
+  if (!catalog.models.length) throw Object.assign(new Error('目标设备没有可用的执行模型，请在目标设备配置供应商和模型'), { code: 'EXECUTION_MODEL_UNAVAILABLE' });
+  const config = preference?.config ?? input.executionConfig;
   if (!config || Object.keys(config).some(key => !['harness', 'models'].includes(key)) || !['official', 'codex', 'claude'].includes(config.harness)
     || !Array.isArray(config.models) || config.models.length !== 1) throw Object.assign(new Error('远端委派需要从目标执行目录选择一个明确的 Harness、供应商和模型组合'), { code: 'EXECUTION_CONFIG_REQUIRED' });
   for (const model of config.models) {
     if (!model || Object.keys(model).some(key => !['providerId', 'modelId', 'params'].includes(key))
       || typeof model.providerId !== 'string' || !model.providerId || typeof model.modelId !== 'string' || !model.modelId
       || !catalog.models.some(row => row.harness === config.harness && row.providerId === model.providerId && row.modelId === model.modelId
-        && digest(row.params ?? null) === digest(model.params ?? null))) throw Object.assign(new Error('远端执行模型或参数不属于已核实目录'), { code: 'EXECUTION_MODEL_UNAVAILABLE' });
+        && (preference?.config || digest(row.params ?? null) === digest(model.params ?? null)))) throw Object.assign(new Error('远端执行模型或参数不属于已核实目录'), { code: 'EXECUTION_MODEL_UNAVAILABLE' });
   }
   const project = input.projectId === undefined ? undefined : catalog.projects.find(row => row.id === input.projectId);
   if (input.projectId !== undefined && (!project || typeof project.path !== 'string' || !project.path)) throw new Error('目标设备项目不存在');

@@ -16,6 +16,10 @@ import { assistantModelCatalog, pickerCatalog } from '../../base/client/model-ca
 import { providerOption } from '../../base/client/provider-brand-icon.jsx';
 import { prioritizeRouterGo } from '../../base/client/provider-options.mjs';
 import { routerGo } from '../../base/shared/builtin-providers.mjs';
+import { reasoningLevelLabels } from '../../base/client/model-reasoning-state.mjs';
+import { ModelEffortSlider } from '../../base/client/model-effort-slider.jsx';
+import { ToolBrandIcon } from '../../base/client/tool-brand-icon.jsx';
+import { Dialog, DialogClose, DialogContent, DialogTitle, DialogTrigger } from '../../shared/client/ui/dialog.jsx';
 import css from './style.css';
 import documentsCss from './documents.css';
 import { AssistantCard } from './card.jsx';
@@ -456,19 +460,40 @@ function AssistantRenameDialog({ target, onClose, onError }) {
 }
 function IconButton({ icon, label, ...props }) { return <Button variant="ghost" type="button" className="ba-icon" title={label} aria-label={label} {...props}><UIIcon name={icon} size={17} /></Button>; }
 function Field({ label, children }) { return <label className="ba-field"><span>{label}</span>{children}</label>; }
-function Picker({ label, value, options, placeholder = '选择', allowCustom = false, disabled = false, onChange }) {
+function Picker({ label, value, options, placeholder = '选择', allowCustom = false, disabled = false, searchable = true, onChange }) {
   const id = useId();
   const items = options.map(item => typeof item === 'string' ? { value: item, label: item } : item);
-  return <div className="ba-field"><label htmlFor={id}>{label}</label><CustomSelect id={id} aria-label={label} value={value} options={items.map(item => ({ ...item, searchText: item.label + ' ' + item.value }))} placeholder={placeholder} searchable allowCustom={allowCustom} disabled={disabled} onChange={onChange} /></div>;
+  return <div className="ba-field"><label htmlFor={id}>{label}</label><CustomSelect id={id} aria-label={label} value={value} options={items.map(item => ({ ...item, searchText: item.label + ' ' + item.value }))} placeholder={placeholder} searchable={searchable} allowCustom={allowCustom} disabled={disabled} onChange={onChange} /></div>;
 }
-function ModelFields({ value = {}, harness = 'official', onHarnessChange, onChange, onStatusChange }) {
+const harnesses = [
+  { value: 'official', label: 'DeepSeek Harness', icon: <ToolBrandIcon tool="deepseek" size={18} colored /> },
+  { value: 'codex', label: 'Codex', icon: <ToolBrandIcon tool="codex" size={18} colored /> },
+  { value: 'claude', label: 'Claude Code', icon: <ToolBrandIcon tool="claude" size={18} /> },
+];
+
+function ModelFields({ value, harness, canChangeHarness, onChange }) {
+  const [open, setOpen] = useState(false), [draft, setDraft] = useState(value), [draftHarness, setDraftHarness] = useState(harness);
+  const activeHarness = open ? draftHarness : harness;
+  return <Dialog open={open} onOpenChange={next => {
+    if (next) { setDraft(value); setDraftHarness(harness); }
+    setOpen(next);
+  }}>
+    <ModelSelection open={open} saved={value} harness={activeHarness} draft={draft} canChangeHarness={canChangeHarness}
+      onHarnessChange={next => {
+        if (next === draftHarness) return;
+        setDraftHarness(next);
+        setDraft(next === harness ? value : { providerId: '', modelId: '' });
+      }} onDraftChange={setDraft} onApply={() => { onChange(draft, draftHarness); setOpen(false); }} />
+  </Dialog>;
+}
+
+function ModelSelection({ open, saved, harness, draft: value, canChangeHarness, onHarnessChange, onDraftChange: onChange, onApply }) {
   const [catalog, setCatalog] = useState(() => assistantModelCatalog.peek() || { providers: [], models: [] }), [error, setError] = useState('');
   const [toolCatalog, setToolCatalog] = useState(() => pickerCatalog.peek()), [toolError, setToolError] = useState('');
   const revision = useSyncExternalStore(assistantModelCatalog.subscribe, assistantModelCatalog.getSnapshot);
   const toolRevision = useSyncExternalStore(pickerCatalog.subscribe, pickerCatalog.getSnapshot);
   const [loading, setLoading] = useState(() => assistantModelCatalog.peek() === null);
   const errorMessage = harness === 'official' ? error : toolError;
-  useEffect(() => { onStatusChange?.({ loading, error: errorMessage }); }, [loading, errorMessage, onStatusChange]);
   useEffect(() => {
     let active = true;
     setError(''); setToolError('');
@@ -499,16 +524,62 @@ function ModelFields({ value = {}, harness = 'official', onHarnessChange, onChan
     const option = providerOption(provider);
     return provider.disabled && !loading && !errorMessage ? { ...option, selectedLabel: `${option.label} · 不可用` } : option;
   });
+  const officialModels = harness === 'official' && providerSelected ? catalog.models.filter(model => model.provider === value.providerId) : [];
   const models = harness === 'official'
-    ? catalog.models.filter(model => providerSelected && model.provider === value.providerId).map(model => ({ value: model.id, label: model.name || model.id }))
+    ? officialModels.map(model => ({ value: model.id, label: model.name || model.id }))
     : routes.filter(row => !value.providerId || row.providerId === value.providerId).map(row => ({ value: row.nativeModelId, label: row.name || row.nativeModelId }));
-  return <><div className="ba-model-fields" data-harness-field={!!onHarnessChange}>
-    {onHarnessChange && <Picker label="执行 Harness" value={harness} options={[
-      { value: 'official', label: '官方 DeepSeek Harness' }, { value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude Code' },
-    ]} onChange={onHarnessChange} />}
-    <Picker label="供应商" value={value.providerId || ''} options={providerOptions} placeholder="选择供应商" onChange={providerId => onChange({ ...value, providerId, ...(providerId !== value.providerId ? { modelId: '' } : {}) })} />
-    <Picker label="模型" value={value.modelId || ''} options={models} placeholder={value.modelId || '选择模型'} allowCustom={harness === 'official' && providerSelected} disabled={!providerSelected} onChange={modelId => onChange({ ...value, modelId })} />
-  </div>{loading ? <Loading label="正在读取模型目录" compact /> : errorMessage ? <p className="ba-model-feedback" data-error="true" role="alert"><span>模型目录加载失败：{errorMessage}。</span><Button variant="ghost" type="button" className="ba-quiet" onClick={() => harness === 'official' ? assistantModelCatalog.invalidate() : pickerCatalog.invalidate()}>重试</Button></p> : providers.every(provider => provider.disabled) && <p className="ba-model-feedback" role="status"><UIIcon name="server" size={15} /><span>{harness === 'official' ? '目录中还没有供应商，可在模型设置中配置。' : toolCatalog?.tools?.find(tool => tool.id === harness)?.routeReason || '当前 Harness 没有可用的 API 模型组合。'}</span></p>}</>;
+  const { reasoning } = officialModels.find(model => model.id === value.modelId) ?? {};
+  const efforts = (reasoning?.efforts || []).map(({ id, name }) => ({ id, name: Object.hasOwn(reasoningLevelLabels, id) ? reasoningLevelLabels[id] : name || id }));
+  const effort = value.options?.reasoningEffort;
+  const unsupportedEffort = !loading && !errorMessage && harness === 'official' && providerSelected && effort !== undefined && !efforts.some(item => item.id === effort);
+  const { reasoningEffort: _oldEffort, ...otherOptions } = value.options ?? {};
+  const withEffort = (model, reasoningEffort) => {
+    const next = { ...model };
+    const options = reasoningEffort ? { ...otherOptions, reasoningEffort } : otherOptions;
+    if (Object.keys(options).length) next.options = options;
+    else delete next.options;
+    return next;
+  };
+  const selectModel = (providerId, modelId) => {
+    if (providerId !== value.providerId || modelId !== value.modelId) onChange(withEffort({ ...value, providerId, modelId }));
+  };
+  const effortOptions = [{ id: '', name: '默认' }, ...efforts];
+  const currentHarness = harnesses.find(item => item.value === harness);
+  const savedProvider = providerOptions.find(item => item.value === saved.providerId);
+  const savedModel = harness === 'official'
+    ? catalog.models.find(model => model.provider === saved.providerId && model.id === saved.modelId)?.name
+    : routes.find(row => row.providerId === saved.providerId && row.nativeModelId === saved.modelId)?.name;
+  const unavailableCatalog = loading || !!errorMessage;
+  const externalModelAvailable = models.some(item => item.value === value.modelId);
+  return <>
+    <DialogTrigger asChild>
+      <Button className="ba-model-select-trigger" variant="outline" type="button" aria-label="选择工具与模型">
+        {savedProvider?.icon || <UIIcon name="box" size={16} />}
+        <span className="ba-model-selection-summary"><strong>{savedModel || saved.modelId || '选择模型'}</strong>{saved.providerId && <small>{savedProvider?.label || saved.providerId}{saved.options?.reasoningEffort && ` · ${Object.hasOwn(reasoningLevelLabels, saved.options.reasoningEffort) ? reasoningLevelLabels[saved.options.reasoningEffort] : saved.options.reasoningEffort}`}</small>}</span>
+        <UIIcon name="chevronDown" size={15} />
+      </Button>
+    </DialogTrigger>
+    {open && <DialogContent className="ba-model-dialog" aria-describedby={undefined} onEscapeKeyDown={event => {
+      if (event.target.closest?.('.dowork-select-popup')) event.preventDefault();
+    }}>
+      <DialogTitle>工具与模型</DialogTitle>
+      <div className="ba-model-fields">
+        {canChangeHarness
+          ? <Picker label="执行 Harness" value={harness} options={harnesses} searchable={false} onChange={onHarnessChange} />
+          : <div className="ba-field"><span>执行 Harness</span><div className="ba-model-harness">{currentHarness?.icon}{currentHarness?.label}</div></div>}
+        <Picker label="供应商" value={value.providerId || ''} options={providerOptions} placeholder="选择供应商" disabled={unavailableCatalog} onChange={providerId => { if (providerId !== value.providerId) selectModel(providerId, ''); }} />
+        <Picker label="模型" value={value.modelId || ''} options={models} placeholder={value.modelId || '选择模型'} allowCustom={harness === 'official' && providerSelected} disabled={unavailableCatalog || !providerSelected} onChange={modelId => selectModel(value.providerId, modelId)} />
+      </div>
+      {loading ? <Loading label="正在读取模型目录" compact /> : errorMessage ? <p className="ba-model-feedback" data-error="true" role="alert"><span>模型目录加载失败：{errorMessage}。</span><Button variant="ghost" type="button" onClick={() => harness === 'official' ? assistantModelCatalog.invalidate() : pickerCatalog.invalidate()}>重试</Button></p> : providers.every(provider => provider.disabled) && <p className="ba-model-feedback" role="status"><UIIcon name="server" size={15} /><span>{harness === 'official' ? '目录中还没有供应商，可在模型设置中配置。' : toolCatalog?.tools?.find(tool => tool.id === harness)?.routeReason || '当前 Harness 没有可用的 API 模型组合。'}</span></p>}
+      {unsupportedEffort && <p className="ba-model-feedback" data-error="true" role="alert"><span>原档位已不可用（{effort}）</span><Button variant="ghost" type="button" onClick={() => onChange(withEffort(value))}>恢复默认</Button></p>}
+      {efforts.length > 0 && <ModelEffortSlider options={effortOptions} value={effort ?? ''} disabled={unavailableCatalog} onCommit={index => onChange(withEffort(value, effortOptions[index].id))} />}
+      {!unavailableCatalog && harness !== 'official' && value.modelId && <p className="ba-model-feedback">推理强度使用此 Harness 的高级设置。</p>}
+      <div className="ba-model-dialog-actions">
+        <DialogClose asChild><Button variant="ghost" type="button">取消</Button></DialogClose>
+        <Button type="button" disabled={unavailableCatalog || !providerSelected || !value.modelId || unsupportedEffort || (harness !== 'official' && !externalModelAvailable)} onClick={onApply}>应用</Button>
+      </div>
+    </DialogContent>}
+  </>;
 }
 function Identity({ snapshot, refresh, onDirtyChange, onDesign, requestedTab, active, modelsOnly = false }) {
   const [confirm, confirmation] = useConfirmation();
@@ -774,7 +845,7 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
             </RetainedPane>
             {view === 'chat' && <>
               {history.sessionId ? <AssistantConversation key={threadId} active={!execution} ctx={ctx}
-                sessionId={history.sessionId} threadId={threadId} history={history} onLoadEarlier={loadEarlier} onRefresh={onRefresh}
+                sessionId={history.sessionId} threadId={threadId} channel={!!selected?.sourceKey} history={history} onLoadEarlier={loadEarlier} onRefresh={onRefresh}
                 SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name}
                 assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={openResources} onOpenExecution={openExecution}
                 loadError={error} onRetryLoad={retryLoad} onDismissLoadError={dismissLoadError}

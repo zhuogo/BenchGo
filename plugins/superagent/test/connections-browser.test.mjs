@@ -28,6 +28,7 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
     configs.feishu={...configs.feishu,enabled:true,appId:'App:Feishu',appSecretRef:'ref:feishu',accessMode:'platform',groups:[]};
     configs.slack={...configs.slack,enabled:true,accountId:'Team:Opaque',botTokenRef:'ref:bot',appTokenRef:'ref:app',ownerIds:['User:Owner']};
     configs.dingtalk={...configs.dingtalk,enabled:true,appId:'App:Opaque',appSecretRef:'ref:secret',robotCode:'Robot:Opaque',ownerIds:['Staff:Owner']};
+    configs.telegram={...configs.telegram,enabled:true,botTokenRef:'ref:telegram'};
     let revision=1;window.calls=[];
     const state=channel=>{const c=window.mode==='empty'&&channel===window.target?catalog.find(d=>d.id===channel).defaults:configs[channel];return {enabled:c.enabled,authentication:c.enabled&&channel!=='feishu'?'verified':'unverified',events:'unverified',sending:'unverified',connection:{state:c.enabled?'connected':'disabled',...(channel==='feishu'?{authenticated:c.enabled}: {})}};};
     window.syncSignals=[];window.pendingSync=[];
@@ -37,7 +38,7 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
         window.syncSignals.push(signal);
         if(window.syncFailure)throw Error('状态服务暂不可用');
         if(window.deferSync)return new Promise(resolve=>window.pendingSync.push(()=>resolve({channels:catalog.map(d=>({...d,status:{enabled:false,connection:{state:'disabled'}}}))})));
-        return {channels:catalog.map(d=>({...d,status:state(d.id)}))};
+        return {channels:catalog.map(d=>({...d,status:state(d.id),...(d.id==='telegram'?{recentSources:[{actorId:'738392',groupId:'-1006482'}]}:{})}))};
       }
       if(action==='connections'){
         if(channel===window.target&&window.mode==='loading')return new Promise(()=>{});
@@ -70,7 +71,7 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
       await page.setContent('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;padding:20px;font-family:Arial,sans-serif;color:#242424;box-sizing:border-box}#app{max-width:1080px;margin:auto;height:auto}.ba-root{height:auto!important;min-width:0}</style></head><body><div id="app" class="ba-root"></div></body></html>');
       await page.evaluate(({target,mode}) => { window.target=target;window.mode=mode; }, {target,mode});
       await page.addScriptTag({content:bundle.outputFiles[0].text});
-      if(target!=='feishu')await page.getByRole('tab', {name:target==='slack'?'Slack':'钉钉',exact:true}).click();
+      if(target!=='feishu')await page.getByRole('tab', {name:catalog.find(channel=>channel.id===target).label,exact:true}).click();
     }
     for (const target of ['feishu','slack','dingtalk']) {
       for (const width of [1440,768,390]) {
@@ -112,6 +113,38 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
       await page.getByRole('button',{name:'验证连接',exact:true}).click();
       await page.getByText('验证完成；认证、接收和发送状态分别显示，实际收发请在原渠道确认。',{exact:true}).waitFor();
     }
+    await open('telegram','data',390);
+    await page.getByText('近期收到的来源 ID',{exact:true}).click();
+    await page.getByRole('button',{name:'加入账号名单',exact:true}).click();
+    await page.getByRole('button',{name:'加入群名单',exact:true}).click();
+    assert.equal(await page.getByLabel('允许的账号 ID',{exact:true}).inputValue(),'738392');
+    assert.equal(await page.getByLabel('允许的群 ID',{exact:true}).inputValue(),'-1006482');
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'personal scope overflows the narrow panel');
+    await page.getByRole('button',{name:'保存更改',exact:true}).click();
+    await page.getByText('已保存',{exact:true}).waitFor();
+    const scopeSave=await page.evaluate(()=>window.calls.find(c=>c.action==='connectionConfigure'));
+    assert.deepEqual(scopeSave.input.patch,{ownerIds:['738392'],chatIds:['-1006482']});
+    await open('api','loading',390);
+    await page.getByText('正在读取连接配置',{exact:true}).waitFor();
+    await open('api','error',390);
+    await page.getByRole('alert').filter({hasText:'连接配置暂时不可用'}).waitFor();
+    await open('api','data',390);
+    const integrationName=page.getByLabel('接入名称',{exact:false});
+    await integrationName.waitFor();
+    assert.equal(await page.getByRole('tab',{name:/Webhook|API Service/}).count(),0);
+    assert.equal(await page.locator('.ba-connection-field').count(),1);
+    assert.equal(await page.locator('.ba-channel-status').innerText(),'未启用');
+    await integrationName.fill('My:Integration');
+    await page.getByRole('switch',{name:'启用外部集成'}).check();
+    await page.getByRole('button',{name:'保存更改',exact:true}).click();
+    await page.getByText('已保存',{exact:true}).waitFor();
+    const integrationSave=await page.evaluate(()=>window.calls.find(c=>c.action==='connectionConfigure'));
+    assert.deepEqual(integrationSave.input.patch,{enabled:true,accountId:'My:Integration'});
+    await page.getByRole('button',{name:'重新加载',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('[role=tabpanel]')?.getAttribute('aria-busy')==='false');
+    assert.equal(await integrationName.inputValue(),'My:Integration');
+    assert.equal(await page.getByRole('switch',{name:'启用外部集成'}).isChecked(),true);
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'integration form overflows the narrow panel');
     await open('feishu','data',1440);
     const appId=page.getByLabel('App ID',{exact:false});
     await appId.fill('Unsaved:App/ID');

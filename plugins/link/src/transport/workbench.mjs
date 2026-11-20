@@ -54,7 +54,7 @@ async function writeChunk(res, chunk, signal) {
 }
 
 /** Same installed UI and Gateway, admitted exclusively by a paired device. */
-export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
+export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCenter } = {}) {
   const peers = new Map();
   const realtime = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
   let closed = false;
@@ -144,6 +144,27 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot } = {}) {
       res.end();
     };
     try {
+      if (path.startsWith('device-center/') && deviceCenter) {
+        const centerPath = path.slice('device-center/'.length);
+        if (centerPath === 'api/devices' && req.method === 'POST') {
+          const value = await deviceCenter(await json(req), device);
+          await sendResponse(Response.json(value)); return;
+        }
+        if (!['GET', 'HEAD'].includes(req.method)) throw fail('不支持的方法', 405);
+        const file = { '': 'index.html', 'app.js': 'app.js', 'app.css': 'app.css' }[centerPath];
+        if (centerPath === 'device-config.js') {
+          await sendResponse(new Response('globalThis.__DSH_DEVICE_CENTER__=true;globalThis.__DSH_PAIRED_DEVICE_CENTER__=true;globalThis.__DSH_DEVICE_PARENT_ORIGIN__=location.origin;', { headers: { 'content-type': mime['.js'] } })); return;
+        }
+        if (!file) throw fail('未找到', 404);
+        let data = await readFile(new URL(file, webRoot));
+        const outgoing = { 'content-type': mime[extname(file)] };
+        if (file === 'index.html') {
+          data = Buffer.from(data.toString().replace('<head>', '<head><script src="./device-config.js"></script>'));
+          outgoing['content-security-policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
+          outgoing['x-frame-options'] = 'SAMEORIGIN';
+        }
+        await sendResponse(new Response(data, { headers: outgoing }), file !== 'index.html'); return;
+      }
       if (path === 'remote/open' && req.method === 'POST') {
         const input = await json(req);
         if (typeof input.id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(input.id) || typeof input.endpoint !== 'string' || !/^[a-zA-Z0-9_$.-]+(?:\/[a-zA-Z0-9_$.-]+)*$/.test(input.endpoint)) throw fail('流请求无效');

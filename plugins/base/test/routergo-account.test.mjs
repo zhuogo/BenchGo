@@ -117,7 +117,7 @@ test('manual credential needs explicit replacement, retry preserves existing con
   assert.deepEqual([...f.refs], [['ROUTERGO_API_KEY', 'old-manual-secret']]);
   f.fail();
   assert.equal((await call(f.service, 'save', { id, replace: true })).body.imported, 1);
-  assert.equal(f.doc.value.providers.routergo.api, 'openai-responses');
+  assert.equal(f.doc.value.providers.routergo.api, 'openai-completions');
   assert.equal(f.doc.value.providers.routergo.displayName, 'RouterGo');
   assert.deepEqual(f.doc.value.providers.routergo.models[0], f.existing);
   assert.equal(f.refs.get('ROUTERGO_API_KEY'), 'old-manual-secret');
@@ -133,7 +133,7 @@ test('existing account sync updates the managed connection and preserves the exa
   f.catalog([]);
   assert.deepEqual((await call(f.service, 'sync')).body, { state: 'synced', added: 0, updated: 0, removed: 0 });
   assert.deepEqual(profile, {
-    displayName: 'RouterGo', api: 'openai-responses', baseURL, apiKeyEnv: ref, models: [f.existing],
+    displayName: 'RouterGo', api: 'openai-completions', baseURL, apiKeyEnv: ref, models: [f.existing],
   });
   assert.equal(f.refs.get(ref), key);
   assert.equal(f.refs.get('ROUTERGO_API_KEY'), 'old-manual-secret');
@@ -161,10 +161,11 @@ test('catalog sync persists automatic ownership, protects local changes and retr
   t.after(f.service.dispose);
   const { body: { id } } = await call(f.service, 'start');
   f.advance(2); f.mode(null);
-  f.catalog(['Update', 'Remove', 'Edited', 'Capability', 'Deleted'].map(id => ({ id, name: id, contextWindow: 24000 })));
+  f.catalog(['Update', 'Remove', 'Edited', 'Capability', 'Deleted'].map(id => ({ id, name: id, contextWindow: 24000, ...(id === 'Update' ? { thinkingLevels: ['off', 'high'] } : {}) })));
   await call(f.service, 'poll', { id });
   assert.equal((await call(f.service, 'save', { id })).body.imported, 5);
   const saved = f.doc.value.providers.routergo;
+  assert.deepEqual(saved.models[0].reasoningEfforts, { off: null, high: 'high' });
   const edited = { ...saved.models.find(model => model.id === 'Edited'), contextWindow: 99_000 };
   saved.models = saved.models.filter(model => model.id !== 'Deleted').map(model => model.id === 'Edited' ? edited : model);
   saved.models.push({ id: 'Manual', name: '手动保留' });
@@ -173,7 +174,7 @@ test('catalog sync persists automatic ownership, protects local changes and retr
   t.after(next.dispose);
   const before = structuredClone(saved.models);
   f.catalog([
-    { id: 'Update', name: '新名称', contextWindow: 32000 }, { id: 'Deleted', name: 'Deleted' },
+    { id: 'Update', name: '新名称', contextWindow: 32000, thinkingLevels: ['high'] }, { id: 'Deleted', name: 'Deleted' },
     { id: 'Edited', name: '更新显示名', contextWindow: 48_000 }, { id: 'update', name: '区分大小写' },
   ]);
   f.fail('catalog');
@@ -186,7 +187,7 @@ test('catalog sync persists automatic ownership, protects local changes and retr
   assert.deepEqual(results.map(result => result.body), Array(2).fill({ state: 'synced', added: 1, updated: 2, removed: 1 }));
   assert.equal(f.discoveries(), reads + 1);
   assert.deepEqual(saved.models, [
-    { id: 'Update', name: '新名称', contextWindow: 32000 }, { ...edited, name: '更新显示名' },
+    { id: 'Update', name: '新名称', contextWindow: 32000, reasoningEfforts: { high: 'high' } }, { ...edited, name: '更新显示名' },
     { id: 'Capability', name: 'Capability', contextWindow: 24000 }, { id: 'Manual', name: '手动保留' }, { id: 'update', name: '区分大小写' },
   ]);
   f.catalog([]);

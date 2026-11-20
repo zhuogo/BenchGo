@@ -59,9 +59,11 @@ export function resolveMacPackageTarget(arch, platform = process.platform, hostA
   return { name: `mac-${arch}`, arch, platform: 'darwin' };
 }
 
-export async function packageMacOS(arch, { serverResources = 'full' } = {}) {
+export async function packageMacOS(arch, { serverResources = 'full', version } = {}) {
   serverResources = serverResourceDelivery(serverResources);
   const target = resolveMacPackageTarget(arch);
+  version ??= JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
+  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error('Invalid macOS distribution version');
   preflightMacPackaging();
   const dmgTool = await prepareMacDmgTool(arch);
   const engine = join(root, 'deepseek-harness');
@@ -96,14 +98,13 @@ export async function packageMacOS(arch, { serverResources = 'full' } = {}) {
   // NODE_OPTIONS is inherited through pnpm exec's Node child; only this build
   // subprocess gets the preload. It is never copied into the app or runtime.
   await pm(['exec', 'electron-builder', '--config', join(root, 'scripts/desktop/electron-builder.macos.config.mjs'), '--mac', `--${arch}`, '--publish', 'never'], desktop,
-    { NODE_OPTIONS: macSigningNodeOptions(env.NODE_OPTIONS), CUSTOM_DMGBUILD_PATH: dmgTool });
-  const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
+    { NODE_OPTIONS: macSigningNodeOptions(env.NODE_OPTIONS), CUSTOM_DMGBUILD_PATH: dmgTool, BENCHGO_MACOS_PACKAGE_VERSION: version });
   const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   await recordMacArtifacts(join(root, `artifacts/macos-${arch}`), { version, arch, sourceSha });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { values, positionals } = parseArgs({ options: { 'server-resources': { type: 'string', default: 'full' } }, allowPositionals: true });
-  if (positionals.length !== 1) throw new Error('Usage: node scripts/desktop/package-macos.mjs arm64|x64 [--server-resources full|online]');
-  await packageMacOS(positionals[0], { serverResources: values['server-resources'] });
+  const { values, positionals } = parseArgs({ options: { 'server-resources': { type: 'string', default: 'full' }, version: { type: 'string' } }, allowPositionals: true });
+  if (positionals.length !== 1) throw new Error('Usage: node scripts/desktop/package-macos.mjs arm64|x64 [--server-resources full|online] [--version X.Y.Z]');
+  await packageMacOS(positionals[0], { serverResources: values['server-resources'], version: values.version });
 }

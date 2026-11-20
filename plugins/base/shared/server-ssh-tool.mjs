@@ -51,3 +51,21 @@ export function serverSshTool(ctx, getLink, authorize = () => {}, shutdown) {
     },
   };
 }
+
+export function registerOrdinaryServerSshTool(ctx, link) {
+  ctx.inject(['tools', 'agents'], scope => {
+    const shutdown = new AbortController();
+    const ordinary = async agent => {
+      const assistant = scope.get('assistant');
+      if (!assistant) return true;
+      return typeof assistant.readSessionRole === 'function' && (await assistant.readSessionRole(agent.id)) === null;
+    };
+    const authorize = async agent => {
+      if (!await ordinary(agent)) throw new Error('此会话须通过所属角色使用 SSH 运维');
+    };
+    const dispose = scope.tools.register(serverSshTool(scope, () => link, authorize, shutdown.signal), {
+      when: ({ agent }) => agent.session.header.origin !== 'subagent' && !agent.session.header.parentSession && ordinary(agent),
+    });
+    scope.effect(() => () => { shutdown.abort(); dispose(); });
+  });
+}

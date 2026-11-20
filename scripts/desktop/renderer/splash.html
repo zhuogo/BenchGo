@@ -6,6 +6,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
     <title>BenchGo</title>
     <link rel="stylesheet" href="benchgo-startup.css">
+    <link rel="stylesheet" href="startup-progress.css">
     <script src="splash.js" defer></script>
   </head>
   <body class="startup-splash">
@@ -18,7 +19,8 @@
       </div>
       <div class="startup-feedback">
         <p id="startup-status" class="startup-status" role="status" aria-live="polite">正在准备插件…</p>
-        <div class="startup-loading" role="progressbar" aria-label="正在加载"><span aria-hidden="true"></span></div>
+        <div class="startup-loading" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        <p id="startup-wait" class="startup-wait" role="status"></p>
       </div>
     </main>
   </body>

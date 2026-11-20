@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createModelProviders } from '../src/model-providers.mjs';
@@ -57,7 +57,7 @@ test('model discovery classifies structured metadata and treats identifiers as o
   assert.deepEqual(rows.get('listen-one').kinds, ['asr']);
   assert.deepEqual(rows.get('whisper-1').kinds, []);
   assert.deepEqual(rows.get('tts-1').kinds, []);
-  assert.deepEqual(rows.get('tts-named-chat').capabilities, ['chat']);
+  assert.deepEqual(rows.get('tts-named-chat').capabilities, ['text']);
   assert.deepEqual(rows.get('image').capabilities, ['image-generation']);
   assert.equal(rows.has('fixture-secret-value'), false);
   assert.deepEqual(doc.value.providers.routergo.models, []);
@@ -143,7 +143,11 @@ test('route can be described for independent credentials without resolving share
 });
 
 test('RouterGo protocol directory coalesces discovery and rechecks account credentials', async t => {
-  const { service, doc, refs } = fixture();
+  const { ctx, doc, refs } = fixture();
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-model-capabilities-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  ctx.get = id => id === 'benchgo' ? { directory } : undefined;
+  const service = createModelProviders(ctx);
   const ref = 'BENCHGO_ROUTERGO_KEY_' + 'a'.repeat(32);
   Object.assign(doc.value.providers.routergo, { baseURL: 'https://routergo.cn/api/v1', apiKeyEnv: ref, api: 'openai-responses' });
   refs.set(ref, 'account-test-key');
@@ -155,8 +159,20 @@ test('RouterGo protocol directory coalesces discovery and rechecks account crede
     return Response.json({ data: [{ id: 'Exact/ID', capabilities: ['chat', 'responses'] }] });
   });
   const [first, concurrent] = await Promise.all([service.routerGoProtocolModels(), service.routerGoProtocolModels()]);
-  assert.deepEqual(first.get('Exact/ID').capabilities, ['chat', 'responses']);
+  assert.deepEqual(first.get('Exact/ID').capabilities, ['text']);
+  assert.deepEqual(first.get('Exact/ID').providerCapabilities, ['chat', 'responses']);
   assert.deepEqual(concurrent, first);
+  assert.equal(calls, 1);
+  const modelId = 'Exact/ID';
+  await writeFile(join(directory, 'model-capabilities.json'), JSON.stringify({ version: 1,
+    entries: [{ providerId: 'routergo', modelId, capabilities: ['chat', 'responses', 'decision'] }],
+  }));
+  assert.deepEqual(await service.modelCapabilities('routergo'), [{ modelId, capabilities: ['text', 'decision'] }]);
+  assert.deepEqual((await service.routerGoProtocolModels()).get(modelId).capabilities, ['text', 'decision']);
+  await service.saveModelCapabilities('routergo', modelId, []);
+  const disabled = (await service.routerGoProtocolModels()).get(modelId);
+  assert.deepEqual(disabled.capabilities, []);
+  assert.deepEqual(disabled.providerCapabilities, ['chat', 'responses']);
   assert.equal(calls, 1);
   refs.set(ref, 'rotated-test-key');
   await service.routerGoProtocolModels();

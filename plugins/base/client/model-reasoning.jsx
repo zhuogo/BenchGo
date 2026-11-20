@@ -1,13 +1,12 @@
 import React from 'react';
 import { Button } from '../../shared/client/ui/index.jsx';
 import { Select } from '../../shared/client/select.jsx';
-import { withOffEffort } from '../shared/model-profile-match.mjs';
 import { isReasoningMapping, reasoningError, reasoningLevelLabels, reasoningLevels, toggleReasoningLevel, withModelReasoning } from './model-reasoning-state.mjs';
 
 export function ModelReasoningEditor({ model, inherited, retained, defaultEffort, position, disabled, onChange, styles }) {
   const value = model.reasoningEfforts;
-  const configured = isReasoningMapping(value) ? withOffEffort(value) : undefined;
-  const defaults = withOffEffort(inherited);
+  const configured = isReasoningMapping(value) ? value : undefined;
+  const defaults = inherited;
   const available = { ...defaults, ...retained, ...configured };
   const selected = value === undefined ? defaults ?? {} : configured ?? {};
   const levels = reasoningLevels.filter(level => Object.hasOwn(available, level));
@@ -23,7 +22,7 @@ export function ModelReasoningEditor({ model, inherited, retained, defaultEffort
     setShow(true);
   }
   function apply() {
-    const next = withOffEffort({ ...selected, [editing]: editing === 'off' && !wire.trim() ? null : wire });
+    const next = { ...selected, [editing]: editing === 'off' && !wire.trim() ? null : wire };
     onChange(withModelReasoning(model, next), { ...available, ...next });
     setShow(false);
   }
@@ -38,10 +37,9 @@ export function ModelReasoningEditor({ model, inherited, retained, defaultEffort
         const label = (custom ? reasoningLevelLabels[level] + ' · ' + providerValue : reasoningLevelLabels[level]) + (active && level === defaultEffort ? '（默认）' : '');
         return <Button key={level} variant="outline" size="sm"
           aria-label={'模型 ' + position + ' 思考档位 ' + label} aria-pressed={active}
-          disabled={disabled || level === 'off'}
+          disabled={disabled || (level === 'off' && !hasThinking && !active)}
           onClick={() => {
-            const current = !hasThinking && Object.hasOwn(available, 'off') ? { off: available.off } : selected;
-            onChange(withModelReasoning(model, withOffEffort(toggleReasoningLevel(current, available, defaults, level))), available);
+            onChange(withModelReasoning(model, toggleReasoningLevel(selected, available, defaults, level)), available);
           }}>
           {label}
         </Button>;

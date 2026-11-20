@@ -20,6 +20,13 @@ import { ChatNotice } from './chat-notice.jsx';
 
 const labels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' };
 const NO_STATUSES = new Map();
+function canRetryReply(session, input, inbox, pendingInteraction, composerBlocked) {
+  return session?.openState === 'open' && !session.running && !session.removed && session.subagent === null
+    && input?.phase === 'plain' && !session.pendingSubmissions?.length && !input.queue?.length
+    && !inbox?.['next-turn']?.length && !inbox?.['next-step']?.some(item => item.source?.kind === 'user')
+    && !pendingInteraction && !composerBlocked;
+}
+
 const sameFields = (a, b) => { const keys = Object.keys(a); return keys.length === Object.keys(b).length && keys.every(key => Object.is(a[key], b[key])); };
 // Live rows rebuild their small content block list on every projection.
 const sameBlocks = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((block, index) => sameFields(block, b[index]));
@@ -73,9 +80,10 @@ const ChatRow = memo(function ChatRow({ row, attention, saved, agentReaction, ch
   </article>;
 });
 
-export function QuietChat({ home, session, chat, inbox, onOpenFile, petError }) {
+export function QuietChat({ home, session, chat, inbox, input, continuation, promptAllowed, composerBlocked, onOpenFile, petError }) {
   const { history = {}, threadId = 'main', api, onLoadEarlier } = home;
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [chosen, setChosen] = useState({});
+  const [retryAttempt, setRetryAttempt] = useState(null), latestRetry = useRef(null);
   const refresh = useRef(home.onRefresh);
   refresh.current = home.onRefresh;
   const submitInteractive = useCallback(async (text, request) => {
@@ -104,8 +112,50 @@ export function QuietChat({ home, session, chat, inbox, onOpenFile, petError }) 
   const replies = projectReplyRows({ history, chat, sessionId: home.sessionId, running: session.running });
   const projected = quietChatRows(history, threadId, session, chat, inbox, replies);
   const rows = useStableRows(projected);
-  const replyFailure = typeof history.error === 'string' ? history.error : history.error ? history.error.message || '回复失败' : '';
-  const failures = history.failures || [];
+  const lastTurn = chat?.timeline?.turns.get(chat.timeline.turnOrder.at(-1));
+  const lastEnd = lastTurn?.end;
+  const lastReason = lastEnd?.data?.reason;
+  const failureSeq = !home.channel && Number.isSafeInteger(continuation) && (!lastEnd || lastEnd.seq === continuation)
+    ? continuation : null;
+  const retrying = retryAttempt?.phase === 'pending';
+  const retryAccepted = retryAttempt?.phase === 'accepted' && retryAttempt.seq === continuation;
+  const retryError = retryAttempt?.phase === 'failed' && retryAttempt.seq === failureSeq ? retryAttempt.error : '';
+  const historyError = typeof history.error === 'string' ? history.error : history.error && (history.error.message || '回复失败');
+  const superseded = !home.channel && (session.running || input?.phase === 'sending' || retryAccepted || (lastTurn && !lastEnd));
+  const staleHistory = !home.channel && lastEnd && history.lastEndSeq !== undefined
+    && (history.lastEndSeq === null || history.lastEndSeq < lastEnd.seq);
+  const liveFailure = lastReason?.kind === 'error' ? lastReason.error?.message || '回复失败' : session.lastAgentError;
+  const replyFailure = superseded ? '' : home.channel ? historyError : liveFailure || (!staleHistory && historyError);
+  const failures = superseded || staleHistory ? [] : (history.failures || []);
+  const showReplyFailure = !!replyFailure || (!superseded && failureSeq !== null);
+  const showRetry = promptAllowed && failureSeq !== null && !superseded;
+  const canRetry = showRetry && canRetryReply(session, input, inbox, pendingInteraction, composerBlocked);
+  async function retryReply(seq) {
+    if (!canRetry || latestRetry.current?.phase === 'pending'
+      || (latestRetry.current?.seq === seq && latestRetry.current.phase === 'accepted')) return;
+    const { ctx, sessionId } = home;
+    const binding = ctx.sessions.binding(sessionId);
+    const target = binding?.session;
+    if (!target || target.projections.faceOf('conversationContinuation').getSnapshot() !== seq
+      || ctx.remoteAccess?.source('session', sessionId, 'session/prompt').getSnapshot() === false) return;
+    const currentInput = ctx.conversation.input.for(binding.ctx).state.getSnapshot();
+    const currentInbox = target.projections.faceOf('inbox').getSnapshot();
+    const currentInteraction = statusSource?.getSnapshot().get(sessionId)?.pendingInteraction;
+    const currentBlock = ctx.conversation.blocks.storeFor(sessionId).getSnapshot();
+    if (!canRetryReply(target.getSnapshot(), currentInput, currentInbox, currentInteraction, currentBlock)) return;
+    const updateAttempt = (phase, error) => {
+      latestRetry.current = { seq, phase, error };
+      setRetryAttempt(latestRetry.current);
+    };
+    updateAttempt('pending');
+    try {
+      const result = await target.prompt([], 'queue');
+      if (!result.ok) throw result.error;
+      updateAttempt('accepted');
+    } catch (cause) {
+      updateAttempt('failed', cause?.message || String(cause));
+    }
+  }
   const approvalIndex = useApprovalIndex({ ctx: home.ctx, api, ownerThreadId: threadId,
     enabled: rows.some(row => !!row.approval) });
   const approvalTarget = useSyncExternalStore(approvalReminderNavigation.subscribe, approvalReminderNavigation.getSnapshot);
@@ -170,7 +220,16 @@ export function QuietChat({ home, session, chat, inbox, onOpenFile, petError }) 
         busy={(row.role === 'system' || !!row.notification) && busy} running={(row.role === 'assistant' || !!row.notification) && !!session.running} assistantName={home.assistantName} threadId={threadId} api={api} onRefresh={home.onRefresh}
         onRun={run} onChosen={setChosen} onSubmit={submitInteractive} onOpenFile={onOpenFile} SessionProvider={row.approval ? home.SessionProvider : undefined} renderSlot={row.approval ? home.renderSlot : undefined} />;
     })}
-    {(replyFailure || failures.length > 0) && <ChatNotice noticeKey={replyFailure ? 'notice:reply-failed' : undefined} message={replyFailure ? '本次回复未完成，对话记录已保留。请重试或检查模型连接。' : undefined}>
+    {(showReplyFailure || failures.length > 0) && <ChatNotice noticeKey={showReplyFailure ? 'notice:reply-failed' : undefined} message={showReplyFailure
+      ? home.channel ? '本次回复未完成，对话记录已保留。请重试或检查模型连接。' : '本次回复未完成，对话记录已保留。'
+      : undefined}>
+      {showRetry && <div className="ba-chat-notice-actions">
+        <Button variant="ghost" type="button" disabled={!canRetry || retrying} aria-busy={retrying || undefined} onClick={() => retryReply(failureSeq)}>
+          <UIIcon name="refresh" size={16} />
+          {retrying ? '正在重试…' : '重试回复'}
+        </Button>
+      </div>}
+      {retryError && <p role="alert">重试提交失败：{retryError}</p>}
       <div className="ba-chat-notice-details">
         {replyFailure && <Disclosure className="ba-chat-diagnostics" title="诊断详情">
           <pre tabIndex={0} aria-label="诊断正文">{replyFailure}</pre>
@@ -193,7 +252,7 @@ export function QuietChat({ home, session, chat, inbox, onOpenFile, petError }) 
     {home.onConfigureModel && <ChatNotice message="还没有配置文本模型" alert={false}>
       <Button variant="ghost" type="button" onClick={home.onConfigureModel}>去设置模型</Button>
     </ChatNotice>}
-    {(rows.length > 0 || replyFailure || failures.length > 0 || home.loadError || petError || error || activity || awaitingChoice) && <div className="ba-chat-tail">
+    {(rows.length > 0 || showReplyFailure || failures.length > 0 || home.loadError || petError || error || activity || awaitingChoice) && <div className="ba-chat-tail">
       {!replies.length && awaitingChoice && <div className="ba-chat-work ba-chat-await" role="status">在下方选项卡中作答后继续</div>}
       {activity && !awaitingChoice && <ConversationActivity activity={activity} />}
     </div>}

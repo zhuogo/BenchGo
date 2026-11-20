@@ -13,7 +13,7 @@ import { pipeline } from 'node:stream/promises';
 import { github, githubJson, releaseKind, sha256 } from './github.mjs';
 import { fileDigest } from './record-artifact.mjs';
 import { validateReceipt } from './assemble.mjs';
-import { downloadPlatforms, validatePlatformReceipt, verifyDownloads } from './downloads.mjs';
+import { downloadPlatforms, platformDownloadEntries, validatePlatformReceipt, verifyDownloads } from './downloads.mjs';
 import { releaseDownloadUrl, validateReleaseManifest, verifySignedJson } from '../../plugins/base/shared/update-feed.mjs';
 
 const execute = promisify(execFile);
@@ -22,6 +22,9 @@ const sourceSha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(va
 const version = value => typeof value === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
 export const recoveryJobs = ['plan', 'linux / package', 'android / package', 'plugin / package',
   'macos / package (macos-15, arm64)', 'macos / package (macos-15-intel, x64)', 'windows / package'];
+const releaseComponents = ['plugin', 'windows', 'android'];
+const buildKeys = [...releaseComponents, 'macos', 'linux'];
+const jobComponent = name => name.split(' / ')[0];
 
 export function validateRecoveryContext({ runId, productSource, releaseVersion, publisherSource, run, jobs, artifacts, comparison }) {
   if (!/^\d+$/.test(String(runId)) || !sourceSha(productSource) || !sourceSha(publisherSource) || !version(releaseVersion)) throw new Error('Invalid explicit recovery identity');
@@ -30,10 +33,17 @@ export function validateRecoveryContext({ runId, productSource, releaseVersion, 
     || run.repository?.full_name !== 'zhuogo/BenchGo' || run.head_repository?.full_name !== 'zhuogo/BenchGo'
     || run.status !== 'completed' || run.conclusion !== 'failure') throw new Error('Recovery requires the original failed main-branch unified release run');
   if (!['ahead', 'identical'].includes(comparison?.status) || comparison.merge_base_commit?.sha !== productSource) throw new Error('Product source must be an ancestor of the real recovery publisher checkout');
-  if (!Array.isArray(jobs) || jobs.length !== recoveryJobs.length + 1) throw new Error('Recovery job set is incomplete or ambiguous');
-  for (const name of recoveryJobs) {
-    const matches = jobs.filter(job => job.name === name);
-    if (matches.length !== 1 || matches[0].status !== 'completed' || matches[0].conclusion !== 'success') throw new Error(`Recovery source verification did not succeed: ${name}`);
+  const allowedJobs = new Set([...recoveryJobs, ...buildKeys, 'publish']);
+  if (!Array.isArray(jobs) || new Set(jobs.map(job => job.name)).size !== jobs.length
+    || jobs.some(job => !allowedJobs.has(job.name) || job.status !== 'completed')) throw new Error('Recovery job set is incomplete or ambiguous');
+  if (jobs.find(job => job.name === 'plan')?.conclusion !== 'success') throw new Error('Original release plan did not succeed');
+  for (const key of buildKeys) {
+    const expected = recoveryJobs.filter(name => jobComponent(name) === key);
+    const actual = jobs.filter(job => jobComponent(job.name) === key);
+    const built = actual.length === expected.length && expected.every(name => actual.some(job => job.name === name && job.conclusion === 'success'));
+    const skipped = actual.length === 1 && actual[0].name === key && actual[0].conclusion === 'skipped'
+      || actual.length === expected.length && expected.every(name => actual.some(job => job.name === name && job.conclusion === 'skipped'));
+    if (!built && !skipped) throw new Error(`Recovery source verification did not succeed: ${key}`);
   }
   const publish = jobs.filter(job => job.name === 'publish');
   if (publish.length !== 1 || publish[0].status !== 'completed' || publish[0].conclusion !== 'failure') throw new Error('Only a failed publication after successful builds can be recovered');
@@ -67,7 +77,7 @@ export async function verifyRecoveryRun({ runId, productSource, releaseVersion, 
   if (listedJobs.total_count !== listedJobs.jobs?.length || listedArtifacts.total_count !== listedArtifacts.artifacts?.length) throw new Error('Recovery inventory requires an unambiguous complete API page');
   const artifacts = validateRecoveryContext({ runId, productSource, releaseVersion, publisherSource: env.GITHUB_SHA,
     run, jobs: listedJobs.jobs, artifacts: listedArtifacts.artifacts, comparison });
-  return { runId: Number(runId), productSource, releaseVersion, publisherSource: env.GITHUB_SHA, artifacts };
+  return { runId: Number(runId), productSource, releaseVersion, publisherSource: env.GITHUB_SHA, artifacts, jobs: listedJobs.jobs };
 }
 
 export async function verifyArchive(path, artifact) {
@@ -131,9 +141,10 @@ export function recoveryStagingPath(sourcePaths) {
 }
 
 export async function verifyRecoveryBundle({ plan, directory, inventory, publicKey, stagingPath }) {
+  const keys = Object.keys(plan.builds ?? {}).sort().join(',');
   if (plan.schemaVersion !== 1 || plan.kind !== releaseKind || plan.tag !== `v${plan.releaseVersion}`
-    || !sourceSha(plan.sourceSha) || !version(plan.releaseVersion) || Object.values(plan.builds).some(value => value !== true)
-    || Object.keys(plan.builds).sort().join(',') !== 'android,plugin,windows') throw new Error('Recovery requires the original complete release plan');
+    || !sourceSha(plan.sourceSha) || !version(plan.releaseVersion) || Object.values(plan.builds ?? {}).some(value => typeof value !== 'boolean')
+    || !['android,plugin,windows', 'android,linux,macos,plugin,windows'].includes(keys)) throw new Error('Recovery requires the original complete release plan');
   const expected = new Map(inventory.map(file => [file.name, file]));
   if (expected.size !== inventory.length || inventory.some(file => !safeName(file.name))) throw new Error('Invalid original archive inventory');
   assert.deepEqual((await readdir(directory)).sort(), [...expected.keys()].sort(), 'Unaccounted files were injected into the original release');
@@ -143,9 +154,10 @@ export async function verifyRecoveryBundle({ plan, directory, inventory, publicK
   }
   const bytes = name => readFile(resolve(directory, name));
   const manifest = validateReleaseManifest(verifySignedJson(await bytes('benchgo-update.json'), await bytes('benchgo-update.json.sig'), publicKey));
+  const engine = plan.builds.plugin ? { min: plan.versions.engine, max: plan.versions.engine } : plan.previous?.manifest?.engine;
   if (manifest.sourceSha !== plan.sourceSha || manifest.releaseVersion !== plan.releaseVersion
-    || manifest.minAppVersion !== plan.minAppVersion || manifest.engine.min !== plan.versions.engine
-    || manifest.engine.max !== plan.versions.engine) throw new Error('Original signed manifest differs from the requested product source');
+    || manifest.minAppVersion !== plan.minAppVersion || manifest.engine.min !== engine?.min
+    || manifest.engine.max !== engine?.max) throw new Error('Original signed manifest differs from the requested product source');
   const catalog = await verifyDownloads({ directory, plan, publicKey });
   const catalogFiles = [];
   const sums = (await bytes('SHA256SUMS.txt')).toString('utf8').trim().split('\n').map(line => /^([a-f0-9]{64})  ([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(line));
@@ -157,25 +169,37 @@ export async function verifyRecoveryBundle({ plan, directory, inventory, publicK
     || source.manifestSha256 !== sha256(await bytes('benchgo-update.json'))) throw new Error('Original release source receipt differs');
   assert.deepEqual(source.builds, plan.builds);
   assert.deepEqual(source.baseline, plan.previous ? { tag: plan.previous.tag, sourceSha: plan.previous.sourceSha, manifestSha256: plan.previous.manifestSha256 } : null);
-  const accounted = new Set(['benchgo-update.json', 'benchgo-update.json.sig', 'downloads.json', 'downloads.json.sig', 'release-source.json', 'latest.yml', 'SHA256SUMS.txt', 'release-notes.md']);
+  const accounted = new Set(['benchgo-update.json', 'benchgo-update.json.sig', 'downloads.json', 'downloads.json.sig', 'release-source.json', 'SHA256SUMS.txt', 'release-notes.md']);
   const matchFile = file => {
     const original = expected.get(file.name);
     if (!original || original.size !== file.size || original.sha256 !== file.sha256) throw new Error(`Original component receipt checksum differs: ${file.name}`);
     accounted.add(file.name);
   };
-  for (const component of ['plugin', 'windows', 'android']) {
-    const receiptName = `${component}-source.json`;
-    const receipt = validateReceipt(JSON.parse(await bytes(receiptName)), plan, component, { stagingPath });
+  for (const component of releaseComponents) {
+    const manifestKey = component === 'windows' ? 'app' : component;
+    const artifact = manifest[manifestKey];
+    catalogFiles.push({ target: component === 'windows' ? 'windows-x64' : component, ...artifact });
+    if (!plan.builds[component]) {
+      assert.deepEqual(artifact, plan.previous?.manifest?.[manifestKey]);
+      assert.deepEqual(source.components[component], plan.previous?.source?.components?.[component]);
+      continue;
+    }
+    const receiptName = `${component}-source.json`, receipt = validateReceipt(JSON.parse(await bytes(receiptName)), plan, component, { stagingPath });
     accounted.add(receiptName);
-    const payload = receipt.files.find(file => file.name === receipt.artifact), artifact = component === 'windows' ? manifest.app : manifest[component];
+    const payload = receipt.files.find(file => file.name === receipt.artifact);
     if (artifact.version !== receipt.version || artifact.url !== releaseDownloadUrl(payload.name, plan.tag) || artifact.size !== payload.size || artifact.sha256 !== payload.sha256
       || component === 'android' && artifact.versionCode !== receipt.versionCode) throw new Error('Signed component differs from its original receipt');
-    catalogFiles.push({ target: component === 'windows' ? 'windows-x64' : component, ...artifact });
     assert.deepEqual(source.components[component], { version: receipt.version, sourceSha: plan.sourceSha, releaseVersion: plan.releaseVersion, receiptUrl: releaseDownloadUrl(receiptName, plan.tag) });
     for (const file of receipt.files) if (component === 'windows' && /(?:\.exe|\.blockmap)$/.test(file.name)
       || component === 'plugin' && file.name.endsWith('.tar.gz') || component === 'android' && /\.apk(?:\.sha256)?$/.test(file.name)) matchFile(file);
   }
   for (const platform of downloadPlatforms) {
+    if (plan.builds[platform === 'linux-server' ? 'linux' : 'macos'] === false) {
+      const entries = platformDownloadEntries(plan.previous?.downloads, platform);
+      if (!entries.length) throw new Error(`Original plan lacks reusable ${platform} downloads`);
+      catalogFiles.push(...entries);
+      continue;
+    }
     const receiptName = `${platform}-source.json`, receipt = JSON.parse(await bytes(receiptName));
     const { expected: payloads } = validatePlatformReceipt(receipt, plan, platform); accounted.add(receiptName);
     for (const file of receipt.files) {
@@ -187,10 +211,13 @@ export async function verifyRecoveryBundle({ plan, directory, inventory, publicK
   }
   const byTargetAndUrl = (a, b) => `${a.target}:${a.url}`.localeCompare(`${b.target}:${b.url}`);
   assert.deepEqual([...catalog.files].sort(byTargetAndUrl), catalogFiles.sort(byTargetAndUrl), 'Signed catalog must contain exactly the original verified component and platform payloads');
+  if (plan.builds.windows) {
+    accounted.add('latest.yml');
+    const { validateNativeFeed } = await import('./publish.mjs');
+    const feed = validateNativeFeed(await bytes('latest.yml'), manifest);
+    if (feed.sha512 !== await fileDigest(resolve(directory, basename(new URL(manifest.app.url).pathname)), 'sha512')) throw new Error('Native updater checksum differs from the immutable Windows installer');
+  }
   assert.deepEqual([...accounted].sort(), [...expected.keys()].sort(), 'Unsigned or unknown release files are forbidden');
-  const { validateNativeFeed } = await import('./publish.mjs');
-  const feed = validateNativeFeed(await bytes('latest.yml'), manifest);
-  if (feed.sha512 !== await fileDigest(resolve(directory, basename(new URL(manifest.app.url).pathname)), 'sha512')) throw new Error('Native updater checksum differs from the immutable Windows installer');
   return { manifestSha256: source.manifestSha256, files: inventory.length, signedProductSource: manifest.sourceSha };
 }
 
@@ -203,6 +230,11 @@ export async function verifyRecoveryPublication({ plan, directory, recovery }) {
   const planBytes = await readFile(recovery.planPath);
   if (sha256(planBytes) !== planInventory[0].sha256) throw new Error('Original plan bytes changed');
   assert.deepEqual(JSON.parse(planBytes), plan);
+  for (const key of buildKeys) {
+    const actual = context.jobs.filter(job => jobComponent(job.name) === key);
+    const expected = plan.builds[key] === false ? 'skipped' : 'success';
+    if (actual.some(job => job.conclusion !== expected)) throw new Error(`Original job result differs from the plan: ${key}`);
+  }
   const inventory = await inspectArchive(recovery.readyArchive);
   const { stdout } = await execute('git', ['ls-tree', '-r', '--name-only', context.productSource, '--', 'plugins/base/package.json', 'plugins/benchgo/package.json'],
     { cwd: fileURLToPath(new URL('../../', import.meta.url)) });

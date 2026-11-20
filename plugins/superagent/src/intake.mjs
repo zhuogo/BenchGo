@@ -1,6 +1,7 @@
 import { taskStopped } from './task-lifecycle.mjs';
 import { createHash } from 'node:crypto';
 import { channelAdmissionCheck } from './channel-policy.mjs';
+import { personalChannels } from './channel-personal-scope.mjs';
 
 /** Protocol adapters expose metadata before reading/normalizing message bodies. */
 export async function ingestChannelEvent(database, envelope, policy, { onInbound, recheck } = {}) {
@@ -14,10 +15,15 @@ export async function ingestChannelEvent(database, envelope, policy, { onInbound
   if (!event) return { ignored: true, requiresEval: false, gate: { allowed: false, strength: 'ignore', reason: 'protocolRejected' } };
   if (identityOf(event) !== identity) throw new Error('消息归一不得修改已核实的来源身份');
   await recheck?.(event);
+  if (personalChannels.has(event.channel) && ['group', 'topic'].includes(event.source.sourceType) && event.mentioned !== true) {
+    return { ignored: true, requiresEval: false, gate: { allowed: false, strength: 'ignore', reason: 'notMentioned' } };
+  }
   const subscribed = database.subscriptions({ threadId: event.threadId }).some(row => database.getTask(row.taskId)?.status !== 'completed' && !taskStopped(database.getTask(row.taskId)));
   if (!channelAdmissionCheck(event, policy).requested && !subscribed) return { ignored: true, requiresEval: false, gate: { allowed: false, strength: 'ignore', reason: 'notMentioned' } };
   const accepted = ingestAssistantEvent(database, event, { ...policy, intakeStage: 'pending' });
   const intakeEvent = database.readIntakeEvent(accepted.trigger.id);
+  if (accepted.duplicate && intakeEvent.source.connectionRevision !== event.source.connectionRevision)
+    return { ignored: true, duplicate: true, requiresEval: false };
   const result = { ...accepted, intakeEvent, trigger: database.getTrigger(intakeEvent.id) || null };
   await onInbound?.(event, result);
   return result;
@@ -48,6 +54,7 @@ export function ingestAssistantEvent(database, event, policy) {
         sourceType, connectionId: event.source?.connectionId, conversationId: event.source?.conversationId, mentioned: event.mentioned === true } },
   };
   const accepted = database.ingest(input);
+  if (accepted.duplicate && accepted.trigger.source.connectionRevision !== input.source.connectionRevision) return accepted;
   // The attention store additionally requires the original requester's identity.
   const attention = !superseded && database.answerAttention(accepted.trigger.id, { sourceAllowed: !!(allowedActor && allowedThread) });
   if (attention) return { ...accepted, requiresEval: false, gate: input.gate, direct: false, attention, delivery: null, ambiguousSubscription: false };

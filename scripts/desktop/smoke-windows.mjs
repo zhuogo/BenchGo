@@ -4,7 +4,7 @@ import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { smokePreparedRuntime } from '../../deepseek-harness/apps/desktop/scripts/smoke-prepared-runtime.ts';
 import { DesktopHostProcess } from '../../deepseek-harness/apps/desktop/src/host-process.ts';
 import { getInstallState } from '../../plugins/base/shared/plugin-install.mjs';
@@ -24,7 +24,7 @@ const temporaryPath = await mkdtemp(join(tmpdir(), 'benchgo-installed-'));
 const temporary = realpathSync.native(temporaryPath);
 console.log('Packaged smoke profile paths:', JSON.stringify({ requested: temporaryPath, native: temporary }));
 const environment = { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: temporary, HOME: temporary, USERPROFILE: temporary, APPDATA: temporary, LOCALAPPDATA: temporary, DSH_TELEMETRY_DISABLED: '1' };
-let host;
+let host, desktopOwner;
 try {
   await new Promise((resolve, reject) => {
     const child = spawn(executable, ['--expose-internals', join(resources, 'benchgo/plugin-bundle.mjs'), 'init-profile', '--resources', resources, '--runtime', join(resources, 'app.asar.unpacked/dsh')], { env: environment, stdio: 'inherit' });
@@ -44,12 +44,25 @@ try {
   const probe = join(profile, 'packaging-probe.mjs');
   await writeFile(probe, await readFile(new URL('./packaged-profile-probe.mjs', import.meta.url)));
   await writeFile(join(profile, 'cordis.patch.yml'), `- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n- insert:\n    - id: benchgo-packaging-probe\n      name: ${JSON.stringify(probe)}\n`);
+  const { createDesktopWorkbenchOwner } = await import(pathToFileURL(join(resources, 'benchgo/workbench-desktop.mjs')).href);
+  const { readWorkbenchInstallation, requestWorkbenchControl, workbenchPaths } = await import(pathToFileURL(join(resources, 'benchgo/shared/workbench-installation.mjs')).href);
+  const workbench = { home: temporary };
+  const installation = await readWorkbenchInstallation(workbench);
+  if (installation?.kind !== 'desktop') throw new Error('Packaged desktop workbench was not registered');
+  desktopOwner = await createDesktopWorkbenchOwner({ paths: workbenchPaths(workbench), installation });
+  const publishDesktopReady = async ready => {
+    await desktopOwner.publish({ url: ready.url, inspect: () => host.inspectQuit() });
+    const status = await requestWorkbenchControl(installation, workbench);
+    const browserUrl = new URL(ready.url).searchParams.get('token') ? ready.url : undefined;
+    if (status.kind !== 'desktop' || status.url !== browserUrl) throw new Error('Packaged desktop readiness status did not match the Host authentication mode');
+  };
   const makeHost = () => new DesktopHostProcess(executable, join(resources, 'app.asar', 'dsh'), profile, undefined, environment, undefined, join(resources, 'runtime/primary-runtime'), { pnpm: join(resources, 'runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs'), nodeBin: join(resources, 'runtime/bin') });
   host = makeHost();
   let deadline;
   let ready;
   try { ready = await Promise.race([host.start(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Packaged Plus Host startup exceeded 120 seconds')), 120_000); })]); }
   finally { clearTimeout(deadline); }
+  await publishDesktopReady(ready);
   if (!ready.authenticationCookie) throw new Error('Packaged Host did not provide an authentication cookie');
   const call = async (path, input) => {
     const result = await fetch(new URL(path, ready.url), { method: 'POST', headers: { cookie: ready.authenticationCookie, 'content-type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(15_000) });
@@ -98,6 +111,7 @@ try {
   host = makeHost();
   try { ready = await Promise.race([host.start(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Packaged Host crash recovery exceeded 120 seconds')), 120_000); })]); }
   finally { clearTimeout(deadline); }
+  await publishDesktopReady(ready);
   if (!ready.authenticationCookie) throw new Error('Recovered packaged Host did not provide an authentication cookie');
   await assertProfile();
   const recovered = await sidebarCall({ action: 'state' });
@@ -110,4 +124,10 @@ try {
   host = undefined;
   console.log('Packaged Host update admission lock, graceful exit and shutdown acknowledgement passed.');
   console.log('Packaged DSH runtime, offline Plus enrollment and authenticated Link management passed.');
-} finally { try { await host?.stop(); } finally { await rm(temporary, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); } }
+} finally {
+  try { await host?.stop(); }
+  finally {
+    try { await desktopOwner?.dispose(); }
+    finally { await rm(temporary, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); }
+  }
+}

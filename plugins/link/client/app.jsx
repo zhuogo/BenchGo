@@ -30,8 +30,6 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
   const [busy, setBusy] = useState(''), [lanAddress, setLanAddress] = useState('');
   const [statusError, setStatusError] = useState(''), [loading, setLoading] = useState(true), [diagnostic, setDiagnostic] = useState('');
   const [editingDevice, setEditingDevice] = useState(null);
-  const [managementResult, setManagementResult] = useState(null);
-  const managementFlight = useRef(false);
   const renamingDevice = useRef(false), composingDeviceName = useRef(false);
   const request = useRef(0), initialized = useRef(false), retryPolling = useRef(null);
   const applyStatus = (value, syncForm = false) => {
@@ -78,17 +76,6 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
     } catch (e) { setError(e.message); } finally { setBusy(''); }
   };
   const confirm = async (id, action) => { setBusy(action); setError(''); try { const value = await management(action, { id }); ++request.current; applyStatus(value); } catch (e) { setError(e.message); } finally { setBusy(''); } };
-  const changeAccess = async (action, input) => {
-    if (managementFlight.current) return;
-    managementFlight.current = true; setBusy(action); setError('');
-    try {
-      const value = await management(action, input);
-      if (action === 'management-decide') { setManagementResult(value); await refresh(); }
-      else { ++request.current; applyStatus(value); }
-    }
-    catch (e) { setError(e.message); }
-    finally { managementFlight.current = false; setBusy(''); }
-  };
   const renameDevice = async event => {
     event.preventDefault();
     if (busy || renamingDevice.current || composingDeviceName.current || !editingDevice?.name.trim()) return;
@@ -118,21 +105,14 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
       {pairingConnection(status, defaults).mode === 'lan' && status?.addresses?.length > 1 && <div className="link-advanced-controls"><label className="link-field"><span>手动指定连接地址 <small>通常保持自动即可；连接失败时再尝试其他地址。</small></span><Select aria-label="局域网地址" value={lanAddress} disabled={unavailable} onChange={e => { setLanAddress(e.target.value); setPairing(null); }}><option value="">自动选择地址</option>{status.addresses.map(address => <option key={address} value={address}>{address}</option>)}</Select></label></div>}
       <div className="link-diagnostics"><div className="link-panel-head"><h4>连接诊断</h4><Button icon="refresh" onClick={refreshStatus} disabled={!!busy}>{busy === 'refresh' ? '正在刷新…' : '刷新状态'}</Button></div><p>Link 运行在哪台电脑，就连接哪台电脑。云服务器不属于手机本地局域网，请使用受信任的 HTTPS 地址；本地连接失败时，检查同一 Wi-Fi、网络隔离和电脑防火墙。</p>{status?.relay?.configured && <p role="status">自有中继：{status.relay.connected ? '主机通道已连接（需从访问端验证可达性）' : status.relay.lastError || '正在连接…'}</p>}<div className="link-addresses">{(status?.addresses || []).map(address => <code key={address}>{address}</code>)}{status?.publicUrl && <code>{status.publicUrl}</code>}{status && !status.addresses?.length && <span>未发现可用连接地址，请检查网络或指定监听地址。</span>}</div></div>
     </Disclosure>
-    {!!status?.pending?.length && !pairing && <div className="link-pending-list">{status.pending.map(device => <div className="link-device" key={device.id}><div><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel()}</small></div><Button kind="primary" icon="check" className="link-button-success" onClick={() => confirm(device.id, 'confirm')} disabled={unavailable}>允许</Button><Button icon="close" className="link-button-danger" onClick={() => confirm(device.id, 'reject')} disabled={unavailable}>拒绝</Button></div>)}</div>}
-    {!!status?.pendingManagement?.length && <div className="link-management-requests" aria-label="远端配置请求"><h3>远端配置请求</h3>{status.pendingManagement.map(operation => <div className="link-management-request" key={operation.id}>
-      <strong>{operation.deviceName || '已授权设备'} 请求修改本机中继</strong>
-      <ul>{(operation.ops || []).map((op, index) => { const node = status.relay?.nodes?.[Number(op.path?.[1])]; return <li key={index}>{node?.url || node?.id || `节点 ${Number(op.path?.[1]) + 1}`}：{op.path?.[2] === 'priority' ? `优先级改为 ${op.value}` : op.value ? '启用' : '停用'}</li>; })}</ul>
-      <small>应用后会重新连接中继，可能影响当前连接；仅执行这次列出的修改。</small>
-      <div className="link-management-actions"><Button onClick={() => changeAccess('management-decide', { operationId: operation.id, allow: false })} disabled={unavailable}>拒绝</Button><Button kind="primary" onClick={() => changeAccess('management-decide', { operationId: operation.id, allow: true })} disabled={unavailable}>应用这次修改</Button></div>
-    </div>)}</div>}
-    {managementResult && <p className={managementResult.state === 'failed' ? 'link-error' : 'link-empty'} role="status">{managementResult.state === 'applied' ? '修改已保存并应用；远端连通性以连接状态为准。' : managementResult.state === 'rejected' ? '已拒绝这次远端修改。' : managementResult.state === 'failed' ? `修改未完成：${managementResult.error?.message || '请刷新状态后重试。'}` : managementResult.state === 'expired' ? '请求已过期，请让发起设备重新提交。' : managementResult.state === 'revoked' ? '设备管理权限已撤销，没有执行修改。' : '操作状态待核实，请刷新连接状态。'}</p>}
+    {!!status?.pending?.length && !pairing && <div className="link-pending-list">{status.pending.map(device => <div className="link-device" key={device.id}><div><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel(device.reciprocal)}</small></div><Button kind="primary" icon="check" className="link-button-success" onClick={() => confirm(device.id, 'confirm')} disabled={unavailable}>允许</Button><Button icon="close" className="link-button-danger" onClick={() => confirm(device.id, 'reject')} disabled={unavailable}>拒绝</Button></div>)}</div>}
     <div className="link-device-list"><div className="link-panel-head"><div><h3>已授权访问此设备</h3></div><span>{status ? `${status.devices?.length || 0} 台` : '—'}</span></div>{status?.devices?.length ? status.devices.map(device => <div className="link-device" key={device.id}><UIIcon name={deviceIcon(device)} size={18} /><div className="link-authorized-device-info">
       {editingDevice?.id === device.id ? <form className="link-device-rename" onSubmit={renameDevice}>
         <input aria-label="设备备注名称" autoFocus value={editingDevice.name} maxLength={100} disabled={unavailable} onFocus={event => event.currentTarget.select()} onChange={event => setEditingDevice(value => ({ ...value, name: event.target.value }))} onCompositionStart={() => { composingDeviceName.current = true; }} onCompositionEnd={() => { composingDeviceName.current = false; }} onKeyDown={deviceNameKeyDown} />
         <Tooltip label="取消修改"><button type="button" className="link-name-action link-name-cancel" aria-label="取消修改设备备注" onClick={cancelDeviceRename} disabled={unavailable}><UIIcon name="close" size={15} /></button></Tooltip>
         <Tooltip label="保存备注"><button type="submit" className="link-name-action link-name-confirm" aria-label="保存设备备注" disabled={unavailable || !editingDevice.name.trim()}><UIIcon name="check" size={15} /></button></Tooltip>
       </form> : <div className="link-device-name"><strong>{device.name || '未命名设备'}</strong><Tooltip label="编辑备注"><button type="button" className="link-name-action" aria-label="编辑设备备注" onClick={() => { composingDeviceName.current = false; setEditingDevice({ id: device.id, name: device.name || '' }); setError(''); }} disabled={unavailable}><UIIcon name="edit" size={14} /></button></Tooltip></div>}
-      <small>最近连接 {formatTime(device.lastSeenAt)}</small>
+      <small>最近连接 {formatTime(device.lastSeenAt)}{device.pairingReturn && ` · ${pairingReturnLabel(device.pairingReturn)}`}</small>
     </div><Button icon="trash" className="link-button-danger" onClick={() => confirm(device.id, 'revoke')} disabled={unavailable}>撤销</Button></div>) : <p className="link-empty">{loading ? '正在连接…' : statusError ? '暂不可用' : '还没有配对设备'}</p>}</div>
   </>;
   return <section className={`link-settings${embedded ? ' link-settings-embedded' : ''}`} aria-label="Link 远程连接">
@@ -145,8 +125,15 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
     {pairing && <PairingDialog pairing={pairing} pending={status?.pending || []} onClose={() => setPairing(null)} onConfirm={confirm} busy={busy} error={error} />}
   </section>;
 }
-function deviceAccessLabel() {
-  return '连接工作台 · 任务协作 · 连接与中继管理（修改需确认）';
+function deviceAccessLabel(reciprocal) {
+  const capabilities = '已开放的工作台、任务协作及连接管理';
+  return reciprocal ? `回程验证通过后，双方可使用对方${capabilities}。回程不可达时，仅对方可访问本机。` : `单向连接，对方可使用本机${capabilities}。`;
+}
+function pairingReturnLabel(direction) {
+  if (direction === 'mutual') return '双向连接';
+  if (direction === 'pending') return '等待确认回程';
+  if (direction === 'source-unavailable') return '单向连接 · 对方无法再添加授权';
+  return '单向连接 · 回程验证未通过';
 }
 
 export function PairingDialog({ pairing, pending = [], onClose, onConfirm, busy, error }) {
@@ -215,7 +202,7 @@ export function PairingDialog({ pairing, pending = [], onClose, onConfirm, busy,
       <h3 id={approvalTitleId}>允许设备连接？</h3>
       <p id={approvalDescriptionId}>仅允许你认识并信任的设备访问此工作台。</p>
       <div className="link-pending-list">{pending.map(device => <div className="link-device" key={device.id}>
-        <UIIcon name={deviceIcon(device)} size={20} /><div className="link-device-info"><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel()}</small></div>
+        <UIIcon name={deviceIcon(device)} size={20} /><div className="link-device-info"><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel(device.reciprocal)}</small></div>
         <div className="link-device-actions"><Button icon="close" className="link-button-danger" onClick={() => onConfirm(device.id, 'reject')} disabled={!!busy}>{busy === 'reject' ? '正在拒绝…' : '拒绝'}</Button><Button kind="primary" icon="check" className="link-button-success" onClick={() => onConfirm(device.id, 'confirm')} disabled={!!busy}>{busy === 'confirm' ? '正在允许…' : '允许'}</Button></div>
       </div>)}</div>
       <ErrorText>{error}</ErrorText>

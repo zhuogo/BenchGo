@@ -160,7 +160,7 @@ test('provider settings render four states and retain protocol choices through d
         if (request.url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
         if (!request.url().endsWith('/api/commander/tooling')) return route.abort();
         if (request.postDataJSON()?.action === 'modelProfiles') return route.fulfill({ json: { success: true, data: [
-          { model_id: 'opaque/router:model', input_modalities: ['text', 'image', 'audio', 'video'] },
+          { model_id: 'opaque/router:model', input_modalities: ['text', 'image', 'audio', 'video'], output_modalities: ['text'] },
           { model_id: 'Opaque/router:model', input_modalities: ['pdf'] },
         ] } });
         return route.fulfill({ json: { tools: [], bindings: {} } });
@@ -228,7 +228,7 @@ test('provider settings render four states and retain protocol choices through d
       await page.waitForFunction(()=>document.activeElement?.getAttribute('role')==='listbox');
       await page.keyboard.press('ArrowDown');
       await page.keyboard.press('Enter');
-      assert.equal((await protocol.innerText()).trim(),'OpenAI Responses');
+      assert.equal((await protocol.innerText()).trim(),'OpenAI 响应');
       await endpoint.fill('https://edited.example/v1');
       const modelActions = router.locator('.cmd-model-list-actions');
       assert.deepEqual((await modelActions.getByRole('button').allTextContents()).map(value=>value.trim()), ['保存', '获取模型']);
@@ -248,7 +248,7 @@ test('provider settings render four states and retain protocol choices through d
       await router.getByRole('button',{name:/^编辑 RouterGo/}).click();
       assert.equal(await endpoint.inputValue(),'https://edited.example/v1');
       await advanced.click();
-      assert.equal((await protocol.innerText()).trim(),'OpenAI Responses');
+      assert.equal((await protocol.innerText()).trim(),'OpenAI 响应');
       await router.getByRole('button',{name:'模型选项 1',exact:true}).click();
       assert.equal(await router.getByRole('textbox',{name:'模型 ID 1',exact:true}).inputValue(),'opaque/router:model');
       const inputs = router.getByRole('group', { name: '输入类型 1' });
@@ -258,7 +258,12 @@ test('provider settings render four states and retain protocol choices through d
         assert(await modality.isChecked());
         assert(await modality.isDisabled());
       }
-      assert.equal(await inputs.getByRole('checkbox', { name: 'pdf' }).count(), 0);
+      const pdf = inputs.getByRole('checkbox', { name: 'PDF', exact: true });
+      const text = inputs.getByRole('checkbox', { name: '文本', exact: true });
+      assert.equal(await pdf.isChecked(), false);
+      assert(await pdf.isDisabled());
+      assert(await text.isChecked());
+      assert(await text.isDisabled());
       if(screenshots) await page.screenshot({path:join(screenshots,`model-inputs-${width}-${dark?'dark':'light'}.png`)});
       const custom = router.getByRole('button', { name: '自定义档位' });
       await custom.click();
@@ -286,7 +291,7 @@ test('provider settings render four states and retain protocol choices through d
       assert.equal(await page.locator('select').count(),0);
       assert.equal(await createProtocol.count(),0);
       await page.getByRole('button',{name:'高级连接设置',exact:true}).click();
-      assert.equal((await createProtocol.innerText()).trim(),'OpenAI Responses');
+      assert.equal((await createProtocol.innerText()).trim(),'OpenAI 响应');
       await createProtocol.click();
       await protocolMenu.getByRole('option',{name:'Anthropic Messages'}).click();
       await page.getByRole('textbox',{name:'Provider ID'}).fill('fixture-gateway');
@@ -356,6 +361,14 @@ test('model capability settings render directory states and persist one exact mo
     const generation = page.getByRole('button', { name: '图片生成', exact: true });
     const mask = page.getByRole('button', { name: '遮罩编辑', exact: true });
     await page.waitForFunction(() => [...document.querySelectorAll('button[aria-pressed=true]')].some(button => button.textContent === '图片生成'));
+    const inputs = page.getByRole('group', { name: '输入类型 1' });
+    const text = page.locator('.cmd-model-capabilities').getByRole('button', { name: '文本', exact: true });
+    assert.equal(await inputs.count(), 0);
+    await text.click();
+    await inputs.waitFor();
+    assert.deepEqual(override, ['image-generation', 'text']);
+    await text.click();
+    await inputs.waitFor({ state: 'hidden' });
     await mask.click();
     await page.locator('.cmd-model-capabilities[aria-busy=false]').waitFor();
     assert.deepEqual(override, ['image-generation', 'image-mask']);
@@ -613,7 +626,7 @@ test('RouterGo manual credentials can batch-add from an empty model list and rec
     assert.deepEqual(persisted, {
       discovery: { ns: 'llm-pi-ai', options: { api: 'openai-responses', baseURL: 'https://routergo.cn/api/v1', apiKey: 'manual-example' } },
       written: [
-        { id: ids[0], name: ids[0], contextWindow: 50000, input: ['text', 'image'], reasoningEfforts: { off: null, high: 'high' } },
+        { id: ids[0], name: ids[0], contextWindow: 50000, input: ['text', 'image'], reasoningEfforts: { high: 'high' } },
         ...ids.slice(1).map(id => ({ id, name: id, contextWindow: 24000, input: ['text'] })),
       ],
     });

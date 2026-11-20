@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: Original unified release run with successful builds and a failed final publisher
+        description: Original unified release run with successful planned builds and a failed final publisher
         required: true
         type: string
       source_sha:

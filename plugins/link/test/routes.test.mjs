@@ -85,6 +85,20 @@ test('route selection prioritizes fixed-pin direct and only falls back for unrea
   }
 });
 
+test('an admitted public pairing endpoint remains usable after alternate routes fail', async () => {
+  const url = 'https://paired.example.test', calls = [], accepted = [];
+  const selected = await selectRoute({ ...target, url, pairedEndpointFallback: true }, {
+    probe: async candidate => {
+      calls.push(candidate.url);
+      if (candidate.url !== url) throw Object.assign(new Error('offline'), { code: 'ECONNREFUSED' });
+    },
+    accept: async (candidate, route) => accepted.push([candidate.url, route]),
+  });
+  assert.equal(selected.url, url);
+  assert.deepEqual(calls, [direct.url, relay.url, url]);
+  assert.deepEqual(accepted, [[url, undefined]]);
+});
+
 test('remote pairing never interprets the host loopback as a client-side direct route', async () => {
   for (const url of ['https://127.0.0.1:46117', 'https://127.12.0.1:46117', 'https://localhost:46117', 'https://[::1]:46117']) {
     const calls = [];

@@ -42,8 +42,12 @@ export function createDirectReplyDelivery({ database, readPolicy, getAdapter, si
       }
       if (signal.aborted) return;
       lease.check();
-      await sendSourceDelivery({ send: () => adapter.send({ source: target, text: row.text, idempotencyKey: `direct-reply:${row.id}` }),
-        finish: options => database.finishDirectReply(row.id, { owner, ...options }), onDelivered });
+      const sendTarget = database.directReplyWindowTarget(row, target);
+      const canRefreshWindow = !ownerReply && trigger.actor.kind === 'human' &&
+        target.connectionId && Number.isSafeInteger(target.connectionRevision) &&
+        (target.accountId || target.appId) && target.messageId === trigger.source.messageId;
+      await sendSourceDelivery({ send: () => adapter.send({ source: sendTarget, text: row.text, idempotencyKey: `direct-reply:${row.id}` }),
+        finish: options => database.finishDirectReply(row.id, { owner, ...options }), onDelivered, waitForReplyWindow: Boolean(canRefreshWindow) });
       } finally { lease.stop(); }
     }
   }

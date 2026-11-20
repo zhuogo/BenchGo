@@ -1,13 +1,10 @@
+import { hasTextCapability, structuredCapabilities } from './model-capabilities.mjs';
+
 const levels = { min: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' };
 
 export function normalizeInputModalities(input) {
   return Array.isArray(input) ? [...new Set(input.filter(value => typeof value === 'string').map(value => value.trim().toLowerCase())
-    .filter(value => ['text', 'image', 'audio', 'video'].includes(value)))] : [];
-}
-
-export function withOffEffort(efforts) {
-  return efforts && typeof efforts === 'object' && !Array.isArray(efforts) && !Object.hasOwn(efforts, 'off')
-    && Object.keys(efforts).some(level => level !== 'off') ? { off: null, ...efforts } : efforts;
+    .filter(value => ['text', 'image', 'audio', 'video', 'pdf'].includes(value)))] : [];
 }
 
 /** Supplier IDs are opaque; duplicate directory IDs are ambiguous. */
@@ -28,12 +25,20 @@ export function modelProfilePatch(row, { reasoning = false, inputField = 'input'
   const contextWindow = positive(row.context), maxTokens = positive(row.max_output);
   if (contextWindow) patch.contextWindow = contextWindow;
   if (maxTokens) patch.maxTokens = maxTokens;
-  const input = normalizeInputModalities(row.input_modalities).filter(item => item === 'text' || item === 'image');
-  if (input.length) patch[inputField] = input;
+  const declared = normalizeInputModalities(row.input_modalities);
+  const outputs = Array.isArray(row.output_modalities) ? row.output_modalities : [];
+  const capabilities = structuredCapabilities(row, declared, outputs);
+  if ((!capabilities.length && !Array.isArray(row.capabilities)) || hasTextCapability(capabilities)) {
+    if (declared.includes('image')) patch[inputField] = ['text', 'image'];
+    else if (declared.includes('text')) patch[inputField] = ['text'];
+  }
   if (reasoning && Array.isArray(row.thinking_levels) && row.thinking_levels.length) {
     const efforts = {};
     for (const level of row.thinking_levels) if (Object.hasOwn(levels, level)) efforts[levels[level]] = level;
-    if (Object.keys(efforts).length > 0) patch.reasoningEfforts = withOffEffort(efforts);
+    if (Object.keys(efforts).length > 0) {
+      if (row.thinking_levels.includes('off')) efforts.off = null;
+      patch.reasoningEfforts = efforts;
+    }
   }
   return patch;
 }

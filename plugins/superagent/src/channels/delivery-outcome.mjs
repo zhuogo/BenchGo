@@ -6,6 +6,10 @@ export function deliveryFailure(message, outcome = 'unknown', status) {
 }
 
 export const knownNotSent = error => error?.deliveryOutcome === 'not_sent';
+export function replyWindowExpired(message) {
+  return Object.assign(deliveryFailure(message, 'not_sent', 409), { code: 'REPLY_WINDOW_EXPIRED' });
+}
+export const waitsForReplyWindow = error => knownNotSent(error) && error.code === 'REPLY_WINDOW_EXPIRED';
 export const httpRejected = status => Number.isInteger(status) && status >= 400 && status < 500 && status !== 408;
 
 /** Safe only around validation/authentication, before the outbound message call. */

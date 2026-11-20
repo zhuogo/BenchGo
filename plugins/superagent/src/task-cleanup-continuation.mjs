@@ -40,7 +40,9 @@ export function createTaskCleanupContinuation({ database, orchestration, taskMan
     if (task.instructionRevision !== row.instructionRevision || task.resultVersion !== row.resultVersion
       || current.taskMeta.version !== row.metaVersion)
       throw fail('CLEANUP_CONTINUATION_STALE', '任务要求、结果或展示已变化，原待归档不再适用');
-    if (!row.executionStamp || orchestration.taskCleanupExecutionStamp(task.id, { excludeTriggerId: row.triggerId }) !== row.executionStamp)
+    if (!row.executionStamp || orchestration.taskCleanupExecutionStamp(task.id, {
+      excludeTriggerId: row.triggerId, legacy: !row.executionStamp.startsWith('v2:'),
+    }) !== row.executionStamp)
       throw fail('CLEANUP_CONTINUATION_STALE', '执行身份或后续输入已变化，原待归档不再适用');
     if (current.archived) throw fail('TASK_ALREADY_ARCHIVED', '任务已由其他整理操作归档');
     if (!task.executionExited) {

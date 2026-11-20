@@ -66,12 +66,12 @@ function readme(version, pluginVersion, upstream) {
 }
 
 /** Build an inventory-bound wrapper around a freshly created, checked server seed. */
-export async function assembleLinuxServer({ seedDirectory, output, sourceSha, rootDirectory = root }) {
+export async function assembleLinuxServer({ seedDirectory, output, sourceSha, rootDirectory = root, version }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha)) throw new Error('Linux distribution requires immutable source SHA');
-  const app = JSON.parse(await readFile(join(rootDirectory, 'package.json')));
+  version ??= JSON.parse(await readFile(join(rootDirectory, 'package.json'))).version;
   const plugin = JSON.parse(await readFile(join(rootDirectory, 'plugins/base/package.json')));
   const upstream = JSON.parse(await readFile(join(rootDirectory, 'upstream.json')));
-  if (!stableVersion.test(app.version) || !stableVersion.test(plugin.version)) throw new Error('Invalid distribution version');
+  if (!stableVersion.test(version) || !stableVersion.test(plugin.version)) throw new Error('Invalid distribution version');
   const manifest = JSON.parse(await readFile(join(seedDirectory, 'manifest.json')));
   if (manifest.schemaVersion !== 1 || manifest.pluginVersion !== plugin.version || manifest.harnessVersion !== upstream.version
     || manifest.harnessCommit !== upstream.commit || !/^[a-f0-9]{64}$/.test(manifest.sha256)
@@ -84,15 +84,15 @@ export async function assembleLinuxServer({ seedDirectory, output, sourceSha, ro
   await mkdir(destination, { recursive: true });
   if ((await readdir(destination)).length) throw new Error('Linux distribution output must be empty');
   const temporary = await mkdtemp(join(tmpdir(), 'benchgo-linux-package-'));
-  const name = `benchgo-${app.version}-linux-server`, archiveName = `${name}.tar.gz`;
+  const name = `benchgo-${version}-linux-server`, archiveName = `${name}.tar.gz`;
   try {
     const stage = join(temporary, name); await mkdir(stage);
     for (const file of seedFiles) await cp(join(seedDirectory, file), join(stage, file));
     await cp(join(rootDirectory, 'LICENSE'), join(stage, 'LICENSE'));
     await cp(join(rootDirectory, 'deepseek-harness/LICENSE'), join(stage, 'DEEPSEEK-LICENSE'));
-    await writeFile(join(stage, 'README.md'), readme(app.version, plugin.version, upstream));
+    await writeFile(join(stage, 'README.md'), readme(version, plugin.version, upstream));
     await writeFile(join(stage, 'install.sh'), '#!/usr/bin/env bash\nset -euo pipefail\numask 077\ncd -- "$(dirname -- "$0")"\n[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || { echo "此发行包仅支持 Linux x64" >&2; exit 1; }\nsha256sum --check --status SHA256SUMS.txt\nexec bash ./bootstrap.sh "${1:-mirror}" "${2:-connect}"\n', { mode: 0o755 });
-    await writeFile(join(stage, 'release-source.json'), JSON.stringify({ schemaVersion: 1, sourceSha, version: app.version,
+    await writeFile(join(stage, 'release-source.json'), JSON.stringify({ schemaVersion: 1, sourceSha, version,
       pluginVersion: plugin.version, platform: 'linux', arch: 'x64', kind: 'server', engine: upstream,
       releaseVersion: plugin.benchgo?.releaseVersion ?? null, runtimeIncluded: false,
       requirements: { platform: 'linux', arch: 'x64', libc: 'glibc>=2.28', service: 'systemd-user' } }, null, 2) + '\n');
@@ -109,7 +109,7 @@ export async function assembleLinuxServer({ seedDirectory, output, sourceSha, ro
     await writeFile(join(destination, checksumName), `${await digest(join(destination, archiveName))}  ${archiveName}\n`);
     const files = [];
     for (const file of [archiveName, checksumName]) files.push({ name: file, size: (await stat(join(destination, file))).size, sha256: await digest(join(destination, file)) });
-    const receipt = { schemaVersion: 1, sourceSha, version: app.version, pluginVersion: plugin.version, platform: 'linux', arch: 'x64', kind: 'server', verified: linuxVerification, files };
+    const receipt = { schemaVersion: 1, sourceSha, version, pluginVersion: plugin.version, platform: 'linux', arch: 'x64', kind: 'server', verified: linuxVerification, files };
     await writeFile(join(destination, 'build-source.json'), JSON.stringify(receipt, null, 2) + '\n');
     return receipt;
   } catch (error) {
@@ -118,19 +118,19 @@ export async function assembleLinuxServer({ seedDirectory, output, sourceSha, ro
   } finally { await rm(temporary, { recursive: true, force: true }); }
 }
 
-export async function packageLinuxServer({ output = join(root, 'artifacts/linux-server') } = {}) {
+export async function packageLinuxServer({ output = join(root, 'artifacts/linux-server'), version } = {}) {
   if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('Build the Linux x64 server distribution on a Linux x64 runner to preserve native executable permissions');
   const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   for (const expected of [process.env.SOURCE_SHA, process.env.GITHUB_SHA].filter(Boolean)) if (expected !== sourceSha) throw new Error('Linux package checkout differs from workflow source');
   const temporary = await mkdtemp(join(tmpdir(), 'benchgo-linux-seed-'));
   try {
     await packageServerSeed({ output: temporary });
-    return await assembleLinuxServer({ seedDirectory: temporary, output, sourceSha });
+    return await assembleLinuxServer({ seedDirectory: temporary, output, sourceSha, version });
   } finally { await rm(temporary, { recursive: true, force: true }); }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { values } = parseArgs({ options: { out: { type: 'string' } } });
-  packageLinuxServer({ output: values.out }).then(result => console.log(JSON.stringify(result, null, 2)))
+  const { values } = parseArgs({ options: { out: { type: 'string' }, version: { type: 'string' } } });
+  packageLinuxServer({ output: values.out, version: values.version }).then(result => console.log(JSON.stringify(result, null, 2)))
     .catch(error => { console.error(error.message); process.exitCode = 1; });
 }

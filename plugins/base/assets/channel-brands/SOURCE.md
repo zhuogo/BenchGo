@@ -6,4 +6,4 @@ The channel selector uses the actual marks served by the vendors' official websi
 
 Slack and DingTalk marks were added on 2026-11-07 from the favicon links on slack.com and dingtalk.com, respectively. Their exact vendor CDN URLs and hashes are recorded in `sources.json`; both images remain unmodified.
 
-Email, Webhook and API are protocols/interface types, not brands, and therefore use neutral semantic icons. Brand availability is represented by grayscale when unavailable; selection alone does not recolor marks.
+Email and API are protocols/interface types, not brands, and therefore use neutral semantic icons. Brand availability is represented by grayscale when unavailable; selection alone does not recolor marks.

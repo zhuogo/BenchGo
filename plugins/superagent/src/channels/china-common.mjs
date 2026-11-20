@@ -14,12 +14,18 @@ export function configFor(definition, input = {}) {
     config[key] = [...new Set(config[key])];
   }
   for (const field of definition.fields) {
-    if (typeof config[field.key] !== 'string' || (config[field.key] && !validId(config[field.key]))) throw fail(`${field.label} 无效`);
+    if (typeof config[field.key] !== 'string' || (config[field.key] && !validId(config[field.key]))
+      || (field.type === 'select' && !field.options.some(option => option.value === config[field.key]))) throw fail(`${field.label} 无效`);
     if (config.enabled && field.required && !config[field.key]) throw fail(`请配置 ${field.label}`);
   }
   return config;
 }
 export const account = config => config.accountId || config.botId || config.appId;
+export function protocolTimestamp(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
 export function eventFor(channel, config, { messageId, actorId, chatId, text, group = false, mentioned = false, occurredAt, extra = {}, metadataOnly = false }) {
   if (![messageId, actorId, chatId].every(validId) || (!metadataOnly && typeof text !== 'string')) throw fail('渠道消息标识或内容无效');
   const sourceType = extra.topicId ? 'topic' : group ? 'group' : 'direct';
@@ -51,13 +57,31 @@ export function createBoundary(definition, { getConfig, credentials, ingest, aut
     async request(config, url, options = {}, timeout = 15_000, authorization = {}) {
       await beforeDelivery(async () => { await current(config); await authorize(authorization.operation || 'receive', authorization.source || connectionSource(config), authorization.actor); });
       let response, body;
-      try { response = await fetcher(url, { ...options, redirect: 'error', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)]) }); body = await response.json(); }
+      try {
+        response = await fetcher(url, { ...options, redirect: 'error', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)]) });
+        body = authorization.parseResponse ? await authorization.parseResponse(response) : await response.json();
+      }
       catch { throw deliveryFailure('渠道请求未获得确定回执', 'unknown', 502); }
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw deliveryFailure('渠道返回无效回执', 'unknown', 502);
-      if (!response.ok) throw deliveryFailure(`渠道请求失败（HTTP ${response.status}）`, httpRejected(response.status) ? 'not_sent' : 'unknown', 502);
+      if (!response.ok) {
+        const error = deliveryFailure(`渠道请求失败（HTTP ${response.status}）`, httpRejected(response.status) ? 'not_sent' : 'unknown', 502);
+        Object.defineProperty(error, 'platformMessage', { value: typeof body.message === 'string' ? body.message.slice(0, 512) : undefined });
+        throw error;
+      }
       return body;
     },
-    async receive(config, event, normalize) { await current(config); if (event) { await authorize('receive', event.source, event.actor); await ingest(normalize ? { ...event, normalize } : event); state.events = 'verified'; } },
+    async receive(config, event, normalize) {
+      await current(config);
+      if (!event) return;
+      try { await authorize('receive', event.source, event.actor); }
+      catch (error) {
+        if (error?.status === 403) return { ignored: true };
+        throw error;
+      }
+      const result = await ingest(normalize ? { ...event, normalize } : event);
+      if (!result?.ignored) state.events = 'verified';
+      return result;
+    },
     async status() { const c = await read(); return { enabled: c.enabled, configured: definition.fields.filter(f => f.required).every(f => Boolean(c[f.key])), ...structuredClone(state) }; },
     async outgoing(source, text, key) {
       return beforeDelivery(async () => {
@@ -73,16 +97,25 @@ export function createBoundary(definition, { getConfig, credentials, ingest, aut
 export const deliveryId = key => createHash('sha256').update(key).digest('hex').slice(0, 32);
 
 /** Socket framing/lifecycle only. Reconnect never retries outgoing business messages. */
-export function createSocketLifecycle({ boundary, connect, onFrame, WebSocketImpl = globalThis.WebSocket }) {
+export function createSocketLifecycle({ boundary, connect, onFrame, onClose, reconnectMs = 5000, WebSocketImpl = globalThis.WebSocket }) {
   let socket, heartbeat, reconnect, generation = 0, pending = Promise.resolve();
   let activeConfig;
   const clear = () => { clearInterval(heartbeat); clearTimeout(reconnect); heartbeat = reconnect = undefined; };
   const stop = () => { generation++; clear(); socket?.close(); socket = undefined; boundary.stop(); };
-  const send = async (frame, authorization) => {
-    await beforeDelivery(async () => { await boundary.current(activeConfig); await boundary.authorize(authorization?.operation || 'receive', authorization?.source || boundary.connectionSource(activeConfig), authorization?.actor); if (socket?.readyState !== 1) throw fail('渠道连接不可用', 503); });
-    try { socket.send(JSON.stringify(frame)); } catch { throw deliveryFailure('渠道发送未取得确定回执', 'unknown', 502); }
+  const send = async (frame, authorization, target = socket) => {
+    await beforeDelivery(async () => {
+      const config = activeConfig;
+      await boundary.current(config);
+      await boundary.authorize(authorization?.operation || 'receive', authorization?.source || boundary.connectionSource(config), authorization?.actor);
+      if (target !== socket || target?.readyState !== 1 || (authorization?.operation === 'send' && boundary.state.connection.state !== 'connected')) throw fail('渠道连接不可用', 503);
+    });
+    try { target.send(JSON.stringify(frame)); } catch { throw deliveryFailure('渠道发送未取得确定回执', 'unknown', 502); }
   };
-  const pulse = (callback, milliseconds) => { clearInterval(heartbeat); heartbeat = setInterval(() => Promise.resolve(callback()).catch(() => socket?.close()), milliseconds); heartbeat.unref?.(); };
+  const schedule = gen => {
+    clearTimeout(reconnect);
+    reconnect = setTimeout(() => { void open(gen); }, reconnectMs);
+    reconnect.unref?.();
+  };
   const open = async gen => {
     const config = await boundary.read(); if (!config.enabled || gen !== generation) return;
     activeConfig = config;
@@ -91,20 +124,40 @@ export function createSocketLifecycle({ boundary, connect, onFrame, WebSocketImp
       await boundary.authorize('receive', boundary.connectionSource(config));
       const connection = await connect(config);
       await boundary.current(config); if (gen !== generation) return;
-      socket = new WebSocketImpl(connection.url);
-      socket.addEventListener('open', () => { if (gen === generation && connection.open) pending = pending.then(() => gen === generation && connection.open(send, pulse)).catch(() => { if (gen === generation) failed(); }); });
-      socket.addEventListener('message', event => {
-        if (gen !== generation) return;
-        pending = pending.then(async () => { if (gen !== generation) return; await boundary.current(config); await boundary.authorize('receive', boundary.connectionSource(config)); if (gen !== generation) return; const raw = typeof event.data === 'string' ? event.data : Buffer.from(event.data).toString(); if (Buffer.byteLength(raw) > 1_048_576) throw fail('渠道消息过大'); await onFrame(JSON.parse(raw), config, { send, pulse, close: () => socket?.close() }); }).catch(() => { if (gen === generation) failed(); });
+      const target = socket = new WebSocketImpl(connection.url);
+      const current = () => gen === generation && target === socket;
+      const sendFrame = (frame, authorization) => send(frame, authorization, target);
+      const close = () => { if (current()) target.close(); };
+      const pulse = (callback, milliseconds) => {
+        if (!current()) return;
+        clearInterval(heartbeat);
+        heartbeat = setInterval(() => Promise.resolve().then(callback).catch(close), milliseconds);
+        heartbeat.unref?.();
+      };
+      const enqueue = action => {
+        pending = pending.then(() => current() && action()).catch(() => { if (current()) failed(); });
+      };
+      target.addEventListener('open', () => { if (connection.open) enqueue(() => connection.open(sendFrame, pulse)); });
+      target.addEventListener('message', event => {
+        enqueue(async () => {
+          await boundary.current(config);
+          await boundary.authorize('receive', boundary.connectionSource(config));
+          if (!current()) return;
+          const raw = typeof event.data === 'string' ? event.data : Buffer.from(event.data).toString();
+          if (Buffer.byteLength(raw) > 1_048_576) throw fail('渠道消息过大');
+          await onFrame(JSON.parse(raw), config, { send: sendFrame, pulse, close });
+        });
       });
-      socket.addEventListener('error', () => { if (gen === generation) failed(); });
-      socket.addEventListener('close', () => {
-        if (gen !== generation) return;
+      target.addEventListener('error', () => { if (current()) failed(); });
+      target.addEventListener('close', event => {
+        if (!current()) return;
+        socket = undefined;
         clear(); boundary.state.connection = { state: 'reconnecting' };
-        reconnect = setTimeout(() => { void open(gen); }, 5000); reconnect.unref?.();
+        if (onClose?.(event) === false) boundary.state.connection = { state: 'failed' };
+        else schedule(gen);
       });
-    } catch { if (gen === generation) { failed(); reconnect = setTimeout(() => { void open(gen); }, 5000); reconnect.unref?.(); } }
+    } catch { if (gen === generation) { failed(); schedule(gen); } }
   };
-  const failed = () => { boundary.state.error = '渠道连接或消息处理失败，请检查配置与权限'; boundary.state.connection = { state: 'failed' }; socket?.close(); };
-  return { send, stop, async start() { stop(); boundary.reset(); await open(generation); }, async dispose() { stop(); await pending; } };
+  const failed = () => { boundary.state.error ||= '渠道连接或消息处理失败，请检查配置与权限'; boundary.state.connection = { state: 'failed' }; socket?.close(); };
+  return { send, stop, disconnect: () => socket?.close(), async start() { stop(); boundary.reset(); await open(generation); }, async dispose() { stop(); await pending; } };
 }

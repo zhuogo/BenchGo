@@ -1,4 +1,4 @@
-/** Device management belongs to a local owner, never to a paired transport. */
+/** Identify the workbench carrier before choosing the device center entrance. */
 export function deviceLauncherMode(scope = globalThis) {
   if (scope.__DSH_LINK_WORKBENCH__ || (scope.__DSH_TRANSPORT__ && scope.__DSH_TRANSPORT__.ownsHost !== true)) return 'remote';
   if (scope.__DSH_TRANSPORT__?.ownsHost === true) return 'owner';

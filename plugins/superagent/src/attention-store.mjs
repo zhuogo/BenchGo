@@ -2,7 +2,7 @@ import { taskExecutionBlocked, taskStopped } from './task-lifecycle.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { validateAttentionDecisions } from './attention-triage.mjs';
 
-const attentionChannels = new Set(['desktop', 'feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api']);
+const attentionChannels = new Set(['desktop', 'feishu', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'api']);
 const attentionText = (source, attentionId, text) => source.channel === 'desktop' ? text
   : `${text}\n\n问题编号：${attentionId}\n可引用这条消息回答，或发送 /answer ${attentionId} 你的回答`;
 

@@ -12,7 +12,9 @@ export function createAssistantConnections({ directory }) {
   db.exec('PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS assistant_connections (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL)');
   const read = (channel = 'feishu') => {
     const row = db.prepare('SELECT revision,payload FROM assistant_connections WHERE id=?').get(channel);
-    return { channel, revision: row?.revision ?? 0, config: connectionConfig(channel, row ? JSON.parse(row.payload) : {}) };
+    const saved = row ? JSON.parse(row.payload) : {};
+    const config = channel === 'api' && row ? { enabled: saved.enabled, accountId: saved.accountId } : saved;
+    return { channel, revision: row?.revision ?? 0, config: connectionConfig(channel, config) };
   };
   return {
     read,

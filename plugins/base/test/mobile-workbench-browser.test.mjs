@@ -40,6 +40,10 @@ test('mobile shell keeps one reachable drawer and restores taps and scrolling ac
           if (name === 'sidebar') return <SidebarRoot {...props} usePanels={nothing} useEntryPins={nothing} useEntryActions={()=>false}
             useRemoteAccess={()=>true} useShortcuts={nothing} usePanelInfo={usePanelInfo} t={t} toggleSidebar={layout.actions.toggleSidebar}
             renderFactorySlot={()=>null} renderSlot={key=>key==='sidebar.workspaces' && <section className="cmd-projects">
+              <nav className="cmd-sidebar-nav" aria-label="快捷工具栏">
+                <button className="dsh-device-launcher">连接</button><button className="dsh-device-launcher-target">设备中心</button>
+                <div className="dsh-device-switch"><button>切换设备</button></div><button>新聊天</button>
+              </nav>
               <div className="cmd-sidebar-content"><button className="ba-card" onClick={()=>selectPanel('assistant')}>SuperAgent</button>
               <button className="cmd-session" onClick={()=>selectPanel(null)}>普通对话</button></div></section>}/>;
           if (name === 'main') return <div className="fixture-main">
@@ -88,6 +92,8 @@ test('mobile shell keeps one reachable drawer and restores taps and scrolling ac
       await page.getByRole('button', { name: '收起侧边栏', exact: true }).waitFor();
       assert.equal(await page.locator('[data-sidebar-mask]').count(), 0);
       await page.waitForFunction(() => document.querySelector('[data-plus-sidebar]').getBoundingClientRect().x === 0);
+      const toolbar = drawer.getByRole('navigation', { name: '快捷工具栏' });
+      assert.deepEqual(await toolbar.getByRole('button').allTextContents(), ['新聊天']);
       const bar = await toggle.boundingBox();
       assert.equal((await drawer.boundingBox()).y, bar.y + bar.height);
       assert.equal((await mask.boundingBox()).y, bar.y + bar.height);

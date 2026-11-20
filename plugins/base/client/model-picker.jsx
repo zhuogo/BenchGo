@@ -12,6 +12,7 @@ import { routerGo } from '../shared/builtin-providers.mjs';
 import { ToolBrandIcon } from './tool-brand-icon.jsx';
 import { availableTools, currentToolId, providersForTool, selectionReasoningEffort } from './model-picker-state.mjs';
 import css from './model-picker.css';
+import effortCss from './model-effort-slider.css';
 import { ModelEffortSlider } from './model-effort-slider.jsx';
 import { nativeActivityLabel } from './native-activity.mjs';
 import { IconPinOutlineRegular, IconPinFillRegular } from '@deepseek-ai/dsh-client-ui-primitives';
@@ -26,7 +27,7 @@ function sameModelBinding(previous, next) {
 export function mountModelPicker(ctx) {
   mountModelCatalogs(ctx);
   ctx.effect(() => moduleSource.subscribe(invalidateModelCatalogs));
-  const style = document.createElement('style'); style.textContent = css; document.head.append(style);
+  const style = document.createElement('style'); style.textContent = css + effortCss; document.head.append(style);
   ctx.effect(() => () => style.remove());
   ctx.slots.inject('conversation.input.model', () => ctx.slots.register({
     name: 'conversation.input.model', priority: -10,

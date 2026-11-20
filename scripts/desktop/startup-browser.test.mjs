@@ -22,6 +22,7 @@ test('prepared startup keeps one brand entrance, local eye expressions, live the
   const screenshots = process.env.BENCHGO_STARTUP_SCREENSHOTS;
   if (screenshots) await mkdir(screenshots, { recursive: true });
   const page = await browser.newPage({ viewport: { width: 420, height: 300 }, colorScheme: 'light' });
+  await page.clock.install();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
@@ -41,6 +42,16 @@ test('prepared startup keeps one brand entrance, local eye expressions, live the
     text: getComputedStyle(document.querySelector('h1')).color,
     overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight,
   }));
+  const dots = () => page.locator('.startup-loading').evaluate(progress => ({
+    count: progress.children.length,
+    completed: Array.from(progress.children).filter(dot => getComputedStyle(dot, '::after').opacity === '1').length,
+    color: getComputedStyle(progress, '::after').backgroundColor,
+    position: getComputedStyle(progress, '::after').translate,
+  }));
+  const waitForDotAt = position => page.waitForFunction(expected => {
+    const progress = document.querySelector('.startup-loading');
+    return getComputedStyle(progress, '::after').translate === expected;
+  }, position);
   for (const name of ['splash.html', 'welcome.html']) {
     await page.goto(pathToFileURL(join(prepared, name)).href);
     await page.locator('.startup-mascot [data-part="eyes"]').waitFor();
@@ -78,13 +89,32 @@ test('prepared startup keeps one brand entrance, local eye expressions, live the
       await snapshot(name + '-' + theme);
     }
     if (name === 'splash.html') {
-      assert.equal(await page.locator('#startup-status').innerText(), '正在准备插件…');
-      await page.locator('#startup-status').evaluate(status => {
-        status.dataset.phase = 'host-starting';
-        status.textContent = '正在启动服务…';
-      });
-      assert.equal((await page.locator('.startup-loading').evaluate(rail => getComputedStyle(rail).getPropertyValue('--stage'))).trim(), '.51');
+      const status = page.locator('#startup-status');
+      const wait = page.locator('#startup-wait');
+      const advance = (stage, label) => page.evaluate(detail => {
+        window.dispatchEvent(new CustomEvent('benchgo-startup-stage', { detail }));
+      }, { stage, label });
+      assert.equal(await status.innerText(), '正在准备插件…');
+      assert.deepEqual(await dots(), { count: 6, completed: 0, color: 'rgb(241, 132, 116)', position: '0px' });
+      assert.equal(await wait.innerText(), '');
+      await page.clock.fastForward(20_000);
+      assert.equal(await status.innerText(), '正在准备插件…');
+      assert.equal(await wait.innerText(), '这一步耗时较长，请稍候');
+      await advance('host-starting', '正在启动服务…');
+      await waitForDotAt('32px');
+      assert.deepEqual(await dots(), { count: 6, completed: 2, color: 'rgb(241, 132, 116)', position: '32px' });
+      assert.equal(await wait.innerText(), '');
+      await page.clock.fastForward(20_000);
+      assert.equal(await status.innerText(), '正在启动服务…');
+      assert.equal(await wait.innerText(), '这一步耗时较长，请稍候');
       await snapshot('splash-host');
+      await advance('host-ready', '正在连接工作台…');
+      await waitForDotAt('48px');
+      assert.deepEqual(await dots(), { count: 6, completed: 3, color: 'rgb(241, 132, 116)', position: '48px' });
+      await page.emulateMedia({ colorScheme: 'light' });
+      assert.equal((await dots()).color, 'rgb(196, 78, 62)');
+      await snapshot('splash-progress-light');
+      assert.equal(await wait.innerText(), '');
     }
     const eyeScale = await page.evaluate(() => {
       const eyes = document.querySelector('[data-part="eyes"]');
@@ -122,6 +152,8 @@ test('prepared startup keeps one brand entrance, local eye expressions, live the
       await page.getByRole('button', { name: '重试' }).waitFor({ state: 'hidden' });
       assert.equal(await page.evaluate(() => window.startupCalls), 2);
       assert.equal(await page.locator('#startup-status').innerText(), '正在打开工作台…');
+      assert.equal((await dots()).completed, 5);
+      assert.equal((await dots()).position, '80px');
       await snapshot('welcome-ready');
     }
     await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });

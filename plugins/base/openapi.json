@@ -869,6 +869,19 @@
                         },
                         "status": {
                           "$ref": "#/components/schemas/ChannelStatus"
+                        },
+                        "recentSources": {
+                          "type": "array",
+                          "maxItems": 20,
+                          "items": {
+                            "type": "object",
+                            "required": ["actorId"],
+                            "properties": {
+                              "actorId": { "type": "string" },
+                              "groupId": { "type": "string" }
+                            },
+                            "additionalProperties": false
+                          }
                         }
                       },
                       "additionalProperties": true
@@ -880,8 +893,11 @@
               "connectionAction": {
                 "type": "object",
                 "additionalProperties": true,
-                "description": "渠道操作响应。飞书 operation=listChats 返回 FeishuChatList；只读取机器人已加入的群，不发送测试消息。",
+                "description": "外部集成 api.submit 返回请求与会话标识，任务结果由 tasks 查询，直接回复由 connectionReplies 查询。飞书 listChats 返回机器人已加入的群。",
                 "x-operation-schemas": {
+                  "api.submit": {
+                    "$ref": "#/components/schemas/ExternalIntegrationSubmission"
+                  },
                   "feishu.listChats": {
                     "$ref": "#/components/schemas/FeishuChatList"
                   }
@@ -999,6 +1015,7 @@
                           "enum": [
                             "queued",
                             "claimed",
+                            "waiting_reply_window",
                             "sent",
                             "suppressed",
                             "uncertain"
@@ -1309,56 +1326,6 @@
           },
           "assistant_task_change": {
             "$ref": "#/components/schemas/AssistantTaskChangeInput"
-          }
-        }
-      }
-    },
-    "/api/commander/assistant/channels/webhook": {
-      "post": {
-        "summary": "签名事件交给统一 Router",
-        "description": "HMAC-SHA256 密钥来自 signingSecretRef；签名十六进制值覆盖 timestamp + \".\" + 原始请求字节。时间窗为五分钟。requestId 持久去重，身份取配置唯一 ownerIds，输入不可声明身份。结果通过已认证 tasks 查询。",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "X-BenchGo-Timestamp",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{10}$"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-BenchGo-Signature",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[a-fA-F0-9]{64}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "事件已持久受理；不代表任务完成"
-          },
-          "401": {
-            "description": "签名或时间戳无效"
-          },
-          "413": {
-            "description": "正文超过64KB"
-          },
-          "503": {
-            "description": "尚未持久受理，请用相同requestId重试"
           }
         }
       }
@@ -2494,7 +2461,10 @@
             "minLength": 1
           },
           "channel": {
-            "$ref": "#/components/schemas/ChannelId"
+            "anyOf": [
+              { "$ref": "#/components/schemas/ChannelId" },
+              { "const": "webhook", "description": "仅用于筛选历史回复。" }
+            ]
           },
           "field": {
             "type": "string",
@@ -2710,6 +2680,15 @@
         "allOf": [
           {
             "if": {
+              "required": ["channel"],
+              "properties": { "channel": { "const": "webhook" } }
+            },
+            "then": {
+              "properties": { "action": { "const": "connectionReplies" } }
+            }
+          },
+          {
+            "if": {
               "properties": {
                 "action": {
                   "const": "taskChange"
@@ -2876,15 +2855,11 @@
                 },
                 "channel": {
                   "const": "api"
-                },
-                "operation": {
-                  "const": "submit"
                 }
               },
               "required": [
                 "action",
-                "channel",
-                "operation"
+                "channel"
               ]
             },
             "then": {
@@ -2894,10 +2869,22 @@
                 "text"
               ],
               "properties": {
+                "operation": {
+                  "const": "submit",
+                  "description": "使用已认证的 BenchGo 主人会话提交请求。"
+                },
+                "requestId": {
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "conversationId": {
+                  "maxLength": 256
+                },
                 "text": {
                   "type": "string",
                   "minLength": 1,
-                  "maxLength": 32000
+                  "maxLength": 32000,
+                  "description": "非空白文字，UTF-8 编码最多 32000 字节。"
                 }
               }
             }
@@ -3650,9 +3637,10 @@
           "weixin",
           "telegram",
           "discord",
+          "slack",
+          "dingtalk",
           "whatsapp",
           "email",
-          "webhook",
           "api"
         ]
       },
@@ -3721,28 +3709,31 @@
         },
         "additionalProperties": true
       },
-      "WebhookEvent": {
+      "ExternalIntegrationSubmission": {
         "type": "object",
+        "description": "外部集成的提交回执。执行结果从任务或直接回复记录读取。",
         "required": [
+          "accepted",
           "requestId",
-          "conversationId",
-          "text"
+          "threadId",
+          "result"
         ],
         "properties": {
+          "accepted": {
+            "const": true
+          },
           "requestId": {
             "type": "string",
             "minLength": 1,
             "maxLength": 256
           },
-          "conversationId": {
+          "threadId": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 256
+            "minLength": 1
           },
-          "text": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 32000
+          "result": {
+            "type": "object",
+            "additionalProperties": true
           }
         },
         "additionalProperties": false
@@ -4319,6 +4310,7 @@
             "enum": [
               "queued",
               "claimed",
+              "waiting_reply_window",
               "sent",
               "suppressed",
               "uncertain"

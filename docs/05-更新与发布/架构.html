@@ -14,7 +14,7 @@
   "title": "更新与发布",
   "eyebrow": "BUILD / RELEASE",
   "subtitle": "统一安装先发现与复用，生产闭包保留实际依赖，部署资源校验缓存后交付；三平台原生、GUI 交接与公开发行分别验收。",
-  "boundary": "公开发行证据见设计正文的 v0.1.5。本轮候选仍须分别验收构建、签名、安装、激活、三平台原生运行、GUI 交接和公网分发。安装发现、实例复用、生产依赖闭包和部署资源已有源码。默认 full 保留完整离线 seed，显式 online 使用固定签名资源与缓存。",
+  "boundary": "图中机制已有实现，但构建、签名、安装、激活与公网分发必须对当前产物分别验收。插件、桌面应用、Android 与服务器是不同更新边界；源码测试或 artifact 存在不代表已正式发布。  install、instance-reuse、payload-policy、sidebar-closure、deployment-resources 已有对应源码；状态仅表示所述实现范围，不表示三平台原生安装、GUI 交接、真实模型推理或公开发行通过。默认 full 保留完整离线 seed，显式 online 走固定签名资源与缓存；Office/Python/Node/dsh-ops 保留。",
   "nodes": [
     {
       "id": "version",
@@ -111,7 +111,7 @@
       "sub": "一个公开版本，复用没有变化的组件",
       "symbol": "v<releaseVersion> · plugin-updates · app-updates",
       "plain": "普通 push 保存源码，显式统一发版才通知客户端。",
-      "role": "统一工作流先比较签名发行基线，按需构建功能包、Windows、Android、macOS 双架构及 Linux 服务端。验证后发布不可变资产，再推进更新通道。默认只生成计划。npm 匿名可用性及已验证产物恢复门槛见设计正文。",
+      "role": "统一工作流先比较签名发行基线，按需调用功能包、Windows、Android 构建；全部验证后发布不可变资产，再推进原生及签名更新通道。默认只生成计划。",
       "input": "已签名清单、完整包、显式发布选项",
       "output": "可匿名下载的发行包与更新通道",
       "sources": [
@@ -316,7 +316,7 @@
       "sources": [
         "scripts/desktop/plugin-bundle.mjs",
         "scripts/server/bootstrap.mjs",
-        "https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/skill/tool-workspace-dependencies/src/index.ts",
+        "deepseek-harness/packages/skill/tool-workspace-dependencies/src/index.ts",
         "docs/05-更新与发布/设计.md",
         "plugins/base/shared/workbench-installation.mjs",
         "scripts/desktop/workbench-desktop.mjs",

@@ -53,6 +53,9 @@ test('splash covers hidden backend startup and disposes only when another window
   close.setStage('host-starting');
   assert.match(splash.scripts.at(-1), /正在启动服务/);
   const sent = splash.scripts.length;
+  close.setStage('shell-loaded');
+  close.setStage('enrollment-ready');
+  close.setStage('host-starting');
   close.setStage('arbitrary config content');
   assert.equal(splash.scripts.length, sent);
   main.show();
@@ -91,6 +94,8 @@ test('a pending splash never delays backend preparation or reappears after the w
     assert.equal(typeof close, 'function', 'backend receives cleanup while Chromium is still loading');
     assert.equal(splash.isVisible(), false);
     close.setStage('host-starting');
+    close.setStage('shell-loaded');
+    close.setStage('enrollment-ready');
     assert.equal(splash.scripts.length, 0, 'status waits for the local document');
     if (workspaceFirst) new env.BrowserWindow({ show: false }).show();
     finishLoad();
@@ -155,7 +160,7 @@ test('startup executes the packaged enrollment entry and propagates failures bef
   }
   verifyStartupBundle(code);
   assert.throws(() => verifyStartupBundle(`${code}\nfunction initializePluginProfile() {}`), /inlined enrollment/);
-  assert.throws(() => verifyStartupBundle(code.replace('await import(enrollmentModule)', 'await oldEnrollment()')), /packaged enrollment/);
+  assert.throws(() => verifyStartupBundle(code.replace('import(enrollmentModule)', 'oldEnrollment()')), /packaged enrollment/);
 });
 
 test('startup timing records bounded phases and total elapsed time without slowing the caller', async t => {

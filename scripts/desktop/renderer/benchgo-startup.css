@@ -83,7 +83,7 @@ h1 { margin: 0; font-size: 35px; line-height: 42px; font-weight: 650; letter-spa
 .startup-feedback {
   position: relative;
   display: grid;
-  grid-template-rows: 24px 8px 32px;
+  grid-template-rows: 24px 14px 32px;
   justify-items: center;
   align-items: center;
   row-gap: 3px;
@@ -91,47 +91,21 @@ h1 { margin: 0; font-size: 35px; line-height: 42px; font-weight: 650; letter-spa
 }
 .startup-engine { position: absolute; bottom: calc(100% + 3px); color: var(--startup-muted); font-size: 10px; line-height: 14px; }
 .startup-status { margin: 0; color: var(--startup-muted); font-size: 13px; line-height: 20px; text-align: center; }
-.startup-loading {
-  position: relative;
-  width: 100%;
-  height: 8px;
-  color: var(--startup-accent);
-  background:
-    repeating-linear-gradient(to right, var(--startup-line) 0 1px, transparent 1px 16px) left bottom / 100% 3px no-repeat,
-    linear-gradient(var(--startup-line), var(--startup-line)) left 3px / 100% 1px no-repeat;
+.startup-wait {
+  align-self: start;
+  margin: 2px 0 0;
+  color: var(--startup-muted);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
 }
-.startup-loading > span { position: absolute; inset: 0; overflow: hidden; }
-.startup-loading::before, .startup-loading::after { content: ""; position: absolute; top: 1px; width: 1px; height: 5px; background: currentColor; }
-.startup-loading::before { left: 0; }
-.startup-loading::after { right: 0; color: var(--startup-signal); }
-.startup-loading > span::before {
-  content: "";
-  position: absolute;
-  inset: 3px 0 auto;
-  height: 1px;
-  background: currentColor;
-  opacity: .38;
-  transform-origin: left;
-  transform: scaleX(var(--stage, .12));
-  transition: transform 200ms var(--ease-out);
-}
-.startup-loading > span::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 0;
-  width: 31%;
-  height: 3px;
-  background: linear-gradient(to right, transparent, currentColor 90%, var(--startup-signal));
-  animation: startup-scan 1.65s linear infinite;
-}
-.startup-status:is([data-phase="enrollment-ready"], [data-phase="shell-loading"]) + .startup-loading { --stage: .32; }
-.startup-status:is([data-phase="shell-loaded"], [data-phase="host-starting"]) + .startup-loading { --stage: .51; }
-.startup-status[data-phase="host-ready"] + .startup-loading { --stage: .72; }
-.startup-status[data-phase="host-connected"] + .startup-loading { --stage: .86; }
-.startup-status[data-phase="welcome-state-ready"] + .startup-loading { --stage: .96; }
-.startup-feedback:has(#startup-retry:not([hidden])) .startup-loading { visibility: hidden; }
-.startup-feedback:has(#startup-retry:not([hidden])) .startup-loading > span::after { animation: none; }
+.startup-status[data-phase="enrollment-ready"] + .startup-loading { --startup-dot-step: 1; }
+.startup-status[data-phase="host-starting"] + .startup-loading { --startup-dot-step: 2; }
+.startup-status[data-phase="host-ready"] + .startup-loading { --startup-dot-step: 3; }
+.startup-status[data-phase="host-connected"] + .startup-loading { --startup-dot-step: 4; }
+.startup-status[data-phase="welcome-state-ready"] + .startup-loading,
+#startup-status:has(~ #startup-retry) + .startup-loading { --startup-dot-step: 5; }
+.startup-feedback:has(#startup-retry:not([hidden])) .startup-loading { display: none; }
 button {
   grid-row: 3;
   pointer-events: auto;
@@ -161,11 +135,8 @@ button:disabled { opacity: .5; cursor: default; }
   33%, 40% { transform: translateX(-18px) scaleY(1); }
   54%, 61% { transform: translateX(18px) scaleY(1); }
 }
-@keyframes startup-scan { from { transform: translateX(-106%); } to { transform: translateX(330%); } }
 @media (prefers-reduced-motion: reduce) {
   .startup-brand, .startup-mascot [data-part="eyes"] { animation: none; }
-  .startup-loading > span::before { transition: none; }
-  .startup-loading > span::after { animation: none; left: 36%; }
   button { transition: none; }
   button:active { transform: none; }
 }

@@ -4,12 +4,15 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { openRemoteExecutionStore } from '../src/remote-execution-store.mjs';
 import { createRemoteExecutionService, remoteExecutionEvidence } from '../src/remote-execution.mjs';
 import { remoteExecutionFixture as fixture } from './fixtures/remote-execution.mjs';
 
 const principal = { kind: 'device', deviceId: 'paired-owner-A' };
+const verifiedSourceHostId = 'sha256:' + 'a'.repeat(64);
+const otherSourceHostId = 'sha256:' + 'b'.repeat(64);
 const request = (extra = {}) => ({ action: 'execution', version: 2, operation: 'submit', requestId: randomUUID(), executionId: randomUUID(), sessionId: randomUUID(),
   identity: { ownerHostId: 'owner-A', taskId: 'task-A', assignmentId: 'assignment-A', runId: 'run-A', fence: 1 },
   config: { harness: 'official', models: [{ providerId: 'exact-provider', modelId: 'opaque-model/1', params: { temperature: 0.3 } }] },
@@ -42,6 +45,35 @@ test('execution journal binds authenticated subjects, immutable commands, sessio
   reopened.close();
 });
 
+test('execution journal upgrades legacy owner bindings without moving executions or receipts', async t => {
+  const directory = await temp(t), input = request(), db = openRemoteExecutionStore(directory);
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  db.tx(() => db.create(principal.deviceId, input, {}));
+  db.close();
+  const legacy = new DatabaseSync(join(directory, 'executions.db'));
+  legacy.exec(`CREATE TABLE legacy_owners(principal TEXT PRIMARY KEY, owner_host_id TEXT NOT NULL UNIQUE);
+    INSERT INTO legacy_owners SELECT principal,owner_host_id FROM execution_owners;
+    DROP TABLE execution_owners;
+    ALTER TABLE legacy_owners RENAME TO execution_owners;`);
+  legacy.close();
+
+  const migrated = openRemoteExecutionStore(directory);
+  try {
+    assert.equal(migrated.owned(input.executionId, principal.deviceId).id, input.executionId);
+    assert.equal(migrated.receipt(principal.deviceId, input.requestId).executionId, input.executionId);
+    const newTask = request({ identity: { ...input.identity, taskId: 'new-task' } });
+    const oldTaskNewAssignment = request({ identity: { ...input.identity, assignmentId: 'other-assignment' } });
+    assert.throws(() => migrated.tx(() => migrated.create('new-pair', newTask, {})), { code: 'EXECUTION_OWNER_CHANGED' });
+    assert.throws(() => migrated.tx(() => migrated.create('new-pair', oldTaskNewAssignment, {}, verifiedSourceHostId)), { code: 'EXECUTION_OWNER_CHANGED' });
+    const row = migrated.tx(() => migrated.create('new-pair', newTask, {}, verifiedSourceHostId));
+    assert.equal(row.principal, 'new-pair');
+    assert.equal(migrated.receipt('new-pair', input.requestId), undefined);
+    assert.throws(() => migrated.owned(input.executionId, 'new-pair'), { code: 'EXECUTION_NOT_FOUND' });
+    assert.equal(migrated.page(input.executionId).cursor, 2);
+    assert.equal(migrated.owned(input.executionId, principal.deviceId).identity.taskId, 'task-A');
+  } finally { migrated.close(); }
+});
+
 
 async function running(t, fixtureValue = fixture()) {
   const directory = await temp(t), service = await createRemoteExecutionService({ ctx: fixtureValue.ctx, directory });
@@ -51,6 +83,29 @@ async function running(t, fixtureValue = fixture()) {
   await waitFor(() => fixtureValue.instances[0]?.pending.length);
   return { directory, service, input, access, call, accepted, execution: fixtureValue.instances[0], fixture: fixtureValue };
 }
+
+test('verified same-source pairing can dispatch a new task while commands and receipts remain principal scoped', async t => {
+  const { service, input, call } = await running(t);
+  const dispatch = (deviceId, value, sourceId) => service.dispatch({ action: 'execution', version: 2, ...value }, {
+    principal: { kind: 'device', deviceId }, verifiedSourceHostId: sourceId,
+  });
+  assert.equal((await dispatch(principal.deviceId, input, verifiedSourceHostId)).execution.id, input.executionId);
+  await assert.rejects(dispatch(principal.deviceId, input, otherSourceHostId), { code: 'EXECUTION_OWNER_CHANGED' });
+  const newTask = request({ requestId: input.requestId, identity: { ...input.identity, taskId: 'new-task' } });
+  await assert.rejects(dispatch('different-source', newTask, otherSourceHostId), { code: 'EXECUTION_OWNER_CHANGED' });
+  await assert.rejects(dispatch('unverified-pair', { ...newTask, verifiedSourceHostId }), { code: 'EXECUTION_OWNER_CHANGED' });
+  const oldTaskNewAssignment = request({ identity: { ...input.identity, assignmentId: 'other-assignment' } });
+  await assert.rejects(dispatch('new-pair', oldTaskNewAssignment, verifiedSourceHostId), { code: 'EXECUTION_OWNER_CHANGED' });
+  const accepted = await dispatch('new-pair', newTask, verifiedSourceHostId);
+  assert.equal(accepted.execution.id, newTask.executionId);
+  const receiptLookup = { operation: 'get', requestId: input.requestId };
+  assert.equal((await dispatch('new-pair', receiptLookup)).execution.id, newTask.executionId);
+  assert.equal((await call(receiptLookup)).execution.id, input.executionId);
+  for (const operation of ['get', 'input', 'control', 'ack']) {
+    await assert.rejects(dispatch('new-pair', { operation, executionId: input.executionId }, verifiedSourceHostId), { code: 'EXECUTION_NOT_FOUND' });
+  }
+  assert.equal((await call({ operation: 'ack', executionId: input.executionId, through: 1 })).execution.ackThrough, 1);
+});
 
 function nativeFixture() {
   const sessions = new Map(), handlers = new Map(), prepared = [], submitted = [];
@@ -194,6 +249,30 @@ test('official execution works without SuperAgent, freezes exact config, and req
   await assert.rejects(f.rawStep({ id: input.sessionId }, []), { code: 'EXECUTION_INPUT_REQUIRES_OWNER' });
   await assert.rejects(call({ operation: 'ack', executionId: input.executionId, through: 999 }), { code: 'INVALID_EXECUTION_ACK' });
   await call({ operation: 'ack', executionId: input.executionId, through: observed.cursor });
+});
+
+test('target Worker preference reads current settings and preserves options in the execution request', async t => {
+  const f = fixture(), directory = await temp(t);
+  const service = await createRemoteExecutionService({ ctx: f.ctx, directory });
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
+  const catalog = () => service.dispatch({ action: 'execution', version: 2, operation: 'catalog' }, { principal });
+  assert.equal((await catalog()).workerPreference, undefined);
+  const unusable = { providerId: 'exact-provider', modelId: 'missing' };
+  const selected = { providerId: 'exact-provider', modelId: 'opaque-model/1', params: { maxTokens: 432 } };
+  let models = [unusable, selected];
+  f.services.assistant = { readWorkerModels: async () => ({ harness: 'official', models }) };
+  const { config } = (await catalog()).workerPreference;
+  assert.deepEqual(config, { harness: 'official', models: [selected] });
+  await service.dispatch(request({ config }), { principal });
+  await waitFor(() => f.instances[0]?.pending.length);
+  await f.instances[0].step();
+  assert.deepEqual(await f.instances[0].requestModel(), { provider: selected.providerId, model: selected.modelId, maxTokens: 432, tools: [] });
+  models = [unusable];
+  assert.equal((await catalog()).workerPreference.error.code, 'EXECUTION_WORKER_UNAVAILABLE');
+  models = [];
+  assert.equal((await catalog()).workerPreference, undefined);
+  await f.instances[0].finish();
+  await waitFor(() => f.instances[0].disposed);
 });
 
 test('revisions and context have durable received/applied receipts and reject native bypass', async t => {

@@ -15,9 +15,9 @@ export function startupWindowPlugin(mainPath) {
       for (const [before, after] of [
         ['async function main() {', "async function main() {\n    benchgoStartupTiming = createStartupTiming(app.getPath('logs'));\n    closeBenchgoStartup = await openStartupWindow({ app, BrowserWindow, nativeImage, nativeTheme, page: join(app.getAppPath(), 'renderer', 'splash.html'), iconPath: join(process.resourcesPath, 'icon.png'), onVisible: () => benchgoStartupStage('splash-visible') });\n    benchgoWorkbench = await ensureBenchgoPlugin(process.resourcesPath);\n    app.once('will-quit', () => { void benchgoWorkbench.dispose().catch(error => console.error('BenchGo workbench ownership cleanup failed', error)); });\n    benchgoStartupStage('enrollment-ready');"],
         ['function reportFatal(error, source) {', "function reportFatal(error, source) {\n    closeBenchgoStartup?.();\n    benchgoStartupTiming?.finish('failed');"],
-        ['const ready = await host.start();', "benchgoStartupStage('host-starting');\n                const ready = await host.start();\n                await benchgoWorkbench.publishReady({ url: ready.url, inspect: () => host.inspectQuit() });\n                benchgoStartupStage('host-ready');"],
+        ['const ready = await host.start();\n                const cookie = await authenticateWebHost(ready.url);', "benchgoStartupStage('host-starting');\n                const ready = await host.start();\n                benchgoStartupStage('host-ready');\n                const [cookie] = await Promise.all([authenticateWebHost(ready.url), benchgoWorkbench.publishReady({ url: ready.url, inspect: () => host.inspectQuit() })]);"],
         ['welcomeBackend = connectDesktopWelcome(ready.url, cookie);', "welcomeBackend = connectDesktopWelcome(ready.url, cookie);\n                benchgoStartupStage('host-connected');"],
-        ['await navigateMain(applicationUrl);\n            await backend.start(async () => {', "benchgoStartupStage('shell-loading');\n            await navigateMain(applicationUrl);\n            benchgoStartupStage('shell-loaded');\n            await backend.start(async () => {"],
+        ['await navigateMain(applicationUrl);\n            await backend.start(async () => {\n                await Promise.all([manager.applyRelease(), prepareHostEnvironment()]);\n            });', "benchgoStartupStage('shell-loading');\n            await Promise.all([\n                navigateMain(applicationUrl).then(() => { benchgoStartupStage('shell-loaded'); }),\n                backend.start(async () => {\n                    await Promise.all([manager.applyRelease(), prepareHostEnvironment()]);\n                }),\n            ]);"],
         ['const state = await readWelcomeState();', "const state = await readWelcomeState();\n        benchgoStartupStage('welcome-state-ready');"],
         ['enteredWorkspace = true;', "enteredWorkspace = true;\n        benchgoStartupStage('workspace-visible');\n        benchgoStartupTiming?.finish();"],
       ]) {
@@ -32,9 +32,8 @@ import { pathToFileURL as benchgoPathToFileURL } from 'node:url';
 async function ensureBenchgoPlugin(resourcesPath) {
   try {
     const enrollmentModule = benchgoPathToFileURL(join(resourcesPath, 'benchgo', 'plugin-bundle.mjs')).href;
-    const { initializePluginProfile } = await import(enrollmentModule);
     const ownershipModule = benchgoPathToFileURL(join(resourcesPath, 'benchgo', 'workbench-desktop.mjs')).href;
-    const { beginDesktopWorkbench } = await import(ownershipModule);
+    const [{ initializePluginProfile }, { beginDesktopWorkbench }] = await Promise.all([import(enrollmentModule), import(ownershipModule)]);
     return await beginDesktopWorkbench({ resources: resourcesPath, initialize: initializePluginProfile });
   } catch (error) {
     console.error('BenchGo plugin enrollment failed', error);
@@ -76,7 +75,7 @@ export function verifyStartupBundle(source) {
   if (!source.includes('resourcesPath') || !source.includes('icon.png')) missing.push('window icon');
   if (!/ensureBenchgoPlugin\(process\.resourcesPath\)/.test(source)) missing.push('plugin enrollment');
   // Rolldown may fold the URL variable into import(), without inlining the module.
-  if (!/['"]benchgo['"],\s*['"]plugin-bundle\.mjs['"]/.test(source) || !/\{\s*initializePluginProfile\s*\}\s*=\s*await import\(/.test(source)) missing.push('packaged enrollment entry');
+  if (!/['"]benchgo['"],\s*['"]plugin-bundle\.mjs['"]/.test(source) || !/\[\s*\{\s*initializePluginProfile\s*\},\s*\{\s*beginDesktopWorkbench\s*\}\s*\]\s*=\s*await Promise\.all\(\[\s*import\(/.test(source)) missing.push('packaged enrollment entry');
   if (!source.includes('workbench-desktop.mjs') || !source.includes('beginDesktopWorkbench') || !source.includes('publishReady') || !source.includes('host.inspectQuit()')) missing.push('shared workbench ownership lifecycle');
   if (/function (?:initializePluginProfile|stagePluginBundle|attachOfficialPackages)\b/.test(source)) missing.push('inlined enrollment implementation');
   if (!/function reportFatal\(error, source\)\s*\{\s*closeBenchgoStartup\?\.\(\)/.test(source)) missing.push('fatal cleanup');

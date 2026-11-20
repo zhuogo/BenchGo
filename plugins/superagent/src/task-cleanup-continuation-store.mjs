@@ -52,7 +52,7 @@ export function installTaskCleanupContinuationStore({ db, transaction }) {
         || !identity(item.id) || !Number.isSafeInteger(item.instructionRevision) || item.instructionRevision < 1
         || !Number.isSafeInteger(item.resultVersion) || item.resultVersion < 0
         || !Number.isSafeInteger(item.metaVersion) || item.metaVersion < 0
-        || item.executionStamp !== undefined && (typeof item.executionStamp !== 'string' || !/^[a-f0-9]{64}$/iu.test(item.executionStamp))))
+        || item.executionStamp !== undefined && (typeof item.executionStamp !== 'string' || !/^(?:v2:)?[a-f0-9]{64}$/iu.test(item.executionStamp))))
       throw fail('CLEANUP_CONTINUATION_INPUT', '待归档需要明确任务和有效版本');
     idsOf(items.map(item => item.id));
     const sorted = items.map(item => ({ id: item.id, instructionRevision: item.instructionRevision,

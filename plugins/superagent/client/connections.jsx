@@ -14,6 +14,9 @@ import QRCode from 'qrcode';
 
 const textConfig = config => Object.fromEntries(Object.entries(config || {}).map(([key, value]) => [key, Array.isArray(value) && key !== 'groups' ? value.join('\n') : value]));
 const listField = field => ['list', 'array', 'string[]', 'textarea'].includes(field.type) || Array.isArray(field.default);
+const idsIn = value => String(value || '').split('\n').map(id => id.trim()).filter(Boolean);
+const personalFields = new Set(['ownerIds', 'chatIds']);
+const automationFields = new Set(['machineIds', 'enabledRuleIds', 'admissionMode']);
 const authentication = status => status?.connection?.authenticated === true ? 'verified' : status?.authentication;
 const available = status => status?.enabled === true && !status?.error && ['verified', 'host-authenticated'].includes(authentication(status)) && ['connected', 'listening'].includes(status?.connection?.state);
 const stateLabel = status => !status?.enabled ? '' : ({ connected: '已连接', connecting: '连接中', reconnecting: '重连中', failed: '连接失败', stopped: '已停止', listening: '监听中', idle: '待连接', error: '连接失败', unavailable: '不可用', disabled: '' })[status?.connection?.state] || '未连接';
@@ -94,7 +97,12 @@ export function Connections({ api, onDirtyChange, active = true }) {
   const definition = catalog.find(item => item.id === channel);
   const fields = (definition?.fields || []).filter(field => field.key !== 'enabled').map(field => definition?.capabilities?.qrLogin && ['accountId', 'tokenRef'].includes(field.key) ? { ...field, advanced: true } : field);
   const feishu = channel === 'feishu';
-  const visibleFields = fields.filter(field => !field.hidden && (!feishu || !['accessMode', 'directMessages', 'groups', 'otherGroups', 'chatIds', 'botOpenId'].includes(field.key)) && (!feishu || field.key !== 'ownerOpenIds' || draft?.accessMode !== 'platform'));
+  const personal = definition?.capabilities?.personalScope;
+  const visibleFields = fields.filter(field => !field.hidden && (!personal || !automationFields.has(field.key)) && (!feishu || !['accessMode', 'directMessages', 'groups', 'otherGroups', 'chatIds', 'botOpenId'].includes(field.key)) && (!feishu || field.key !== 'ownerOpenIds' || draft?.accessMode !== 'platform'));
+  const scopeFields = personal ? visibleFields.filter(field => personalFields.has(field.key) && (field.key !== 'chatIds' || definition.capabilities.groups || !!draft?.chatIds)) : [];
+  const settingsFields = visibleFields.filter(field => !personal || !personalFields.has(field.key));
+  const listSourceIds = key => [...new Set((definition?.recentSources || []).map(source => source[key]).filter(Boolean))];
+  const addScopeId = (field, id) => setDraft(current => ({ ...current, [field]: [...new Set([...idsIn(current[field]), id])].join('\n') }));
   const dirty = !!base && (JSON.stringify(draft) !== JSON.stringify(textConfig(base.config)) || Object.values(secrets).some(Boolean));
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
   const load = async (target = channel, refreshCatalog = false) => {
@@ -157,7 +165,7 @@ export function Connections({ api, onDirtyChange, active = true }) {
       for (const key of new Set(['enabled', ...fields.map(field => field.key), ...(feishu ? ['accessMode', 'directMessages', 'groups', 'otherGroups'] : [])])) {
         if (JSON.stringify(savedDraft[key]) === JSON.stringify(previous[key])) continue;
         const field = fields.find(item => item.key === key);
-        patch[key] = key === 'groups' ? savedDraft[key] : field && (listField(field) || Array.isArray(base.config[key])) ? String(savedDraft[key] || '').split('\n').map(value => value.trim()).filter(Boolean) : field?.type === 'number' ? (savedDraft[key] === '' ? null : Number(savedDraft[key])) : savedDraft[key];
+        patch[key] = key === 'groups' ? savedDraft[key] : field && (listField(field) || Array.isArray(base.config[key])) ? idsIn(savedDraft[key]) : field?.type === 'number' ? (savedDraft[key] === '' ? null : Number(savedDraft[key])) : savedDraft[key];
       }
       const value = await requestApi('connectionConfigure', { channel, patch, revision: base.revision });
       setBase(value); setDraft(textConfig(value.config)); setNotice('已保存');
@@ -237,11 +245,25 @@ export function Connections({ api, onDirtyChange, active = true }) {
         <fieldset disabled={busy}>
           {definition.capabilities?.qrLogin && <section className="ba-connection-section ba-channel-login"><strong>微信扫码连接</strong><p className="ba-connection-inline-note">用微信扫描二维码并确认授权，无需手动填写账号与 Token。</p>{login ? <><img src={login.image} width="224" height="224" alt="微信连接二维码" /><p role="status">{login.status === 'scanned' ? '已扫码，请在微信确认授权。' : '等待扫码，完成后点击检查扫码状态。'}</p><div className="ba-row-actions"><Button variant="ghost" type="button" onClick={() => loginAction('pollLogin')}>检查扫码状态</Button><Button variant="ghost" type="button" onClick={cancelLogin}>取消扫码</Button></div></> : <Button variant="ghost" type="button" onClick={() => loginAction('startLogin')}>扫码连接</Button>}</section>}
           <section className="ba-connection-section ba-channel-setup">
-            <div className="ba-connection-section-head"><div><h3><UIIcon name="settings" size={17} />{feishu ? '应用凭据' : '连接配置'}</h3><p>填写平台凭据，保存后验证连接。</p></div>{feishu && definition.setupUrl && <Button asChild variant="outline" size="sm"><a href={definition.setupUrl} target="_blank" rel="noreferrer">飞书开放平台 <UIIcon name="external" size={14} /></a></Button>}</div>
-            <div className="ba-goal-fields">{visibleFields.filter(field => !field.advanced && (!feishu || field.key !== 'ownerOpenIds')).sort((a, b) => Number(!!b.required) - Number(!!a.required)).map(renderField)}</div>
+            <div className="ba-connection-section-head"><div><h3><UIIcon name="settings" size={17} />{feishu ? '应用凭据' : '连接配置'}</h3>{channel !== 'api' && <p>填写平台凭据，保存后验证连接。</p>}</div>{feishu && definition.setupUrl && <Button asChild variant="outline" size="sm"><a href={definition.setupUrl} target="_blank" rel="noreferrer">飞书开放平台 <UIIcon name="external" size={14} /></a></Button>}</div>
+            <div className="ba-goal-fields">{settingsFields.filter(field => !field.advanced && (!feishu || field.key !== 'ownerOpenIds')).sort((a, b) => Number(!!b.required) - Number(!!a.required)).map(renderField)}</div>
             {fields.some(field => field.key.endsWith('Ref')) && <p className="ba-channel-credentials"><UIIcon name="check" size={15} />密钥加密保存；已配置的密钥留空即可保留。</p>}
             {feishu && (definition.help || definition.capabilities?.notes) && <Disclosure className="ba-feishu-guide" title="查看飞书端配置说明"><div className="ba-feishu-guide-copy">{definition.help && <p>{definition.help}</p>}{definition.capabilities?.notes && <p>{Array.isArray(definition.capabilities.notes) ? definition.capabilities.notes.join('；') : definition.capabilities.notes}</p>}</div></Disclosure>}
           </section>
+          {personal && <section className="ba-connection-section ba-channel-conversations">
+            <div className="ba-connection-section-head"><div><h3><UIIcon name="userlib" size={17} />对话范围</h3><p>{definition.capabilities.groups ? '仅响应指定账号。群聊和话题还需加入群名单，并明确 @ 机器人。' : '仅响应指定账号的私聊。'}</p></div></div>
+            <div className="ba-goal-fields">{scopeFields.map(field => renderField({ ...field, label: field.key === 'ownerIds' ? '允许的账号 ID' : definition.capabilities.groups ? '允许的群 ID' : '原有私聊会话 ID' }))}</div>
+            {base.config.enabled && <Disclosure className="ba-channel-manual" title="近期收到的来源 ID">
+              {fresh && !definition.recentSources?.length && <p className="ba-connection-inline-note">暂无来源。请在平台私聊机器人{definition.capabilities.groups ? '，或在目标群 @ 机器人' : ''}。</p>}
+              {!fresh && <p className="ba-connection-inline-note" role="status">来源列表待同步。</p>}
+              {fresh && [['actorId', 'ownerIds', '账号'], ['groupId', 'chatIds', '群']].filter(([, field]) => scopeFields.some(item => item.key === field)).map(([key, field, label]) => <div key={key} className="ba-channel-group-list">
+                {listSourceIds(key).map(id => {
+                  const added = idsIn(draft[field]).includes(id);
+                  return <div key={id} className="ba-channel-group-row"><div className="ba-connection-inline-note">{label} <code>{id}</code></div><Button variant="outline" type="button" disabled={added} onClick={() => addScopeId(field, id)}>{added ? '已在名单' : `加入${label}名单`}</Button></div>;
+                })}
+              </div>)}
+            </Disclosure>}
+          </section>}
           {feishu && <section className="ba-connection-section ba-channel-conversations">
             <div className="ba-connection-section-head"><div><h3><UIIcon name="userlib" size={17} />对话范围</h3><p>决定谁能发起任务，以及在哪些会话中响应。</p></div><span className="ba-channel-summary">{draft.groups == null ? '原有会话范围' : `${draft.groups.filter(group => group.mode !== 'disabled').length} 个群已开启`}</span></div>
             <div className="ba-goal-fields">
@@ -263,7 +285,7 @@ export function Connections({ api, onDirtyChange, active = true }) {
               <Disclosure className="ba-channel-manual" open={manualOpen} onOpenChange={setManualOpen} title={<span className="ba-feishu-disclosure-title">手动添加群 ID<small>{manualOpen ? '收起' : '展开'}</small></span>}><div className="ba-channel-manual-row"><input id="ba-feishu-manual-chat" aria-label="群 ID" placeholder="填写飞书 chat_id" value={manualChatId} onChange={event => setManualChatId(event.target.value)} /><Button variant="secondary" type="button" disabled={!manualChatId.trim()} onClick={() => { updateGroup({ chatId: manualChatId.trim() }, 'mentions'); setManualChatId(''); }}>添加群</Button></div></Disclosure>
             </>}
           </section>}
-          {(visibleFields.some(field => field.advanced) || feishu) && <Disclosure className="ba-connection-section ba-channel-advanced" title={feishu ? <span className="ba-feishu-disclosure-title">高级设置<small>{advancedOpen ? '收起' : '展开'}</small></span> : '高级设置'} description={feishu ? undefined : '协议参数与平台扩展配置，按需调整'} open={advancedOpen} onOpenChange={setAdvancedOpen}><div className="ba-goal-fields">{visibleFields.filter(field => field.advanced).map(renderField)}{feishu && draft.groups != null && <div className="ba-connection-field"><label htmlFor="ba-channel-otherGroups">其他群</label><CustomSelect id="ba-channel-otherGroups" value={draft.otherGroups || 'disabled'} onChange={value => setDraft(current => ({ ...current, otherGroups: value }))} disabled={busy} options={[{"value":"disabled","label":"不响应"},{"value":"mentions","label":"仅 @ 时响应"}]} /></div>}{feishu && <div className="ba-connection-field"><label htmlFor="ba-channel-botOpenId">机器人身份（自动识别）</label><input id="ba-channel-botOpenId" readOnly value={draft.botOpenId || ''} placeholder="保存凭据后验证连接" /></div>}</div></Disclosure>}
+          {(settingsFields.some(field => field.advanced) || feishu) && <Disclosure className="ba-connection-section ba-channel-advanced" title={feishu ? <span className="ba-feishu-disclosure-title">高级设置<small>{advancedOpen ? '收起' : '展开'}</small></span> : '高级设置'} description={feishu ? undefined : '协议参数与平台扩展配置，按需调整'} open={advancedOpen} onOpenChange={setAdvancedOpen}><div className="ba-goal-fields">{settingsFields.filter(field => field.advanced).map(renderField)}{feishu && draft.groups != null && <div className="ba-connection-field"><label htmlFor="ba-channel-otherGroups">其他群</label><CustomSelect id="ba-channel-otherGroups" value={draft.otherGroups || 'disabled'} onChange={value => setDraft(current => ({ ...current, otherGroups: value }))} disabled={busy} options={[{"value":"disabled","label":"不响应"},{"value":"mentions","label":"仅 @ 时响应"}]} /></div>}{feishu && <div className="ba-connection-field"><label htmlFor="ba-channel-botOpenId">机器人身份（自动识别）</label><input id="ba-channel-botOpenId" readOnly value={draft.botOpenId || ''} placeholder="保存凭据后验证连接" /></div>}</div></Disclosure>}
         </fieldset>
         {status?.voice && <section className="ba-connection-section"><h3>实时语音</h3><p className="ba-connection-inline-note">{status.voice.available ? '在 Discord 文字频道发送 /join 加入、/leave 退出；需要主人已在语音频道。' : status.voice.reason || '当前环境暂不支持实时语音。'}</p></section>}
         <section className="ba-connection-section ba-channel-verification"><div className="ba-connection-section-head"><div><h3><UIIcon name="scan" size={17} />连接验证</h3><p>{dirty ? '先保存更改，再验证当前连接。' : '检查平台认证、消息接收与发送状态。'}</p></div><Button variant="outline" type="button" disabled={busy || dirty || (feishu ? !base.config.appId || !base.config.appSecretRef : !base.config.enabled)} onClick={verify}>验证连接</Button></div>

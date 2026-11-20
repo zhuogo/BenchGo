@@ -52,6 +52,9 @@ function activeIdentity(history, rows, turn, users, boundary) {
   const active = history.activeReply;
   const node = [...(rows.nodes || [])].reverse().find(item => ['user', 'steering'].includes(item.kind)
     && (!boundary || item.seq > boundary.start.seq && item.seq < (boundary.end?.seq ?? Infinity)));
+  if (active?.turn === turn && Number.isFinite(active.retrySeq) && !(node?.seq > active.retrySeq) && users.has(active.requestId)) {
+    return { ...active, seq: active.retrySeq };
+  }
   if (isTaskResultReplyRequest(node) && typeof node.messageId === 'string' && node.messageId
     && Number.isFinite(node.seq)) {
     const priorEnd = Math.max(-1, ...[...(rows.turnEnds || [])].filter(([ended]) => ended < turn).map(([, seq]) => seq));

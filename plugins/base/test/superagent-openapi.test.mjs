@@ -112,6 +112,21 @@ test('OpenAPI descriptions retain UTF-8 and channel actions require scoped write
   ]) assert.equal(request(invalid), false, JSON.stringify(invalid));
 });
 
+test('external integration retains owner submit and platform-specific callback contracts', () => {
+  const input = { action: 'connectionAction', channel: 'api', operation: 'submit', requestId: 'r1', conversationId: 'room', text: '汇总附件' };
+  valid(request, input);
+  assert.equal(request({ ...input, operation: 'event' }), false);
+  assert.equal(request({ ...input, channel: 'webhook' }), false);
+  assert.equal(request({ action: 'connectionConfigure', channel: 'webhook', revision: 0, patch: { enabled: true } }), false);
+  valid(request, { action: 'connectionReplies', channel: 'webhook', threadId: 'legacy-thread' });
+  assert.equal(document.paths['/api/commander/assistant/channels/webhook'], undefined);
+  assert.ok(document.paths['/api/commander/assistant/channels/feishu'].post);
+  assert.ok(document.paths['/api/commander/assistant/channels/whatsapp'].post);
+  const receipt = compile(document.paths[path].post.responses['200']['x-action-schemas'].connectionAction['x-operation-schemas']['api.submit']);
+  valid(receipt, { accepted: true, requestId: 'r1', threadId: 'api:benchgo-api:room', result: { requiresEval: true } });
+  assert.equal(receipt({ accepted: true, requestId: 'r1' }), false);
+});
+
 test('new documented actions exist in production and require their actual CAS fields', async () => {
   const service = await readFile(new URL('../../superagent/src/assistant-dispatch.mjs', import.meta.url), 'utf8');
   for (const action of ['taskCancel', 'taskResult', 'taskTakeover', 'taskVerify']) {
@@ -213,8 +228,8 @@ test('three model queues match persisted configuration and real role routing', a
   assert.deepEqual(roleModels(undefined, loaded, 'worker'), [worker]);
   const edited = await store.updateConfig({ workerModels: [], workerHarness: 'official' }, { revision: loaded.revision });
   assert.deepEqual(edited.models, patch.models); assert.deepEqual(edited.auxiliary, auxiliary);
-  assert.deepEqual(roleModels(undefined, edited, 'worker'), []);
-  assert.deepEqual(roleModels(worker, edited, 'worker'), [worker]);
+  assert.deepEqual(roleModels(undefined, edited, 'worker'), [router]);
+  assert.deepEqual(roleModels(worker, edited, 'worker'), [worker, router]);
   assert.equal(request({ action: 'config', patch: { workerHarness: 'unsupported' } }), false);
   assert.deepEqual(auxiliaryModels(undefined, loaded, 'review'), [...auxiliary.models, router]);
   assert.deepEqual(auxiliaryModels(undefined, loaded, 'summary'), [router]);

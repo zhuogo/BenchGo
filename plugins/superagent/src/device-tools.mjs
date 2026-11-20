@@ -22,10 +22,16 @@ export function createDeviceTools({ ctx }) {
       if (!message?.id || !instruction.trim()) throw new Error('设备操作缺少当前真实用户指令');
       const source = { sessionId: ownerAgent.id, messageId: message.id, threadId, instruction };
       const requestId = digest([source, input]);
-      if (['settings-read', 'settings-prepare', 'operation', 'status'].includes(input.operation)) {
+      if (['settings-read', 'settings-apply', 'operation', 'status'].includes(input.operation)) {
         if (!input.deviceId || input.deviceId === 'local') throw new Error('本机配置请使用 assistant_settings；远端配置需要明确目标设备');
-        return linkService(ctx).callDevice({ deviceId: input.deviceId, input: { ...input, action: 'management', requestId,
-          ...(['settings-read', 'settings-prepare'].includes(input.operation) ? { namespace: 'benchgo-link-relay' } : {}) }, signal: exec.signal });
+        const { operation, expected, ops, operationId, lookupRequestId } = input;
+        const value = { action: 'management', operation, expected, ops, operationId, requestId: operation === 'operation' ? lookupRequestId : requestId,
+          ...(['settings-read', 'settings-apply'].includes(operation) ? { namespace: 'benchgo-link-relay' } : {}) };
+        try { return await linkService(ctx).callDevice({ deviceId: input.deviceId, input: value, signal: exec.signal }); }
+        catch (error) {
+          if (operation === 'settings-apply' && !error.statusCode) return { state: 'unknown', requestId, error: { code: error.code, message: error.message } };
+          throw error;
+        }
       }
       return linkService(ctx).deviceAction({ ...input, requestId, source, signal: exec.signal });
     },

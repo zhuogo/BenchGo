@@ -34,13 +34,14 @@ import { createFeishuAdapter } from './channels/feishu/index.mjs';
 import { createUnifiedChannelIngress } from './channel-ingress.mjs';
 import { createWorkbenchChannelIngress } from './workbench-channel-ingress.mjs';
 import { createChannelSessionHost, registerChannelSessionProjection } from './channel-session.mjs';
-import { superagentSessionInventory } from './execution-session.mjs';
+import { readOwnedSessionRole, superagentSessionInventory } from './execution-session.mjs';
 import { registerAssistantFetchRoute } from './assistant-fetch-route.mjs';
 import { createExternalActionStore } from './external-action-store.mjs';
 import { createExternalActionRegistry, createExternalActionHost, registerChannelExternalActions } from './external-actions.mjs';
 import { createChannelCredentials } from './channel-credentials.mjs';
 import { connectionConfig, channelDefinition, channelIds } from './channel-catalog.mjs';
 import { createChannelRuntime, mountChannelCallbacks } from './channel-runtime.mjs';
+import { createPersonalChannelSources } from './channel-personal-scope.mjs';
 import { createFeishuStream } from './channels/feishu/stream.mjs';
 import { createAssessmentRunner } from './assessment-runner.mjs';
 import { createEvaluationDisposition } from './eval-disposition.mjs';
@@ -161,7 +162,8 @@ export async function mountAssistant(ctx, commander, providers) {
     return voiceHandlers;
   };
   ctx.effect(() => () => voiceHandlers?.dispose());
-  channels = createChannelRuntime({ ctx, store, onInbound, adapterOptions: { credentials: channelCredentials,
+  const personalChannelSources = createPersonalChannelSources();
+  channels = createChannelRuntime({ ctx, store, onInbound, observeSource: personalChannelSources.observe, adapterOptions: { credentials: channelCredentials,
     voiceAvailability: () => channelVoiceAvailability(ctx.get?.('voice'), providers),
     transcribe: request => channelVoice().transcribe(request),
     synthesize: request => channelVoice().speech(request),
@@ -418,7 +420,7 @@ export async function mountAssistant(ctx, commander, providers) {
   watchdogRetryTimer.unref?.();
   const state = async () => ({ config: await store.getConfig(), petExpression: pet.event(), media: await voiceMedia.availability(), profile: await store.getProfile(), memories: await store.listMemories(), state: { ...await store.getState(), notifications: database.notifications().events } });
   const systemFiles = createAssistantSystemFiles({ directory: store.paths.directory, desktop: () => ctx.get?.('sessionController') });
-  const dispatch = createAssistantDispatch({ ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, orchestrationRuntime,
+  const dispatch = createAssistantDispatch({ ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, personalChannelSources, orchestrationRuntime,
     executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state,
     artifacts, auxiliary, systemFiles, skillProvider });
   ctx.effect(() => registerAssistantFetchRoute({ connection: ctx.connection, dispatch }));
@@ -437,6 +439,13 @@ export async function mountAssistant(ctx, commander, providers) {
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/assistant/artifact', methods: ['GET'], requestBody: 'buffered', fetch: request => artifacts.fetch(request) }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/commander/assistant/system-file', methods: ['GET'], requestBody: 'buffered', fetch: request => systemFiles.fetch(request) }));
   return { store, engine, database, dispatch, dispose,
+    readSessionRole: sessionId => readOwnedSessionRole({ store, sessionId, listSessions: () => ctx.sessionQuery.listSessions() }),
+    async readWorkerModels() {
+      const { workerHarness, workerModels } = await store.getConfig();
+      return { harness: workerHarness, models: workerModels.map(({ providerId, modelId, options }) => ({
+        providerId, modelId, ...(options && Object.keys(options).length ? { params: options } : {}),
+      })) };
+    },
     sidebarPrivateSessionIds: async () => {
       const [snapshot, records] = await Promise.all([store.getState(), ctx.sessionQuery.listSessions()]);
       return superagentSessionInventory({ state: snapshot, database: store.orchestration, records }).privateSessionIds;

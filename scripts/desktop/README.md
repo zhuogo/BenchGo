@@ -15,7 +15,7 @@
 - `renderer/`：打包时通过官方文件映射替换初始化页面，只展示 BenchGo 和工作台准备状态，通过已有 `dshWelcome.skip()` 进入工作台；失败可重试，不写入虚假凭据或登录状态。模型凭据在工作台内配置。
 - `prepare-startup.mjs` / `startup-window.mjs`：复用根目录主进程编译步骤，在官方 `main()` 开始时加载 420×300 BenchGo 启动卡片，覆盖后端初始化等待；页面加载与插件登记、后台启动并行，不等待 Chromium 冷启动，实际显示时才记录 `splash-visible`；其他窗口显示、致命错误或退出时销毁，未加载完的卡片也不再迟到弹出。窗口图标使用 `resources/icon.png`，避免任务栏落到 Electron 默认图标。编译锚点变化中止打包，不修改上游源码、不做运行时拦截。BenchGo Windows 打包接入此步骤，根目录 `npm run dev` 启动该打包应用；官方 Desktop 的命令封装 `npm run start` 不包含这条开发同步流程。
 - `prepare-dev.mjs` / `sync-dev-plugin.mjs`：`npm run dev` 先用当前登记脚本初始化 profile，再镜像同步本地源码、模块产物与统一客户端，最后启动 `artifacts/windows/win-unpacked/BenchGo.exe`。可执行文件缺失时明确报错并要求先打包，保留用户配置、依赖与服务器种子。
-- `renderer/splash.html`：左图标、右文案，墨黑描边与冷青 loading；页面源码直接引用品牌母版，打包时写入 `.local/desktop/brand/renderer/` 并内联 SVG 数据，不依赖 asar 外部图片，也不维护图标副本；不显示虚假百分比，不设最低停留时长；20 秒后提示仍在准备，支持减少动效。卡片只能在 Electron ready 后显示，无法覆盖操作系统加载 exe 的阶段，也不缩短实际初始化时间。
+- `renderer/splash.html`：启动页源码直接引用品牌母版，打包时写入 `.local/desktop/brand/renderer/` 并内联 SVG。样式及阶段行为见[前端视觉规范](../../docs/02-工作台与Agent/前端视觉规范.md#windows-启动页)。卡片在 Electron ready 后显示，工作台页面和 Host 同时准备，两边就绪后立即交接。
 
 启动卡片验证：`node --test scripts/desktop/startup-window.test.mjs scripts/desktop/startup.test.mjs` 覆盖窗口显示/销毁、失败回退、编译锚点和页面重试；主进程编译与打包映射复用 `prepare-tray.test.mjs`。2026-10-20 已通过定向测试和实际主进程编译（当前 Node 22 使用仓库 tsx loader）；未生成新 Windows EXE、未实跑 Windows GUI。
 - `smoke-windows.mjs`：验证打包资源、官方 Host 启动、离线配对 profile 初始化与认证 Link 管理接口。

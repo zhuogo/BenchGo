@@ -83,7 +83,7 @@ export async function createDesktopWorkbenchOwner({ paths, installation, pid = p
       const inspection = await ready.inspect();
       if (!inspection || typeof inspection.activeTasks !== 'boolean' || typeof inspection.scheduledTasks !== 'boolean')
         throw new Error('BenchGo 桌面工作台任务状态未知');
-      return json(200, { installationId: installation.id, pid, kind: 'desktop', url: ready.url,
+      return json(200, { installationId: installation.id, pid, kind: 'desktop', url: ready.browserUrl,
         activeTasks: inspection.activeTasks, scheduledTasks: inspection.scheduledTasks });
     } catch (error) { return json(503, { error: error.message || 'BenchGo 桌面工作台状态暂不可用' }); }
   });
@@ -95,9 +95,9 @@ export async function createDesktopWorkbenchOwner({ paths, installation, pid = p
   const owner = { installationId: installation.id, pid, token, controlUrl };
   return {
     async publish({ url, inspect }) {
-      const checked = api.loopbackUrl(url, { authenticated: true });
+      const checked = api.loopbackUrl(url);
       if (typeof inspect !== 'function') throw new Error('BenchGo Desktop 缺少官方任务状态检查');
-      ready = { url: checked.href, inspect };
+      ready = { browserUrl: checked.searchParams.get('token') ? checked.href : undefined, inspect };
       await mkdir(paths.directory, { recursive: true, mode: 0o700 });
       await writeOwner(paths.ownerFile, owner);
     },

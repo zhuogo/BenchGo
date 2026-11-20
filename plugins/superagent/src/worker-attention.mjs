@@ -38,7 +38,7 @@ export function installWorkerAttention(scope, agent, { database, assignment, sig
   scope.on('user-questions/request', async (request, next) => {
     if (request.agent !== agent) return next();
     const task = database.getTask(assignment.taskId);
-    if (!['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'webhook', 'api'].includes(task?.mandate.source?.channel)) return next();
+    if (!['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'slack', 'dingtalk', 'whatsapp', 'email', 'api'].includes(task?.mandate.source?.channel)) return next();
     const waitSignal = AbortSignal.any([signal, ...(request.signal ? [request.signal] : [])]);
     waitSignal.throwIfAborted();
     let hold, holdAbort;

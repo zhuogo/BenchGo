@@ -163,7 +163,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         if (inbox.inputGateInstalled) executionBindings.set(agent, Object.freeze({ taskId: task.id,
           assignmentId: assignment.id, runId: run.id, sessionId, owner: assignment.owner, fence: assignment.fence }));
         const currentSnapshot = () => inbox.currentSnapshot?.() || { target: task.target, acceptance: task.acceptance, mandate: task.mandate, context: [], instructionRevision: task.instructionRevision };
-        if (['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'slack', 'dingtalk', 'email', 'webhook', 'api'].includes(task.mandate.source?.channel) && scope.get?.('userQuestions')) await scope.plugin(AskUserTool, { mode: 'timed', timeout: 1 });
+        if (['feishu', 'desktop', 'wecom', 'qq', 'weixin', 'telegram', 'discord', 'whatsapp', 'slack', 'dingtalk', 'email', 'api'].includes(task.mandate.source?.channel) && scope.get?.('userQuestions')) await scope.plugin(AskUserTool, { mode: 'timed', timeout: 1 });
         attention = installWorkerAttention(scope, agent, { database, assignment, signal,
           sessionProjections: ctx.get?.('sessionProjections'), llm: ctx.llm, readPolicy });
         if (sourceReference) scope.systemPrompt.context?.({ name: 'benchgo-worker-source-reference', order: 101, interpolate: false, text: () => JSON.stringify(sourceReference) });

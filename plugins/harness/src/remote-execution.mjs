@@ -75,15 +75,14 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
       ...(row.protocol ? { protocol: row.protocol } : {}),
     }));
   };
-  const checkConfig = async input => {
-    const harness = input.config?.harness;
+  const checkModel = async (config, candidates) => {
+    const harness = config?.harness;
     if (!['official', 'codex', 'claude'].includes(harness)
-      || !Array.isArray(input.config.models) || input.config.models.length !== 1)
+      || !Array.isArray(config.models) || config.models.length !== 1)
       throw executionError('UNSUPPORTED_EXECUTION_CONFIG', '执行实例必须冻结目标设备目录中的一个 Harness、供应商与模型组合', 422);
-    const model = input.config.models[0]; required(model?.providerId, '供应商 ID'); required(model.modelId, '模型 ID');
+    const model = config.models[0]; required(model?.providerId, '供应商 ID'); required(model.modelId, '模型 ID');
     const params = model.params === undefined ? {} : model.params;
     if (params === null || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some(key => !['reasoningEffort', 'maxTokens', 'temperature', 'stop'].includes(key))) throw executionError('INVALID_EXECUTION_CONFIG', '模型参数不受支持', 422);
-    const candidates = await modelCatalog();
     if (!candidates.some(item => item.harness === harness && item.providerId === model.providerId && item.modelId === model.modelId))
       throw executionError('EXECUTION_MODEL_UNAVAILABLE', '冻结 Harness/API/模型组合不在目标设备可用目录中', 422);
     let binding;
@@ -94,17 +93,34 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
     } else {
       if (!commander?.providers?.has(harness) || typeof commander.routeService?.capture !== 'function')
         throw executionError('EXECUTION_ADAPTER_UNAVAILABLE', '目标设备未提供该外部 Harness 的 API 执行适配器', 422);
-      const { mandate, toolScope } = input.requirements;
-      if ([toolScope, mandate.toolScope, mandate.scope?.toolNames].some(scope => scope != null))
-        throw executionError('NATIVE_WORKER_SCOPE_UNSUPPORTED', '外部 Harness 当前无法落实此工单的工具范围，请选择官方 Harness', 422);
+      if (Object.keys(params).length) throw executionError('UNSUPPORTED_EXECUTION_CONFIG', '请在目标设备的「设置 → Harness 工具」中配置外部 Harness 参数', 422);
       const advancedConfig = await commander.advancedConfig(harness);
       try { binding = await commander.routeService.capture({ tool: harness, providerId: model.providerId, model: model.modelId, ...(advancedConfig ? { advancedConfig } : {}) }); }
       catch (error) { throw executionError(error.code || 'EXECUTION_ROUTE_UNAVAILABLE', error.message, 422); }
-      if (model.params && Object.keys(model.params).length) throw executionError('UNSUPPORTED_EXECUTION_CONFIG', '请在目标设备的「设置 → Harness 工具」中配置外部 Harness 参数', 422);
     }
     if (params.maxTokens !== undefined && (!Number.isSafeInteger(params.maxTokens) || params.maxTokens < 1)
       || params.temperature !== undefined && (!Number.isFinite(params.temperature) || params.temperature < 0 || params.temperature > 2)
       || params.stop !== undefined && (!Array.isArray(params.stop) || params.stop.some(value => typeof value !== 'string'))) throw executionError('INVALID_EXECUTION_CONFIG', '模型参数无效', 422);
+    return binding;
+  };
+  const workerPreference = async (models, signal) => {
+    const worker = await getService(ctx, 'assistant')?.readWorkerModels?.();
+    signal?.throwIfAborted();
+    if (!worker?.models.length) return undefined;
+    for (const model of worker.models) {
+      const config = { harness: worker.harness, models: [model] };
+      try { await checkModel(config, models); }
+      catch { signal?.throwIfAborted(); continue; }
+      signal?.throwIfAborted();
+      return { config };
+    }
+    return { error: { code: 'EXECUTION_WORKER_UNAVAILABLE', message: '目标设备已配置 Worker，但其 Harness、模型或参数当前均不可用，请检查目标设备的工作模型设置' } };
+  };
+  const checkConfig = async input => {
+    const { mandate, toolScope } = input.requirements;
+    if (['codex', 'claude'].includes(input.config?.harness) && [toolScope, mandate.toolScope, mandate.scope?.toolNames].some(scope => scope != null))
+      throw executionError('NATIVE_WORKER_SCOPE_UNSUPPORTED', '外部 Harness 当前无法落实此工单的工具范围，请选择官方 Harness', 422);
+    const binding = await checkModel(input.config, await modelCatalog());
     const project = input.projectId === undefined ? null : projects().find(item => item.id === input.projectId);
     if (input.projectId !== undefined && !project) throw executionError('EXECUTION_PROJECT_UNAVAILABLE', '执行工作区不在设备真实目录中', 422);
     const frozen = input.requirements?.mandate?.project;
@@ -534,15 +550,17 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
       }
       await Promise.allSettled(pending);
     },
-    async dispatch(input, { principal, signal, hostId } = {}) {
+    async dispatch(input, { principal, signal, hostId, verifiedSourceHostId } = {}) {
       if (closed) throw executionError('EXECUTION_SERVICE_CLOSED', '远端执行服务已关闭', 503);
       signal?.throwIfAborted();
       const subject = required(principal?.kind === 'device' ? principal.deviceId : null, '认证设备');
       if (input?.action !== 'execution' || input.version !== REMOTE_EXECUTION_VERSION || !REMOTE_EXECUTION_OPERATIONS.includes(input.operation)) throw executionError('UNSUPPORTED_EXECUTION_PROTOCOL', '不支持的执行协议版本或操作', 422);
       if (JSON.stringify(input).length > 1_000_000) throw executionError('EXECUTION_PAYLOAD_TOO_LARGE', '执行请求过大', 413);
       if (input.operation === 'catalog') {
+        const models = await modelCatalog();
+        const worker = await workerPreference(models, signal);
         return { version: REMOTE_EXECUTION_VERSION, available: !!(commander?.pickerCatalog && agents?.create && agents?.resume && query?.readSession && llm?.resolveModelInfo),
-          models: await modelCatalog(), projects: projects() };
+          models, projects: projects(), ...(worker ? { workerPreference: worker } : {}) };
       }
       if (input.operation === 'submit') {
         required(input.requestId, '请求 ID', 200); required(input.executionId, '执行 ID', 200); required(input.sessionId, '会话 ID'); required(input.text, '执行文本', 100000);
@@ -553,15 +571,22 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
         const frozenConfig = input.requirements.mandate.execution?.config;
         if (frozenConfig && executionFingerprint(frozenConfig) !== executionFingerprint(input.config))
           throw executionError('EXECUTION_CONFIG_CHANGED', '执行选择与工单冻结的组合不一致', 422);
-        const prior = store.receipt(subject, input.requestId, input); if (prior) return response(store.owned(prior.executionId, subject), input);
+        const replay = () => {
+          const prior = store.receipt(subject, input.requestId, input);
+          if (!prior) return;
+          const row = store.owned(prior.executionId, subject);
+          if (verifiedSourceHostId) store.tx(() => store.bindOwner(subject, row.identity.ownerHostId, verifiedSourceHostId));
+          return response(row, input);
+        };
+        const prior = replay(); if (prior) return prior;
         const checked = await checkConfig(input); signal?.throwIfAborted();
         try { await assertSessionAbsent(input.sessionId); }
-        catch (error) { const duplicate = store.receipt(subject, input.requestId, input); if (duplicate) return response(store.owned(duplicate.executionId, subject), input); throw error; }
-        const repeated = store.receipt(subject, input.requestId, input); if (repeated) return response(store.owned(repeated.executionId, subject), input);
+        catch (error) { const duplicate = replay(); if (duplicate) return duplicate; throw error; }
+        const repeated = replay(); if (repeated) return repeated;
         if (live.size >= maxConcurrent) throw executionError('EXECUTION_CAPACITY', '执行并发已满，请稍后重试', 429);
         const executionDirectory = join(directory, 'work', createHash('sha256').update(input.executionId).digest('hex'));
         const row = store.tx(() => store.create(subject, input, { project: checked.project, binding: checked.binding,
-          directory: executionDirectory, workingDirectory: checked.project?.path || executionDirectory }));
+          directory: executionDirectory, workingDirectory: checked.project?.path || executionDirectory }, verifiedSourceHostId));
         start(row); return response(store.get(row.id), input);
       }
       let id = input.executionId;

@@ -35,12 +35,31 @@ test('platform members receive task authority only within enabled Feishu scope',
   assert.equal(authorizeAssessment({ ...input, decision, task: { mandate } }).outcome, 'attach');
 });
 import { readAssessmentPolicy, authorizeAssessment, validateTaskMandate } from '../src/assessment-policy.mjs';
+import { channelAdmissionCheck, connectionPolicy } from '../src/channel-policy.mjs';
+
+test('personal channels require an allowlisted account and an explicit mention in a configured group', () => {
+  for (const channel of ['wecom', 'weixin', 'qq', 'telegram']) {
+    const config = { enabled: true, ownerIds: ['owner'], chatIds: ['group'], accessMode: 'platform', machineIds: ['robot'] };
+    const row = { channel, config };
+    const actor = { id: 'owner', kind: 'human' };
+    const source = { channel, sourceType: 'group', chatId: 'group', conversationId: 'group' };
+    const event = { channel, source, actor, mentioned: true };
+    const policy = connectionPolicy(row);
+    assert.equal(channelAdmissionCheck(event, policy).allowed, channel !== 'weixin');
+    assert.equal(channelAdmissionCheck({ ...event, actor: { id: 'outsider', kind: 'human' } }, policy).allowed, false);
+    assert.equal(channelAdmissionCheck({ ...event, actor: { id: 'robot', kind: 'machine' } }, policy).allowed, false);
+    assert.equal(channelAdmissionCheck({ ...event, mentioned: false }, policy).allowed, false);
+    assert.equal(channelAdmissionCheck(event, connectionPolicy({ ...row, config: { ...config, chatIds: [] } })).allowed, false);
+    const direct = { channel, sourceType: 'direct', chatId: 'owner', conversationId: 'owner' };
+    assert.equal(channelAdmissionCheck({ channel, source: direct, actor }, policy).allowed, channel !== 'weixin');
+  }
+});
 
 test('stop requires verified source and exact requester ownership without owner privilege', () => {
-  const source = { channel: 'telegram', connectionId: 'telegram', chatId: 'chat', conversationId: 'chat', sourceType: 'direct' };
+  const source = { channel: 'discord', connectionId: 'discord', chatId: 'chat', conversationId: 'chat', sourceType: 'direct' };
   const config = { enabled: true, ownerIds: ['owner'], accessMode: 'platform', chatIds: ['chat'] };
-  const evidence = { sourceVerified: true, ownerVerified: true, sourceType: 'direct', connectionId: 'telegram', conversationId: 'chat' };
-  const input = { policy: { connections: { telegram: { channel: 'telegram', config } } },
+  const evidence = { sourceVerified: true, ownerVerified: true, sourceType: 'direct', connectionId: 'discord', conversationId: 'chat' };
+  const input = { policy: { connections: { discord: { channel: 'discord', config } } },
     candidate: { gate: { allowed: true, strength: 'explicit', evidence } },
     trigger: { actor: { id: 'owner', kind: 'human' }, source },
     decision: { outcome: 'stop', taskId: 'task' }, task: { mandate: { actorId: 'owner', source } } };
@@ -48,7 +67,7 @@ test('stop requires verified source and exact requester ownership without owner 
   for (const key of ['sourceVerified']) {
     assert.equal(authorizeAssessment({ ...input, candidate: { gate: { ...input.candidate.gate, evidence: { ...evidence, [key]: false } } } }).allowed, false);
   }
-  assert.equal(authorizeAssessment({ ...input, policy: { connections: { telegram: { channel: 'telegram', config: { ...config, ownerIds: [] } } } } }).allowed, true);
+  assert.equal(authorizeAssessment({ ...input, policy: { connections: { discord: { channel: 'discord', config: { ...config, ownerIds: [] } } } } }).allowed, true);
   for (const key of ['channel', 'connectionId', 'conversationId']) {
     for (const value of [undefined, 'other']) {
       assert.equal(authorizeAssessment({ ...input, task: { mandate: { actorId: 'owner', source: { ...source, [key]: value } } } }).allowed, false);
@@ -60,9 +79,9 @@ test('stop requires verified source and exact requester ownership without owner 
 
 test('non-direct stop becomes Router attention; old source and unmentioned group cannot open work', () => {
   const config = { enabled: true, ownerIds: ['owner'], chatIds: ['chat'] };
-  const input = { policy: { connections: { telegram: { channel: 'telegram', config } } },
+  const input = { policy: { connections: { discord: { channel: 'discord', config } } },
     candidate: { gate: { allowed: true, strength: 'explicit' } },
-    trigger: { actor: { id: 'owner', kind: 'human' }, source: { channel: 'telegram', connectionId: 'telegram', chatId: 'chat', conversationId: 'chat', sourceType: 'group' } },
+    trigger: { actor: { id: 'owner', kind: 'human' }, source: { channel: 'discord', connectionId: 'discord', chatId: 'chat', conversationId: 'chat', sourceType: 'group' } },
     decision: { outcome: 'stop', taskId: 'task' } };
   for (const sourceType of ['group', 'topic', 'system']) {
     const permission = authorizeAssessment({ ...input, trigger: { ...input.trigger, source: { ...input.trigger.source, sourceType, ...(sourceType === 'topic' ? { topicId: 'topic' } : {}) } } });
@@ -78,8 +97,8 @@ test('non-direct stop becomes Router attention; old source and unmentioned group
 
 test('verified allowlisted machine system stop is attention only without admission authority', () => {
   const config = { enabled: true, machineIds: ['monitor'], chatIds: ['chat'], admissionMode: 'manual' };
-  const source = { channel: 'telegram', connectionId: 'telegram', conversationId: 'chat', sourceType: 'system' };
-  const input = { policy: { connections: { telegram: { channel: 'telegram', config } } },
+  const source = { channel: 'discord', connectionId: 'discord', conversationId: 'chat', sourceType: 'system' };
+  const input = { policy: { connections: { discord: { channel: 'discord', config } } },
     candidate: { gate: { allowed: true, strength: 'inferred', evidence: { sourceVerified: true } } },
     trigger: { actor: { id: 'monitor', kind: 'machine' }, source }, decision: { outcome: 'stop', taskId: 'task' } };
   const result = authorizeAssessment(input);

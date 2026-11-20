@@ -17,14 +17,19 @@ function baseline() {
     manifest: { schemaVersion: 1, version: '1.0.0', releaseVersion: '1.0.0', sourceSha: oldSha, engine: { min: '0.2.2-rc.1', max: '0.2.2-rc.1' },
       plugin: descriptor('benchgo-1.0.0-plugin.tar.gz'), app: descriptor('benchgo-1.0.0-win-x64-setup.exe'),
       android: { ...descriptor('benchgo-1.0.0-android.apk'), versionCode: 10 } },
-    source: { components: Object.fromEntries(['plugin', 'windows', 'android'].map(key => [key, { version: '1.0.0', sourceSha: oldSha, releaseVersion: '1.0.0' }])) } };
+    source: { components: Object.fromEntries(['plugin', 'windows', 'android'].map(key => [key, { version: '1.0.0', sourceSha: oldSha, releaseVersion: '1.0.0' }])) },
+    downloads: { schemaVersion: 1, releaseVersion: '1.0.0', sourceSha: oldSha, files: [
+      ...['arm64', 'x64'].flatMap(arch => ['dmg', 'zip'].map(extension => ({ target: `mac-${arch}`,
+        ...descriptor(`benchgo-1.0.0-mac-${arch}.${extension}`), signing: 'ad-hoc', notarized: false }))),
+      { target: 'linux-server', ...descriptor('benchgo-1.0.0-linux-server.tar.gz'), kind: 'server', arch: 'x64', systems: ['Ubuntu', 'Debian'] },
+    ] } };
 }
 const versions = changes => ({ plugin: '1.0.0', windows: '1.0.0', android: '1.0.0', androidVersionCode: 10, engine: '0.2.2-rc.1', ...changes });
 const plan = overrides => createReleasePlan({ releaseVersion: '1.1.0', sourceSha: newSha, previous: baseline(), versions: versions(), minAppVersion: '1.0.0', ...overrides });
 
 test('first unified release builds all components; legacy release tags cannot silently supply a baseline', () => {
   const value = plan({ previous: null });
-  assert.deepEqual(value.builds, { plugin: true, windows: true, android: true });
+  assert.deepEqual(value.builds, { plugin: true, windows: true, android: true, macos: true, linux: true });
   assert.equal(value.kind, releaseKind);
 });
 
@@ -56,38 +61,55 @@ test('legacy download streams only an exact checksum-verified MZ installer and r
   assert.deepEqual((await (await import('node:fs/promises')).readdir(directory)).sort(), [name]);
 });
 
-test('plugin-only release keeps application versions and reuses both native binaries', () => {
+test('a plugin change reuses EXE and APK and refreshes the exact-version installation seeds', () => {
   const value = plan({ versions: versions({ plugin: '1.1.0' }), paths: ['plugins/media/src/calls.mjs'] });
-  assert.deepEqual(value.builds, { plugin: true, windows: false, android: false });
+  assert.deepEqual(value.builds, { plugin: true, windows: false, android: false, macos: true, linux: true });
   assert.equal(value.versions.windows, '1.0.0');
+  assert.equal(value.versions.macos, '1.1.0');
+  assert.equal(value.versions.linux, '1.1.0');
 });
 
 test('Windows-only version increase preserves the independent Android artifact and versionCode', () => {
   const value = plan({ versions: versions({ windows: '1.1.0' }), paths: ['package.json'] });
-  assert.deepEqual(value.builds, { plugin: false, windows: true, android: false });
+  assert.deepEqual(value.builds, { plugin: false, windows: true, android: false, macos: false, linux: false });
   assert.equal(value.versions.android, '1.0.0');
   assert.equal(value.versions.androidVersionCode, 10);
 });
 
-test('desktop seed enrollment changes rebuild the feature archive and installer without an unrelated APK', () => {
-  const value = plan({ versions: versions({ plugin: '1.1.0', windows: '1.1.0' }), paths: ['scripts/desktop/plugin-bundle.mjs'] });
-  assert.deepEqual(value.builds, { plugin: true, windows: true, android: false });
-  assert.equal(value.versions.androidVersionCode, 10);
+test('shared seed staging changes rebuild each distribution that embeds the seed', () => {
+  const value = plan({ versions: versions({ plugin: '1.1.0', windows: '1.1.0', android: '1.1.0', androidVersionCode: 11 }),
+    paths: ['scripts/desktop/plugin-bundle.mjs'] });
+  assert.deepEqual(value.builds, { plugin: true, windows: true, android: true, macos: true, linux: true });
 });
 
 test('Android-only version increase preserves the independent Windows artifact', () => {
   const value = plan({ versions: versions({ android: '1.1.0', androidVersionCode: 11 }), paths: ['plugins/link/mobile/android/app/build.gradle'] });
-  assert.deepEqual(value.builds, { plugin: false, windows: false, android: true });
+  assert.deepEqual(value.builds, { plugin: false, windows: false, android: true, macos: false, linux: false });
   assert.equal(value.versions.windows, '1.0.0');
   assert.throws(() => plan({ versions: versions({ android: '1.1.0' }), paths: ['plugins/link/mobile/android/app/build.gradle'] }), /increased versionCode/);
 });
 
 test('native Android and embedded Link changes are explicit; documentation and tests do not rebuild', () => {
-  assert.deepEqual(classifyChanges(['plugins/link/mobile/android/app/src/main/java/Main.kt']), { plugin: [], windows: [], android: ['plugins/link/mobile/android/app/src/main/java/Main.kt'] });
+  assert.deepEqual(classifyChanges(['plugins/link/mobile/android/app/src/main/java/Main.kt']),
+    { plugin: [], windows: [], android: ['plugins/link/mobile/android/app/src/main/java/Main.kt'], macos: [], linux: [] });
   const embedded = classifyChanges(['plugins/link/client/main.jsx']);
   assert.equal(embedded.plugin.length, 1); assert.equal(embedded.android.length, 1); assert.equal(embedded.windows.length, 0);
-  assert.deepEqual(plan({ paths: ['docs/设计.md', 'plugins/media/test/calls.test.mjs', '.github/workflows/unified-release.yml'] }).builds,
-    { plugin: false, windows: false, android: false });
+  assert.deepEqual(plan({ paths: ['docs/设计.md', 'plugins/media/test/calls.test.mjs', '.github/workflows/unified-release.yml',
+    'scripts/desktop/smoke-windows.mjs', 'plugins/base/lib/client.js'] }).builds,
+    { plugin: false, windows: false, android: false, macos: false, linux: false });
+  assert.deepEqual(classifyChanges(['plugins/link/src/devices/center.mjs']).android, []);
+});
+
+test('macOS-only changes and missing Linux entries schedule only the affected platforms', () => {
+  const macos = plan({ paths: ['scripts/desktop/electron-builder.macos.config.mjs'] });
+  assert.deepEqual(macos.builds, { plugin: false, windows: false, android: false, macos: true, linux: false });
+  assert.equal(macos.versions.macos, '1.1.0');
+  assert.equal(macos.versions.linux, '1.0.0');
+  assert.deepEqual(plan({ paths: ['scripts/server/package-linux.mjs'] }).builds,
+    { plugin: false, windows: false, android: false, macos: false, linux: true });
+  const previous = baseline();
+  previous.downloads.files.pop();
+  assert.deepEqual(plan({ previous }).builds, { plugin: false, windows: false, android: false, macos: false, linux: true });
 });
 
 test('changed components require increased versions and Android additionally requires increased versionCode', () => {
@@ -100,7 +122,7 @@ test('changed components require increased versions and Android additionally req
 
 test('official engine or brand changes cannot skip a component build', () => {
   const value = plan({ paths: ['deepseek-harness'], versions: versions({ plugin: '1.1.0', windows: '1.1.0', android: '1.1.0', androidVersionCode: 11 }) });
-  assert.deepEqual(value.builds, { plugin: true, windows: true, android: true });
+  assert.deepEqual(value.builds, { plugin: true, windows: true, android: true, macos: true, linux: true });
   assert.throws(() => plan({ minAppVersion: '2.0.0' }), /minAppVersion/);
 });
 

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { createHmac } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { loadChannelModules, channelIds } from '../src/channel-catalog.mjs';
 import { createAssistantConnections } from '../src/connections.mjs';
 import { createChannelRuntime, mountChannelCallbacks } from '../src/channel-runtime.mjs';
@@ -37,7 +37,10 @@ test('authenticated API direct messages enter durable Router queue and revoked s
   const orchestration = createAssistantOrchestrationStore({ directory });
   const runtime = createChannelRuntime({ ctx: {}, store: { connections, orchestration } });
   try {
-    connections.update({ enabled: true, ownerIds: ['owner'] }, { channel: 'api', revision: 0 });
+    const saved = new DatabaseSync(join(directory, 'assistant.db'));
+    saved.prepare('INSERT INTO assistant_connections VALUES (?, ?, ?)').run('api', 1, JSON.stringify({ enabled: true, accountId: 'API:Saved', ownerIds: ['owner'], machineIds: [], chatIds: [], enabledRuleIds: [], admissionMode: 'manual' }));
+    saved.close();
+    assert.deepEqual(connections.read('api').config, { enabled: true, accountId: 'API:Saved' });
     await runtime.restart('api');
     const adapter = runtime.get('api'), input = { operation: 'submit', requestId: 'req-1', conversationId: 'conversation', text: 'Inspect project' };
     await assert.rejects(adapter.operation(input, { principal: { kind: 'visitor' } }));
@@ -46,6 +49,7 @@ test('authenticated API direct messages enter durable Router queue and revoked s
     assert.equal(orchestration.candidates().length, 1);
     assert.equal(accepted.result.trigger, null);
     assert.equal(accepted.result.intakeEvent.source.connectionRevision, 1);
+    assert.deepEqual(accepted.result.intakeEvent.actor, { id: 'desktop-owner', kind: 'human' });
     const replay = await adapter.operation(input, { principal: { kind: 'owner', id: 'owner' } });
     assert.equal(replay.result.duplicate, true);
     connections.update({ enabled: false }, { channel: 'api', revision: 1 });
@@ -67,11 +71,11 @@ test('disabled channel lifecycle needs no network and callbacks report missing c
       assert.notEqual(status.authentication, 'verified', channel);
     }
     assert.equal(mountChannelCallbacks({}, runtime, {}), false);
-    assert.equal((await runtime.status('webhook')).callback.available, false);
-    assert.equal((await runtime.status('webhook')).callback.path, '/api/commander/assistant/channels/webhook');
+    assert.equal((await runtime.status('whatsapp')).callback.available, false);
+    assert.equal((await runtime.status('whatsapp')).callback.path, '/api/commander/assistant/channels/whatsapp');
     const registrations = [];
     assert.equal(mountChannelCallbacks({ webServer: { register: route => { registrations.push(route); return () => {}; } }, effect: factory => factory() }, runtime, {}), true);
-    assert.equal(registrations.length, 3);
+    assert.equal(registrations.length, 2);
     assert.ok(registrations.every(route => route.kind === 'exact' && !route.path.endsWith('/api')));
   } finally { await runtime.dispose(); connections.close(); await rm(directory, { recursive: true, force: true }); }
 });
@@ -116,24 +120,22 @@ test('mounting channels exposes adapters while remote login is pending', { timeo
 test('late HTTP carrier mounts signed callbacks and revokes routes on disposal', async () => {
   await loadChannelModules();
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-channel-http-'));
-  const connections = createAssistantConnections({ directory }), orchestration = createAssistantOrchestrationStore({ directory });
-  const secret = 'integration-signing-secret', routes = new Map(), cleanups = [];
+  const connections = createAssistantConnections({ directory });
+  const routes = new Map(), cleanups = [];
   let inject;
-  const runtime = createChannelRuntime({ ctx: {}, store: { connections, orchestration }, adapterOptions: { credentials: { resolve: async () => ({ value: secret }) } } });
+  const runtime = createChannelRuntime({ ctx: {}, store: { connections } });
   const server = createServer((req, res) => { const route = routes.get(req.url); if (route) void route.handler(req, res); else { res.writeHead(404); res.end(); } });
   try {
-    connections.update({ enabled: true, machineIds: ['benchgo-webhook'], signingSecretRef: 'REF' }, { channel: 'webhook', revision: 0 });
-    await runtime.restart('webhook');
-    mountChannelCallbacks({ inject: (_services, callback) => { inject = callback; } }, runtime, {});
-    assert.equal(runtime.callbackStatus('webhook').available, false);
+    mountChannelCallbacks({ inject: (_services, callback) => { inject = callback; } }, runtime, { handle: () => new Response('feishu') });
+    assert.equal(runtime.callbackStatus('feishu').available, false);
     inject({ get: () => ({ register: route => { routes.set(route.path, route); return () => routes.delete(route.path); } }), effect: factory => cleanups.push(factory()) });
-    assert.equal(runtime.callbackStatus('webhook').available, true);
+    assert.equal(runtime.callbackStatus('feishu').available, true);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const raw = JSON.stringify({ requestId: 'HTTP:1', conversationId: 'room', text: 'Inspect project' }), timestamp = String(Math.floor(Date.now() / 1000));
-    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/commander/assistant/channels/webhook`, { method: 'POST', body: raw, headers: { 'x-benchgo-timestamp': timestamp, 'x-benchgo-signature': createHmac('sha256', secret).update(timestamp + '.').update(raw).digest('hex') } });
-    assert.equal(response.status, 202, await response.text());
-    assert.equal(orchestration.candidates().length, 1);
+    const baseUrl = `http://127.0.0.1:${server.address().port}/api/commander/assistant/channels`;
+    const response = await fetch(`${baseUrl}/feishu`, { method: 'POST', body: '{}' });
+    assert.equal(await response.text(), 'feishu');
+    assert.equal((await fetch(`${baseUrl}/webhook`, { method: 'POST', body: '{}' })).status, 404);
     for (const cleanup of cleanups.reverse()) cleanup();
-    assert.equal(routes.size, 0); assert.equal(runtime.callbackStatus('webhook').available, false);
-  } finally { if (server.listening) await new Promise(resolve => server.close(resolve)); await runtime.dispose(); orchestration.close(); connections.close(); await rm(directory, { recursive: true, force: true }); }
+    assert.equal(routes.size, 0); assert.equal(runtime.callbackStatus('feishu').available, false);
+  } finally { if (server.listening) await new Promise(resolve => server.close(resolve)); await runtime.dispose(); connections.close(); await rm(directory, { recursive: true, force: true }); }
 });

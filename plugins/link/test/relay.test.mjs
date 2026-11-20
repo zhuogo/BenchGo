@@ -50,12 +50,20 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
   const relayPort = await freePort(), relayOrigin = `https://localhost:${relayPort}`;
   request.relayCert = relayIdentity.cert; request.relayOrigin = relayOrigin;
   const forwardedWorkbenchCookies = [];
+  const cancelledRequest = Promise.withResolvers();
+  const localRequestClosed = Promise.withResolvers();
   const ctx = {
     connection: {
       createPeer: () => ({ dispose: async () => {} }),
       createSharedFetchHandler: () => ({
         requestBodyMode: () => 'streaming',
         async fetch(request) {
+          if (new URL(request.url).pathname === '/api/stream/cancel') {
+            cancelledRequest.resolve();
+            await new Promise(resolve => request.signal.addEventListener('abort', resolve, { once: true }));
+            localRequestClosed.resolve();
+            return new Response(null, { status: 204 });
+          }
           let uploaded = 0;
           if (request.body) for await (const chunk of request.body) uploaded += chunk.length;
           const data = Buffer.alloc(48 * 48 * 1024, 0x5a);
@@ -131,6 +139,14 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
     stream.on('error', reject); stream.on('end', () => resolve(status)); stream.resume();
   })));
   assert(startup.every(status => status === 200), 'a cold-start resource burst must not return capacity errors');
+
+  const cancelled = multiplexed.request({ ':method': 'POST', ':path': '/link/workbench/api/stream/cancel', origin: relayOrigin, cookie });
+  cancelled.end();
+  await cancelledRequest.promise;
+  cancelled.close();
+  await localRequestClosed.promise;
+  assert.equal(host.status().connected, true);
+  assert.equal(host.status().lastError, null, 'leaving a workbench request must not report a relay failure');
   multiplexed.close();
 
   const payload = Buffer.alloc(1_500_000, 0x41);
@@ -139,6 +155,7 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
   assert.equal(streamed.headers['x-uploaded-bytes'], String(payload.length));
   assert.equal(streamed.body.length, 48 * 48 * 1024);
   assert.equal(streamed.body[0], 0x5a);
+  assert.deepEqual(hostErrors, [], 'a client cancellation must not be recorded as an upstream failure');
 
   const voiceUrl = `wss://localhost:${relayPort}/link/workbench/api/voice/realtime`;
   const browser = new WebSocket(voiceUrl, { ca: relayIdentity.cert, origin: relayOrigin, headers: { host: `localhost:${relayPort}`, cookie }, perMessageDeflate: false });

@@ -33,7 +33,7 @@ export function updateHistoryIndex(events, index = { watermark: 0, mediaCalls: n
     const event = events[i];
     if (event.type === 'request/header') index.header = event.data.header.config;
     else if (event.type === 'turn/start') index.mediaGroup = { groupId: `turn:${event.seq}`, turn: event.data?.turn };
-    else if (event.type === 'turn/end') { index.lastEnd = event.data.reason; index.mediaGroup = null; }
+    else if (event.type === 'turn/end') { index.lastEnd = event.data.reason; index.lastEndSeq = event.seq; index.mediaGroup = null; }
     else if (event.type === 'assistant/message') {
       // Capture the call's turn, not the result's arrival time. Results can land
       // after a boundary; old/incomplete transcripts fall back to one message.

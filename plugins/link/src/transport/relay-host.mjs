@@ -51,7 +51,8 @@ export function createRelayHost(options) {
     if (!relayPathAllowed(input.method, input.path)) { ws.close(1008); return; }
     const endpoint = new URL(input.path, target.url);
     if (endpoint.origin !== target.url || !['GET', 'HEAD', 'POST'].includes(input.method)) { ws.close(1008); return; }
-    let ended = false;
+    let ended = false, cancelled = false;
+    const onUpstreamError = error => { if (!ended && !cancelled) failRequest(ws, error); };
     const upstream = request(endpoint, { agent, method: input.method, headers: { ...headersFor(input, target), ...sourceHeaders(input) }, timeout: 120_000 }, response => {
       void send(ws, JSON.stringify({ type: 'response', status: response.statusCode, headers: response.headers })).catch(error => upstream.destroy(error));
       response.on('data', chunk => {
@@ -62,10 +63,10 @@ export function createRelayHost(options) {
         })().catch(error => response.destroy(error));
       });
       response.once('end', () => { ended = true; void send(ws, JSON.stringify({ type: 'end' })).catch(() => {}); });
-      response.once('error', error => failRequest(ws, error));
+      response.once('error', onUpstreamError);
     });
     upstream.on('timeout', () => upstream.destroy(new Error('upstream timeout')));
-    upstream.on('error', error => { if (!ended) failRequest(ws, error); });
+    upstream.on('error', onUpstreamError);
     ws.on('message', (raw, binary) => {
       if (binary) {
         if (!upstream.write(raw)) { ws.pause(); upstream.once('drain', () => ws.resume()); }
@@ -74,7 +75,8 @@ export function createRelayHost(options) {
       let frame; try { frame = JSON.parse(raw.toString()); } catch { upstream.destroy(new Error('invalid relay frame')); return; }
       if (frame.type === 'request-end') upstream.end(); else upstream.destroy(new Error('unexpected relay frame'));
     });
-    ws.once('close', () => upstream.destroy()); ws.once('error', () => upstream.destroy());
+    const cancel = () => { cancelled = true; upstream.destroy(); };
+    ws.once('close', cancel); ws.once('error', cancel);
   };
   const voiceTransaction = (ws, input) => {
     if (input.path !== VOICE || typeof input.cookie !== 'string' || input.cookie.length > 4096) { ws.close(1008); return; }

@@ -1,4 +1,5 @@
 import { nativeProviderRoute, providerProtocolReason, routerGoModelProtocolReason } from './provider-access.mjs';
+import { hasTextCapability } from '../shared/model-capabilities.mjs';
 
 /** Credential-free catalog shared by the official picker and native adapters. */
 const PREFIX = 'dsh-route-v1:';
@@ -68,10 +69,12 @@ export function createPickerCatalog({ commander, installer, providers, routeServ
       };
       let rows, accountModels;
       try {
-        const [models, account] = await Promise.all([
+        const [models, account, overrides] = await Promise.all([
           providerModels(provider.id), source.managedRouterGo ? providers.routerGoProtocolModels() : undefined,
+          source.managedRouterGo ? undefined : providers.modelCapabilities?.(provider.id),
         ]);
-        rows = models;
+        const byId = new Map(overrides?.map(({ modelId, capabilities }) => [modelId, capabilities]));
+        rows = models.filter(row => !byId.has(row.id) || hasTextCapability(byId.get(row.id)));
         accountModels = account;
       } catch { provider.unavailableReason = '无法读取供应商模型目录'; return provider; }
       if (accountModels) provider.accountManaged = true;
@@ -85,9 +88,10 @@ export function createPickerCatalog({ commander, installer, providers, routeServ
           provider.unavailableTools[tool.id] = providerProtocolReason(tool.id);
           continue;
         }
-        const available = accountModels ? rows.filter(model => !routerGoModelProtocolReason(tool.id, accountModels.get(model.id))) : rows;
+        const configuredProtocol = direct?.protocol ?? source.modelProtocol;
+        const available = accountModels ? rows.filter(model => !routerGoModelProtocolReason(tool.id, accountModels.get(model.id), configuredProtocol)) : rows;
         if (accountModels && !available.length) {
-          provider.unavailableTools[tool.id] = tool.id === 'claude' ? 'RouterGo 账号暂无对话模型' : 'RouterGo 账号暂无支持 Responses 的模型';
+          provider.unavailableTools[tool.id] = 'RouterGo 账号暂无兼容此协议的文本模型';
           continue;
         }
         provider.tools.push(tool.id);

@@ -12,7 +12,7 @@ import { managementOwner } from './management-http.mjs';
 /** The owner-facing HTTP action table behind POST /api/commander/assistant. */
 export function createAssistantDispatch(runtime) {
   const { ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, orchestrationRuntime,
-    executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state,
+    executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state, personalChannelSources,
     artifacts, auxiliary, systemFiles, skillProvider } = runtime;
   return async function dispatch(input, peer, { signal } = {}) {
     if (shutdown.signal.aborted) throw Object.assign(new Error('SuperAgent 已停用'), { status: 503, code: 'ASSISTANT_UNAVAILABLE' });
@@ -63,6 +63,10 @@ export function createAssistantDispatch(runtime) {
         if (status?.enabled && !status.error && status.connection?.state === 'connected'
           && (status.connection.authenticated === true || status.authentication === 'verified')) {
           channel.sourceNames = await feishu.sourceNames((await store.getState()).threads);
+        }
+        if (peer?.principal?.kind === 'owner') for (const item of catalog.channels) {
+          if (!item.capabilities?.personalScope || !item.status?.enabled) continue;
+          item.recentSources = personalChannelSources?.list(item.id, store.connections.read(item.id).revision) || [];
         }
         return catalog;
       }

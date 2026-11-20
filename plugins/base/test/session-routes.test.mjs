@@ -67,7 +67,7 @@ test('managed RouterGo shares a credential and uses each native tool URL', async
   assert.equal(claude.baseURL + '/v1/messages', 'https://routergo.cn/api/v1/messages');
   assert.equal(codex.credentialRef, claude.credentialRef);
   await assert.rejects(routes.capture({ tool: 'codex', providerId: 'routergo', model: 'chat-only' }), /未为此模型开放 Responses/);
-  await assert.rejects(routes.capture({ tool: 'claude', providerId: 'routergo', model: 'image-only' }), /没有可用的对话接口/);
+  await assert.rejects(routes.capture({ tool: 'claude', providerId: 'routergo', model: 'image-only' }), /未启用文本能力/);
   await assert.rejects(routes.capture({ tool: 'claude', providerId: 'routergo', model: 'vendor/Exact:Model' }), /未提供此模型/);
   const launch = await routes.launch({ tool: 'claude', route: claude, sessionId: randomUUID() });
   assert.equal(launch.env.ANTHROPIC_BASE_URL, claude.baseURL);

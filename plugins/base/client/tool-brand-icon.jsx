@@ -23,8 +23,15 @@ SOFTWARE.*/
 import React from 'react';
 import icons from './icons.json';
 import brands from './assets/tool-brands/catalog.json';
-export function ToolBrandIcon({ tool, size = 20, muted = false }) {
+import providerBrands from './assets/provider-brands/catalog.json';
+
+const colorBrands = {
+  deepseek: providerBrands.deepseek,
+  codex: 'data:image/svg+xml,' + encodeURIComponent(icons.codex.replace('fill="#000"', 'fill="#10a37f"')),
+};
+
+export function ToolBrandIcon({ tool, size = 20, muted = false, colored = false }) {
   const markup = icons[tool];
-  const src = brands[tool] || (markup ? 'data:image/svg+xml,' + encodeURIComponent(markup) : null);
-  return <span className="cmd-tool-brand" aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, flexShrink: 0, verticalAlign: 'middle', filter: muted ? 'grayscale(1)' : undefined, opacity: muted ? .58 : undefined }}>{src ? <img src={src} alt="" width={size} height={size} draggable={false} style={{ display: 'block', width: size, height: size, objectFit: 'contain' }} /> : <span style={{ fontSize: size * .7 }}>⌘</span>}</span>;
+  const src = (colored && colorBrands[tool]) || brands[tool] || (markup ? 'data:image/svg+xml,' + encodeURIComponent(markup) : null);
+  return <span className="cmd-tool-brand" data-tool={tool} aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, flexShrink: 0, verticalAlign: 'middle', filter: muted ? 'grayscale(1)' : undefined, opacity: muted ? .58 : undefined }}>{src ? <img src={src} alt="" width={size} height={size} draggable={false} style={{ display: 'block', width: size, height: size, objectFit: 'contain' }} /> : <span style={{ fontSize: size * .7 }}>⌘</span>}</span>;
 }

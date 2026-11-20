@@ -32,6 +32,13 @@ function harness(options = {}) {
   return { listeners, documentListeners, intervals, exports: module.exports, render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return module.exports[name](props); }, calls, effects };
 }
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
+function promoteBackup(nodes) {
+  const backup = nodes.find(node => node.type === 'article' && /备用 1模型$/.test(node.props['aria-label']));
+  assert.ok(backup);
+  const handle = walk(backup).find(node => node.props['aria-label']?.startsWith('调整模型优先级'));
+  assert.ok(handle);
+  handle.props.onKeyDown({ key: 'ArrowUp', preventDefault() {} });
+}
 
 test('model edits preserve opaque IDs and unrelated hidden configuration across save and reload', async () => {
   const auxiliary = { models: [{ providerId: 'aux/@', modelId: 'Exact: Aux/01' }], capabilities: ['compression'] };
@@ -42,7 +49,7 @@ test('model edits preserve opaque IDs and unrelated hidden configuration across 
   const props = { modelsOnly: true, snapshot: { config }, refresh: async () => {} };
   let nodes = walk(h.render('Identity', props));
   assert.equal(nodes.some(node => ['AuxiliaryModels', 'KeyPools'].includes(node.type?.name)), false);
-  nodes.find(node => node.props.label === '提高优先级' && !node.props.disabled).props.onClick();
+  promoteBackup(nodes);
   nodes = walk(h.render('Identity', props));
   await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [{ action: 'config', revision: 8, patch: { models: changed } }]);
@@ -81,7 +88,7 @@ test('Worker queue edits save independently and removing all entries visibly res
   const props = { modelsOnly: true, snapshot: { config }, refresh: async () => {} };
   let nodes = walk(h.render('Identity', props));
   const workerSection = nodes.find(node => node.props['aria-label'] === '工作模型 Worker 配置');
-  walk(workerSection).find(node => node.props.label === '提高优先级' && !node.props.disabled).props.onClick();
+  promoteBackup(walk(workerSection));
   nodes = walk(h.render('Identity', props));
   await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [{ action: 'config', revision: 20, patch: { workerModels: reversed } }]);
@@ -464,7 +471,7 @@ test('identity body is edited only through documents; model priority remains exa
   assert.equal(nodes.some(node => node.type === 'textarea'), false);
   const modelsProps = { ...props, modelsOnly: true };
   nodes = walk(h.render('Identity', modelsProps));
-  nodes.find(node => node.props.label === '提高优先级' && !node.props.disabled).props.onClick();
+  promoteBackup(nodes);
   nodes = walk(h.render('Identity', modelsProps));
   await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
   assert.deepEqual(h.calls[0].patch.models.map(model => model.modelId), ['Exact:Second', 'Exact:First']);

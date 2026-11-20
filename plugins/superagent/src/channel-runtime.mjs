@@ -5,7 +5,7 @@ import { channelMessageChunks } from './channels/message-chunks.mjs';
 import { beforeDelivery, deliveryFailure } from './channels/delivery-outcome.mjs';
 
 /** One lifecycle per saved connection; adapters have no scheduling authority. */
-export function createChannelRuntime({ ctx, store, adapterOptions = {}, onInbound }) {
+export function createChannelRuntime({ ctx, store, adapterOptions = {}, onInbound, observeSource }) {
   const adapters = new Map(), failures = new Map(), queues = new Map();
   const ingress = createUnifiedChannelIngress({ store, onInbound: onInbound || adapterOptions.onInbound });
   let closed = false, callbacksAvailable = false;
@@ -20,8 +20,12 @@ export function createChannelRuntime({ ctx, store, adapterOptions = {}, onInboun
       const row = store.connections.read(channel), module = channelModule(channel);
       const factory = Object.entries(module || {}).find(([key, value]) => /^create.*Adapter$/.test(key) && typeof value === 'function')?.[1];
       if (!factory) throw new Error('渠道适配器不存在');
-      const authorizeConnection = input => {
+      const assertCurrent = () => {
         if (closed || store.connections.read(channel).revision !== row.revision) throw new Error('渠道连接配置已更改');
+      };
+      const authorizeConnection = input => {
+        assertCurrent();
+        if (row.config.enabled && input.operation === 'receive' && input.actor) observeSource?.(channel, row.revision, input.source, input.actor);
         return ingress.authorize(channel, input, { expectedRevision: row.revision });
       };
       const options = { ...adapterOptions, authorizeConnection, getConfig: () => {
@@ -35,6 +39,28 @@ export function createChannelRuntime({ ctx, store, adapterOptions = {}, onInboun
           if (event.channel !== channel || event.source?.channel !== channel) throw new Error('渠道来源不匹配');
           return ingress.receive(channel, event, { expectedRevision: row.revision });
         } };
+      if (['weixin', 'telegram'].includes(channel)) {
+        options.assertCurrent = assertCurrent;
+        options.isSourceAllowed = (source, actor) => {
+          assertCurrent();
+          try {
+            ingress.authorize(channel, { operation: 'receive', source, actor }, { expectedRevision: row.revision });
+            return true;
+          }
+          catch (error) {
+            assertCurrent();
+            if (error?.status === 403) return false;
+            throw error;
+          }
+        };
+        options.observeSource = (source, actor) => {
+          assertCurrent();
+          if (row.config.enabled) observeSource?.(channel, row.revision, source, actor);
+        };
+        if (options.credentials?.runtimeState) options.runtimeState = identity => options.credentials.runtimeState({
+          channel, profileId: store.paths?.directory || store.profileId, connectionId: row.connectionId || channel, ...identity,
+        });
+      }
       if (channel === 'discord') options.voice = createDiscordVoice({ getConfig: options.getConfig, ingest: options.ingest, authorizeConnection, transcribe: adapterOptions.transcribe, synthesize: adapterOptions.synthesize });
       const adapter = factory(options);
       if (adapter.send && channelDefinition(channel).capabilities.externalActions.includes('external-send')) adapter.prepareExternalSend = (input, context) => ingress.prepareExternalSend(channel, input, context);
@@ -46,7 +72,7 @@ export function createChannelRuntime({ ctx, store, adapterOptions = {}, onInboun
         });
         const current = store.connections.read(channel);
         if (!current.config.enabled || (input.source?.connectionRevision !== undefined && input.source.connectionRevision !== current.revision)) throw deliveryFailure('交付来源配置已撤销', 'not_sent');
-        if (['api', 'webhook', 'email'].includes(channel)) return send(input);
+        if (['api', 'email'].includes(channel)) return send(input);
         const parts = await beforeDelivery(() => channelMessageChunks(input.text)), receipts = [];
         for (let index = 0; index < parts.length; index++) {
           const latest = store.connections.read(channel);
@@ -91,7 +117,7 @@ export function createChannelRuntime({ ctx, store, adapterOptions = {}, onInboun
         const available = await adapterOptions.voiceAvailability();
         if (!available.available?.voiceInput || !available.available?.readAloud) status = { ...status, voice: { ...status?.voice, available: false, reason: '请先在 Voice 中配置可用的语音输入和朗读服务' } };
       }
-      const callback = ['webhook', 'whatsapp'].includes(channel) ? this.callbackStatus(channel) : undefined;
+      const callback = channel === 'whatsapp' ? this.callbackStatus(channel) : undefined;
       return { enabled: row.config.enabled, configured: false, authentication: 'unverified', events: 'unverified', sending: 'unverified', connection: { state: row.config.enabled ? 'unavailable' : 'disabled' }, ...status, ...(callback ? { callback, ...(!callbacksAvailable && row.config.enabled ? { events: 'unavailable', error: callback.reason, connection: { state: 'unavailable' } } : {}) } : {}), ...(failures.has(channel) ? { error: failures.get(channel), connection: { state: 'error' } } : {}) };
     },
     async catalog(feishuStatus) { return { channels: await Promise.all(channelIds.map(async channel => ({ ...channelDefinition(channel), status: channel === 'feishu' ? await feishuStatus() : await this.status(channel) }))) }; },
@@ -105,7 +131,7 @@ export function mountChannelCallbacks(ctx, runtime, feishu) {
   const mount = child => {
   const server = child.get ? child.get('webServer') : child.webServer;
   if (!server?.register) return;
-  for (const channel of ['feishu', 'whatsapp', 'webhook']) child.effect(() => server.register({ kind: 'exact', path: `/api/commander/assistant/channels/${channel}`, async handler(req, res) {
+  for (const channel of ['feishu', 'whatsapp']) child.effect(() => server.register({ kind: 'exact', path: `/api/commander/assistant/channels/${channel}`, async handler(req, res) {
     try {
       if (!['POST', 'GET'].includes(req.method)) { res.writeHead(405); res.end(); return; }
       const adapter = channel === 'feishu' ? feishu : runtime.get(channel);

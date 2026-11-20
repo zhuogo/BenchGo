@@ -57,7 +57,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
       const remote = request(new URL(url.pathname + url.search, remoteOrigin), { agent, method: req.method, headers }, response => {
         const outgoing = { ...response.headers, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
         delete outgoing['set-cookie']; delete outgoing['x-frame-options']; delete outgoing['strict-transport-security'];
-        if (outgoing['content-security-policy']) outgoing['content-security-policy'] = outgoing['content-security-policy'].replace(/frame-ancestors[^;]*/g, 'frame-ancestors ' + parentOrigin + ' dsh-app:');
+        if (outgoing['content-security-policy']) outgoing['content-security-policy'] = outgoing['content-security-policy'].replace(/frame-ancestors[^;]*/g, "frame-ancestors 'self' " + parentOrigin + ' dsh-app:');
         if (response.statusCode >= 300 && response.statusCode < 400) {
           const location = new URL(response.headers.location || '/', remoteOrigin);
           if (location.origin !== remoteOrigin || !location.pathname.startsWith('/link/workbench/')) {
@@ -68,7 +68,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
         if (String(outgoing['content-type']).startsWith('text/html')) {
           const chunks = []; let bytes = 0;
           response.on('data', chunk => { bytes += chunk.length; if (bytes > 8 * 1024 * 1024) response.destroy(new Error('工作台页面过大')); else chunks.push(chunk); });
-          response.on('end', () => { if (res.destroyed) return; const html = Buffer.concat(chunks).toString().replaceAll('/link/workbench/', prefix + '/link/workbench/').replace('<head>', '<head><script src="' + prefix + '/local-proxy.js"></script>'); const hashes = [...html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(match => "'sha256-" + createHash('sha256').update(match[1]).digest('base64') + "'"); if (outgoing['content-security-policy']) { outgoing['content-security-policy'] = outgoing['content-security-policy'].replace(/'sha256-[^']+'/g, '').replace(/script-src([^;]*)/, (_, rules) => 'script-src' + rules + ' ' + hashes.join(' ')).replace(/connect-src([^;]*)/, (_, rules) => 'connect-src' + rules + ' ' + (publicOrigin || origin).replace(/^http/, 'ws')); } delete outgoing['content-length']; res.writeHead(response.statusCode, outgoing); res.end(html); });
+          response.on('end', () => { if (res.destroyed) return; let html = Buffer.concat(chunks).toString().replaceAll('/link/workbench/', prefix + '/link/workbench/'); if (url.pathname === '/link/workbench/' || url.pathname === '/link/workbench/index.html') html = html.replace('<head>', '<head><script src="' + prefix + '/local-proxy.js"></script>'); const hashes = [...html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(match => "'sha256-" + createHash('sha256').update(match[1]).digest('base64') + "'"); if (outgoing['content-security-policy']) { outgoing['content-security-policy'] = outgoing['content-security-policy'].replace(/'sha256-[^']+'/g, '').replace(/script-src([^;]*)/, (_, rules) => 'script-src' + rules + ' ' + hashes.join(' ')).replace(/connect-src([^;]*)/, (_, rules) => 'connect-src' + rules + ' ' + (publicOrigin || origin).replace(/^http/, 'ws')); } delete outgoing['content-length']; res.writeHead(response.statusCode, outgoing); res.end(html); });
         } else { res.writeHead(response.statusCode, outgoing); response.pipe(res); }
         response.on('error', error => res.destroy(error));
       });

@@ -5,9 +5,9 @@ import { sessionRouteSupport } from '../src/session-routes.mjs';
 
 const provider = (id, modelProtocol) => ({ id, name: id, authMode: 'api', configured: true, modelProtocol });
 const tool = (id, available = true) => ({ id, installed: true, available, chatSupported: true });
-const fixture = ({ installed = [tool('codex'), tool('claude')], providers = [], accountModels, listModels = async () => [{ id: 'vendor/Exact-ID' }] } = {}) => createPickerCatalog({
+const fixture = ({ installed = [tool('codex'), tool('claude')], providers = [], accountModels, modelCapabilities, listModels = async () => [{ id: 'vendor/Exact-ID' }] } = {}) => createPickerCatalog({
   installer: { list: async () => installed },
-  providers: { list: async () => providers, routerGoProtocolModels: async () => accountModels },
+  providers: { list: async () => providers, routerGoProtocolModels: async () => accountModels, modelCapabilities },
   routeService: { supports: sessionRouteSupport },
   llm: { listModels },
 });
@@ -44,6 +44,14 @@ test('unlaunchable and unsupported tools are omitted from model routes', async (
   assert.equal(value.tools.find(row => row.id === 'pi').routeSupported, false);
   assert.deepEqual(await catalog.models('codex'), []);
   assert.deepEqual(await catalog.models('pi'), []);
+});
+
+test('manual capability settings control dialogue selection by exact model ID', async () => {
+  const catalog = fixture({ providers: [provider('manual', 'responses')],
+    listModels: async () => [{ id: 'Text/Only' }, { id: 'text/only' }],
+    modelCapabilities: async () => [{ modelId: 'Text/Only', capabilities: ['image-generation'] }],
+  });
+  assert.deepEqual((await catalog.list()).routes.map(row => row.nativeModelId), ['text/only', 'text/only']);
 });
 
 test('managed RouterGo lists routes by account capabilities and exact registered model IDs', async () => {

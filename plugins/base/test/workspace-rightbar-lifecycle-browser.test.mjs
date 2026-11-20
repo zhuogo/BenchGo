@@ -147,7 +147,7 @@ test('official rightbar and corner share session lifetimes across selection, she
     nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.png': 'dataurl' },
     plugins: [{ name: 'workspace-lifecycle-fixture', setup(build) {
-      build.onLoad({ filter: /base[\\/]client[\\/]shell-ui\.jsx$/ }, async ({ path }) => ({ loader: 'jsx', resolveDir: dirname(path), contents: (await readFile(path, 'utf8')) + '\nexport {ResponsiveAppFrame};' }));
+      build.onLoad({ filter: /benchgo[\\/]client[\\/]shell-ui\.jsx$/ }, async ({ path }) => ({ loader: 'jsx', resolveDir: dirname(path), contents: (await readFile(path, 'utf8')) + '\nexport {ResponsiveAppFrame};' }));
     } }, shellUi()],
     define: { 'process.env.NODE_ENV': '"production"', 'process.env.DSH_CLIENT_TITLE': 'undefined', 'process.env.DSH_CLIENT_VERSION': 'undefined', 'process.env.DSH_CLIENT_COMMIT_HASH': 'undefined', 'process.env.DSH_CLIENT_GIT_DIRTY': 'undefined' }, logLevel: 'silent',
   });

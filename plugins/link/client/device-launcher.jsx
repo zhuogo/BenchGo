@@ -15,6 +15,7 @@ export function DeviceLauncher({ compact = false, label = '' }) {
   const [integratedNavigation, setIntegratedNavigation] = useState(false);
   const navigationController = useRef(null);
   const mode = deviceLauncherMode();
+  const paired = mode === 'remote' && globalThis.__DSH_LINK_WORKBENCH__;
   const [frameReady, setFrameReady] = useState(false);
   const [actionsReady, setActionsReady] = useState(false), [reconnectId, setReconnectId] = useState('');
   const [theme, setTheme] = useState(() => readHostTheme());
@@ -47,7 +48,7 @@ export function DeviceLauncher({ compact = false, label = '' }) {
       if (event.data?.type === 'dsh-devices:theme-ready') syncTheme();
       if (event.data?.type === 'dsh-devices:actions-ready') setActionsReady(true);
       if (event.data?.type === 'dsh-devices:return-local') setOpen(false);
-      if (event.data?.type === 'dsh-devices:select' && typeof event.data.deviceId === 'string' && event.data.deviceId) {
+      if (!paired && event.data?.type === 'dsh-devices:select' && typeof event.data.deviceId === 'string' && event.data.deviceId) {
         setOpen(false);
         document.dispatchEvent(new CustomEvent('benchgo:device-select', { detail: { deviceId: event.data.deviceId } }));
       }
@@ -55,12 +56,16 @@ export function DeviceLauncher({ compact = false, label = '' }) {
     };
     window.addEventListener('message', returned);
     return () => window.removeEventListener('message', returned);
-  }, [url, theme]);
+  }, [url, theme, paired]);
   const launch = useCallback(async () => {
     if (gate.current) return;
-    if (navigation) { navigationController.current?.showDevices(); return; }
     setOpen(true); setError('');
     if (url) return;
+    if (paired) {
+      const target = new URL('device-center/', document.baseURI);
+      target.searchParams.set('theme', theme);
+      setUrl(target.href); return;
+    }
     gate.current = true; setBusy(true);
     try {
       const requestUrl = new URL('/api/commander-devices', location.origin);
@@ -79,9 +84,9 @@ export function DeviceLauncher({ compact = false, label = '' }) {
       }
       setUrl(target.href);
     } catch (reason) { setError(reason.message); } finally { gate.current = false; setBusy(false); }
-  }, [navigation, url, mode, theme]);
+  }, [url, mode, theme, paired]);
   useEffect(() => {
-    if (compact || window.parent !== window || !document.documentElement?.hasAttribute?.('data-windows-titlebar')) return;
+    if (paired || compact || window.parent !== window || !document.documentElement?.hasAttribute?.('data-windows-titlebar')) return;
     const reconnect = event => {
       const id = event.detail?.deviceId;
       if (typeof id !== 'string' || !id) return;
@@ -90,7 +95,18 @@ export function DeviceLauncher({ compact = false, label = '' }) {
     };
     document.addEventListener('benchgo:device-ssh-auth', reconnect);
     return () => document.removeEventListener('benchgo:device-ssh-auth', reconnect);
-  }, [compact, launch]);
-  if (mode === 'remote' && !navigation) return null;
-  return <><Tooltip label={navigation?.name || '设备中心'}><button type="button" className={`cmd-search-toggle dsh-device-launcher${compact ? ' dsh-device-launcher-compact' : ''}`} aria-label={navigation ? `切换设备：${navigation.name}` : '设备中心'} aria-haspopup={navigation ? undefined : 'dialog'} onClick={launch}><UIIcon name="link" size={16} />{label}{compact && <UIIcon name="chevronDown" size={10} />}</button></Tooltip>{createPortal(<dialog ref={dialog} className="dsh-device-dialog" data-theme={theme} onCancel={() => setOpen(false)} onClose={() => { setOpen(false); document.dispatchEvent?.(new Event('benchgo:devices-changed')); }}><style>{'.dsh-device-dialog{position:fixed;inset:0;width:100vw;height:100dvh;max-width:none;max-height:none;margin:0;padding:0;border:0;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#202020);color-scheme:light}html[data-windows-titlebar] .dsh-device-dialog{top:var(--dsh-windows-titlebar-height,40px);height:calc(100dvh - var(--dsh-windows-titlebar-height,40px))}.dsh-device-dialog::backdrop{background:#10182088}html[data-windows-titlebar] .dsh-device-dialog::backdrop{background:transparent}.dsh-device-dialog[open]{display:flex;flex-direction:column}.dsh-device-dialog-header{display:flex;align-items:center;justify-content:flex-start;gap:2px;flex:none;min-height:38px;padding:5px max(14px,env(safe-area-inset-right)) 5px max(14px,env(safe-area-inset-left));border-bottom:1px solid #8883;background:inherit;font-size:12px;line-height:1.5;font-family:inherit}.dsh-device-dialog-header button,.dsh-device-dialog-error button{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;cursor:pointer}.dsh-device-dialog-header button:hover{background:#8882}.dsh-device-dialog-header>button{padding:6px}.dsh-device-dialog iframe{display:block;flex:1;width:100%;min-height:0;border:0}.dsh-device-dialog-error{display:grid;justify-items:center;align-content:center;flex:1;padding:24px;gap:12px;font-size:13px}.dsh-device-dialog-error p{max-width:420px;overflow-wrap:anywhere}.dsh-device-dialog-error button{border:1px solid #8884}.dsh-device-dialog :focus-visible{outline:2px solid #2c6ee8;outline-offset:2px}.dsh-device-dialog-header.dsh-device-dialog-ready{display:none}@media(max-width:767px){.dsh-device-dialog-header.dsh-device-dialog-integrated{display:none}}.dsh-device-dialog[data-theme=dark]{background:var(--dsw-alias-bg-base,#151517);color:var(--dsw-alias-label-primary,#ededed);color-scheme:dark}'}</style><header className={`dsh-device-dialog-header${frameReady ? ' dsh-device-dialog-ready' : ''}${integratedNavigation ? ' dsh-device-dialog-integrated' : ''}`}><button type="button" aria-label="返回工作台" onClick={() => setOpen(false)}><UIIcon name="chevronLeft" size={16} /></button><span>设备中心</span></header>{url ? <><div hidden={frameReady}><DeviceLoading label="正在打开设备中心…" /></div><iframe ref={frame} style={frameReady ? undefined : { position: 'absolute', visibility: 'hidden' }} src={url} title="BenchGo设备中心" allow="clipboard-read; clipboard-write; microphone" referrerPolicy="no-referrer" onLoad={() => { setFrameReady(true); setIntegratedNavigation(false); syncTheme(); }} /></> : <div className="dsh-device-dialog-error">{!error && <DeviceLoading label="正在打开设备中心…" />}<p hidden={!error} role={error ? 'alert' : 'status'}>{error || (busy ? '正在打开设备中心…' : '准备打开设备中心')}</p>{error && mode !== 'remote' && <button type="button" onClick={launch} disabled={busy}>重试</button>}</div>}</dialog>, document.body)}</>;
+  }, [compact, launch, paired]);
+  if (mode === 'remote' && !navigation && !paired) return null;
+  const showDevices = () => navigationController.current?.showDevices();
+  return <>
+    <Tooltip label={navigation?.name || '设备中心'}>
+      <button type="button" className="cmd-search-toggle dsh-device-launcher"
+        aria-label={navigation ? `切换设备：${navigation.name}` : '设备中心'}
+        aria-haspopup={navigation ? undefined : 'dialog'} onClick={navigation ? showDevices : launch}>
+        <UIIcon name="link" size={16} />{label}
+      </button>
+    </Tooltip>
+    {!compact && paired && navigation && <Tooltip label="设备中心"><button type="button" className="cmd-search-toggle dsh-device-launcher-target" aria-label="设备中心" aria-haspopup="dialog" onClick={launch}><UIIcon name="devices" size={16} /></button></Tooltip>}
+    {createPortal(<dialog ref={dialog} className="dsh-device-dialog" data-theme={theme} onCancel={() => setOpen(false)} onClose={() => { setOpen(false); document.dispatchEvent?.(new Event('benchgo:devices-changed')); }}><style>{'.dsh-device-dialog{position:fixed;inset:0;width:100vw;height:100dvh;max-width:none;max-height:none;margin:0;padding:0;border:0;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#202020);color-scheme:light}html[data-windows-titlebar] .dsh-device-dialog{top:var(--dsh-windows-titlebar-height,40px);height:calc(100dvh - var(--dsh-windows-titlebar-height,40px))}.dsh-device-dialog::backdrop{background:#10182088}html[data-windows-titlebar] .dsh-device-dialog::backdrop{background:transparent}.dsh-device-dialog[open]{display:flex;flex-direction:column}.dsh-device-dialog-header{display:flex;align-items:center;justify-content:flex-start;gap:2px;flex:none;min-height:38px;padding:5px max(14px,env(safe-area-inset-right)) 5px max(14px,env(safe-area-inset-left));border-bottom:1px solid #8883;background:inherit;font-size:12px;line-height:1.5;font-family:inherit}.dsh-device-dialog-header button,.dsh-device-dialog-error button{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;cursor:pointer}.dsh-device-dialog-header button:hover{background:#8882}.dsh-device-dialog-header>button{padding:6px}.dsh-device-dialog iframe{display:block;flex:1;width:100%;min-height:0;border:0}.dsh-device-dialog-error{display:grid;justify-items:center;align-content:center;flex:1;padding:24px;gap:12px;font-size:13px}.dsh-device-dialog-error p{max-width:420px;overflow-wrap:anywhere}.dsh-device-dialog-error button{border:1px solid #8884}.dsh-device-dialog :focus-visible{outline:2px solid #2c6ee8;outline-offset:2px}.dsh-device-dialog-header.dsh-device-dialog-ready{display:none}@media(max-width:767px){.dsh-device-dialog-header.dsh-device-dialog-integrated{display:none}}.dsh-device-dialog[data-theme=dark]{background:var(--dsw-alias-bg-base,#151517);color:var(--dsw-alias-label-primary,#ededed);color-scheme:dark}'}</style><header className={`dsh-device-dialog-header${frameReady && (!paired || actionsReady) ? ' dsh-device-dialog-ready' : ''}${integratedNavigation ? ' dsh-device-dialog-integrated' : ''}`}><button type="button" aria-label="返回工作台" onClick={() => setOpen(false)}><UIIcon name="chevronLeft" size={16} /></button><span>设备中心</span></header>{url ? <><div hidden={frameReady}><DeviceLoading label="正在打开设备中心…" /></div><iframe ref={frame} style={frameReady ? undefined : { position: 'absolute', visibility: 'hidden' }} src={url} title="BenchGo设备中心" allow="clipboard-read; clipboard-write; microphone" referrerPolicy="no-referrer" onLoad={() => { setFrameReady(true); setIntegratedNavigation(false); syncTheme(); }} /></> : <div className="dsh-device-dialog-error">{!error && <DeviceLoading label="正在打开设备中心…" />}<p hidden={!error} role={error ? 'alert' : 'status'}>{error || (busy ? '正在打开设备中心…' : '准备打开设备中心')}</p>{error && mode !== 'remote' && <button type="button" onClick={launch} disabled={busy}>重试</button>}</div>}</dialog>, document.body)}
+  </>;
 }

@@ -1,6 +1,5 @@
 export const modelCapabilityLabels = Object.freeze({
-  chat: '聊天',
-  responses: 'Responses',
+  text: '文本',
   'image-generation': '图片生成',
   'image-edit': '图片编辑',
   'image-mask': '遮罩编辑',
@@ -14,8 +13,18 @@ export const modelCapabilityLabels = Object.freeze({
   decision: '判断',
 });
 
+const textCapabilities = new Set(['text', 'chat', 'responses', 'anthropic-messages']);
+
+export function normalizeModelCapabilities(capabilities = []) {
+  return [...new Set(capabilities.map(capability => textCapabilities.has(capability) ? 'text' : capability))];
+}
+
+export function hasTextCapability(capabilities = []) {
+  return capabilities.some(capability => textCapabilities.has(capability));
+}
+
 const taskCapabilities = new Map([
-  ['text-generation', 'chat'],
+  ['text-generation', 'text'],
   ['chat-completions', 'chat'],
   ['text-to-image', 'image-generation'],
   ['image-to-image', 'image-edit'],
@@ -39,13 +48,14 @@ export function structuredCapabilities(model, inputs, outputs) {
     : [];
   const explicit = [...tags, model.task, model.pipeline_tag, model.type, model.mode]
     .map(task => taskCapabilities.get(task) ?? task)
-    .filter(capability => typeof capability === 'string' && Object.hasOwn(modelCapabilityLabels, capability));
+    .filter(capability => typeof capability === 'string'
+      && (Object.hasOwn(modelCapabilityLabels, capability) || textCapabilities.has(capability)));
   if (explicit.length) return [...new Set(explicit)];
   if (outputs.length !== 1) return [];
   if (outputs[0] === 'text' && inputs.length === 1 && inputs[0] === 'audio') return ['asr'];
   if (outputs[0] === 'audio' && inputs.length === 1 && inputs[0] === 'text') return ['tts'];
   if (outputs[0] === 'image' && inputs.includes('text')) return ['image-generation'];
   if (outputs[0] === 'video' && inputs.length) return ['video'];
-  if (outputs[0] === 'text' && inputs.includes('text')) return ['chat'];
+  if (outputs[0] === 'text' && inputs.includes('text')) return ['text'];
   return [];
 }

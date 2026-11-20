@@ -1,7 +1,7 @@
 import { isManagedRouterGo, modelProtocol } from './provider-access.mjs';
 import { createModelCapabilitySettings } from './model-capability-settings.mjs';
 import { builtinProvider, routerGo } from '../shared/builtin-providers.mjs';
-import { structuredCapabilities } from '../shared/model-capabilities.mjs';
+import { normalizeModelCapabilities, structuredCapabilities } from '../shared/model-capabilities.mjs';
 
 const LIMIT = 4 * 1024 * 1024;
 const forbidden = new Set(['__proto__', 'constructor', 'prototype']);
@@ -40,7 +40,7 @@ function modelEntry(model, publicProfile, override, secret) {
   const outputModalities = preferPublic(publicProfile?.output_modalities, model.output_modalities ?? architecture.output_modalities ?? architecture.output);
   const thinkingLevels = preferPublic(publicProfile?.thinking_levels, model.thinking_levels);
   const declared = names(structuredCapabilities(model, inputModalities, outputModalities), secret);
-  const capabilities = override ?? declared;
+  const capabilities = override ?? normalizeModelCapabilities(declared);
   const mediaConstraints = model.media_constraints && typeof model.media_constraints === 'object' && !Array.isArray(model.media_constraints)
     ? constraintValue(model.media_constraints, secret) : undefined;
   const contextWindow = positive(publicProfile?.context) ?? positive(model.context_length);
@@ -49,7 +49,7 @@ function modelEntry(model, publicProfile, override, secret) {
     id: model.id,
     name: [model.display_name, model.name, publicProfile?.model_name].find(name => safeString(name, secret)) || model.id,
     capabilities, kinds: capabilities.filter(name => name === 'asr' || name === 'tts'),
-    ...(override ? { providerCapabilities: declared } : {}),
+    ...(override || declared.some(capability => !capabilities.includes(capability)) ? { providerCapabilities: declared } : {}),
     ...(mediaConstraints ? { mediaConstraints } : {}),
     ...(inputModalities.length ? { inputModalities } : {}),
     ...(outputModalities.length ? { outputModalities } : {}),
@@ -197,10 +197,19 @@ export function createModelProviders(ctx) {
         routerGoModels = current;
       }
       const current = routerGoModels;
-      const models = await current.models;
+      const [models, labels] = await Promise.all([current.models, overrides.list(routerGo.id)]);
       const latest = await service.describeRoute(routerGo.id);
       if (!latest.managedRouterGo || latest.credentialRef !== current.credentialRef || latest.apiKey !== current.apiKey) throw new ProviderError('Provider changed; refresh the model list again', 409);
-      return models;
+      if (!labels.length) return models;
+      const effective = new Map(models);
+      for (const { modelId, capabilities } of labels) {
+        const remote = models.get(modelId);
+        if (remote) effective.set(modelId, { ...remote, capabilities,
+          providerCapabilities: remote.providerCapabilities ?? remote.capabilities,
+          kinds: capabilities.filter(name => name === 'asr' || name === 'tts'),
+        });
+      }
+      return effective;
     },
     async models(id, signal) {
       const config = await service.describeRoute(id);

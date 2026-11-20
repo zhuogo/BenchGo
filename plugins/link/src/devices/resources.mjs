@@ -1,4 +1,4 @@
-import { selectRoute } from './routes.mjs';
+import { deviceIdentity, selectRoute } from './routes.mjs';
 import { remoteAgent, remoteJson } from './remote.mjs';
 const kinds = new Set(['projects', 'sessions', 'recent', 'models', 'capabilities', 'tasks']);
 const actions = new Set(['state', 'models', 'create', 'history', 'send', 'cancel', 'respond', 'resources', 'execution', 'management', 'sessionAction']);
@@ -10,10 +10,10 @@ export function deviceConnectionFailure(error) {
   if (error.code === 'SSH_AUTH_REQUIRED') return { code: error.code, status: 'unknown', reason: error.message };
   if (error.code === 'ROUTES_COOLDOWN') return { code: 'ROUTES_COOLDOWN', status: 'connecting', reason: '中继连接正在恢复，请稍后重试或在设备中心检查连接' };
   if (error.code === 'IDENTITY_CHANGED' || error.code === 'ERR_LINK_CERTIFICATE' || /CERT|TLS/.test(error.code || '')) return { code: 'IDENTITY_CHANGED', status: 'failed', reason: '主机身份或证书变化，请在设备中心重新核验' };
-  if ([401, 403].includes(status) || error.code === 'UNAUTHORIZED') return { code: 'UNAUTHORIZED', status: 'failed', reason: '授权失效，请在设备中心重新核验' };
+  if (status === 401 || status === 403 && !error.code || error.code === 'UNAUTHORIZED') return { code: 'UNAUTHORIZED', status: 'failed', reason: '授权失效，请在设备中心重新核验' };
   if (networkErrors.has(error.code) || error.name === 'TimeoutError' || [502, 503, 504].includes(status)) return { code: 'OFFLINE', status: 'offline', reason: '设备暂不可达，请检查连接后重试' };
   if (error.code === 'UNSUPPORTED' || status === 422) return { code: 'UNSUPPORTED', status: 'online', reason: '目标尚不支持该资源' };
-  return { code: 'QUERY_FAILED', status: status >= 400 ? 'online' : null, reason: '设备资源查询失败，请重试' };
+  return { code: status === 403 && error.code ? error.code : 'QUERY_FAILED', status: status >= 400 ? 'online' : null, reason: status === 403 && error.code ? error.message : '设备资源查询失败，请重试' };
 }
 export function resourcePage(input = {}) {
   const kind = input.kind || 'projects', offset = input.offset ?? 0, limit = input.limit ?? 30;
@@ -36,7 +36,7 @@ export function projectResources(state, input, deviceId) {
   const items = source.slice(offset, offset + limit).map(row => ({ ...Object.fromEntries(fields.filter(key => row[key] !== undefined).map(key => [key, row[key]])), deviceId, kind, resourceId: row.id ?? row.model }));
   return { deviceId, available: true, code: 'OK', reason: null, observedAt: Date.now(), freshness: 'fresh', items, offset, limit, total: source.length, hasMore: offset + limit < source.length };
 }
-export function createDeviceResources({ registry, local, request = remoteJson, route = selectRoute, timeout = 8000 }) {
+export function createDeviceResources({ registry, local, request = remoteJson, route = selectRoute, signSource, timeout = 8000 }) {
   const cache = new Map(), connections = new Map();
   let epoch = 0, sequence = 0;
   const identity = saved => JSON.stringify([saved.url, saved.pin, saved.token, saved.hostId, saved.authorizationId, saved.routes?.map(({ kind, url, pin, relayId, id, priority }) => [kind, url, pin, relayId, id, priority])]);
@@ -72,6 +72,26 @@ export function createDeviceResources({ registry, local, request = remoteJson, r
     if (deviceId === 'local') { assertExpected(null); return local(input, signal); }
     const saved = registry.get(deviceId);
     assertExpected(saved);
+    return connected(deviceId, saved, signal, async (target, options, connection) => {
+      let outbound = input;
+      if (input.action === 'execution' && input.operation === 'submit' && signSource) {
+        if (connection.executionSourceProof === undefined) {
+          const { value } = await request(target, '/link/api/info', undefined, options);
+          current(deviceId, connection);
+          deviceIdentity(target, value);
+          connection.executionSourceProof = value?.executionSourceProof === 1;
+        }
+        if (connection.executionSourceProof) outbound = { ...input, sourceProof: signSource(saved, input) };
+      }
+      const { value } = await request(target, '/link/api/rpc', outbound, options);
+      if (input.action === 'execution' && (value?.hostId !== saved.hostId || value?.authorizationId !== saved.authorizationId)) throw fail('执行回执的目标身份或授权不一致', 'IDENTITY_CHANGED', 403);
+      if (saved.hostId && value?.hostId && saved.hostId !== value.hostId) throw fail('目标身份已变化，请重新配对', 'IDENTITY_CHANGED', 403);
+      if (input.action === 'resources' && value?.available === false) throw fail('目标资源不可用', value.code || 'QUERY_FAILED');
+      if (input.action === 'execution' && input.operation === 'catalog') connection.executionSourceProof = value?.executionSourceProof === 1;
+      return value;
+    });
+  };
+  const connected = async (deviceId, saved, signal, rpc) => {
     let connection = connections.get(deviceId);
     if (!connection || connection.identity !== identity(saved)) {
       invalidate(deviceId);
@@ -103,11 +123,8 @@ export function createDeviceResources({ registry, local, request = remoteJson, r
         connection.agent = remoteAgent(target, { maxSockets: 4, maxFreeSockets: 2 }); connection.routeKey = routeKey;
       }
       agent = connection.agent;
-      const { value } = await request(target, '/link/api/rpc', input, { signal: bounded, agent });
+      const value = await rpc(target, { signal: bounded, agent }, connection);
       bounded.throwIfAborted(); current(deviceId, connection);
-      if (input.action === 'execution' && (value?.hostId !== saved.hostId || value?.authorizationId !== saved.authorizationId)) throw fail('执行回执的目标身份或授权不一致', 'IDENTITY_CHANGED', 403);
-      if (saved.hostId && value?.hostId && saved.hostId !== value.hostId) throw fail('目标身份已变化，请重新配对', 'IDENTITY_CHANGED', 403);
-      if (input.action === 'resources' && value?.available === false) throw fail('目标资源不可用', value.code || 'QUERY_FAILED');
       observe(deviceId, connection, order, 'online');
       return value;
     } catch (error) {
@@ -119,6 +136,42 @@ export function createDeviceResources({ registry, local, request = remoteJson, r
       if (order >= connection.observed && ['UNAUTHORIZED', 'IDENTITY_CHANGED'].includes(failure.code)) invalidate(deviceId);
       throw error;
     }
+  };
+  const identityChecks = new Map();
+  const identified = saved => ({ ...registry.publicDevice(saved), hostId: saved.hostId, authorizationId: saved.authorizationId });
+  const resolveDeviceIdentity = async ({ deviceId, signal }) => {
+    signal?.throwIfAborted();
+    const saved = registry.get(deviceId);
+    let pending = identityChecks.get(deviceId);
+    if (pending?.saved !== saved) {
+      if (saved.hostId && saved.authorizationId) return identified(saved);
+      const promise = (async () => {
+        const resolved = await connected(deviceId, saved, undefined, async (target, options) => {
+          const { value } = await request(target, '/link/api/info', undefined, options);
+          let identity = deviceIdentity(target, value);
+          if (!identity.authorizationId) {
+            // Execution-v2 peers already report both identities in the read-only catalog.
+            const { value: catalog } = await request(target, '/link/api/rpc', { action: 'execution', version: 2, operation: 'catalog' }, options).catch(error => {
+              if (error.statusCode === 400 && /Unsupported Link action/.test(error.message)) return {};
+              throw error;
+            });
+            identity = deviceIdentity({ ...target, hostId: identity.hostId ?? target.hostId }, catalog);
+          }
+          if (!identity.hostId || !identity.authorizationId) throw fail('目标版本无法核验配对身份，请更新目标设备', 'UNSUPPORTED', 422);
+          return { hostId: identity.hostId, authorizationId: identity.authorizationId };
+        });
+        const previous = connections.get(deviceId);
+        await registry.updateIdentity(deviceId, saved, resolved);
+        if (previous === connections.get(deviceId) && previous?.identity !== identity(saved)) invalidate(deviceId);
+      })();
+      pending = { saved, promise };
+      identityChecks.set(deviceId, pending);
+      const clear = () => { if (identityChecks.get(deviceId) === pending) identityChecks.delete(deviceId); };
+      void promise.then(clear, clear);
+    }
+    await pending.promise;
+    signal?.throwIfAborted();
+    return identified(registry.get(deviceId));
   };
   const resources = async (input = {}) => {
     const started = epoch;
@@ -164,5 +217,5 @@ export function createDeviceResources({ registry, local, request = remoteJson, r
     }));
     return { devices: results, partial: results.some(row => !row.available) };
   };
-  return { devices, resources, callDevice, invalidate, clear() { epoch++; for (const deviceId of connections.keys()) invalidate(deviceId); cache.clear(); } };
+  return { devices, resources, callDevice, resolveDeviceIdentity, invalidate, clear() { epoch++; for (const deviceId of connections.keys()) invalidate(deviceId); cache.clear(); } };
 }

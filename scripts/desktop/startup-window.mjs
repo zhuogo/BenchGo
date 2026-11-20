@@ -2,7 +2,14 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const STARTUP_STAGES = new Set(['started', 'splash-visible', 'enrollment-ready', 'shell-loading', 'shell-loaded', 'host-starting', 'host-ready', 'host-connected', 'welcome-state-ready', 'workspace-visible', 'workspace-ready', 'failed']);
-const STARTUP_LABELS = { 'splash-visible': '正在准备插件…', 'enrollment-ready': '正在载入工作台…', 'shell-loading': '正在载入工作台…', 'shell-loaded': '正在启动服务…', 'host-starting': '正在启动服务…', 'host-ready': '正在连接工作台…', 'host-connected': '正在读取设置…', 'welcome-state-ready': '正在打开工作台…' };
+const STARTUP_LABELS = {
+  'enrollment-ready': '正在载入工作台…',
+  'host-starting': '正在启动服务…',
+  'host-ready': '正在连接工作台…',
+  'host-connected': '正在读取设置…',
+  'welcome-state-ready': '正在打开工作台…',
+};
+const STARTUP_PHASES = Object.keys(STARTUP_LABELS);
 
 /** Keep one bounded, local startup record; diagnostic I/O must never gate startup. */
 export function createStartupTiming(directory, { now = () => performance.now(), startedAt = new Date().toISOString() } = {}) {
@@ -44,7 +51,14 @@ export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativ
   const updateTheme = () => { if (!window.isDestroyed()) window.setBackgroundColor(background()); };
   nativeTheme?.on('updated', updateTheme);
   const waiting = new Map();
-  let disposed = false, loaded = false, pendingStage;
+  let disposed = false, loaded = false, phase = -1;
+  const sendStage = () => {
+    const stage = STARTUP_PHASES[phase];
+    if (!stage) return;
+    const detail = JSON.stringify({ stage, label: STARTUP_LABELS[stage] });
+    // Only fixed presentation strings reach our local sandboxed document.
+    void window.webContents.executeJavaScript(`window.dispatchEvent(new CustomEvent('benchgo-startup-stage', { detail: ${detail} }))`).catch(() => {});
+  };
   const dispose = () => {
     if (disposed) return;
     disposed = true;
@@ -59,11 +73,10 @@ export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativ
     if (!window.isDestroyed()) window.destroy();
   };
   dispose.setStage = stage => {
-    const label = STARTUP_LABELS[stage];
-    if (disposed || window.isDestroyed() || !label) return;
-    if (!loaded) { pendingStage = stage; return; }
-    // Only fixed presentation strings reach our local sandboxed document.
-    void window.webContents.executeJavaScript(`(() => { const status = document.getElementById('startup-status'); if (status) { status.dataset.phase = ${JSON.stringify(stage)}; status.textContent = ${JSON.stringify(label)}; } })()`).catch(() => {});
+    const next = STARTUP_PHASES.indexOf(stage);
+    if (disposed || window.isDestroyed() || next <= phase) return;
+    phase = next;
+    if (loaded) sendStage();
   };
   const observe = (_event, other) => {
     const shown = () => {
@@ -101,7 +114,7 @@ export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativ
       if (disposed || window.isDestroyed()) return;
       window.show();
       onVisible?.();
-      if (pendingStage) dispose.setStage(pendingStage);
+      sendStage();
     }, unavailable).catch(unavailable);
   } catch (error) { unavailable(error); }
   return dispose;

@@ -16,6 +16,7 @@ test('history index appends metadata once and keeps pagination, image validation
   const index = updateHistoryIndex(events);
   assert.deepEqual(index.header, { provider: 'opaque-provider', model: 'exact-model' });
   assert.equal(index.lastEnd.error.message, 'offline');
+  assert.equal(index.lastEndSeq, 7);
   assert.deepEqual(index.images.map(row => row.image.name), ['first.png']);
   events.push(call(8, 'c', 'generate_image'), result(9, 'c', 'latest.webp'));
   updateHistoryIndex(events, index);
@@ -108,5 +109,6 @@ test('warm reads never revisit old tool traces and incremental indexing reads on
   updateHistoryIndex(events, index);
   assert.equal(accesses, 1);
   assert.equal(index.lastEnd.kind, 'completed');
+  assert.equal(index.lastEndSeq, 100000);
   t.diagnostic(JSON.stringify({ events: trace.length, messages: messages.length, coldIndexMs: coldMs, warm100PagesMs: warm100Ms }));
 });

@@ -31,7 +31,7 @@ function fixture(t) {
 
 test('cleanup execution stamp binds new assignments, claims and runs but permits their natural progress', t => {
   const f = fixture(t), empty = f.stamp();
-  assert.match(empty, /^[a-f0-9]{64}$/u);
+  assert.match(empty, /^v2:[a-f0-9]{64}$/u);
   assert.equal(f.stamp(), empty);
   assert.throws(() => f.store.taskCleanupExecutionStamp('missing'), { code: 'TASK_NOT_FOUND' });
   const created = f.store.createAssignment('task', { text: 'Execute' });
@@ -58,6 +58,18 @@ test('cleanup execution stamp includes historical assignments and all run fences
   const fenceChanged = f.stamp(); assert.notEqual(fenceChanged, assignmentChanged);
   f.sql.prepare("UPDATE sa_runs SET owner='new-worker' WHERE id=?").run(first.run.id);
   assert.notEqual(f.stamp(), fenceChanged);
+});
+
+test('remote observer changes preserve the archive intent while replacement runs change it', t => {
+  const f = fixture(t), { assignment, run } = f.execute();
+  f.sql.prepare("UPDATE sa_assignments SET payload=json_set(payload,'$.executor','remote') WHERE id=?").run(assignment.id);
+  const original = f.stamp(), legacy = f.stamp({ legacy: true });
+  assert.match(legacy, /^[a-f0-9]{64}$/u);
+  f.sql.prepare("UPDATE sa_runs SET owner='remote-observer:replacement' WHERE id=?").run(run.id);
+  assert.equal(f.stamp(), original);
+  assert.notEqual(f.stamp({ legacy: true }), legacy);
+  f.sql.prepare('UPDATE sa_runs SET fence=fence+1 WHERE id=?').run(run.id);
+  assert.notEqual(f.stamp(), original);
 });
 
 test('own context-to-stop input and confirmed execution exit leave cleanup identity unchanged', t => {

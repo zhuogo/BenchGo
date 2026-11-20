@@ -70,8 +70,56 @@ async function fixture() {
       window.clearCalls=0;
       const onClear=()=>{window.clearCalls++;return new Promise(resolve=>{window.finishClear=resolve;});};
       const id=++serial;
-      root.render(<ActivityProvider><div key={mode==='history'?'data':mode.startsWith('segments-')?'segments':mode} data-render={id} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}><style>{hostCss}{css}</style><header style={{padding:16}}>{threadId==='main'?'BenchGo 主聊天':'feishu · oc_exact'}</header><AssistantConversation active={false} ctx={ctx} sessionId='feishu-session' threadId={threadId} history={history} api={api} assistantName='BenchGo' assistantConfig={{cardMotion:false,cardHtml:'<b>PRIVATE_CUSTOM_CARD</b>'}} SessionProvider={({children})=>children} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop} onClear={onClear}/></div></ActivityProvider>);
+      root.render(<ActivityProvider><div key={mode==='history'?'data':mode.startsWith('segments-')?'segments':mode} data-render={id} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}><style>{hostCss}{css}</style><header style={{padding:16}}>{threadId==='main'?'BenchGo 主聊天':'feishu · oc_exact'}</header><AssistantConversation active={false} ctx={ctx} sessionId='feishu-session' threadId={threadId} channel={threadId==='channel-thread'} history={history} api={api} assistantName='BenchGo' assistantConfig={{cardMotion:false,cardHtml:'<b>PRIVATE_CUSTOM_CARD</b>'}} SessionProvider={({children})=>children} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop} onClear={onClear}/></div></ActivityProvider>);
       return id;
+    };
+    window.renderRetry=(threadId,channel=false)=>{
+      const sessionId='router-'+threadId, select=value=>selector=>selector(value), noop=()=>{};
+      const input={phase:'plain',draft:'保留这段草稿',attachmentIds:['draft-image'],queue:[]};
+      const session={sessionId,openState:'open',running:false,subagent:null,pendingSubmissions:[]};
+      let history={sessionId,threadId,lastEndSeq:11,error:'服务器历史中的旧错误',messages:[{id:'human',role:'user',seq:7,text:'请检查服务是否正常'}]};
+      let continuation=11, turnEnd={seq:11,data:{reason:{kind:'error',error:{message:'模型响应超时'}}}}, blocked, inbox={}, statuses=new Map(), promptAllowed=true;
+      const ctx={effect:fn=>fn(),slots:{inject:(_name,fn)=>fn(),register:(_meta,Component)=>{Official=Component;return noop}},
+        uiConversation:{binding:()=>({activate:noop})},uiSession:{sessionStatus:{getSnapshot:()=>statuses,subscribe:()=>noop}},
+        remoteAccess:{source:(resource,id,action)=>({getSnapshot:()=>resource==='session'&&id===sessionId&&action==='session/prompt'&&promptAllowed})},
+        conversation:{input:{for:scope=>{if(scope!==binding.ctx)throw Error('wrong input scope');return {state:{getSnapshot:()=>input}}}},
+          blocks:{storeFor:()=>({getSnapshot:()=>blocked,subscribe:()=>noop})}},
+        sessions:{retain:()=>({binding,ready:Promise.resolve(),release:noop}),binding:id=>id===sessionId?binding:undefined}};
+      let Official;
+      const binding={ctx:{},session:{getSnapshot:()=>session,projections:{faceOf:key=>({getSnapshot:()=>key==='inbox'?inbox:continuation})},
+        prompt:(content,mode)=>{window.retryCalls.push({sessionId,content,mode});return new Promise(resolve=>{window.finishRetry=message=>resolve(message?{ok:false,error:{message}}:{ok:true});});}}};
+      mountAssistantConversation(ctx);
+      const SessionProvider=({children})=>children, api=async()=>({});
+      const renderSlot=name=>name==='benchgo.assistant.conversation'?<Official {...hooks} renderSlot={()=>null} renderFactorySlot={renderFactorySlot}/>:null;
+      const renderFactorySlot=(_name,_props,children)=>{
+        const View=children.slots.views;
+        return <><View {...hooks}/><div style={{padding:16,borderTop:'1px solid #8883'}}><textarea aria-label='消息草稿' readOnly value={input.draft}/>{input.attachmentIds.includes('draft-image')&&<span>已添加图片附件</span>}</div></>;
+      };
+      let hooks;
+      const render=()=>{
+        const chat={timeline:{turnOrder:[1],turns:new Map([[1,{end:turnEnd}]])},legacy:{nodes:[]}};
+        const conversation={activeTargets:new Set(['chat']),views:new Map([['chat',chat]])};
+        hooks={useSession:select({...session}),useConversation:select(conversation),useInput:select({...input}),inputActions:{setDraft:noop,persistDraft:noop},
+          useProjection:key=>key==='inbox'?inbox:continuation,useAccess:action=>action==='session/prompt'&&promptAllowed};
+        root.render(<ActivityProvider><div key={threadId} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}>
+          <style>{hostCss}{css}</style><header style={{padding:16}}>{threadId==='main'?'BenchGo 主聊天':'BenchGo 旁聊'}</header>
+          <AssistantConversation active={false} ctx={ctx} sessionId={sessionId} threadId={threadId} channel={channel} history={history} api={api}
+            assistantName='BenchGo' SessionProvider={SessionProvider} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop}/>
+        </div></ActivityProvider>);
+      };
+      window.retryCalls=[];
+      window.patchRetry=(changed,paint=true)=>{
+        if('continuation' in changed)continuation=changed.continuation;
+        if('turnEnd' in changed)turnEnd=changed.turnEnd;
+        if('blocked' in changed)blocked=changed.blocked;
+        if('pendingInteraction' in changed)statuses=new Map([[sessionId,{pendingInteraction:changed.pendingInteraction}]]);
+        if('inbox' in changed)inbox=changed.inbox;
+        if('promptAllowed' in changed)promptAllowed=changed.promptAllowed;
+        if(changed.history)history={...history,...changed.history};
+        Object.assign(session,changed.session);Object.assign(input,changed.input);
+        if(paint)render();
+      };
+      render();
     };
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-channel-quiet-ui-test'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
@@ -103,7 +151,8 @@ test('real assistant conversations display connection states, channel history an
         else if(mode==='reply-error'||mode==='main-reply-error'){
           const feed=page.getByLabel('聊天记录',{exact:true});
           const notice=feed.locator('[data-chat-key="notice:reply-failed"][data-role="assistant"]');
-          await notice.getByText('本次回复未完成，对话记录已保留。请重试或检查模型连接。',{exact:true}).waitFor();
+          await notice.getByText(mode==='reply-error'?'本次回复未完成，对话记录已保留。请重试或检查模型连接。':'本次回复未完成，对话记录已保留。',{exact:true}).waitFor();
+          assert.equal(await notice.getByRole('button',{name:'重试回复',exact:true}).count(),0);
           assert.equal(await page.getByText(/本次回复未完成/).count(),1);
           if(mode==='reply-error'){
             assert.deepEqual(await feed.locator('[data-chat-key]').evaluateAll(rows=>rows.map(row=>row.dataset.role)),['user','assistant','assistant','assistant']);
@@ -151,6 +200,99 @@ test('real assistant conversations display connection states, channel history an
     }
     assert.deepEqual(errors,[]);
   }finally{await browser.close()}
+});
+
+test('Router main and side chats retry the current failed turn once without consuming the composer draft', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
+  const screenshots = process.env.BENCHGO_REPLY_RETRY_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    const page = await browser.newPage(), errors = [];
+    page.setDefaultTimeout(6000);
+    page.on('pageerror', error => errors.push(error.message));
+    await page.route('**/*', route => route.request().url() === 'http://localhost/'
+      ? route.fulfill({ contentType: 'text/html', body: html })
+      : route.abort());
+    await page.goto('http://localhost/');
+    const notice = page.locator('[data-chat-key="notice:reply-failed"]');
+    const retry = notice.getByRole('button', { name: '重试回复', exact: true });
+    const patch = (change, paint = true) => page.evaluate(([changed, visible]) => window.patchRetry(changed, visible), [change, paint]);
+    const calls = () => page.evaluate(() => window.retryCalls);
+    const draft = page.getByRole('textbox', { name: '消息草稿' });
+    const failure = (seq, message) => ({ seq, data: { reason: { kind: 'error', error: { message } } } });
+    for (const [thread, width, dark] of [['main', 1440, false], ['local-side', 390, true]]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme', dark), dark);
+      await page.evaluate(thread => window.renderRetry(thread), thread);
+      await retry.waitFor();
+      await notice.getByRole('button', { name: '诊断详情' }).click();
+      await notice.getByText('模型响应超时', { exact: true }).waitFor();
+      assert.equal(await notice.getByText('服务器历史中的旧错误').count(), 0);
+      assert.equal(await draft.inputValue(), '保留这段草稿');
+      await page.getByText('已添加图片附件', { exact: true }).waitFor();
+      assert.equal(await page.locator('[data-role=user]').count(), 1);
+      if (screenshots) await page.screenshot({ path: join(screenshots, thread + '-retry.png'), animations: 'disabled' });
+
+      // An enabled old DOM button can outlive the Store update by one paint.
+      await patch({ continuation: 12 }, false);
+      await retry.click();
+      assert.deepEqual(await calls(), []);
+      await patch({ continuation: 11 }, false);
+      await patch({ promptAllowed: false }, false);
+      await retry.click();
+      assert.deepEqual(await calls(), []);
+      await patch({ promptAllowed: false });
+      await retry.waitFor({ state: 'hidden' });
+      await patch({ promptAllowed: true });
+      await retry.waitFor();
+      await patch({ pendingInteraction: { kind: 'question' } }, false);
+      await retry.click();
+      assert.deepEqual(await calls(), []);
+      for (const [blocked, unblocked] of [
+        [{ pendingInteraction: { kind: 'permission' } }, { pendingInteraction: null }],
+        [{ inbox: { 'next-turn': [{ id: 'queued' }] } }, { inbox: {} }],
+        [{ inbox: { 'next-step': [{ id: 'steering', source: { kind: 'user' } }] } }, { inbox: {} }],
+        [{ blocked: { reason: '模型不可用' } }, { blocked: null }],
+        [{ session: { pendingSubmissions: [{ requestId: 'pending' }] } }, { session: { pendingSubmissions: [] } }],
+      ]) {
+        await patch(blocked);
+        await notice.locator('button:disabled').getByText('重试回复', { exact: true }).waitFor();
+        await patch(unblocked);
+        await notice.locator('button:enabled').getByText('重试回复', { exact: true }).waitFor();
+      }
+      await patch({ input: { phase: 'sending' } });
+      await notice.waitFor({ state: 'hidden' });
+      await patch({ input: { phase: 'plain' }, continuation: 11 });
+      await retry.waitFor();
+
+      await retry.evaluate(button => { button.click(); button.click(); });
+      assert.deepEqual(await calls(), [{ sessionId: 'router-' + thread, content: [], mode: 'queue' }]);
+      await notice.locator('button:disabled[aria-busy=true]').getByText('正在重试…', { exact: true }).waitFor();
+      await page.evaluate(() => window.finishRetry('路由连接已断开'));
+      await notice.getByRole('alert').filter({ hasText: '路由连接已断开' }).waitFor();
+      await retry.click();
+      assert.equal((await calls()).length, 2);
+      await page.evaluate(() => window.finishRetry());
+      await notice.waitFor({ state: 'hidden' });
+      assert.equal(await draft.inputValue(), '保留这段草稿');
+      await page.getByText('已添加图片附件', { exact: true }).waitFor();
+      assert.equal(await page.locator('[data-role=user]').count(), 1);
+
+      await patch({ continuation: 16, turnEnd: failure(16, '重试后遇到新的超时') });
+      await retry.waitFor();
+      await patch({ continuation: null, turnEnd: { seq: 19, data: { reason: { kind: 'completed' } } } });
+      await notice.waitFor({ state: 'hidden' });
+      await patch({ history: { lastEndSeq: 19, error: '交付状态结算失败' } });
+      await notice.getByRole('button', { name: '诊断详情' }).click();
+      await notice.getByText('交付状态结算失败', { exact: true }).waitFor();
+      assert.equal(await retry.count(), 0);
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    }
+    await page.evaluate(() => window.renderRetry('channel-thread', true));
+    await notice.waitFor();
+    assert.equal(await retry.count(), 0);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
 });
 
 test('running main chat input survives echo, durable inbox, admission and history without receipt hints or private notices', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {

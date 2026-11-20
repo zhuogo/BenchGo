@@ -4,9 +4,10 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { openDeviceRegistry, normalizeTarget } from './registry.mjs';
 import { remoteJson } from './remote.mjs';
 import { createDeviceResources, deviceConnectionFailure } from './resources.mjs';
-import { readDeviceRoutes, selectRoute } from './routes.mjs';
+import { readDeviceInfo, selectRoute } from './routes.mjs';
 import { createDeviceProxy } from './proxy.mjs';
 import { createServerManager } from '../server/manager.mjs';
+import { verifyReturnRoute } from '../pairing/return.mjs';
 const secret = () => randomBytes(32).toString('base64url');
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 export function parsePairingUri(input) {
@@ -32,7 +33,7 @@ async function body(req) {
   const input = JSON.parse(Buffer.concat(chunks).toString());
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('请求必须是对象'); return input;
 }
-export async function createDeviceCenter({ directory, webRoot, managerFactory = createServerManager, hostAdmin, localName, localDispatch, publicOrigin, workbenchOrigin, registerProxy }) {
+export async function createDeviceCenter({ directory, webRoot, managerFactory = createServerManager, hostAdmin, localName, localDispatch, publicOrigin, workbenchOrigin, registerProxy, pairing, signSource }) {
   let renamedLocal;
   const registry = await openDeviceRegistry(directory, { localName: () => localName?.() || renamedLocal || '本机' }), pending = new Map(), proxies = new Map(), tickets = new Map(), sessions = new Map(), parents = new Set(), sockets = new Set();
   let origin, closed = false;
@@ -50,7 +51,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     await options.accept?.(route, { kind: 'ssh' });
     return route;
   };
-  const resources = createDeviceResources({ registry, route: workbenchRoute, local: localDispatch || (() => { throw fail('本机资源暂不可用'); }) });
+  const resources = createDeviceResources({ registry, route: workbenchRoute, signSource, local: localDispatch || (() => { throw fail('本机资源暂不可用'); }) });
   const markFailure = (id, target, error) => {
     if (closed) return;
     try {
@@ -77,6 +78,53 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   const serverManagement = !publicOrigin && typeof manager?.sshTarget === 'function';
   const decorate = device => ({ ...device, ...(serverManagement ? manager.state(device.id) : undefined) });
   const devices = () => { const data = resources.devices(); return { ...data, devices: data.devices.map(decorate) }; };
+  const savePairing = async input => {
+    const device = await registry.upsert({ ...input, kind: 'computer' });
+    resources.invalidate(device.id);
+    const proxy = proxies.get(device.id);
+    if (proxy) { proxies.delete(device.id); await proxy.close(); }
+    return device;
+  };
+  const acceptReturn = async (offer, credential, authorize, name) => {
+    const target = await verifyReturnRoute(offer, credential);
+    if (!target) return 'unreachable';
+    authorize();
+    if (closed) throw fail('设备中心已关闭', 503);
+    await savePairing({ ...target, name, pairingNotice: null });
+    return 'mutual';
+  };
+  const releaseProof = pair => { if (pair.offer) pairing.clearProof(pair.offer.proof.id); };
+  const pairingNotice = direction => ({
+    'local-unavailable': '已单向连接。本机没有可供目标访问的连接地址。',
+    'remote-unavailable': '已单向连接。目标设备未支持双向配对。',
+    'source-unavailable': '已单向连接。本机的授权设备数已达上限。',
+    unreachable: '已单向连接。目标设备未能验证本机的连接路线。',
+  })[direction];
+  const finishPairing = async pair => {
+    const query = { requestId: pair.remote.requestId, pollToken: pair.remote.pollToken };
+    const { value } = await remoteJson(pair, '/link/api/pair/status', query);
+    if (value.status !== 'approved') {
+      if (value.status === 'rejected') releaseProof(pair);
+      return { status: value.status };
+    }
+    if (pair.pin && value.hostId && value.hostId !== 'sha256:' + pair.pin) throw fail('配对主机身份不一致');
+    const name = value.hostName || value.name || pair.name;
+    let direction = pair.offer ? 'remote-unavailable' : 'local-unavailable';
+    if (pair.offer && pair.remote.reciprocal === true && value.reciprocal === true) {
+      if (typeof value.hostId !== 'string' || value.hostId === pair.offer.hostId) throw fail('配对主机身份不一致');
+      if (pair.credential === undefined) pair.credential = await pairing.issue(name, pair.expiresAt);
+      const { value: result } = await remoteJson(pair, '/link/api/pair/status', { ...query, credential: pair.credential }, { timeout: 12_000 });
+      direction = result.direction;
+      if (!['mutual', 'unreachable', 'source-unavailable'].includes(direction)) throw fail('双向配对结果无效');
+      if (pair.credential) {
+        if (direction === 'mutual') await pairing.record(pair.credential.deviceId, direction);
+        else await pairing.revoke(pair.credential.deviceId);
+      }
+    }
+    const device = await savePairing({ url: pair.url, pin: pair.pin, token: value.token, routes: value.routes, hostId: value.hostId, authorizationId: value.deviceId, capabilities: value.capabilities, name, pairedEndpointFallback: !pair.pin, pairingNotice: pairingNotice(direction) ?? null });
+    releaseProof(pair);
+    return pair.result = { status: 'approved', device, direction };
+  };
   const idOf = input => input.deviceId || input.targetId || input.id;
   const api = async input => {
     if (closed) throw fail('设备中心已关闭', 503);
@@ -91,30 +139,36 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     if (input.action === 'resourceScope') return { scope: registry.scope() };
     if (input.action === 'setResourceScope') return { scope: await registry.setScope(input.scope) };
     if (input.action === 'list') { const data = registry.list(); return { ...data, devices: data.devices.map(decorate), relayJob: manager?.activeRelayJob?.() ?? null, capabilities: { ssh: Boolean(manager), serverManagement, sshAgent: serverManagement && await manager.agentAvailable(), serverTerminalResize: serverManagement, relayDeploy: Boolean(manager?.deployRelay) && typeof hostAdmin === 'function', hostAdmin: typeof hostAdmin === 'function' } }; }
-    const hostActions = { hostRelayTest: 'relay-test', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke', hostRenameDevice: 'rename-device', hostManagementDecide: 'management-decide' };
+    const hostActions = { hostRelayTest: 'relay-test', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke', hostRenameDevice: 'rename-device' };
     if (Object.hasOwn(hostActions, input.action)) {
       if (typeof hostAdmin !== 'function') throw fail('此客户端不支持本机连接管理，请更新应用');
-      const fields = { hostRelayTest: ['id', 'url', 'token'], hostRelayPoolConfigure: ['expected', 'operation', 'id', 'url', 'token', 'enabled'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl', 'name'], hostPairing: ['mode', 'address', 'relayId'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'], hostRenameDevice: ['id', 'name'], hostManagementDecide: ['operationId','allow'] }[input.action];
+      const fields = { hostRelayTest: ['id', 'url', 'token'], hostRelayPoolConfigure: ['expected', 'operation', 'id', 'url', 'token', 'enabled'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl', 'name'], hostPairing: ['mode', 'address', 'relayId'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'], hostRenameDevice: ['id', 'name'] }[input.action];
       return hostAdmin({ action: hostActions[input.action], ...Object.fromEntries(fields.filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]])) });
     }
     if (input.action === 'pair') {
-      for (const [key, item] of pending) if (item.expiresAt < Date.now()) pending.delete(key);
+      for (const [key, item] of pending) if (item.expiresAt < Date.now()) { releaseProof(item); pending.delete(key); }
       if (pending.size >= 16) throw fail('配对请求过多');
       const { target, code, name } = parsePairingUri(input.uri);
       const host = typeof hostAdmin === 'function' ? await hostAdmin({ action: 'status' }) : undefined;
-      const { value } = await remoteJson(target, '/link/api/pair', { code, name: localName?.() || host?.hostName || renamedLocal || `BenchGo-${randomBytes(3).toString('hex')}` });
+      const offer = pairing?.offer();
+      let value;
+      try {
+        ({ value } = await remoteJson(target, '/link/api/pair', { code, name: localName?.() || host?.hostName || renamedLocal || `BenchGo-${randomBytes(3).toString('hex')}`, ...(offer ? { returnOffer: offer } : {}) }));
+      } catch (error) { releaseProof({ offer }); throw error; }
       const requestId = randomUUID();
-      pending.set(requestId, { ...target, name, remote: value, expiresAt: Math.min(value.expiresAt || Date.now() + 300000, Date.now() + 300000) });
+      pending.set(requestId, { ...target, name, offer, remote: value, expiresAt: Math.min(value.expiresAt || Date.now() + 300000, Date.now() + 300000) });
       return { requestId, expiresAt: value.expiresAt };
     }
     if (input.action === 'pairStatus') {
-      const pair = pending.get(input.requestId); if (!pair || pair.expiresAt < Date.now()) { pending.delete(input.requestId); throw fail('配对已过期，请重新扫码'); }
-      if (pair.device) return { status: 'approved', device: pair.device };
-      const { value } = await remoteJson(pair, '/link/api/pair/status', { requestId: pair.remote.requestId, pollToken: pair.remote.pollToken });
-      if (value.status !== 'approved') return { status: value.status };
-      pair.device = await registry.upsert({ url: pair.url, pin: pair.pin, token: value.token, routes: value.routes, hostId: value.hostId, authorizationId: value.deviceId, capabilities: value.capabilities, kind: 'computer', name: value.hostName || value.name || pair.name });
-      resources.invalidate(pair.device.id);
-      return { status: 'approved', device: pair.device };
+      const pair = pending.get(input.requestId);
+      if (!pair || pair.expiresAt < Date.now()) {
+        if (pair) releaseProof(pair);
+        pending.delete(input.requestId);
+        throw fail('配对已过期，请重新扫码');
+      }
+      if (pair.result) return pair.result;
+      pair.poll ??= finishPairing(pair).finally(() => { pair.poll = undefined; });
+      return pair.poll;
     }
     if (input.action === 'select') {
       if (input.resource && (!['projects','sessions'].includes(input.resource.kind) || typeof input.resource.resourceId !== 'string' || !input.resource.resourceId || input.resource.resourceId.length > 200)) throw fail('资源引用无效');
@@ -123,10 +177,10 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       const connect = async () => {
         if (closed) throw fail('设备中心已关闭', 503);
         let savedTarget = registry.get(id);
-        let url, activeRoute, freshRoutes;
+        let url, activeRoute, freshInfo;
         try {
           const accept = async (target, route) => {
-              const routes = savedTarget.kind === 'computer' && route?.kind !== 'ssh' ? await readDeviceRoutes(target) : undefined;
+              const info = savedTarget.kind === 'computer' && route?.kind !== 'ssh' ? await readDeviceInfo(target) : undefined;
               const previous = proxies.get(id), routeKey = `${target.url}|${target.pin || ''}`;
               let proxy = previous?.routeKey === routeKey ? previous : undefined;
               const published = !proxy && publicOrigin ? registerProxy() : null;
@@ -140,7 +194,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
                   await previous?.close();
                 }
                 activeRoute = route ?? { kind: 'direct' };
-                freshRoutes = routes;
+                freshInfo = info;
               } catch (error) {
                 if (proxy !== previous) await proxy?.close();
                 published?.remove();
@@ -151,7 +205,12 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
             onHealth: (route, health, details) => registry.markRouteHealth(id, route.relayId || route.url, health, { ...details, lastError: details.lastError?.slice(0, 200) }),
             accept,
           });
-          if (freshRoutes) await registry.updateRoutes(id, savedTarget, freshRoutes);
+          if (freshInfo?.hostId && freshInfo.authorizationId && (!savedTarget.hostId || !savedTarget.authorizationId)) {
+            const { hostId, authorizationId } = freshInfo;
+            await registry.updateIdentity(id, savedTarget, { hostId, authorizationId });
+            resources.invalidate(id);
+          }
+          if (freshInfo?.routes) await registry.updateRoutes(id, savedTarget, freshInfo.routes);
           registry.markRoute(id, activeRoute); registry.mark(id, 'online');
           return { device: decorate(await registry.select(id)), url, ...(input.resource ? { resource: { deviceId: id, kind: input.resource.kind, resourceId: input.resource.resourceId } } : {}) };
         } catch (error) {
@@ -187,9 +246,8 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     if (input.action === 'sshConnect') {
       if (input.deviceId) {
         if (!serverManagement) throw fail('请在本机设备中心补绑 SSH', 403);
-        const device = registry.get(input.deviceId);
-        if (!/^sha256:[A-Za-z0-9+/]{43}=$/.test(device.hostId || '')) throw fail('此设备尚无可核验的实例身份，请先重新配对');
-        return manager.connect({ ...input, device });
+        await resources.resolveDeviceIdentity({ deviceId: input.deviceId, signal: input.signal });
+        return manager.connect({ ...input, device: registry.get(input.deviceId) });
       }
       return manager.connect({ ...input, device: undefined });
     }
@@ -249,7 +307,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   origin = 'http://127.0.0.1:' + server.address().port;
   return {
-    origin, api, ...resources, devices,
+    origin, api, ...resources, devices, acceptReturn,
     sshTarget: input => manager.sshTarget(input),
     sshCommand: input => manager.sshCommand(input),
     select(deviceId, parentOrigin, resource) { if (parentOrigin) parents.add(parentOrigin); return api({ action: 'select', deviceId, resource }); },

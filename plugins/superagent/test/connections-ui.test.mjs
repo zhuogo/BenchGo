@@ -59,6 +59,22 @@ test('status polling preserves drafts and ignores results after cleanup', async 
   assert.equal(h.timers.size, 0);
 });
 
+test('personal channel sources can be added individually without saving other fields', async () => {
+  const h = harness();
+  h.state[0][0].capabilities = { personalScope: true, groups: true };
+  h.state[0][0].recentSources = [{ actorId: 'User:Case/X', groupId: 'Room:Y' }];
+  h.state[0][0].fields.push({ key: 'chatIds', type: 'list', advanced: true });
+  h.render().find(node => node.type === 'button' && node.children.includes('加入账号名单')).props.onClick();
+  assert.equal(h.state[3].chatIds, undefined);
+  h.render().find(node => node.type === 'button' && node.children.includes('加入群名单')).props.onClick();
+  assert.equal(h.state[3].ownerIds, 'Owner:X\nUser:Case/X');
+  assert.equal(h.state[3].chatIds, 'Room:Y');
+  assert.equal(h.calls.length, 0);
+  await h.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  const save = h.calls.find(call => call.op === 'connectionConfigure');
+  assert.deepEqual(JSON.parse(JSON.stringify(save.input.patch)), { ownerIds: ['Owner:X', 'User:Case/X'], chatIds: ['Room:Y'] });
+});
+
 test('hidden connection view does not poll and a failed status refresh dims saved availability without replacing drafts', async () => {
   const hidden = harness();
   hidden.render({ active: false }); hidden.effects.at(-1)();

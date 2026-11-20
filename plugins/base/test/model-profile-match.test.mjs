@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
-import { applyModelProfile, matchModelProfile, modelProfilePatch, withOffEffort } from '../shared/model-profile-match.mjs';
+import { applyModelProfile, matchModelProfile, modelProfilePatch } from '../shared/model-profile-match.mjs';
 
 const catalog = [
   { model_id: 'gpt-5.4', model_name: 'GPT-5.4', context: 1050000, max_output: 128000, input_modalities: [], thinking_levels: ['low', 'medium', 'high', 'xhigh'] },
@@ -35,7 +35,7 @@ test('profile facts fill only supported empty fields and preserve manual values'
   assert.deepEqual(modelProfilePatch(row, { reasoning: true }), {
     contextWindow: 1050000,
     maxTokens: 128000,
-    reasoningEfforts: { off: null, low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' },
+    reasoningEfforts: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' },
   });
   const manual = { id: 'gpt-5.4', contextWindow: 4000, compat: { supportsReasoningEffort: true } };
   const applied = applyModelProfile(manual, row, { reasoning: true });
@@ -46,10 +46,12 @@ test('profile facts fill only supported empty fields and preserve manual values'
   assert.equal(applyModelProfile({ id: 'gpt-image-2.5', input: ['text'] }, matchModelProfile('gpt-image-2.5', catalog)).matched, false);
 });
 
-test('reasoning is omitted unless requested and min maps to minimal', () => {
+test('reasoning is omitted unless requested, min maps to minimal and off must be declared', () => {
   const row = matchModelProfile('deepseek-v4.1-flash', catalog);
   assert.equal(modelProfilePatch(row).reasoningEfforts, undefined);
-  assert.deepEqual(modelProfilePatch(row, { reasoning: true }).reasoningEfforts, { off: null, minimal: 'min', high: 'high' });
+  const options = { reasoning: true };
+  assert.deepEqual(modelProfilePatch(row, options).reasoningEfforts, { minimal: 'min', high: 'high' });
+  assert.deepEqual(modelProfilePatch({ ...row, thinking_levels: ['off', ...row.thinking_levels] }, options).reasoningEfforts, { off: null, minimal: 'min', high: 'high' });
   assert.deepEqual(modelProfilePatch(row).input, ['text', 'image']);
 });
 
@@ -62,6 +64,12 @@ test('DeepSeek input defaults populate the adapter field without overriding user
   assert.equal(applyModelProfile(explicit, row, { inputField: 'inputModalities' }).model.inputModalities, explicit.inputModalities);
 });
 
+test('only text model profiles import conversation modalities and always include text', () => {
+  const fields = { input_modalities: ['image', 'pdf'], context: 8000 };
+  assert.deepEqual(modelProfilePatch({ ...fields, capabilities: ['image-generation'] }), { contextWindow: 8000 });
+  assert.deepEqual(modelProfilePatch({ ...fields, capabilities: ['responses'] }), { contextWindow: 8000, input: ['text', 'image'] });
+});
+
 const profileCode = transformSync(readFileSync(new URL('../client/model-profile.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
 function mountProfile(fetcher) {
   const refs = []; let cursor = 0, cleanup, timer, previousDeps;
@@ -70,7 +78,7 @@ function mountProfile(fetcher) {
     useEffect(effect, deps) { if (previousDeps && deps.every((value, at) => Object.is(value, previousDeps[at]))) return; cleanup?.(); previousDeps = deps; cleanup = effect(); },
   };
   const module = { exports: {} };
-  runInNewContext(profileCode, { module, exports: module.exports, AbortSignal, URL, document: { baseURI: 'http://localhost:4000/' }, fetch: fetcher, setTimeout: fn => { timer = fn; return 1; }, clearTimeout: () => { timer = null; }, require: id => id.endsWith('model-profile-match.mjs') ? { applyModelProfile, matchModelProfile, withOffEffort } : react });
+  runInNewContext(profileCode, { module, exports: module.exports, AbortSignal, URL, document: { baseURI: 'http://localhost:4000/' }, fetch: fetcher, setTimeout: fn => { timer = fn; return 1; }, clearTimeout: () => { timer = null; }, require: id => id.endsWith('model-profile-match.mjs') ? { applyModelProfile, matchModelProfile } : react });
   const discovered = new Map();
   return { discovered, resolve: models => module.exports.resolveModelProfiles(models, true, false, discovered), render(models, onChange, disabled = false, inherited = false) { cursor = 0; return module.exports.useModelProfiles(models, onChange, disabled, true, inherited, discovered); }, async flush() { const fn = timer; timer = null; await fn?.(); }, clean() { cleanup?.(); } };
 }
@@ -120,7 +128,7 @@ test('ordinary rerenders with cloned rows preserve pending enrichment', async ()
   await pending;
   assert.equal(result[0].contextWindow, 1050000);
   assert.equal(result[0].maxTokens, 128000);
-  assert.deepEqual(result[0].reasoningEfforts, { off: null, high: 'high' });
+  assert.deepEqual(result[0].reasoningEfforts, { high: 'high' });
   view.clean();
 });
 

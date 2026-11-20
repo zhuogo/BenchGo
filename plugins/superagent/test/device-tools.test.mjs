@@ -10,6 +10,7 @@ function fixture() {
   const model = { providerId: 'opaque/P', modelId: 'opaque:M', params: { maxTokens: 4096, temperature: 0.5 } };
   const catalog = { version: 2, available: true, hostId: 'sha256:B', models: [{ harness: 'official', ...model }], projects: [] };
   const link = { devices: async () => ({ devices: [{ id: 'B', hostId: 'sha256:B', authorizationId: 'paired-A' }] }),
+    resolveDeviceIdentity: async ({ deviceId }) => ({ id: deviceId, hostId: 'sha256:B', authorizationId: 'paired-A' }),
     resources: async input => ({ input }), callDevice: async input => { calls.push(input); return catalog; },
     deviceAction: async input => { calls.push(input); return { accepted: true }; } };
   const ctx = { get: name => name === 'benchgoLink' ? link : undefined,

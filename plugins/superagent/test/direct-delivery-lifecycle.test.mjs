@@ -7,14 +7,18 @@ import { DatabaseSync } from 'node:sqlite';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { taskReplySignal } from '../src/task-reply.mjs';
 import { createDirectReplyDelivery } from '../src/direct-reply-delivery.mjs';
+import { createUnifiedChannelIngress } from '../src/channel-ingress.mjs';
+import { replyWindowExpired } from '../src/channels/delivery-outcome.mjs';
 
 async function fixture(t, channel = 'feishu') {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-result-notice-'));
   let db = createAssistantOrchestrationStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
   const source = channel === 'desktop' ? { channel, sessionId: 'router', messageId: 'human' }
+    : channel === 'wecom' ? { channel, sourceType: 'group', accountId: 'bot', connectionId: channel, connectionRevision: 1,
+      conversationId: 'chat', chatId: 'chat', topicId: null, messageId: 'human', replyRequestId: 'req-original', mentioned: true }
     : { channel, sourceType: 'direct', appId: 'app', conversationId: 'chat', chatId: 'chat', messageId: 'human' };
-  const { trigger } = db.ingest({ dedupeKey: 'human', thread: { id: 'thread', source: { type: channel, id: 'router' } },
+  const { trigger } = db.ingest({ dedupeKey: 'human', thread: { id: 'thread', source: { type: channel, id: channel === 'wecom' ? 'thread' : 'router' } },
     source, actor: { kind: 'human', id: 'owner' }, content: 'original task', mode: 'direct', gate: { allowed: true, strength: 'explicit' } });
   const task = db.createTask({ threadId: 'thread', target: 'task', sourceTriggerIds: [trigger.id], mandate: { source } });
   db.createAssignment(task.id, { id: 'work' });
@@ -61,6 +65,86 @@ test('Router channel delivery uses the existing adapter and immutable public tex
   assert.equal(sends, 1);
   assert.equal(f.db.results(f.task.id)[0].reply.receipt.messageId, 'external');
   assert.equal(f.db.learningSources().items.length, 1);
+});
+
+test('an expired Router result waits durably and refreshes only the original owner reply anchor', async t => {
+  const f = await fixture(t, 'wecom');
+  const original = f.db.enqueueRouterReply(f.input);
+  const connection = { revision: 1, config: { enabled: true, botId: 'bot', ownerIds: ['owner', 'other-owner'], chatIds: ['chat', 'other-chat'] } };
+  const ingress = () => createUnifiedChannelIngress({ store: { orchestration: f.db, connections: { read: () => connection } } });
+  const receive = (messageId, { actor = 'owner', mentioned = true, scope = {} } = {}) => ingress().receive('wecom', {
+    channel: 'wecom', sourceType: 'group', threadId: 'thread', messageId, sourceKey: `wecom:bot:${messageId}`,
+    source: { ...f.source, messageId, replyRequestId: `req-${messageId}`, messageOccurredAt: '2026-11-20T01:02:03.000Z', ...scope },
+    actor: { kind: 'human', id: actor }, text: '新消息', mentioned,
+  });
+  const sends = [];
+  const shutdown = new AbortController();
+  const senderFor = () => createDirectReplyDelivery({ database: f.db, signal: shutdown.signal,
+    readPolicy: async () => ({ connections: { wecom: connection } }),
+    getAdapter: () => ({ send: async input => {
+      sends.push(input);
+      if (sends.length === 1) {
+        // The next message can persist while the old outbound receipt is pending.
+        await receive('concurrent');
+        throw replyWindowExpired('expired');
+      }
+      if (sends.length === 2) throw replyWindowExpired('expired again');
+      return { status: 'accepted', messageId: 'platform-receipt' };
+    } }) });
+  await senderFor().tick();
+  assert.equal(f.db.directReplies()[0].state, 'waiting_reply_window');
+  f.reopen();
+  const sender = senderFor();
+  await sender.tick();
+  assert.equal(sends[1].source.messageId, 'concurrent');
+  const replay = await receive('concurrent', { scope: { replyRequestId: 'req-replayed' } });
+  assert.equal(replay.duplicate, true);
+  connection.revision++;
+  assert.equal((await receive('concurrent')).ignored, true);
+  connection.revision--;
+  await receive('different-owner', { actor: 'other-owner' });
+  await receive('different-chat', { scope: { chatId: 'other-chat', conversationId: 'other-chat' } });
+  await receive('no-mention', { mentioned: false });
+  await sender.tick();
+  assert.equal(sends.length, 2);
+  await receive('fresh');
+  await sender.tick();
+  await sender.tick();
+  assert.equal(sends.length, 3);
+  assert.deepEqual(sends[2], { source: { ...f.source, messageId: 'fresh', replyRequestId: 'req-fresh', messageOccurredAt: '2026-11-20T01:02:03.000Z' },
+    text: original.text, idempotencyKey: `direct-reply:${original.id}` });
+  const [sent] = f.db.directReplies();
+  assert.deepEqual(sent.source, original.source);
+  assert.equal(sent.triggerId, original.triggerId);
+  assert.equal(sent.state, 'sent');
+  assert.equal(f.db.results(f.task.id)[0].reply.receipt.messageId, 'platform-receipt');
+  assert.equal(f.db.assignments(f.task.id)[0].attempts, 1);
+});
+
+test('a matching fresh anchor cannot revive a delivery after its connection revision was revoked', async t => {
+  const f = await fixture(t, 'wecom');
+  f.db.enqueueRouterReply(f.input);
+  const connection = { revision: 1, config: { enabled: true, botId: 'bot', ownerIds: ['owner'], chatIds: ['chat'] } };
+  const ingress = createUnifiedChannelIngress({ store: { orchestration: f.db, connections: { read: () => connection } } });
+  const receive = messageId => ingress.receive('wecom', { channel: 'wecom', sourceType: 'group', threadId: 'thread', messageId,
+    sourceKey: `wecom:bot:${messageId}`, source: { ...f.source, messageId }, actor: { kind: 'human', id: 'owner' }, text: '新消息', mentioned: true });
+  let sends = 0;
+  const sender = createDirectReplyDelivery({ database: f.db, signal: new AbortController().signal,
+    readPolicy: async () => ({ connections: { wecom: connection } }),
+    getAdapter: () => ({ send: async () => { sends++; throw replyWindowExpired('expired'); } }) });
+  await sender.tick();
+  connection.revision++;
+  await receive('different-revision');
+  await sender.tick();
+  assert.equal(f.db.directReplies()[0].state, 'waiting_reply_window');
+  assert.equal(sends, 1);
+  // A previously persisted matching anchor is insufficient under current policy.
+  connection.revision--;
+  await receive('same-revision-before-revoke');
+  connection.revision++;
+  await sender.tick();
+  assert.equal(f.db.directReplies()[0].state, 'suppressed');
+  assert.equal(sends, 1);
 });
 
 test('changed source or result version cannot enqueue a Router transport', async t => {

@@ -105,6 +105,19 @@ test('service and runtime-store reopen recover authorized pending archival witho
   assert.equal(f.notices.length, 1);
 });
 
+test('a pending archive saved in the original format still runs after restart', async t => {
+  const f = await fixture(t); f.task('legacy');
+  const ledger = f.database.taskCleanupContinuations, prepare = ledger.prepare;
+  t.mock.method(ledger, 'prepare', input => prepare({ ...input, items: input.items.map(item => ({
+    ...item, executionStamp: f.orchestration.taskCleanupExecutionStamp(item.id, { excludeTriggerId: input.triggerId, legacy: true }),
+  })) }));
+  const admitted = f.start(['legacy']);
+  f.reopen();
+  await f.worker.tick();
+  assert.equal(f.worker.pending({ operationId: admitted.operationId }).items[0].status, 'completed');
+  assert.equal(f.orchestration.getTask('legacy').archived, true);
+});
+
 test('explicit cancellation narrows the pending subset and never resumes already stopped work', async t => {
   const f = await fixture(t); f.task('one'); f.task('two');
   const first = f.executor('one'), second = f.executor('two');

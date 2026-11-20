@@ -64,6 +64,16 @@ test('an admitted user identity bridges a slow history refresh without borrowing
   assert.equal(run([], { chat, history: admitted }).requestId, 'human');
 });
 
+test('manual continuation streams under the original request until newer human input arrives', () => {
+  const activeReply = { requestId: 'human', turn: 2, retrySeq: 8 };
+  const chat = { timeline: { turnOrder: [2], turns: new Map([[2, { turn: 2, start: { seq: 7 } }]]) },
+    legacy: { nodes: [{ kind: 'turn-trigger', seq: 8 }], partial: { turn: 2, step: 1, blocks: [{ kind: 'text', text: '继续回复' }] } } };
+  const continued = { ...history, activeReply };
+  assert.equal(rows(chat, { history: continued })[0].id, 'reply:human:2:1');
+  chat.legacy.nodes.push({ kind: 'steering', seq: 9, source: { kind: 'user', rpcId: 'new-user' } });
+  assert.deepEqual(rows(chat, { history: continued }), []);
+});
+
 test('explicit assistant_reply stream supersedes ordinary public progress in the same turn', () => {
   const args = PartialArguments.fromObject({ text: '正式正文' });
   const chat = { legacy: { runningCalls: [call(args)], partial: { turn: 2, blocks: [{ kind: 'text', text: '可见进度' }] } } };

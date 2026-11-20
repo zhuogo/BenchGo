@@ -27,6 +27,8 @@ jobs:
       plugin: ${{ steps.plan.outputs.plugin }}
       windows: ${{ steps.plan.outputs.windows }}
       android: ${{ steps.plan.outputs.android }}
+      macos: ${{ steps.plan.outputs.macos }}
+      linux: ${{ steps.plan.outputs.linux }}
       sha: ${{ steps.plan.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +44,7 @@ jobs:
           RELEASE_REF: ${{ github.ref }}
         run: test "$RELEASE_REF" = refs/heads/main
       - name: Verify release planner
-        run: node --test scripts/release/release.test.mjs scripts/release/downloads.test.mjs scripts/release/publish-web-catalog.test.mjs scripts/release/publish-app-channel.test.mjs
+        run: node --test scripts/release/release.test.mjs scripts/release/downloads.test.mjs scripts/release/publish-web-catalog.test.mjs scripts/release/publish-app-channel.test.mjs scripts/release/publish-recovery.test.mjs
       - name: Plan only changed components against the last signed unified release
         id: plan
         env:
@@ -99,7 +101,7 @@ jobs:
     secrets: inherit
   macos:
     needs: plan
-    if: inputs.publish
+    if: inputs.publish && needs.plan.outputs.macos == 'true'
     uses: ./.github/workflows/macos-package.yml
     with:
       source_sha: ${{ needs.plan.outputs.sha }}
@@ -107,7 +109,7 @@ jobs:
     secrets: inherit
   linux:
     needs: plan
-    if: inputs.publish
+    if: inputs.publish && needs.plan.outputs.linux == 'true'
     uses: ./.github/workflows/linux-package.yml
     with:
       source_sha: ${{ needs.plan.outputs.sha }}
@@ -117,10 +119,11 @@ jobs:
     needs: [plan, plugin, windows, android, macos, linux]
     if: >-
       always() && inputs.publish && needs.plan.result == 'success' &&
-      (needs.plugin.result == 'success' || needs.plugin.result == 'skipped') &&
-      (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
-      (needs.android.result == 'success' || needs.android.result == 'skipped') &&
-      needs.macos.result == 'success' && needs.linux.result == 'success'
+      needs.plugin.result == (needs.plan.outputs.plugin == 'true' && 'success' || 'skipped') &&
+      needs.windows.result == (needs.plan.outputs.windows == 'true' && 'success' || 'skipped') &&
+      needs.android.result == (needs.plan.outputs.android == 'true' && 'success' || 'skipped') &&
+      needs.macos.result == (needs.plan.outputs.macos == 'true' && 'success' || 'skipped') &&
+      needs.linux.result == (needs.plan.outputs.linux == 'true' && 'success' || 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -143,6 +146,7 @@ jobs:
           name: benchgo-release-plan
           path: artifacts/release-plan
       - name: Download only verified component artifacts from this run
+        if: needs.plan.outputs.plugin == 'true' || needs.plan.outputs.windows == 'true' || needs.plan.outputs.android == 'true' || needs.plan.outputs.macos == 'true' || needs.plan.outputs.linux == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: benchgo-*

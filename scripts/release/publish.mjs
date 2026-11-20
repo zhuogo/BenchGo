@@ -4,12 +4,12 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
+import { isDeepStrictEqual, parseArgs } from 'node:util';
 import { compareVersions, resolveUpdateUrl, validateReleaseManifest } from '../../plugins/base/shared/update-feed.mjs';
-import { github, githubJson, assetBytes, findPreviousRelease, readSignedRelease, releaseKind, sha256 } from './github.mjs';
+import { github, githubJson, assetBytes, findPreviousRelease, readSignedDownloads, readSignedRelease, releaseKind, sha256 } from './github.mjs';
 import { fileDigest } from './record-artifact.mjs';
 import { immutableArtifact } from './assemble.mjs';
-import { verifyDownloads } from './downloads.mjs';
+import { downloadPlatforms, platformDownloadEntries, verifyDownloads } from './downloads.mjs';
 import { publishWebCatalog } from './publish-web-catalog.mjs';
 import { verifyRecoveryPublication } from './recover-release.mjs';
 
@@ -228,7 +228,19 @@ export async function publishRelease({ plan, directory, recovery }) {
   if (manifest.releaseVersion !== plan.releaseVersion || manifest.sourceSha !== plan.sourceSha || source.kind !== releaseKind
     || source.sourceSha !== plan.sourceSha || source.manifestSha256 !== sha256(raw) || source.releaseVersion !== plan.releaseVersion) throw new Error('Release metadata is not bound to the planned source');
   const downloads = await verifyDownloads({ directory: output, plan, publicKey });
-  validatePublishBaseline({ plan, current: await findPreviousRelease() });
+  const current = await findPreviousRelease();
+  validatePublishBaseline({ plan, current });
+  const reused = downloadPlatforms.filter(target => plan.builds[target === 'linux-server' ? 'linux' : 'macos'] === false);
+  if (reused.length) {
+    const previous = plan.previous;
+    if (!previous) throw new Error('Reused downloads require a previous signed release');
+    const baseline = current?.tag === previous.tag ? current.downloads
+      : await readSignedDownloads(await getRelease(previous.tag), { ...previous, publicKey });
+    for (const target of reused) {
+      const entries = platformDownloadEntries(baseline, target);
+      if (!entries.length || !isDeepStrictEqual(platformDownloadEntries(downloads, target), entries)) throw new Error(`Reused ${target} assets differ from the signed baseline`);
+    }
+  }
   const channelRelease = await getRelease('plugin-updates');
   const channel = await readChannelForPublication(channelRelease, plan, raw, signatureBytes, publicKey);
   validateChannelAdvance(channel, manifest);

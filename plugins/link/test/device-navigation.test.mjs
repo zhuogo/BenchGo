@@ -62,6 +62,24 @@ test('cloud launcher opens the owner hosted centre and never a browser loopback'
   assert.match(textOf(invalid.tree), /设备中心地址无效/);
 });
 
+test('wide and compact paired workbenches keep the device center on their own authenticated path', async () => {
+  for (const compact of [false, true]) {
+    const url = compact ? 'https://relay.example/s/test/link/workbench/' : 'https://link.example/link/workbench/';
+    const view = fixture({ url, compact, globals: { __DSH_LINK_WORKBENCH__: true, matchMedia: () => ({ matches: compact }) } });
+    await view.settle();
+    view.nodes().find(node => node.props['aria-label'] === '设备中心').props.onClick(); await view.settle();
+    const frame = view.nodes().find(node => node.type === 'iframe');
+    assert.equal(frame.props.src, `${url}device-center/?theme=${compact ? 'dark' : 'light'}`);
+    assert.equal(view.requests.length, 0);
+    const source = frame.props.ref.current.contentWindow, origin = new URL(url).origin;
+    view.host.emit('message', { source, origin, data: { type: 'dsh-devices:select', deviceId: 'other-device' } });
+    assert.equal(view.selected.length, 0);
+    view.host.emit('message', { source, origin, data: { type: 'dsh-devices:return-local' } }); await view.settle();
+    assert.equal(view.nodes().find(node => node.type === 'dialog').props.ref.current.open, false);
+    view.unmount();
+  }
+});
+
 test('Desktop launcher stays available and HTML 403 preserves status and API path', async () => {
   const view = fixture({ globals: { __DSH_TRANSPORT__: { ownsHost: true } }, response: () => new Response('<html>Forbidden</html>', { status: 403 }) }); await view.settle();
   await view.nodes().find(node => node.props['aria-label'] === '设备中心').props.onClick(); await view.settle();

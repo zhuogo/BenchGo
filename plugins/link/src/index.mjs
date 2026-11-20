@@ -2,7 +2,8 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { openStore, text, PAIRED_DEVICE_CAPABILITIES } from './pairing/store.mjs';
-import { loadIdentity } from './transport/tls.mjs';
+import { PAIR_RETURN_VERSION, validReturnTarget } from './pairing/return.mjs';
+import { loadIdentity, signExecutionSource, verifyExecutionSource } from './transport/tls.mjs';
 import { listen, connectionAddresses, authority, validateConfig } from './transport/server.mjs';
 import { createSessionAdapter } from './session/adapter.mjs';
 import { createNativeAdapter } from './session/native.mjs';
@@ -29,8 +30,15 @@ async function mountLinkHost(ctx, config) {
   const directory = config.directory ?? join(ctx.get('benchgo').directory, 'link');
   const store = await openStore(directory);
   const managementOperations = store.state.managementOperations ??= [];
-  for (const operation of managementOperations) if (['applying','approved'].includes(operation.state)) operation.state = 'unknown';
-  const managementView = operation => ({ id: operation.id, operationId: operation.id, requestId: operation.requestId, deviceId: operation.deviceId, deviceName: store.state.devices.find(row => row.id === operation.deviceId)?.name || operation.deviceId, namespace: operation.namespace, expected: operation.expected, ops: operation.ops, createdAt: operation.createdAt, expiresAt: operation.expiresAt, state: operation.state === 'pending' && operation.expiresAt < Date.now() ? 'expired' : operation.state, ...(operation.result ? { result: operation.result } : {}), ...(operation.error ? { error: operation.error } : {}) });
+  for (const operation of managementOperations) {
+    if (['applying', 'approved'].includes(operation.state)) operation.state = 'unknown';
+    if (operation.state === 'pending') operation.state = 'expired';
+  }
+  const managementFlights = new Map();
+  const managementView = ({ id, requestId, deviceId, namespace, expected, ops, createdAt, state, result, error }) => ({
+    id, operationId: id, requestId, deviceId, namespace, expected, ops, createdAt, state,
+    ...(result ? { result } : {}), ...(error ? { error } : {}),
+  });
   const legacyRelay = store.state.relay;
   if (!Array.isArray(store.state.relayPool) && legacyRelay?.url) {
     store.state.relayPool = [{ id: 'primary', url: legacyRelay.url, token: legacyRelay.token || env.DSH_LINK_RELAY_TOKEN, priority: 0, enabled: legacyRelay.enabled !== false }];
@@ -70,38 +78,23 @@ async function mountLinkHost(ctx, config) {
       if (input.version !== 2 || !['catalog','submit','get','input','control','ack'].includes(input.operation)) throw Object.assign(new Error('不支持的执行协议版本或操作'), { status: 422, code: 'UNSUPPORTED_EXECUTION_PROTOCOL' });
       const execution = ctx.get?.('benchgoExecution');
       if (typeof execution?.dispatch !== 'function') throw Object.assign(new Error('目标执行服务尚不可用'), { status: 422, code: 'UNSUPPORTED' });
-      const { principal, ...safe } = input;
-      const value = await execution.dispatch(safe, { hostId: 'sha256:' + identity.pin, principal: { kind: 'device', deviceId: device.id, capabilities: [...PAIRED_DEVICE_CAPABILITIES] } });
-      return { ...value, hostId: 'sha256:' + identity.pin, authorizationId: device.id };
+      const { principal, sourceProof, ...safe } = input;
+      const hostId = 'sha256:' + identity.pin;
+      const verifiedSourceHostId = safe.operation === 'submit' && sourceProof !== undefined
+        ? verifyExecutionSource(sourceProof, hostId, device.id, safe) : undefined;
+      const value = await execution.dispatch(safe, { hostId, verifiedSourceHostId, principal: { kind: 'device', deviceId: device.id, capabilities: [...PAIRED_DEVICE_CAPABILITIES] } });
+      return { ...value, hostId, authorizationId: device.id, ...(safe.operation === 'catalog' ? { executionSourceProof: 1 } : {}) };
     }
     if (input?.action === 'management') {
       if (input.operation === 'status') { const value = status(); return { enabled: value.enabled, hostName: value.hostName, error: value.error, relay: value.relay }; }
       if (input.operation === 'relay-test') return admin({ action: 'relay-test', id: input.id });
       if (input.operation === 'settings-read' && [LINK_TRANSPORT_NAMESPACE, LINK_RELAY_NAMESPACE].includes(input.namespace)) return configurationSnapshot(input.namespace);
       if (input.operation === 'operation') {
-        const operation = managementOperations.find(row => row.id === input.operationId && row.deviceId === device.id);
+        const operation = managementOperations.find(row => row.deviceId === device.id && (input.operationId ? row.id === input.operationId : row.requestId === input.requestId));
         if (!operation) throw Object.assign(new Error('管理操作不存在'), { status: 404, code: 'NOT_FOUND' });
         return managementView(operation);
       }
-      if (input.operation === 'settings-prepare') {
-        const requestId = text(input.requestId, '请求 ID');
-        if (input.namespace !== LINK_RELAY_NAMESPACE || !Array.isArray(input.ops) || !input.ops.length || input.ops.length > 20 || input.ops.some(op => op.op !== 'set' || op.path?.length !== 3 || op.path[0] !== 'nodes' || !/^\d+$/.test(op.path[1]) || !['priority','enabled'].includes(op.path[2]) || (op.path[2] === 'priority' ? !Number.isSafeInteger(op.value) || op.value < 0 || op.value > 1000000 : typeof op.value !== 'boolean'))) throw Object.assign(new Error('远端仅支持已配置中继优先级与启停的精确修改'), { status: 422, code: 'UNSUPPORTED' });
-        const ops = input.ops.map(op => ({ op: 'set', path: [...op.path], value: op.value }));
-        const expected = { fingerprint: input.expected?.fingerprint };
-        const prior = managementOperations.find(row => row.deviceId === device.id && row.requestId === requestId);
-        const fingerprint = settingsFingerprint({ namespace: input.namespace, expected, ops });
-        if (prior) { if (prior.fingerprint !== fingerprint) throw Object.assign(new Error('请求 ID 已用于其他配置修改'), { status: 409, code: 'SETTINGS_IDEMPOTENCY_CONFLICT' }); return managementView(prior); }
-        assertSettingsExpected(configurationSnapshot(input.namespace), expected);
-        // Retain bounded receipts without letting completed history exhaust the pending queue.
-        if (managementOperations.length >= 128) {
-          const retired = managementOperations.findIndex(row => ['applied', 'rejected', 'revoked', 'failed', 'expired'].includes(row.state) || (row.state === 'pending' && row.expiresAt <= Date.now()));
-          if (retired < 0) throw Object.assign(new Error('未决管理操作已达上限，请先在设备中心处理'), { status: 429, code: 'CAPACITY_REACHED' });
-          managementOperations.splice(retired, 1);
-        }
-        const operation = { id: 'management-' + randomUUID(), requestId, deviceId: device.id, namespace: input.namespace, expected, ops, fingerprint, createdAt: Date.now(), expiresAt: Date.now() + 1200000, state: 'pending' };
-        managementOperations.push(operation); await store.persist();
-        return { ...managementView(operation), requiresConfirmation: true };
-      }
+      if (input.operation === 'settings-apply') return applyRemoteSettings(input, device);
       throw Object.assign(new Error('不支持的管理操作'), { status: 422, code: 'UNSUPPORTED' });
     }
     if (input?.action === 'resources') {
@@ -110,7 +103,7 @@ async function mountLinkHost(ctx, config) {
         { id: 'resources', available: true, operations: ['projects','sessions','recent','models','capabilities'] },
         ...sessionActions.capabilities(device),
         { id: 'execution', version: 2, available: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function', reason: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function' ? null : '目标执行服务尚不可用', operations: ['catalog','submit','get','input','control','ack'] },
-        { id: 'management', available: true, reason: null, operations: ['status','relay-test','settings-read','settings-prepare','operation'] },
+        { id: 'management', available: true, reason: null, operations: ['status','relay-test','settings-read','settings-apply','operation'] },
         { id: 'reverse', available: false, reason: '反向协作需要另一设备明确配对并建立回程目录', operations: [] },
       ];
       let state, recent;
@@ -183,16 +176,18 @@ async function mountLinkHost(ctx, config) {
       relayNodes.set(id, runtime);
     }
   };
+  const connectionRoutes = () => {
+    const relays = rankedRelays().filter(node => node.enabled && node.url && node.token)
+      .map(({ url, id, priority }) => ({ url, kind: 'relay', relayId: id, priority }));
+    const direct = connectionAddresses(store.state.host).filter(address => !['localhost', '::1'].includes(address) && !/^127\./.test(address))
+      .slice(0, 16 - relays.length).map(address => ({ url: `https://${authority(address, listener?.port ?? store.state.port)}`, pin: identity.pin, kind: 'direct' }));
+    return [...direct, ...relays];
+  };
   const start = () => hostScope(ctx)(async () => {
     identity ??= await loadIdentity(directory);
-    workbench = createWorkbench(ctx, store, { webRoot, workbenchRoot: config.workbenchRoot });
-    listener = await listen({ identity, config: { ...store.state }, webRoot, store, dispatch, workbench, runRequest: operation => hostScope(ctx)(operation), routes: () => {
-      const relays = rankedRelays().filter(node => node.enabled && node.url && node.token)
-        .map(({ url, id, priority }) => ({ url, kind: 'relay', relayId: id, priority }));
-      const direct = connectionAddresses(store.state.host).filter(address => !['localhost', '::1'].includes(address) && !/^127\./.test(address))
-        .slice(0, 16 - relays.length).map(address => ({ url: `https://${authority(address, listener?.port ?? store.state.port)}`, pin: identity.pin, kind: 'direct' }));
-      return [...direct, ...relays];
-    }, onError: e => { error = e.message; } });
+    workbench = createWorkbench(ctx, store, { webRoot, workbenchRoot: config.workbenchRoot, deviceCenter: pairedDeviceCenter });
+    listener = await listen({ identity, config: { ...store.state }, webRoot, store, dispatch, workbench, runRequest: operation => hostScope(ctx)(operation), routes: connectionRoutes,
+      registerReturn: async (...args) => (await getCenter()).acceptReturn(...args), onError: e => { error = e.message; } });
     error = '';
     await connectRelays();
   });
@@ -209,7 +204,7 @@ async function mountLinkHost(ctx, config) {
     enabled: Boolean(listener), host: store.state.host, port: listener?.port ?? store.state.port, publicUrl: store.state.publicUrl,
     hostName: store.state.name, hostId: 'sha256:' + identity.pin, scopedPairing: true, error: error || null,
     addresses: connectionAddresses(store.state.host).map(a => `https://${authority(a, listener?.port ?? store.state.port)}`),
-    devices: store.state.devices.map(({ tokenHash, alias, ...device }) => ({ ...device, capabilities: [...PAIRED_DEVICE_CAPABILITIES], name: alias || device.name, ...(alias ? { originalName: device.name } : {}) })), pending: store.pending(), pendingManagement: managementOperations.filter(row => row.state === 'pending' && row.expiresAt > Date.now()).map(managementView),
+    devices: store.state.devices.map(({ tokenHash, alias, pairingReturnExpiresAt, ...device }) => ({ ...device, ...(pairingReturnExpiresAt && pairingReturnExpiresAt <= Date.now() ? { pairingReturn: 'unreachable' } : {}), capabilities: [...PAIRED_DEVICE_CAPABILITIES], name: alias || device.name, ...(alias ? { originalName: device.name } : {}) })), pending: store.pending(),
     relay: { configured: Boolean(nodes.length), enabled: Boolean(preferred), url: selectedRelay?.url || preferred?.url || nodes[0]?.url || '',
       preferredId: preferred?.id ?? null, selectedId: selectedRelay?.id ?? null, fingerprint: configurationSnapshot(LINK_RELAY_NAMESPACE).fingerprint,
       connected: Boolean(selectedRelay), lastError: selectedRelay ? null : nodes.find(node => node.enabled)?.lastError ?? null, nodes },
@@ -281,34 +276,96 @@ async function mountLinkHost(ctx, config) {
       ? { state: 'pending', reason: '中继配置已保存，连接状态尚未就绪，请查看设备页面实时状态' }
       : { state: 'applied' } } : status();
   });
-  const admin = async input => {
+  const applyRemoteSettings = (input, device, centerFingerprint) => {
+    const requestId = text(input.requestId, '请求 ID');
+    if (input.namespace !== LINK_RELAY_NAMESPACE || !Array.isArray(input.ops) || !input.ops.length || input.ops.length > 20 || input.ops.some(op =>
+      op?.op !== 'set' || !Array.isArray(op.path) || op.path.length !== 3 || op.path[0] !== 'nodes'
+      || typeof op.path[1] !== 'string' || !/^(0|[1-9]\d*)$/.test(op.path[1])
+      || !['priority', 'enabled'].includes(op.path[2])
+      || (op.path[2] === 'priority' ? !Number.isSafeInteger(op.value) || op.value < 0 || op.value > 1000000 : typeof op.value !== 'boolean')
+    )) throw Object.assign(new Error('远端仅支持已配置中继优先级与启停的精确修改'), { status: 422, code: 'UNSUPPORTED' });
+    const ops = input.ops.map(({ path, value }) => ({ op: 'set', path: [...path], value }));
+    const expected = { fingerprint: input.expected?.fingerprint };
+    const namespace = LINK_RELAY_NAMESPACE;
+    const fingerprint = settingsFingerprint({ namespace, expected, ops });
+    const prior = managementOperations.find(row => row.deviceId === device.id && row.requestId === requestId);
+    if (prior) {
+      if (prior.fingerprint !== fingerprint) throw Object.assign(new Error('请求 ID 已用于其他配置修改'), { status: 409, code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
+      return managementFlights.get(prior.id) ?? managementView(prior);
+    }
+    if (typeof expected.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(expected.fingerprint)) {
+      throw Object.assign(new Error('配置已变化，请重新读取'), { code: 'REVISION_CONFLICT', status: 409 });
+    }
+    if (managementOperations.length >= 128) {
+      const retired = managementOperations.findIndex(row => row.state !== 'applying' && row.state !== 'unknown' && !managementFlights.has(row.id));
+      if (retired < 0) throw Object.assign(new Error('当前管理操作已达上限'), { status: 429, code: 'CAPACITY_REACHED' });
+      managementOperations.splice(retired, 1);
+    }
+    const operation = { id: 'management-' + randomUUID(), requestId, deviceId: device.id, namespace, expected, ops, fingerprint, createdAt: Date.now(), state: 'applying' };
+    if (centerFingerprint) operation.centerFingerprint = centerFingerprint;
+    managementOperations.push(operation);
+    const task = (async () => {
+      try { await store.persist(); } catch (reason) {
+        managementOperations.splice(managementOperations.indexOf(operation), 1);
+        throw reason;
+      }
+      try {
+        operation.result = await configureRelayPool(undefined, { expected, ops, authorize: () => authorizePairedDevice(device) });
+        operation.state = 'applied';
+      } catch (reason) {
+        operation.state = 'failed';
+        operation.error = { code: reason.code || 'APPLY_FAILED', message: reason.message };
+      }
+      await store.persist();
+      return managementView(operation);
+    })().finally(() => managementFlights.delete(operation.id));
+    managementFlights.set(operation.id, task);
+    return task;
+  };
+  const pairedDeviceCenter = async (input, device) => {
+    authorizePairedDevice(device);
+    if (input.action === 'list') {
+      const devices = [{ id: 'local', kind: 'local', name: store.state.name }, ...store.state.devices.map(({ id, name, alias, deviceType, lastSeenAt }) => ({
+        id, name: alias || name, kind: 'paired', deviceType, lastSeenAt,
+      }))];
+      return { devices, activeId: 'local', capabilities: { relayManagement: true } };
+    }
+    if (input.action === 'hostStatus') return dispatch({ action: 'management', operation: 'status' }, device);
+    if (input.action === 'hostRelayTest') return dispatch({ action: 'management', operation: 'relay-test', id: text(input.id, '中继 ID', 128) }, device);
+    if (input.action === 'hostRelayOperation') return dispatch({ action: 'management', operation: 'operation', requestId: text(input.requestId, '请求 ID') }, device);
+    if (input.action === 'hostRelayPoolConfigure') {
+      const { id, operation, expected, enabled } = input;
+      const requestId = text(input.requestId, '请求 ID');
+      const centerFingerprint = settingsFingerprint({ id, operation, expected, enabled });
+      if (input.url !== undefined || input.token !== undefined || !(operation === 'update' && typeof enabled === 'boolean' || operation === 'prefer')) {
+        throw Object.assign(new Error('此入口仅支持已有中继的启停与首选设置'), { status: 422, code: 'UNSUPPORTED' });
+      }
+      const previous = managementOperations.find(row => row.deviceId === device.id && row.requestId === requestId);
+      if (previous) {
+        if (previous.centerFingerprint !== centerFingerprint) {
+          throw Object.assign(new Error('请求 ID 已用于其他配置修改'), { status: 409, code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
+        }
+        return managementFlights.get(previous.id) ?? managementView(previous);
+      }
+      const snapshot = configurationSnapshot(LINK_RELAY_NAMESPACE);
+      assertSettingsExpected(snapshot, expected);
+      const { nodes } = snapshot.value;
+      const edited = editLinkRelayPool(nodes, { id, operation, enabled });
+      const ops = nodes.flatMap((node, index) => {
+        const next = edited.find(row => row.id === node.id);
+        const key = operation === 'prefer' ? 'priority' : 'enabled';
+        if (node[key] === next[key] && node.id !== id) return [];
+        return [{ op: 'set', path: ['nodes', String(index), key], value: next[key] }];
+      });
+      return applyRemoteSettings({ namespace: LINK_RELAY_NAMESPACE, expected, ops, requestId }, device, centerFingerprint);
+    }
+    throw Object.assign(new Error('此设备操作需要在目标设备本机完成'), { status: 403, code: 'OWNER_REQUIRED' });
+  };
+  const admin = async (input, pairingCenter = getCenter) => {
     if (closed) throw new Error('Link 已关闭');
     const action = text(input?.action, '操作');
     if (action === 'status') return input.pairingCode === undefined ? status() : { pending: store.pending(input.pairingCode) };
     if (action === 'pairing-probe') return store.beginProbe();
-    if (action === 'management-decide') {
-      const decision = await serializeChange(async () => {
-      if (typeof input.allow !== 'boolean') throw new Error('需要明确批准或拒绝');
-      const operation = managementOperations.find(row => row.id === input.operationId);
-      if (!operation) throw Object.assign(new Error('管理操作不存在'), { status: 404, code: 'NOT_FOUND' });
-      if (operation.state !== 'pending') return { operation, apply: false };
-      if (operation.expiresAt < Date.now()) { operation.state = 'expired'; await store.persist(); return { operation, apply: false }; }
-      if (!store.state.devices.some(row => row.id === operation.deviceId)) { operation.state = 'revoked'; await store.persist(); return { operation, apply: false }; }
-      if (!input.allow) { operation.state = 'rejected'; await store.persist(); return { operation, apply: false }; }
-      // The serialized owner decision claims the exact persisted diff once.
-      operation.state = 'applying'; await store.persist();
-      return { operation, apply: true };
-      });
-      const { operation } = decision;
-      if (!decision.apply) return managementView(operation);
-      try {
-        operation.result = await configureRelayPool(undefined, { expected: operation.expected, ops: operation.ops, authorize() {
-          if (!store.state.devices.some(row => row.id === operation.deviceId)) throw Object.assign(new Error('设备授权已撤销'), { code: 'UNAUTHORIZED', status: 403 });
-        } });
-        operation.state = 'applied'; await store.persist();
-      } catch (error) { operation.state = 'failed'; operation.error = { code: error.code || 'APPLY_FAILED', message: error.message }; await store.persist(); }
-      return managementView(operation);
-    }
     if (action === 'relay-test') {
       const previous = input.id ? relayPool.find(node => node.id === input.id) : undefined;
       if (input.id && !previous) return { ok: false, latencyMs: 0, message: '中继不存在，请刷新后重试' };
@@ -336,7 +393,7 @@ async function mountLinkHost(ctx, config) {
         url = input.address;
       }
       if (!url) throw new Error('未找到可用的连接地址，请检查网络或在高级设置中指定监听地址');
-      const pair = store.begin();
+      const pair = store.begin(async (...args) => (await pairingCenter()).acceptReturn(...args));
       const query = new URLSearchParams({ url, pin: mode === 'lan' ? identity.pin : '', code: pair.code, name: store.state.name });
       return { ...pair, mode, uri: `benchgo://pair?${query}`, ...(mode !== 'lan' ? { webUrl: `${url}/link/#code=${encodeURIComponent(pair.code)}` } : {}), url };
     }
@@ -351,7 +408,23 @@ async function mountLinkHost(ctx, config) {
     throw new Error('不支持的管理操作');
   };
   let deviceCenter, cloudCenter, cloudGateway;
-  const getCenter = () => deviceCenter ??= createDeviceCenter({ directory: join(directory, 'outgoing'), webRoot, hostAdmin: admin, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name }).catch(error => { deviceCenter = undefined; throw error; });
+  const pairing = {
+    offer() {
+      if (!listener) return undefined;
+      const routes = connectionRoutes().filter(validReturnTarget);
+      const publicTarget = store.state.publicUrl ? { url: store.state.publicUrl, pin: '' } : undefined;
+      const target = publicTarget && validReturnTarget(publicTarget) ? publicTarget : routes[0];
+      if (!target) return undefined;
+      return { version: PAIR_RETURN_VERSION, hostId: 'sha256:' + identity.pin, target: { url: target.url, pin: target.pin }, routes, proof: store.beginReturnProof() };
+    },
+    clearProof: id => store.clearReturnProof(id),
+    issue: (name, expiresAt) => store.issueReturn(name, expiresAt),
+    record: (id, direction) => store.recordReturn(id, direction),
+    revoke: id => store.revoke(id),
+  };
+  const centerOptions = { webRoot, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name, pairing,
+    signSource: (target, command) => signExecutionSource(identity, target, command) };
+  const getCenter = () => deviceCenter ??= createDeviceCenter({ ...centerOptions, directory: join(directory, 'outgoing'), hostAdmin: input => admin(input) }).catch(error => { deviceCenter = undefined; throw error; });
   const deviceAction = async input => {
     input = { ...input, action: input.action || ({ diagnose: 'hostStatus' }[input.operation] || input.operation) };
     if (input.action === 'connect' && input.deviceId && input.deviceId !== 'local') return (await getCenter()).resources({ deviceId: input.deviceId, kind: 'capabilities' });
@@ -360,7 +433,7 @@ async function mountLinkHost(ctx, config) {
     if (!['list','devices','rename','remove','reconnect','job','relayProbe','hostStatus'].includes(input?.action)) return { available: false, code: 'SECURE_INPUT_REQUIRED', reason: '请在侧栏设备中心完成连接、授权或受控管理', handoff: { kind: 'device-center' } };
     return (await getCenter()).api(input);
   };
-  const getCloudCenter = () => cloudCenter ??= createDeviceCenter({ directory: join(directory, 'cloud-outgoing'), webRoot, hostAdmin: admin, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name, publicOrigin: cloudAccess.origin, workbenchOrigin: env.DSH_LINK_WORKBENCH_ORIGIN, registerProxy: () => cloudGateway.registerProxy() }).catch(error => { cloudCenter = undefined; throw error; });
+  const getCloudCenter = () => cloudCenter ??= createDeviceCenter({ ...centerOptions, directory: join(directory, 'cloud-outgoing'), hostAdmin: input => admin(input, getCloudCenter), publicOrigin: cloudAccess.origin, workbenchOrigin: env.DSH_LINK_WORKBENCH_ORIGIN, registerProxy: () => cloudGateway.registerProxy() }).catch(error => { cloudCenter = undefined; throw error; });
   if (env.DSH_LINK_DEVICE_GATEWAY_PORT && cloudAccess.origin && env.DSH_LINK_WORKBENCH_ORIGIN) {
     cloudGateway = await createCloudDeviceGateway({ ownerOrigin: cloudAccess.origin, workbenchOrigin: env.DSH_LINK_WORKBENCH_ORIGIN, port: Number(env.DSH_LINK_DEVICE_GATEWAY_PORT), getCenter: getCloudCenter });
   }
@@ -389,8 +462,7 @@ async function mountLinkHost(ctx, config) {
           const value = input.action === 'devices' ? center.devices() : ['resources','resourceScope','setResourceScope','sessionAction'].includes(input.action) ? await center.api({ ...input, signal: request.signal }) : center.launch(page.origin);
           return Response.json(value, { headers: { 'cache-control': 'no-store' } });
         }
-        deviceCenter ??= createDeviceCenter({ directory: join(directory, 'outgoing'), webRoot, hostAdmin: admin, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name }).catch(error => { deviceCenter = undefined; throw error; });
-        const center = await deviceCenter;
+        const center = await getCenter();
         if (closed) throw new Error('Link 已关闭');
         if (input.action === 'select' && (typeof input.deviceId !== 'string' || !input.deviceId)) throw new Error('请选择已保存的设备');
         const value = input.action === 'devices' ? center.devices() : ['resources','resourceScope','setResourceScope','sessionAction'].includes(input.action) ? await center.api({ ...input, signal: request.signal }) : input.action === 'select'
@@ -408,6 +480,7 @@ async function mountLinkHost(ctx, config) {
       await cloudGateway?.close();
       await (await cloudCenter?.catch(() => undefined))?.close();
       await cloudClosing;
+      await Promise.allSettled(managementFlights.values());
       await changes; await stopRelay(); await listener?.close(); listener = undefined; await sessionActions.close(); await sessions.close(); store.clearPairings(); await store.flush();
     })();
     return closing;
@@ -432,6 +505,7 @@ async function mountLinkHost(ctx, config) {
     admin, status, close, configurationSnapshot,
     devices: async () => { const snapshot = (await getCenter()).devices(); const hostId = 'sha256:' + identity.pin; return { ...snapshot, hostId, devices: snapshot.devices.map(device => device.id === 'local' ? { ...device, hostId, authorizationId: null } : device) }; },
     resources: async input => (await getCenter()).resources(input),
+    resolveDeviceIdentity: async input => (await getCenter()).resolveDeviceIdentity(input),
     callDevice: async input => (await getCenter()).callDevice(input),
     sshTarget: async input => (await getCenter()).sshTarget(input),
     sshCommand: async input => (await getCenter()).sshCommand(input),

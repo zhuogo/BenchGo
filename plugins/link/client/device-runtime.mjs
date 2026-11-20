@@ -3,6 +3,7 @@ import { deviceName } from './pairing-state.mjs';
 export const hasDeviceCenter = () => Boolean(globalThis.__DSH_DEVICE_CENTER__ || (isNative() && bootstrap()?.capabilities?.devices));
 export const deviceRuntime = {
   bootstrap, isNative, scan, contextUri,
+  get paired() { return globalThis.__DSH_PAIRED_DEVICE_CENTER__ === true; },
   hostCall(action, input = {}) {
     const actions = {
       relayTest: 'hostRelayTest',
@@ -16,7 +17,7 @@ export const deviceRuntime = {
       reject: 'hostReject',
       revoke: 'hostRevoke',
       'rename-device': 'hostRenameDevice',
-      'management-decide': 'hostManagementDecide',
+      hostRelayOperation: 'hostRelayOperation',
     };
     if (!actions[action]) return Promise.reject(new Error('当前设备中心不支持此高级设置，请在主机设置中操作'));
     return deviceRuntime.call(actions[action], input);
@@ -26,7 +27,7 @@ export const deviceRuntime = {
     if (isNative()) return nativeDeviceCall(action, args);
     const response = await fetch(new URL('api/devices', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...args, action }) });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok || result.error) throw Object.assign(new Error(result.error || `设备服务返回 HTTP ${response.status}`), { code: result.code });
+    if (!response.ok || result.error) throw Object.assign(new Error(result.error || `设备服务返回 HTTP ${response.status}`), { code: result.code, status: response.status });
     return result;
   },
 };

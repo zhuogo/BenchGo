@@ -132,7 +132,7 @@ test('catalog declares normalized actual capabilities and pull channels do not c
   for (const id of channelIds) {
     const { capabilities } = channelDefinition(id);
     for (const key of ['text', 'direct', 'groups', 'topics', 'images', 'attachments', 'cards', 'history', 'receipts']) assert.equal(typeof capabilities[key], 'boolean', `${id}:${key}`);
-    assert.deepEqual(capabilities.externalActions, ['api', 'webhook'].includes(id) ? [] : ['external-send']);
+    assert.deepEqual(capabilities.externalActions, id === 'api' ? [] : ['external-send']);
   }
 });
 

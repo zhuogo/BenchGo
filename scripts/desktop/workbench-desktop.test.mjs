@@ -131,7 +131,7 @@ test('unchanged Desktop startup keeps its installation record and checks runtime
   assert.equal(await shared.readWorkbenchLease({ home: f.home }), null);
 });
 
-test('Desktop status capability publishes only authenticated loopback ready state and cannot stop Desktop', async t => {
+test('Desktop status capability exposes the legacy browser login URL and cannot stop Desktop', async t => {
   const f = await fixture(t);
   const installation = { id: '11111111-1111-4111-8111-111111111111' };
   const owner = await createDesktopWorkbenchOwner({ paths: f.paths, installation });
@@ -156,6 +156,18 @@ test('Desktop status capability publishes only authenticated loopback ready stat
   assert.equal(connected.url, readyUrl); assert.equal(connected.activeTasks, false);
   await owner.dispose();
   await assert.rejects(access(f.paths.ownerFile), { code: 'ENOENT' });
+});
+
+test('Desktop status accepts an IPC-authenticated Host without exposing its URL as a browser entry', async t => {
+  const f = await fixture(t);
+  const installation = { id: '11111111-1111-4111-8111-111111111111' };
+  const owner = await createDesktopWorkbenchOwner({ paths: f.paths, installation });
+  t.after(() => owner.dispose());
+  const inspect = async () => ({ activeTasks: false, scheduledTasks: true });
+  await assert.rejects(owner.publish({ url: 'http://example.com:12345/', inspect }), /连接地址无效/);
+  await owner.publish({ url: 'http://127.0.0.1:12345/', inspect });
+  const status = await shared.requestWorkbenchControl(installation, { home: f.home });
+  assert.deepEqual(status, { installationId: installation.id, pid: process.pid, kind: 'desktop', activeTasks: false, scheduledTasks: true });
 });
 
 test('status refuses unknown task state and never fabricates an idle workbench', async t => {

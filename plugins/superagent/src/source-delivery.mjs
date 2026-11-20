@@ -1,13 +1,16 @@
-import { knownNotSent } from './channels/delivery-outcome.mjs';
+import { knownNotSent, waitsForReplyWindow } from './channels/delivery-outcome.mjs';
 
 /** Shared send/receipt boundary for both durable source outboxes. */
-export async function sendSourceDelivery({ send, finish, onDelivered, durableDeduplication = false }) {
+export async function sendSourceDelivery({ send, finish, onDelivered, durableDeduplication = false, waitForReplyWindow = false }) {
   let saved;
   try {
     const receipt = await send();
     if (receipt?.status !== 'accepted' || !receipt.messageId) throw new Error('来源未返回确定回执');
     saved = finish({ sent: true, receipt });
   } catch (error) {
+    if (waitForReplyWindow && waitsForReplyWindow(error) && !error.receipt) {
+      return finish({ waitForReplyWindow: true, error: '来源回复窗口已失效，等待原请求人在原会话发来新消息' });
+    }
     const notSent = durableDeduplication || knownNotSent(error);
     return finish({ uncertain: !notSent, retryMs: 30000,
       error: notSent ? '来源确认未发送，等待恢复后重试' : '来源发送结果待核实',

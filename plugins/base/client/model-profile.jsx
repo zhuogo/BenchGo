@@ -1,5 +1,5 @@
 import React from 'react';
-import { applyModelProfile, matchModelProfile, withOffEffort } from '../shared/model-profile-match.mjs';
+import { applyModelProfile, matchModelProfile } from '../shared/model-profile-match.mjs';
 
 let catalog;
 function loadCatalog() {
@@ -21,11 +21,6 @@ export function usePublicModelProfiles(enabled) {
   return rows;
 }
 
-export function useModelProfile(id) {
-  const rows = usePublicModelProfiles(typeof id === 'string' && id.length > 0);
-  return React.useMemo(() => matchModelProfile(id, rows), [id, rows]);
-}
-
 function resolvedProfiles(rows, models, reasoning, inherited, discovered) {
   if (!rows.length) return models;
   const options = { reasoning, inputField: reasoning ? 'input' : 'inputModalities' };
@@ -42,11 +37,7 @@ function resolvedProfiles(rows, models, reasoning, inherited, discovered) {
 
 export async function resolveModelProfiles(models, reasoning, inherited, discovered) {
   if (!models.some(model => model.id)) return models;
-  const resolved = resolvedProfiles(await loadCatalog(), models, reasoning, inherited, discovered);
-  return reasoning ? resolved.map(model => {
-    const efforts = withOffEffort(model.reasoningEfforts);
-    return efforts === model.reasoningEfforts ? model : { ...model, reasoningEfforts: efforts };
-  }) : resolved;
+  return resolvedProfiles(await loadCatalog(), models, reasoning, inherited, discovered);
 }
 
 /** Reconcile public facts against the latest draft while keeping explicit edits. */

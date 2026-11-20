@@ -75,7 +75,7 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
     const route = activeRoutes.get(value.id);
     return { id: value.id, name: value.name, kind: value.kind, url: value.kind === 'ssh' ? value.ssh?.host : value.url,
       status: value.status || 'unknown', lastError: value.lastError || null, currentPath: route?.kind ?? null,
-      ...(route?.kind === 'relay' ? { currentRelayId: route.relayId ?? null, currentRelayUrl: route.url } : {}), ...(value.warning ? { warning: value.warning } : {}) };
+      ...(route?.kind === 'relay' ? { currentRelayId: route.relayId ?? null, currentRelayUrl: route.url } : {}), ...(value.warning ? { warning: value.warning } : {}), ...(value.pairingNotice ? { pairingNotice: value.pairingNotice } : {}) };
   };
   const localDevice = () => ({ id: 'local', name: localName(), kind: 'local', status: 'online' });
   return {
@@ -105,6 +105,17 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
     async rename(id, name) { const value = get(id); value.alias = value.name = label(name); await persist(); return publicDevice(value); },
     async remove(id) { get(id); activeRoutes.delete(id); state.devices = state.devices.filter(row => row.id !== id); if (state.activeId === id) state.activeId = 'local'; await persist(); },
     mark(id, status, lastError = null) { const value = get(id); value.status = status; value.lastError = lastError; },
+    async updateIdentity(id, expected, resolved) {
+      const stored = get(id);
+      if (stored !== expected || stored.hostId && stored.hostId !== resolved.hostId || stored.authorizationId && stored.authorizationId !== resolved.authorizationId) {
+        throw Object.assign(new Error('设备身份或连接已更新，请重试'), { code: 'IDENTITY_CHANGED', status: 409 });
+      }
+      const { hostId, authorizationId } = stored;
+      if (hostId && authorizationId) return;
+      Object.assign(stored, resolved);
+      try { await persist(); } catch (error) { Object.assign(stored, { hostId, authorizationId }); throw error; }
+      if (get(id) !== expected) throw Object.assign(new Error('设备连接已更新，请重试'), { code: 'IDENTITY_CHANGED', status: 409 });
+    },
     markRoute(id, route) {
       get(id);
     if (!['direct', 'relay', 'ssh'].includes(route.kind)) throw new Error('设备连接路线无效');

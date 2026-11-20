@@ -75,7 +75,7 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
   try {
     const html = await fixture(), markdown = await readFile(join(root, 'plugins/base/lib/preview/markdown.js'), 'utf8');
     for (const width of [1440, 390]) {
-      const page = await browser.newPage({ viewport: { width, height: 960 } }), errors = [], calls = [];
+      const page = await browser.newPage({ viewport: { width, height: 960 }, hasTouch: width < 760 }), errors = [], calls = [];
       page.setDefaultTimeout(7000); page.on('pageerror', error => errors.push(error.message));
       let saveFailures = 1, toolCatalogReads = 0;
       let config = { revision: 1, name: 'BenchGo', models: [{ providerId: 'Provider:Exact', modelId: 'Model:First/1' }], workerModels: [], auxiliary: { models: [], capabilities: [] }, image: { modelId: 'Image:Keep/1' } };
@@ -156,8 +156,37 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
       assert.match(await auxiliaryToggle.innerText(), /跟随身份模型 Router/);
       assert.equal(await page.getByRole('button', { name: '保存更改', exact: true }).count(), 0, 'a clean page has no save bar');
       await checkLayout('models-default');
-      await page.getByRole('button', { name: '模型', exact: true }).last().click();
+      const chooseModel = (scope = page) => scope.getByRole('button', { name: '选择工具与模型', exact: true });
+      const dialog = page.getByRole('dialog', { name: '工具与模型' });
+      const checkHarnessIcon = async (scope, tool) => {
+        const icon = scope.locator(`.cmd-tool-brand[data-tool="${tool}"] img`);
+        const color = { deepseek: [77, 107, 254], codex: [16, 163, 127], claude: [217, 119, 87] }[tool];
+        for (const dark of [false, true, false]) {
+          await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme', dark), dark);
+          const actual = await icon.evaluate(async image => {
+            await image.decode();
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 24;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0, 24, 24);
+            const pixels = ctx.getImageData(0, 0, 24, 24).data;
+            const popup = image.closest('.dowork-select-popup');
+            const background = popup && getComputedStyle(popup).backgroundColor;
+            const panel = getComputedStyle(image.closest('.ba-model-dialog')).backgroundColor;
+            for (let i = 0; i < pixels.length; i += 4) {
+              if (pixels[i + 3] === 255) return { color: [...pixels.slice(i, i + 3)], background, panel, filter: getComputedStyle(image).filter };
+            }
+          });
+          assert.deepEqual(actual.color, color);
+          assert.equal(actual.filter, 'none');
+          if (actual.background) assert.equal(actual.background, actual.panel);
+        }
+      };
+      await chooseModel().last().click();
+      await checkHarnessIcon(dialog.locator('.ba-model-harness'), 'deepseek');
+      await dialog.getByRole('button', { name: '模型', exact: true }).click();
       await page.getByRole('option', { name: '第二模型', exact: true }).click();
+      await dialog.getByRole('button', { name: '应用', exact: true }).click();
       await checkLayout('models-draft');
       await workerToggle.click();
       await page.getByRole('button', { name: '配置工作模型', exact: true }).click();
@@ -172,7 +201,7 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
       assert.equal(calls.filter(call => call.action === 'config').length, 0, 'incomplete collapsed models must never reach the API');
       assert.equal(await workerToggle.getAttribute('aria-expanded'), 'true');
       const worker = page.getByRole('region', { name: '工作模型 Worker 配置', exact: true });
-      await worker.getByRole('button', { name: '供应商', exact: true }).waitFor();
+      await chooseModel(worker).waitFor();
       await checkLayout('models-invalid');
       await worker.getByRole('button', { name: '移除模型', exact: true }).click();
       await page.getByRole('button', { name: '保存更改', exact: true }).click();
@@ -180,7 +209,7 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
       await saveError.waitFor();
       assert(await saveError.evaluate(element => element === document.activeElement), 'save failure receives keyboard focus');
       assert(await saveError.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; }), 'save failure must be visible without searching elsewhere');
-      assert.equal(await page.getByRole('button', { name: '模型', exact: true }).last().innerText(), '第二模型');
+      assert.equal(await chooseModel().last().locator('strong').innerText(), '第二模型');
       await checkLayout('models-save-error');
       await choose('保险库');
       await page.getByText('还没有凭据', { exact: true }).waitFor();
@@ -190,7 +219,7 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
       await choose('身份');
       assert.equal(await page.getByPlaceholder('未命名（可选）').inputValue(), '保留身份草稿');
       await choose('模型');
-      assert.equal(await page.getByRole('button', { name: '模型', exact: true }).last().innerText(), '第二模型');
+      assert.equal(await chooseModel().last().locator('strong').innerText(), '第二模型');
       await page.getByRole('button', { name: /^(保存更改|重试保存)$/ }).click();
       await page.getByText('已保存', { exact: true }).waitFor();
       const saved = calls.find(call => call.action === 'config');
@@ -199,26 +228,85 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
       assert.equal(calls.filter(call => call.action === 'config').length, 2);
       const router = page.getByRole('region', { name: '身份模型 Router 配置', exact: true });
       assert.equal(await router.getByRole('button', { name: '执行 Harness', exact: true }).count(), 0);
+      await router.getByRole('button', { name: '添加模型', exact: true }).click();
+      const modelRows = router.locator('.ba-model-card');
+      const backup = modelRows.nth(1);
+      await chooseModel(backup).click();
+      await dialog.getByRole('button', { name: '供应商', exact: true }).click();
+      await page.getByRole('option', { name: '精确供应商', exact: true }).click();
+      await dialog.getByRole('button', { name: '模型', exact: true }).click();
+      await page.getByRole('option', { name: '首个模型', exact: true }).click();
+      await dialog.getByRole('button', { name: '应用', exact: true }).click();
+      assert.equal(await router.getByRole('button', { name: /完整 ID|提高优先级|降低优先级/ }).count(), 0);
+      const handles = router.getByRole('button', { name: /^调整模型优先级/ });
+      await checkLayout('models-sortable');
+      await handles.nth(1).scrollIntoViewIfNeeded();
+      const handle = await handles.nth(1).boundingBox(), first = await modelRows.first().boundingBox();
+      const x = Math.round(handle.x + handle.width / 2), y = Math.round(handle.y + handle.height / 2);
+      const targetY = Math.round(y + first.y - (await backup.boundingBox()).y - 4);
+      const order = () => chooseModel(router).locator('strong').allTextContents();
+      if (width > 760) {
+        await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x, targetY, { steps: 5 });
+        await router.locator('[data-dragging]').waitFor();
+        assert.notEqual(await backup.evaluate(element => element.style.transform), '');
+        assert.notEqual(await modelRows.first().evaluate(element => element.style.transform), '');
+        await page.keyboard.press('Escape'); await page.mouse.up();
+        assert.deepEqual(await order(), ['第二模型', '首个模型']);
+        await router.evaluate(element => Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished)));
+        await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x, targetY, { steps: 5 }); await page.mouse.up();
+      } else {
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        const touch = await page.context().newCDPSession(page);
+        try {
+          await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+          await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: targetY }] });
+          await router.locator('[data-dragging]').waitFor();
+          await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        } finally { await touch.detach(); }
+      }
+      assert.deepEqual(await order(), ['首个模型', '第二模型']);
+      assert.equal(await router.locator('[data-dragging]').count(), 0);
+      await handles.first().press('ArrowDown');
+      assert.deepEqual(await order(), ['第二模型', '首个模型']);
+      assert.equal(await handles.nth(1).evaluate(element => element === document.activeElement), true);
+      await handles.nth(1).press('ArrowUp');
+      await page.getByRole('button', { name: '保存更改', exact: true }).click();
+      await page.getByText('已保存', { exact: true }).waitFor();
+      assert.deepEqual(calls.filter(call => call.action === 'config').at(-1).patch, { models: [
+        { providerId: 'Provider:Exact', modelId: 'Model:First/1' }, { providerId: 'Provider:Exact', modelId: 'Model:Second/2' },
+      ] });
+      await choose('保险库'); await choose('模型');
+      assert.deepEqual(await order(), ['首个模型', '第二模型']);
       if (await workerToggle.getAttribute('aria-expanded') === 'false') await workerToggle.click();
       await worker.getByRole('button', { name: '配置工作模型', exact: true }).click();
+      await chooseModel(worker).click();
+      assert.equal(await dialog.getByRole('button', { name: '执行 Harness', exact: true }).innerText(), 'DeepSeek Harness');
       const selectHarness = async name => {
-        await worker.getByRole('button', { name: '执行 Harness', exact: true }).click();
+        await dialog.getByRole('button', { name: '执行 Harness', exact: true }).click();
         await page.getByRole('option', { name, exact: true }).click();
       };
+      await dialog.getByRole('button', { name: '执行 Harness', exact: true }).click();
+      await checkHarnessIcon(dialog.getByRole('option', { name: 'DeepSeek Harness', exact: true }), 'deepseek');
+      await checkHarnessIcon(dialog.getByRole('option', { name: 'Codex', exact: true }), 'codex');
+      await checkHarnessIcon(dialog.getByRole('option', { name: 'Claude Code', exact: true }), 'claude');
+      await checkLayout('worker-harness-options');
+      await page.keyboard.press('Escape');
       await selectHarness('Codex');
-      await worker.getByText('正在读取模型目录').waitFor();
-      await worker.getByRole('alert').filter({ hasText: '目录暂时不可用' }).waitFor();
+      await checkHarnessIcon(dialog.getByRole('button', { name: '执行 Harness', exact: true }), 'codex');
+      await dialog.getByText('正在读取模型目录').waitFor();
+      await dialog.getByRole('alert').filter({ hasText: '目录暂时不可用' }).waitFor();
       await checkLayout('worker-catalog-error');
-      await worker.getByRole('button', { name: '重试', exact: true }).click();
+      await dialog.getByRole('button', { name: '重试', exact: true }).click();
       await selectHarness('Claude Code');
-      await worker.getByText('Claude Code 尚无 API 模型', { exact: true }).waitFor();
+      await dialog.getByText('Claude Code 尚无 API 模型', { exact: true }).waitFor();
       await checkLayout('worker-catalog-empty');
       await selectHarness('Codex');
-      await worker.getByRole('button', { name: '供应商', exact: true }).click();
+      await dialog.getByRole('button', { name: '供应商', exact: true }).click();
       await page.getByRole('option', { name: '共享供应商', exact: true }).click();
-      await worker.getByRole('button', { name: '模型', exact: true }).click();
+      await dialog.getByRole('button', { name: '模型', exact: true }).click();
       await page.getByRole('option', { name: '共享模型', exact: true }).click();
       await checkLayout('worker-catalog-ready');
+      await dialog.getByRole('button', { name: '应用', exact: true }).click();
       await page.getByRole('button', { name: '保存更改', exact: true }).click();
       await page.getByText('已保存', { exact: true }).waitFor();
       assert.deepEqual(calls.filter(call => call.action === 'config').at(-1).patch, {
@@ -456,19 +544,30 @@ test('model settings keep controls aligned through loading, errors and data, wit
     for (const width of [1440, 390]) {
       const page = await browser.newPage({ viewport: { width, height: 960 } });
       page.setDefaultTimeout(7000);
-      let releaseCatalog, attempts = 0, connected = true;
+      let releaseCatalog, attempts = 0, connected = true, savedConfig;
       const pending = new Promise(resolve => { releaseCatalog = resolve; });
       await page.route('**/*', async route => {
         if (route.request().url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
         if (route.request().url().endsWith('/api/commander/assistant')) {
-          if (route.request().postDataJSON().action === 'catalog') {
+          const input = route.request().postDataJSON();
+          if (input.action === 'catalog') {
             if (++attempts === 1) { await pending; return route.fulfill({ status: 503, json: { error: '供应商暂时无法连接' } }); }
             return route.fulfill({ json: {
               providers: [{ id: 'deepseek-account', name: 'DeepSeek Account', available: true }, { id: 'unreachable', name: '连接失败的供应商', available: false },
                 ...(connected ? [{ id: 'Provider:Exact', name: '精确供应商', available: true }] : [])],
-              models: connected ? [{ id: 'Model:First/1', name: '首个模型', provider: 'Provider:Exact' }] : [],
+              models: connected ? [
+                { id: 'Model:First/1', name: '首个模型', provider: 'Provider:Exact', reasoning: {
+                  efforts: ['low', 'medium', 'high'].map(id => ({ id, name: id })), defaultEffort: 'low',
+                } },
+                { id: 'Model:Plain/2', name: '无档位模型', provider: 'Provider:Exact' },
+              ] : [],
             } });
           }
+          if (input.action === 'config') {
+            savedConfig = { ...savedConfig, ...input.patch, revision: savedConfig.revision + 1 };
+            return route.fulfill({ json: savedConfig });
+          }
+          if (input.action === 'state') return route.fulfill({ json: { config: savedConfig } });
           return route.fulfill({ json: {} });
         }
         return route.abort();
@@ -476,19 +575,22 @@ test('model settings keep controls aligned through loading, errors and data, wit
       await page.goto('http://localhost/');
       if (width > 760) await page.getByRole('navigation', { name: '资源分区', exact: true }).getByRole('button', { name: '模型', exact: true }).click();
       else { await page.getByRole('button', { name: '资源分区', exact: true }).click(); await page.getByRole('option', { name: / · 模型$/ }).click(); }
+      const trigger = (scope = page) => scope.getByRole('button', { name: '选择工具与模型', exact: true });
+      const dialog = page.getByRole('dialog', { name: '工具与模型' });
+      const field = name => dialog.getByRole('button', { name, exact: true });
+      const slider = dialog.getByRole('slider', { name: '推理强度档位' });
+      await trigger().first().click();
       const check = async state => {
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${state}/${width} must fit the viewport`);
         const row = page.locator('.ba-model-card').first();
         if (await row.count()) {
           const geometry = await row.evaluate(element => {
             const rect = selector => { const bounds = element.querySelector(selector).getBoundingClientRect(); return { y: bounds.y, bottom: bounds.bottom, center: bounds.y + bounds.height / 2, height: bounds.height }; };
-            return { wide: element.closest('.ba-model-settings').clientWidth > 660, provider: rect('[aria-label="供应商"]'), model: rect('[aria-label="模型"]'), priority: rect('.ba-model-priority'), actions: rect('.ba-row-actions'), buttons: [...element.querySelectorAll('.ba-row-actions button')].map(button => button.getBoundingClientRect().height) };
+            return { wide: element.closest('.ba-model-settings').clientWidth > 660, model: rect('.ba-model-select-trigger'), priority: rect('.ba-model-priority'), actions: rect('.ba-row-actions'), buttons: [...element.querySelectorAll('.ba-row-actions button')].map(button => button.getBoundingClientRect().height) };
           });
-          assert(Math.abs(geometry.provider.y - geometry.model.y) < 1, `${state}/${width}: selector tops must align`);
-          assert.equal(geometry.provider.height, geometry.model.height);
           assert(Math.abs(geometry.priority.center - geometry.actions.center) < 1, `${state}/${width}: priority and actions must align`);
           if (geometry.wide) assert(Math.abs(geometry.model.center - geometry.actions.center) < 1, `${state}/${width}: actions must align with controls, excluding labels and feedback`);
-          else { assert(geometry.actions.bottom <= geometry.provider.y, 'compact rows put actions above the fields'); assert(geometry.buttons.every(height => height >= 44), 'all mobile actions retain their touch target, including disabled buttons'); }
+          else { assert(geometry.actions.bottom <= geometry.model.y, 'compact rows put actions above the selector'); assert(geometry.buttons.every(height => height >= 44), 'all mobile actions retain their touch target, including disabled buttons'); }
         }
         if (screenshots) {
           for (const theme of ['light', 'dark']) {
@@ -503,11 +605,9 @@ test('model settings keep controls aligned through loading, errors and data, wit
       await page.getByRole('alert').filter({ hasText: '供应商暂时无法连接' }).waitFor();
       await check('error');
       await page.getByRole('button', { name: '重试', exact: true }).click();
-      await page.getByRole('button', { name: '供应商', exact: true }).filter({ hasText: '精确供应商' }).waitFor();
-      assert(!/编辑|配置/.test(await page.getByRole('button', { name: /工作模型 Worker/ }).innerText()), 'closed headings use the chevron without redundant action text');
-      assert(!/编辑|配置/.test(await page.getByRole('button', { name: /^辅助模型/ }).innerText()));
+      await field('供应商').filter({ hasText: '精确供应商' }).waitFor();
       await check('data');
-      await page.getByRole('button', { name: '供应商', exact: true }).click();
+      await field('供应商').click();
       await page.getByRole('option', { name: '精确供应商', exact: true }).waitFor();
       await page.getByRole('combobox', { name: '搜索供应商' }).fill('精确供应商');
       const firstSupplier = page.getByRole('option').first();
@@ -517,12 +617,65 @@ test('model settings keep controls aligned through loading, errors and data, wit
       assert.equal(await page.getByRole('option', { name: 'DeepSeek Account' }).count(), 0);
       assert.equal(await page.getByRole('option', { name: '连接失败的供应商' }).count(), 0);
       await page.keyboard.press('Escape');
+      assert(await dialog.isVisible());
+      await field('取消').click();
+      assert.equal(await trigger().first().evaluate(element => element === document.activeElement), true);
+      const baseModel = { providerId: 'Provider:Exact', modelId: 'Model:First/1' };
+      savedConfig = { ...await page.evaluate(() => window.config),
+        models: [{ ...baseModel, options: { maxTokens: 123, reasoningEffort: 'off' } }],
+        workerModels: [baseModel], auxiliary: { models: [baseModel], capabilities: ['review'] },
+      };
+      await page.evaluate(config => window.acceptConfig(config), savedConfig);
+      await page.getByRole('button', { name: /工作模型 Worker/ }).click();
+      await page.getByRole('button', { name: /^辅助模型/ }).click();
+      const router = page.getByRole('region', { name: '身份模型 Router 配置' });
+      const worker = page.getByRole('region', { name: '工作模型 Worker 配置' });
+      const auxiliary = page.getByRole('region', { name: '辅助模型配置' });
+      for (const [section, label] of [[router, '高'], [worker, '中'], [auxiliary, '低']]) {
+        await trigger(section).click();
+        if (section === router) assert.match(await dialog.getByRole('alert').innerText(), /原档位已不可用/);
+        assert.equal(await field('关闭').count(), 1, 'only the dialog close button uses this label');
+        await field(label).click();
+        if (section === worker) await check('efforts');
+        await field('应用').click();
+      }
+      await page.getByRole('button', { name: '保存更改', exact: true }).click();
+      await page.getByText('已保存', { exact: true }).waitFor();
+      assert.deepEqual(savedConfig.models, [{ ...baseModel, options: { maxTokens: 123, reasoningEffort: 'high' } }]);
+      assert.deepEqual(savedConfig.workerModels, [{ ...baseModel, options: { reasoningEffort: 'medium' } }]);
+      assert.deepEqual(savedConfig.auxiliary, { models: [{ ...baseModel, options: { reasoningEffort: 'low' } }], capabilities: ['review'] });
+      await page.evaluate(config => window.acceptConfig(config), savedConfig);
+      for (const [section, label] of [[router, '高'], [worker, '中'], [auxiliary, '低']]) {
+        await trigger(section).click();
+        assert.equal(await slider.getAttribute('aria-valuetext'), label);
+        await field('取消').click();
+      }
+      await trigger(worker).click();
+      await slider.press('Home');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '默认');
+      await field('取消').click();
+      assert.equal(await page.getByRole('button', { name: '取消修改', exact: true }).count(), 0);
+      await trigger(worker).click();
+      assert.equal(await slider.getAttribute('aria-valuetext'), '中');
+      await slider.press('Home');
+      await field('应用').click();
+      await trigger(router).click();
+      await field('模型').click();
+      await page.getByRole('option', { name: '无档位模型', exact: true }).click();
+      assert.equal(await slider.count(), 0);
+      await field('应用').click();
+      await page.getByRole('button', { name: '保存更改', exact: true }).click();
+      await page.getByText('已保存', { exact: true }).waitFor();
+      assert.deepEqual(savedConfig.models, [{ ...baseModel, modelId: 'Model:Plain/2', options: { maxTokens: 123 } }]);
+      assert.deepEqual(savedConfig.workerModels, [baseModel]);
+      await page.evaluate(config => window.acceptConfig(config), { ...savedConfig, models: [baseModel], workerModels: [], auxiliary: null });
       connected = false;
       await page.evaluate(() => window.invalidateAssistantCatalog());
-      await page.getByRole('button', { name: '供应商', exact: true }).filter({ hasText: 'Provider:Exact · 不可用' }).waitFor();
-      const boundModel = page.getByRole('button', { name: '模型', exact: true }).filter({ hasText: 'Model:First/1' });
-      assert.equal(await boundModel.isDisabled(), true);
-      await page.getByRole('button', { name: '移除模型', exact: true }).click();
+      await trigger(router).click();
+      await field('供应商').filter({ hasText: 'Provider:Exact · 不可用' }).waitFor();
+      assert.equal(await field('模型').isDisabled(), true);
+      await field('取消').click();
+      await router.getByRole('button', { name: '移除模型', exact: true }).click();
       await page.getByText('为助手选择一个模型', { exact: true }).waitFor();
       await check('empty');
       await page.close();

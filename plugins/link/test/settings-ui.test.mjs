@@ -156,7 +156,9 @@ test('approval uses existing confirm and reject actions and prevents closing whi
   const view = fixture(), calls = []; let closed = 0;
   const props = { pairing: { mode: 'lan', code: 'CODE', uri: 'dshlink://pair' }, pending: [{ id: 'phone', name: '我的手机', capabilities: ['collaboration', 'management'] }], onClose() { closed++; }, onConfirm: (id, action) => calls.push({ id, action }), busy: '' };
   const tree = view.render(view.exports.PairingDialog, props);
-  assert.match(textOf(tree), /连接工作台 · 任务协作 · 连接与中继管理（修改需确认）/);
+  assert.match(textOf(tree), /单向连接，对方可使用本机已开放的工作台、任务协作及连接管理/);
+  const reciprocal = view.render(view.exports.PairingDialog, { ...props, pending: [{ id: 'desktop', name: '我的电脑', reciprocal: true }] });
+  assert.match(textOf(reciprocal), /回程验证通过后，双方可使用对方已开放的工作台、任务协作及连接管理/);
   assert.deepEqual(calls, [], 'displaying the default scope still requires approval');
   view.find(tree, '允许').props.onClick(); view.find(tree, '拒绝').props.onClick();
   assert.deepEqual(calls, [{ id: 'phone', action: 'confirm' }, { id: 'phone', action: 'reject' }]);
@@ -386,13 +388,4 @@ test('authorized devices retain names and revoke actions without switches or imp
  assert.equal(nodes(tree).some(node=>node.type==='input'&&node.props.type==='checkbox'),false);
  assert.equal(view.calls.some(call=>call.action==='grant-device'),false);
  assert.deepEqual(view.status.devices[0].capabilities,[]);assert.deepEqual(view.status.devices[1].capabilities,['management']);stop();
-});
-test('specific relay approval refreshes status after operation receipt without replacing device catalog',async()=>{
- const view=fixture({respond:async(action,input,status)=>{if(action==='management-decide'){status.pendingManagement=[];return {id:input.operationId,state:'applied'};}return {...status};}});
- view.status.devices=[{id:'phone',name:'保留设备',capabilities:['management']}];view.status.relay={nodes:[{id:'relay',url:'https://relay.example.com'}]};view.status.pendingManagement=[{id:'operation',deviceName:'远端电脑',ops:[{path:['nodes',0,'priority'],value:7},{path:['nodes',0,'enabled'],value:false}]}];view.render();const stop=view.effects[1]();await new Promise(setImmediate);
- const tree=view.render();assert.match(textOf(tree),/https:\/\/relay.example.com：优先级改为 7/);assert.match(textOf(tree),/https:\/\/relay.example.com：停用/);
- await view.find(tree,'应用这次修改').props.onClick();assert.deepEqual(JSON.parse(JSON.stringify(view.calls.slice(-2))),[{action:'management-decide',input:{operationId:'operation',allow:true}},{action:'status',input:{}}]);assert.match(textOf(view.render()),/保留设备/);assert.match(textOf(view.render()),/修改已保存并应用/);assert.doesNotMatch(textOf(view.render()),/远端电脑 请求修改/);stop();
-});
-for(const [state,message] of [['failed','修改未完成：中继不可用'],['expired','请求已过期']])test('management '+state+' result stays explicit while device catalog survives',async()=>{
- const view=fixture({respond:async(action,input,status)=>action==='management-decide'?{id:input.operationId,state,error:{message:'中继不可用'}}:{...status}});view.status.devices=[{id:'desk',name:'已有设备'}];view.status.pendingManagement=[{id:'operation',ops:[]}];view.render();const stop=view.effects[1]();await new Promise(setImmediate);await view.find(view.render(),'应用这次修改').props.onClick();assert(textOf(view.render()).includes(message));assert.match(textOf(view.render()),/已有设备/);stop();
 });

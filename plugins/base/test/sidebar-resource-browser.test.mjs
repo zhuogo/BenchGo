@@ -68,7 +68,7 @@ test('cross-device sidebar persists scope and renders device states while retain
     nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text' },
     plugins: [{ name: 'sidebar-fixture', setup(build) {
-      build.onLoad({ filter: /base[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => {
+      build.onLoad({ filter: /benchgo[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => {
         // Mount the real sidebar without loading unrelated application entry points.
         const keep = ['shared/client/ui/index', 'shared/client/ui/tooltip', 'sidebar-state.mjs', 'resource-navigation.jsx', 'resource-navigation-store.mjs', 'resource-state.mjs', 'resource-creation.jsx', 'session-device-picker.jsx', 'device-launcher.jsx', 'device-switch.jsx', "from 'react'", 'icons.json', 'dsh-client-ui-primitives', 'iconsax.jsx', 'modules.mjs', 'session-info.mjs'];
         const source = (await readFile(path, 'utf8')).split('\n').filter(line => !line.startsWith('import ') || keep.some(value => line.includes(value))).join('\n');

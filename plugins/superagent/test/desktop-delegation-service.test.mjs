@@ -37,6 +37,7 @@ function remoteFixture(f) {
   let reads = 0;
   f.ctx.get = name => name === 'benchgoLink' ? {
     devices: async () => { reads++; return { devices: [structuredClone(device)] }; },
+    resolveDeviceIdentity: async () => structuredClone(device),
     callDevice: async request => { calls.push(request); return structuredClone(catalog); },
   } : undefined;
   f.ctx.llm.resolveModelInfo = async () => { throw Error('remote model must not resolve against A'); };
@@ -76,6 +77,26 @@ test('remote admission rejects unavailable catalogs, guessed models and changed 
   };
   await assert.rejects(f.service.delegate(b.input, f.exec, f.options), /目标设备或连接授权已变化/);
   assert.equal(f.database.listTasks().length, 0);
+});
+
+test('remote admission prefers the target Worker and reports missing models without accepting a task', async t => {
+  const f = await fixture(t), b = remoteFixture(f);
+  const input = { ...b.input, executionConfig: undefined };
+  b.catalog.workerPreference = { error: { code: 'EXECUTION_WORKER_UNAVAILABLE', message: '目标设备 Worker 不可用' } };
+  await assert.rejects(f.service.delegate(input, f.exec, f.options), { code: 'EXECUTION_WORKER_UNAVAILABLE', message: '目标设备 Worker 不可用' });
+  delete b.catalog.workerPreference;
+  const routerChoice = b.catalog.models.pop();
+  await assert.rejects(f.service.delegate(input, f.exec, f.options), { code: 'EXECUTION_MODEL_UNAVAILABLE' });
+  assert.equal(f.database.listTasks().length, 0);
+  const worker = { providerId: 'Worker/Provider', modelId: 'Worker:Model', params: { maxTokens: 2048 } };
+  b.catalog.models.push(routerChoice, { harness: 'official', providerId: worker.providerId, modelId: worker.modelId });
+  const config = { harness: 'official', models: [worker] };
+  b.catalog.workerPreference = { config };
+  const task = await f.service.delegate(input, f.exec, f.options);
+  assert.deepEqual(task.mandate.execution.config, config);
+  assert.deepEqual(f.database.assignments(task.id)[0].model, worker);
+  const withRouterChoice = await f.service.delegate({ ...b.input, requestId: 'other-request' }, f.exec, f.options);
+  assert.deepEqual(withRouterChoice.mandate.execution.config, config);
 });
 
 test('remote revisions and linked adjustments preserve B binding and never use the A work role', async t => {
