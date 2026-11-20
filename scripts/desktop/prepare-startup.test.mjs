@@ -15,7 +15,7 @@ test('Desktop main claims common ownership before profile preparation and publis
   plugin.generateBundle();
   assert(result.indexOf('benchgoWorkbench = await ensureBenchgoPlugin(process.resourcesPath)') < result.indexOf('const paths = resolveDesktopPaths()'));
   assert.match(result, /beginDesktopWorkbench\(\{ resources: resourcesPath, initialize: initializePluginProfile \}\)/);
-  assert.match(result, /await Promise\.all\(\[authenticateWebHost\(ready\.url\), benchgoWorkbench\.publishReady\(\{ url: ready\.url, inspect: \(\) => host\.inspectQuit\(\) \}\)\]\)/);
+  assert.match(result, /const cookie = ready\.authenticationCookie;\s*await benchgoWorkbench\.publishReady\(\{ url: ready\.url, inspect: \(\) => host\.inspectQuit\(\) \}\)/);
   assert.match(result, /app\.once\('will-quit'.*benchgoWorkbench\.dispose/s);
   assert.match(result, /cleanupRetiredInstalls/);
   assert.throws(() => plugin.transform(source + source, main), /Official startup changed/);
