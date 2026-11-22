@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { unwrapClient, workbenchClientAdapters } from '../scripts/vendor-adapter.mjs';
 import { sharedUiStyles } from '../../scripts/shared-ui.mjs';
+import { mountProjectFiles } from '../src/project-files.mjs';
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url));
 const webRequire = createRequire(new URL('../../../../deepseek-harness/apps/web/package.json', import.meta.url));
@@ -19,7 +21,7 @@ const executablePath = [process.env.CHROMIUM_EXECUTABLE_PATH, chromium.executabl
 async function fixture() {
   const primitivesSource = { name: 'workbench-official-primitives-source', setup(build) {
     build.onResolve({ filter: /^@deepseek-ai\/dsh-client-ui-primitives$/ }, () => ({ path: 'workbench-primitives', namespace: 'official-source' }));
-    build.onLoad({ filter: /.*/, namespace: 'official-source' }, () => ({ loader: 'ts', resolveDir: root, contents: `export {Tooltip} from './deepseek-harness/packages/client/ui-primitives/src/Tooltip.tsx';export * from './deepseek-harness/packages/client/ui-primitives/src/icons/index.tsx';` }));
+    build.onLoad({ filter: /.*/, namespace: 'official-source' }, () => ({ loader: 'ts', resolveDir: root, contents: `export {Tooltip} from './deepseek-harness/packages/client/ui-primitives/src/Tooltip.tsx';export * from './deepseek-harness/packages/client/ui-primitives/src/icons/index.tsx';export {FileTypeIcon,classifyFileType} from './deepseek-harness/packages/client/ui-primitives/src/FileTypeIcon.tsx';` }));
   } };
   // The real product supplies these through its ModuleLoader. Share exactly
   // one React instance with the published CJS vendor factories in this fixture.
@@ -31,6 +33,8 @@ async function fixture() {
     import {WorkbenchPage,mountWorkbenchClient} from './plugins/base/workbench/client/index.jsx';
     import {createWebConnectionRpc} from './deepseek-harness/packages/client/connection/src/client/rpc.ts';
     import {mountWorkbenchPreviews} from './plugins/base/workbench/client/previews.jsx';
+    import {mountProjectFileActions} from './plugins/base/workbench/client/project-files.jsx';
+    import {FileTree} from './deepseek-harness/packages/client/ui-sidebar-files/src/client/FileTree.tsx';
     import {Loading} from './plugins/shared/client/ui/loading.jsx';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
     installIconSprite({effect:fn=>fn(),on:()=>{}},undefined);
@@ -91,6 +95,36 @@ async function fixture() {
       window.renderWorkbenchEntry(entries.get('benchgo-workbench'));
     };
     window.readWorkspaceFiles=()=>createWebConnectionRpc(globalThis.__DSH_TRANSPORT__.fetch).call('/api','workspaceFiles/list',{args:{workspaceFileScopeId:'project',path:'.'}});
+    window.renderFileActions=workspace=>{
+      const providers=[],slots=new Map(), effects=[];
+      let gateway, refresh;
+      const ctx={
+        inject(_names,setup){setup(this);},
+        effect(setup){effects.push(setup());},
+        sessions:{binding:()=>undefined,list:{getSnapshot:()=>({projectionsBySession:{},byId:{project:{cwd:workspace}}})}},
+        slots:{inject(_name,setup){setup();},register(options,Component){slots.set(options.name,{Component,props:options.inject()});}},
+        contextMenus:{register(item){providers.push(item);},notify(message){window.fileNotice=message;},open({kind,value}){gateway(providers.find(item=>item.target===kind).resolve(value));}},
+      };
+      mountProjectFileActions(ctx);
+      window.releaseFileActions=()=>{for(const effect of effects.reverse())if(typeof effect==='function')effect();};
+      function App(){
+        const [entries,setEntries]=useState([]),[menu,setMenu]=useState([]);
+        gateway=setMenu;
+        refresh=()=>fetch('fixture-entries').then(result=>result.json()).then(setEntries);
+        useEffect(()=>{refresh();},[]);
+        const overlay=slots.get('shell.overlay'), toolbar=slots.get('sidebar.right.tab.files.actions');
+        return <main data-sidebar-right-session="project"><section data-files-page>
+          <toolbar.Component {...toolbar.props} absolutePath={workspace} sessionId="project"/>
+          <button data-files-reload onClick={refresh}>刷新</button>
+          <aside data-files-navigator="pane" data-files-root={workspace}>
+            <FileTree root={workspace} entries={entries} expanded={[workspace+'/文件夹']} t={key=>key} useFactorySlot={(_,fallback)=>fallback}
+              onOpen={()=>{}} onToggle={()=>{}} rowTriggerProps={(entry,kind)=>({onContextMenu(event){event.preventDefault();ctx.contextMenus.open({kind,value:{path:entry.path,sessionId:'project'}});}})}/>
+          </aside>
+        </section>{menu.length>0&&<div role="menu">{menu.map(item=><button role="menuitem" key={item.id} disabled={item.disabled} onClick={()=>{setMenu([]);item.run();}}>{item.label}</button>)}</div>}
+        <overlay.Component {...overlay.props}/></main>;
+      }
+      app.render(<App/>);
+    };
     window.renderViewer=(id,path)=>app.render(<Shell key={++serial}><section className="fixture-preview" aria-label="项目文件预览"><Viewer id={id} path={path}/></section></Shell>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts', 'unused-workbench-browser'), format: 'iife', jsx: 'automatic',
     nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
@@ -163,7 +197,8 @@ test('remote loopback workbench keeps native files and excludes local vendor ser
     const page = await browser.newPage({ locale: 'zh-CN' }); page.setDefaultTimeout(5000);
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}${prefix}`);
-    await page.addScriptTag({ path: join(root, 'plugins/link/client/workbench-bridge.mjs') });
+    const bridge = await build({ entryPoints: [join(root, 'plugins/link/client/workbench-bridge.mjs')], bundle: true, format: 'iife', write: false });
+    await page.addScriptTag({ content: bridge.outputFiles[0].text });
     const mounted = await page.evaluate(() => {
       const nativeFiles = { id: 'official-files', kind: 'files' }, files = new Map([['files', nativeFiles]]), injections = [], entries = [];
       const host = {
@@ -183,7 +218,7 @@ test('remote loopback workbench keeps native files and excludes local vendor ser
       return { remoteWorkbench: globalThis.__DSH_LINK_WORKBENCH__, injections, nativeFilesPreserved: files.get('files') === nativeFiles };
     });
     assert.equal(mounted.remoteWorkbench, true, 'the real Link bridge identifies the remote page');
-    assert.deepEqual(mounted.injections, [], 'a remote proxy must not request local sidebar or SSH services');
+    assert.deepEqual(mounted.injections, [['contextMenus']], 'a remote proxy mounts file actions without requesting local sidebar or SSH services');
     assert.equal(mounted.nativeFilesPreserved, true, 'the native files registration stays owned by the official client');
     await page.getByRole('heading', { name: '从本机打开运维工作台', exact: true }).waitFor();
     assert.equal(requests.some(request => request.path.endsWith('/api/benchgo/workbench') || request.path.includes('/sidebar/')), false, 'the remote page must not call local-only workbench routes');
@@ -198,6 +233,92 @@ test('remote loopback workbench keeps native files and excludes local vendor ser
     assert.deepEqual(fileRequests[0].message.payload, { args: { workspaceFileScopeId: 'project', path: '.' } });
     assert.deepEqual(errors, []);
   } finally { await browser.close(); if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } }
+});
+
+test('remote rightbar actions and native file drag work through the project file route', { skip: !executablePath, timeout: 60000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-files-browser-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const workspace = directory.replaceAll('\\', '/');
+  await mkdir(join(directory, '文件夹'));
+  await writeFile(join(directory, '原稿.txt'), '原有内容');
+  let route;
+  mountProjectFiles({
+    effect: setup => setup(),
+    connection: { fetch: { register: value => { route = value; } } },
+    workspaceFiles: { scopeOf: async () => ({ workspaceRoot: directory }) },
+    fs: { processPathFromHostPath: path => path },
+  });
+  const entries = async (folder = '', deep = true) => {
+    const children = await readdir(join(directory, folder), { withFileTypes: true });
+    const result = [];
+    for (const item of children) {
+      const path = folder + '/' + item.name;
+      result.push({ name: item.name, path: workspace + path, meta: { kind: item.isDirectory() ? 'directory' : 'file' } });
+      if (deep && item.isDirectory()) result.push(...await entries(path, false));
+    }
+    return result;
+  };
+  const html = await fixture(), prefix = '/link/workbench/';
+  const server = createServer(async (req, res) => {
+    const address = new URL(req.url, 'http://' + req.headers.host);
+    if (address.pathname === prefix) { res.setHeader('content-type', 'text/html'); res.end(html); return; }
+    if (address.pathname === prefix + 'fixture-entries') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(await entries())); return; }
+    if (address.pathname === prefix + route.path.slice(1)) {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const response = await route.fetch(new Request(address, { method: req.method, headers: req.headers, body: Buffer.concat(chunks) }));
+      res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(await response.text()); return;
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const browser = await chromium.launch({ executablePath, headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  page.setDefaultTimeout(5000);
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('http://127.0.0.1:' + server.address().port + prefix);
+  await page.evaluate(workspace => { window.__DSH_LINK_WORKBENCH__ = true; window.renderFileActions(workspace); }, workspace);
+  const row = name => page.locator('[data-files-entry] > div').filter({ hasText: new RegExp('^' + name + '$') });
+  const menu = label => page.getByRole('menuitem', { name: label, exact: true });
+  await row('原稿.txt').locator('button[aria-haspopup="menu"]').click();
+  await menu('重命名').click();
+  await page.getByRole('textbox', { name: '文件名称' }).fill('改名.txt');
+  await page.getByRole('button', { name: '重命名', exact: true }).click();
+  await row('改名.txt').waitFor();
+  const transfer = await page.evaluateHandle(() => new DataTransfer());
+  assert.equal(await row('改名.txt').getAttribute('draggable'), 'true');
+  await row('改名.txt').dispatchEvent('dragstart', { dataTransfer: transfer });
+  await row('文件夹').dispatchEvent('dragover', { dataTransfer: transfer });
+  assert.equal(await row('文件夹').locator('..').getAttribute('data-benchgo-drop-target'), '');
+  await row('文件夹').dispatchEvent('drop', { dataTransfer: transfer });
+  await page.locator('[data-files-path$="/文件夹/改名.txt"]').waitFor();
+  assert.equal(await readFile(join(directory, '文件夹', '改名.txt'), 'utf8'), '原有内容');
+  await page.locator('[data-files-path$="/文件夹/改名.txt"] > div > button').first().click({ button: 'right' });
+  await menu('复制文件').click();
+  await page.getByRole('button', { name: '项目文件操作' }).click();
+  await menu('粘贴到此处').click();
+  await page.waitForFunction(() => window.fileNotice === '已粘贴');
+  assert.equal(await readFile(join(directory, '改名.txt'), 'utf8'), '原有内容');
+  await page.locator('[data-files-path$="/文件夹/改名.txt"] > div > button').first().click({ button: 'right' });
+  await menu('删除').click();
+  await page.getByRole('button', { name: '永久删除' }).click();
+  await page.locator('[data-files-path$="/文件夹/改名.txt"]').waitFor({ state: 'detached' });
+  await row('改名.txt').getByRole('button', { name: '文件操作' }).click();
+  await menu('移动到…').click();
+  await page.getByRole('dialog').getByRole('button', { name: '文件夹' }).click();
+  await page.getByRole('button', { name: '移到此处' }).click();
+  await page.locator('[data-files-path$="/文件夹/改名.txt"]').waitFor();
+  await page.getByRole('button', { name: '项目文件操作' }).click();
+  await menu('新建文件夹').click();
+  await page.getByRole('textbox', { name: '文件夹名称' }).fill('新目录');
+  await page.getByRole('button', { name: '新建文件夹', exact: true }).click();
+  await row('新目录').waitFor();
+  await page.evaluate(() => window.releaseFileActions());
+  assert.equal(await page.locator('[data-benchgo-draggable], .bg-project-file-more').count(), 0);
+  assert.deepEqual(errors, []);
 });
 
 test('built-in workbench renders four states and real audio/video/Office previews', { skip: !executablePath && 'Chromium/Edge is required', timeout: 120000 }, async () => {

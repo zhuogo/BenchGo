@@ -3,10 +3,10 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { request } from 'node:https';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, createHash } from 'node:crypto';
-import { remoteAgent, remoteJson, upstreamOrigin } from './remote.mjs';
+import { remoteAgent, remoteJson, relayTargetHeaders, upstreamOrigin } from './remote.mjs';
 const secret = () => randomBytes(32).toString('base64url');
 /** Each host has its own origin. Remote scripts cannot read the device centre. */
-export async function createDeviceProxy(target, { parentOrigin, onFailure, webRoot, publicOrigin, publicPrefix = '' } = {}) {
+export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuccess, webRoot, publicOrigin, publicPrefix = '' } = {}) {
   const agent = remoteAgent(target), tickets = new Map(), sessions = new Set(), sockets = new Set();
   const remoteOrigin = upstreamOrigin(target);
   let origin, remoteCookie, closed = false;
@@ -18,7 +18,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
   };
   const checkPage = () => new Promise((resolve, reject) => {
     const req = request(new URL('/link/workbench/', remoteOrigin), {
-      agent, method: 'HEAD', timeout: 5000, headers: { cookie: remoteCookie },
+      agent, method: 'HEAD', timeout: 5000, headers: { ...relayTargetHeaders(target), cookie: remoteCookie },
     }, res => {
       res.resume();
       const status = res.statusCode;
@@ -50,11 +50,13 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
       if (webRoot && url.pathname === '/link/workbench/workbench.js' && req.method === 'GET') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end(await readFile(new URL('workbench.js', webRoot))); return; }
       if (!url.pathname.startsWith('/link/workbench/') || !['GET', 'HEAD', 'POST'].includes(req.method)) throw Object.assign(new Error('路径未授权'), { status: 403 });
       const headers = {};
-      for (const [key, value] of Object.entries(req.headers)) if (value !== undefined && !['cookie','authorization','host','origin','referer','connection','upgrade','sec-websocket-key','sec-websocket-version'].includes(key)) headers[key] = value;
+      for (const [key, value] of Object.entries(req.headers)) if (value !== undefined && !['cookie','authorization','host','origin','referer','connection','upgrade','sec-websocket-key','sec-websocket-version','x-benchgo-relay-target'].includes(key)) headers[key] = value;
+      Object.assign(headers, relayTargetHeaders(target));
       // Only static assets pass through unchanged. HTML must remain decodable for path/CSP rewriting.
       const staticAsset = url.pathname.startsWith('/link/workbench/plugins/') || url.pathname.startsWith('/link/workbench/assets/');
       headers['accept-encoding'] = staticAsset ? req.headers['accept-encoding'] || 'identity' : 'identity'; headers.cookie = remoteCookie; headers.origin = remoteOrigin;
       const remote = request(new URL(url.pathname + url.search, remoteOrigin), { agent, method: req.method, headers }, response => {
+        if (response.statusCode >= 200 && response.statusCode < 400) onSuccess?.();
         const outgoing = { ...response.headers, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
         delete outgoing['set-cookie']; delete outgoing['x-frame-options']; delete outgoing['strict-transport-security'];
         if (outgoing['content-security-policy']) outgoing['content-security-policy'] = outgoing['content-security-policy'].replace(/frame-ancestors[^;]*/g, "frame-ancestors 'self' " + parentOrigin + ' dsh-app:');
@@ -85,7 +87,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
     activeSockets.add(ws);
     const endpoint = new URL('/link/workbench/api/voice/realtime', remoteOrigin);
     endpoint.protocol = 'wss:';
-    const remote = new WebSocket(endpoint, { agent, origin: remoteOrigin, headers: { cookie: remoteCookie }, handshakeTimeout: 10000, maxPayload: 64 * 1024, perMessageDeflate: false });
+    const remote = new WebSocket(endpoint, { agent, origin: remoteOrigin, headers: { ...relayTargetHeaders(target), cookie: remoteCookie }, handshakeTimeout: 10000, maxPayload: 64 * 1024, perMessageDeflate: false });
     const pending = []; let bytes = 0, ended = false;
     const stop = error => {
       if (ended) return;
@@ -126,7 +128,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, webRo
           if (typeof input.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(input.id) || requests.has(input.id) || requests.size >= 64) throw new Error('流请求无效');
           const body = JSON.stringify(input.body);
           if (input.type !== 'open' || typeof input.body !== 'object' || body.length > 1024 * 1024) throw new Error('流请求无效');
-          const remote = request(new URL('/link/workbench/remote/open', remoteOrigin), { agent, method: 'POST', headers: { cookie: remoteCookie, origin: remoteOrigin, 'content-type': 'application/json' } }, response => {
+          const remote = request(new URL('/link/workbench/remote/open', remoteOrigin), { agent, method: 'POST', headers: { ...relayTargetHeaders(target), cookie: remoteCookie, origin: remoteOrigin, 'content-type': 'application/json' } }, response => {
             send({ id: input.id, type: 'headers', status: response.statusCode });
             let buffer = '';
             response.setEncoding('utf8');

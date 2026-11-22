@@ -73,6 +73,7 @@ async function initializeWeb(ctx, { directory, getCommander = () => ctx.get('com
       return { bound: !!session, ...(session ? { id: session.id, cursor: session.cursor, provider: session.provider, model: session.model, route: { providerId: session.route.providerId, model: session.route.model } } : {}) };
     }
     if (action === 'browse') return projects.browse(input);
+    if (action === 'folder') return projects.folder(input);
     if (action === 'clone') return projects.clone(input);
     if (action === 'dismiss') {
       const id = text(input.harnessSessionId, 'harnessSessionId', 200);

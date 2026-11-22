@@ -299,6 +299,7 @@ html[data-benchgo-desktop-embedded] .cmd-narrow .cmd-sidebar-nav { padding-top: 
 .cmd-folder-roots > span { flex: none; margin-right: 4px; color: var(--dsw-alias-label-secondary, #777); font-size: 12px; }
 .cmd-folder-location { display: flex; flex: none; gap: 4px; align-items: center; min-width: 0; margin-bottom: 8px; }
 .cmd-folder-location > span { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--dsw-alias-label-secondary, #777); font-size: 12px; }
+.cmd-folder-location .cmd-folder-create { width: auto; gap: 4px; padding: 0 6px; white-space: nowrap; }
 .cmd-folder-root { flex: none; padding: 5px 6px; border: 0; border-radius: 6px; color: inherit; background: transparent; cursor: pointer; white-space: nowrap; }
 .cmd-folder-search { display: flex; flex: none; align-items: center; gap: 7px; min-height: 32px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3, #88888825); border-radius: 7px; padding: 5px 9px; color: var(--dsw-alias-label-secondary, #777); }
 .cmd-folder-search:focus-within { border-color: var(--dsw-focus-ring-color, #4d6bfe); }
@@ -306,10 +307,24 @@ html[data-benchgo-desktop-embedded] .cmd-narrow .cmd-sidebar-nav { padding-top: 
 .cmd-folder-search input:focus-visible { outline: none; }
 .cmd-folder-search input::placeholder, .cmd-github-form input::placeholder { color: var(--dsw-alias-label-secondary, #777); opacity: .8; }
 .cmd-folder-entries { flex: 0 1 200px; height: 200px; min-height: 64px; overflow: auto; overscroll-behavior: contain; margin: 6px -4px 10px; padding: 0 4px; scrollbar-width: thin; scrollbar-color: var(--dsw-alias-border-l2, #88888840) transparent; }
-.cmd-folder-entries > button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 33px; padding: 7px 6px; border: 0; border-radius: 6px; color: inherit; background: transparent; cursor: pointer; text-align: left; }
-.cmd-folder-entries > button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, #88888812); }
-.cmd-folder-entries > button > span:not(.cmd-ui-icon) { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.cmd-folder-entries > button > .cmd-ui-icon { color: var(--dsw-alias-label-secondary, #777); }
+.cmd-folder-row { display: flex; align-items: center; min-width: 0; border-radius: 6px; }
+.cmd-folder-entry { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; min-height: 33px; padding: 7px 6px; border: 0; border-radius: 6px; color: inherit; background: transparent; cursor: pointer; text-align: left; user-select: none; }
+.cmd-folder-entry-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cmd-folder-entry .cmd-ui-icon { color: var(--dsw-alias-label-secondary, #777); }
+.cmd-folder-entry-icon, .cmd-folder-drag-handle { display: inline-flex; flex: none; align-items: center; justify-content: center; }
+.cmd-folder-drag-handle { touch-action: none; cursor: grab; }
+.cmd-folder-entry[data-folder-dragging] { opacity: .4; cursor: grabbing; }
+.cmd-folder-browser [data-drag-over] { background: var(--dsw-alias-interactive-bg-hover, #88888812); outline: 1px solid var(--dsw-focus-ring-color, #4d6bfe); outline-offset: -1px; }
+.cmd-folder-drag-preview { position: fixed; z-index: 3; top: 0; left: 0; max-width: min(240px, 50vw); padding: 5px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; border-radius: 6px; background: var(--dsw-alias-bg-layer-2, #fff); box-shadow: 0 3px 12px #0003; }
+.cmd-folder-more { margin-right: 3px; }
+@media (hover: hover) { .cmd-folder-row:hover { background: var(--dsw-alias-interactive-bg-hover, #88888812); } }
+.cmd-folder-edit { display: flex; flex: none; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 8px; padding: 8px; border: 1px solid var(--dsw-alias-border-l3, #88888825); border-radius: 7px; }
+.cmd-folder-edit label, .cmd-folder-edit p { display: grid; flex: 1 1 160px; min-width: 0; gap: 4px; margin: 0; }
+.cmd-folder-edit p { overflow-wrap: anywhere; }
+.cmd-folder-edit p strong { color: var(--dsw-alias-label-secondary, #777); font-size: 12px; font-weight: 400; }
+.cmd-folder-edit input { min-width: 0; padding: 5px 7px; border: 1px solid var(--dsw-alias-border-l3, #88888825); border-radius: 6px; color: inherit; background: transparent; }
+.cmd-folder-edit-actions { display: flex; gap: 4px; margin-left: auto; }
+.cmd-folder-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .cmd-folder-next { transform: rotate(-90deg); opacity: .65; }
 .cmd-folder-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 100%; box-sizing: border-box; padding: 12px; color: var(--dsw-alias-label-secondary, #777); text-align: center; font-size: 12px; }
 .cmd-folder-error-detail { max-width: 100%; overflow-wrap: anywhere; }
@@ -324,7 +339,15 @@ html[data-benchgo-desktop-embedded] .cmd-narrow .cmd-sidebar-nav { padding-top: 
 .cmd-github-form label { font-weight: 500; font-size: 12px; }
 .cmd-github-form input { min-width: 0; width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l3, #88888825); border-radius: 7px; color: inherit; background: transparent; }
 .cmd-github-form p { margin: 0 0 6px; font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-secondary, #777); }
-@media (pointer: coarse) { .cmd-project-icon-button { width: 36px; height: 36px; } .cmd-project-tabs button, .cmd-folder-root, .cmd-folder-entries > button, .cmd-project-submit .cmd-dialog-button, .cmd-folder-retry { min-height: 40px; } .cmd-creation-device .dowork-select { min-height: 44px; } .cmd-folder-search, .cmd-github-form input { min-height: 40px; } .cmd-project-dialog input { font-size: 16px; } }
+@media (pointer: coarse) {
+  .cmd-project-icon-button { width: 36px; height: 36px; }
+  .cmd-project-tabs button, .cmd-folder-root, .cmd-project-submit .cmd-dialog-button, .cmd-folder-retry { min-height: 40px; }
+  .cmd-folder-entry { min-height: 44px; padding: 0 6px 0 0; gap: 0; }
+  .cmd-folder-entry-icon, .cmd-folder-drag-handle, .cmd-folder-more { width: 44px; height: 44px; }
+  .cmd-creation-device .dowork-select { min-height: 44px; }
+  .cmd-folder-search, .cmd-github-form input { min-height: 40px; }
+  .cmd-project-dialog input { font-size: 16px; }
+}
 @media(hover:none) { .cmd-session-more { opacity: 1; } }
 @media(prefers-reduced-motion:reduce) { .cmd-ui-icon, .cmd-ui-icon > span { transition:none!important; animation:none!important; } }
 

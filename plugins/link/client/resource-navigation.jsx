@@ -9,10 +9,10 @@ import {UIIcon} from '../../base/client/iconsax.jsx';
 import {deviceStatus,workbenchUrl} from './device-state.mjs';
 import {observeHostTheme,sendWorkbenchTheme,themedWorkbenchUrl} from './device-theme.mjs';
 import {deviceLauncherMode} from './device-navigation.mjs';
-import {deviceRequest,normalizeScope,scopeDevices,resourceKey,readResourcePages,mergeResourcePage,sortResourceRecents,sessionActionAccess,canRetryResource,resourceRetryDelay,resourceQueryFailure} from './resource-state.mjs';
+import {deviceRequest,normalizeScope,scopeDevices,resourceKey,readResourcePages,mergeResourcePage,sortResourceRecents,sessionActionAccess,canRetryResource,resourceRetryDelay,resourceQueryFailure,resourceRequestId} from './resource-state.mjs';
 
 export function useResourceNavigation(enabled,showArchived){
-  enabled=enabled&&deviceLauncherMode()!=='remote';
+  enabled=enabled&&(deviceLauncherMode()!=='remote'||globalThis.__DSH_LINK_GROUP_RESOURCES__===true);
   const [scope,setScope]=useState(normalizeScope()),[devices,setDevices]=useState([]),[activeId,setActiveId]=useState('local'),[pages,setPages]=useState({}),[error,setError]=useState(''),[saveError,setSaveError]=useState(''),[saving,setSaving]=useState(false),[ready,setReady]=useState(false),[revision,setRevision]=useState(0);
   const generation=useRef(0),draft=useRef(null),identities=useRef(new Map()),touched=useRef(false),pageRef=useRef({}),requests=useRef(new Map()),deviceVersion=useRef(0),archiveView=useRef(showArchived);
   const [connecting,setConnecting]=useState(false);
@@ -132,7 +132,7 @@ export function useResourceNavigation(enabled,showArchived){
   const sessionAction=async(row,operation,title,{stopActivity}={})=>{
     const access=sessionActionAccess({remote,pages:pageRef.current},row,operation);
     if(!access.available)throw Error(access.reason);
-    const id=row.resourceId??row.id,requestId='sa:'+Date.now()+':'+crypto.randomUUID();
+    const id=row.resourceId??row.id,requestId='sa:'+Date.now()+':'+resourceRequestId();
     const result=await deviceRequest('sessionAction',{deviceId:row.deviceId,expectedHostId:row.device.hostId??null,expectedAuthorizationId:row.device.authorizationId??null,id,native:row.native===true,operation,requestId,...(operation==='rename'?{title}:{}),...(stopActivity===true?{stopActivity:true}:{})},AbortSignal.timeout(15000));
     if(result.accepted!==true||result.id!==id||result.operation!==operation||result.requestId!==requestId)throw Error('所属设备未确认会话操作，请刷新后核验');
     setRevision(v=>v+1);
@@ -233,6 +233,9 @@ export function ResourceStage({ target, onClose, sessionDevices, onSessionDevice
   const [entry, setEntry] = useState(null), [ready, setReady] = useState(false), [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0), [container, setContainer] = useState(null);
   const deviceId = target?.device.id;
+  const deviceParent = globalThis.__DSH_LINK_GROUP_RESOURCES__ === true && typeof target?.device.hostId === 'string'
+    && !target.resource.ownerTask && !target.resource.file && target.resource.resourceId
+    ? document.documentElement.getAttribute('data-benchgo-device-parent') : null;
   const identity = JSON.stringify([deviceId, target?.device.hostId, target?.device.authorizationId]);
   const url = entry?.identity === identity && entry?.attempt === attempt ? entry.url : '';
   useEffect(() => {
@@ -247,6 +250,19 @@ export function ResourceStage({ target, onClose, sessionDevices, onSessionDevice
   useEffect(() => {
     receiverReady.current = false; setReady(false); setEntry(null); setError('');
     if (!deviceId) return;
+    if (deviceParent) {
+      const requestId = target.requestId;
+      const receive = event => {
+        if (event.source !== window.parent || event.origin !== deviceParent || event.data?.type !== 'benchgo:device-switch:resource-result' || event.data.requestId !== requestId) return;
+        clearTimeout(timer);
+        if (event.data.error) setError(event.data.error);
+        else onClose();
+      };
+      const timer = setTimeout(() => setError('目标工作台未响应，请重试'), 35_000);
+      window.addEventListener('message', receive);
+      window.parent.postMessage({ type: 'benchgo:device-switch:resource', hostId: target.device.hostId, requestId, resource: target.resource }, deviceParent);
+      return () => { clearTimeout(timer); window.removeEventListener('message', receive); };
+    }
     const controller = new AbortController();
     void deviceRequest('select', { deviceId }, AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])).then(value => {
       if (controller.signal.aborted) return;
@@ -259,7 +275,7 @@ export function ResourceStage({ target, onClose, sessionDevices, onSessionDevice
       setEntry({ identity, attempt, url: themedWorkbenchUrl(next.href) });
     }).catch(reason => { if (!controller.signal.aborted) setError(reason.message); });
     return () => controller.abort();
-  }, [identity, attempt]);
+  }, [identity, attempt, deviceParent, deviceParent ? target?.requestId : null]);
   useEffect(() => {
     if (url) return observeHostTheme(theme => sendWorkbenchTheme(frame.current, url, theme));
   }, [url]);
@@ -329,10 +345,13 @@ export function ResourceStage({ target, onClose, sessionDevices, onSessionDevice
   </div>, container);
 }
 
-export function installResourceReceiver(host, { open, newSession, addProject, projectApi, getDefaultProjectId, onSessionDevices }) {
-  const origin = new URLSearchParams(location.hash.slice(1)).get('resourceParentOrigin');
-  if (window.parent === window || !origin) return;
-  try {
+export function installResourceReceiver(host, { open, newSession, addProject, projectApi, projectFolderActions, getDefaultProjectId, onSessionDevices }) {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const resourceOrigin = params.get('resourceParentOrigin');
+  const origin = resourceOrigin || params.get('deviceParentOrigin');
+  const desktopOwner = window.parent === window && document.documentElement.hasAttribute('data-windows-titlebar');
+  if (!desktopOwner && (window.parent === window || !origin)) return;
+  if (!desktopOwner) try {
     const parent = new URL(origin);
     if (!['http:', 'https:', 'dsh-app:'].includes(parent.protocol) || (parent.origin !== origin && 'dsh-app://' + parent.host !== origin)) return;
   } catch { return; }
@@ -354,6 +373,7 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
   };
   const requests = new Map(), projectRequests = new Map(), cancellations = new Set();
   const projectActions = typeof projectApi === 'function' ? ['browse', 'project', 'clone'] : [];
+  if (projectActions.length && projectFolderActions) projectActions.push('folder');
   if (typeof host.workspaces?.delete === 'function' && typeof getDefaultProjectId === 'function') projectActions.push('deleteProject');
   const loadedValue = async (list, pick, label) => {
     const find = () => pick(list.getSnapshot());
@@ -417,13 +437,14 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
     else await host.sidebarRight.openResource(address, { params: { line: resource.file.line } });
   };
   const ready = () => {
-    document.documentElement.setAttribute('data-resource-embedded', '');
+    if (resourceOrigin) document.documentElement.setAttribute('data-resource-embedded', '');
     window.parent.postMessage({ type: 'benchgo:resource:ready', projectActions,
       executionReadOnly: !!(host.conversation?.blocks?.storeFor && host.conversation?.blocks?.set), files: fileWorkspaceAvailable(), sessionDevices: typeof onSessionDevices === 'function' }, origin);
   };
-  const receive = event => {
-    if (event.source !== window.parent || event.origin !== origin) return;
+  const receive = (event, local = false) => {
+    if (!local && (event.source !== window.parent || event.origin !== origin)) return;
     if (event.data?.type === 'benchgo:resource:probe') { ready(); return; }
+    if (!resourceOrigin && event.data?.type !== 'benchgo:resource:open') return;
     if (event.data?.type === 'benchgo:resource:session-devices') {
       const { activeId, devices } = event.data;
       onSessionDevices?.(Array.isArray(devices) && devices.some(device => device.id === activeId) ? {
@@ -457,7 +478,11 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
             await host.workspaces.delete(args.id);
             return { type: 'benchgo:project:result', requestId, value: { deleted: true, id: args.id } };
           }
-          const input = action === 'clone' ? { url: args?.url } : args?.path === undefined ? {} : { path: args.path };
+          let input;
+          if (action === 'folder') {
+            const { operation, directory, path, name, destination } = args ?? {};
+            input = { operation, directory, path, name, destination };
+          } else input = action === 'clone' ? { url: args?.url } : args?.path === undefined ? {} : { path: args.path };
           return { type: 'benchgo:project:result', requestId, value: await projectApi(action, input) };
         }).catch(reason => ({ type: 'benchgo:project:result', requestId, error: reason.message })).finally(() => { entry.done = true; });
         projectRequests.set(requestId, entry);
@@ -500,11 +525,21 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
       requests.set(requestId, operation);
       if (requests.size > 128) requests.delete(requests.keys().next().value);
     }
-    void requests.get(requestId).then(result => { if (!disposed) window.parent.postMessage(result, origin); });
+    void requests.get(requestId).then(result => {
+      if (disposed) return;
+      if (local) window.dispatchEvent(new CustomEvent('benchgo:device-resource-opened', { detail: result }));
+      else window.parent.postMessage(result, origin);
+    });
   };
-  window.addEventListener('message', receive);
+  const localReceive = event => receive({ data: { ...event.detail, type: 'benchgo:resource:open' } }, true);
+  if (desktopOwner) document.addEventListener('benchgo:device-resource', localReceive);
+  else window.addEventListener('message', receive);
   // The official shell can finish loading before this async sidebar mounts.
   // Announce readiness here, so a one-shot onLoad probe cannot be lost.
-  ready();
-  return () => { disposed = true; clearInputPolicy(); cancellations.forEach(cancel => cancel()); window.removeEventListener('message', receive); };
+  if (!desktopOwner) ready();
+  return () => {
+    disposed = true; clearInputPolicy(); cancellations.forEach(cancel => cancel());
+    if (desktopOwner) document.removeEventListener('benchgo:device-resource', localReceive);
+    else window.removeEventListener('message', receive);
+  };
 }

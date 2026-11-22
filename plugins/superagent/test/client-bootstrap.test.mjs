@@ -1,4 +1,5 @@
 import { retainAssistantSession } from '../client/session-retain.mjs';
+import { createConfigSync } from '../client/config-sync.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -15,7 +16,7 @@ function load(path, overrides = {}, { suffix = '', globals = {} } = {}) {
     module, exports: module.exports, AbortController, crypto: webcrypto, queueMicrotask: fn => fn(), setTimeout: fn => fn(),
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
     document: { baseURI: 'https://benchgo.test/', dispatchEvent() {}, addEventListener() {}, removeEventListener() {}, createElement: () => ({ remove() {} }), head: { append() {} } },
-    require: id => id.endsWith('session-retain.mjs') ? { retainAssistantSession } : overrides[id] || empty,
+    require: id => id.endsWith('session-retain.mjs') ? { retainAssistantSession } : overrides[id] || (id === 'react' ? { createElement: () => null } : empty),
     ...globals,
   });
   return module.exports;
@@ -77,6 +78,31 @@ test('assistant conversation retains the official composer without a replacement
   const source = readFileSync(new URL('../client/conversation.jsx', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /InboxComposer|mountComposerInboxAdapter|<textarea|conversation\.composer/);
   assert.match(source, /renderFactorySlot\('conversation\.content'/);
+});
+
+test('identity notification refreshes the sidebar snapshot even with a stale state read in flight', async () => {
+  const sync = createConfigSync(), reads = [];
+  let refreshIdentity;
+  const assistant = load('../client/index.jsx', {
+    './activity-remote.jsx': { mountAssistantActivity: (_ctx, _api, refresh) => { refreshIdentity = refresh; } },
+    './config-sync.mjs': { assistantConfigSync: sync },
+    '../../shared/client/perf-trace.mjs': { perfTrace: { time: () => () => {} } },
+    '../../base/client/http-response.mjs': { readJsonResponse: response => response.json() },
+  }, { suffix: '\nexport { api };', globals: { URL, AbortSignal, fetch: () => new Promise(resolve => {
+    reads.push(name => resolve({ json: async () => ({ config: { revision: 1, name } }) }));
+  }) } });
+  assistant.mountAssistant({ effect: () => {}, slots: { inject: () => {} } });
+  sync.accept({ revision: 1, name: '' }, sync.begin());
+  const stale = assistant.api('state');
+  const updated = new Promise(resolve => sync.subscribe(resolve));
+
+  refreshIdentity();
+  assert.equal(reads.length, 2);
+  reads[1]('小北');
+  await updated;
+  reads[0]('');
+  await stale;
+  assert.equal(sync.getSnapshot().name, '小北');
 });
 
 test('first registered main panel opens SuperAgent and remount does not steal navigation', () => {

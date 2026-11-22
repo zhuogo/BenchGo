@@ -182,7 +182,8 @@ test('board artifacts load only on selection, render compact states and open ver
     await tabs.getByRole('tab',{name:/^审核/}).focus();await page.keyboard.press('ArrowRight');
     await panel.getByRole('button',{name:'说明 文档.md',exact:true}).waitFor();
     assert.equal(await reads(),1);assert.equal(await artifacts().getAttribute('aria-selected'),'true');
-    assert(await panel.getByText('当前工作台的助手产物库，不限于当前聊天。',{exact:true}).isVisible());
+    assert.equal(await panel.locator('.ba-artifacts-head').count(),0);
+    assert(await panel.getByRole('tablist',{name:'产物分类',exact:true}).isVisible());
     assert.equal(await panel.getByRole('checkbox').count(),0,'compact files omit resource-page bulk controls');
     await page.evaluate(()=>window.scenarioControl.openFail=true);
     await panel.getByRole('button',{name:'说明 文档.md',exact:true}).click();
@@ -206,7 +207,7 @@ test('board artifacts load only on selection, render compact states and open ver
       assert.equal(geometry.tabs.length,4);assert(geometry.tabs.every(tab=>tab.width>=72&&!tab.clipped),'four board tabs stay readable and usable');
       if(captureDir){await mkdir(captureDir,{recursive:true});await page.screenshot({path:join(captureDir,`artifacts-${dark?'dark':'light'}-${width}-${state}.png`)});}
       if(state==='loading'){await tabs.getByRole('tab',{name:'身份',exact:true}).click();await page.evaluate(()=>window.finishArtifactRead());assert.equal(await panel.locator('.ba-artifacts').count(),0,'late file results cannot mount in another tab');}
-      if(state==='error'){await page.evaluate(()=>window.scenarioControl.artifactState='data');await panel.getByRole('button',{name:'重试',exact:true}).click();await panel.getByRole('button',{name:'说明 文档.md',exact:true}).waitFor();}
+      if(state==='error'){await page.evaluate(()=>window.scenarioControl.artifactState='data');await panel.getByRole('alert').getByRole('button',{name:'重试',exact:true}).click();await panel.getByRole('button',{name:'说明 文档.md',exact:true}).waitFor();}
     }
     await artifacts().focus();await page.keyboard.press('ArrowRight');assert.equal(await tabs.getByRole('tab',{name:'身份',exact:true}).getAttribute('aria-selected'),'true');
     assert.equal(await tabs.getByRole('tab').evaluateAll(nodes=>nodes.filter(node=>node.tabIndex===0).length),1);

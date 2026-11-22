@@ -44,22 +44,32 @@ test('device center renders server preparation and relay pool states across them
         const relayUrl = 'https://backup.example.com:24680';
         const nodes = [
           {id:'preferred',url:'https://preferred-relay.example.com:24680',enabled:true,connected:false,checkedAt:1795000000000,lastError:'网络超时'},
-          {id:'backup',url:relayUrl,enabled:true,connected:true,checkedAt:1795000000000},
+          {id:'backup',url:relayUrl,enabled:true,connected:true,checkedAt:1795000000000,lastError:'中继数据通道已关闭'},
         ];
         const hostStatus = () => ({relay:{fingerprint:'relay-revision',preferredId:'preferred',nodes:window.relayMode==='data'?nodes:[]}});
         const remote = {id:'remote',name:'远端工作台',kind:'computer',status:'online',currentPath:'relay',currentRelayUrl:relayUrl};
         const runtime = {bootstrap:()=>null,isNative:()=>false,clientName:()=> '本机',call:async(action,input)=>{
           window.calls.push({action,input});
-          if(action==='list')return {devices:[{id:'local',name:'本机',kind:'local',status:'online'},...(['relay-data','directory','managed'].includes(mode)?[{...remote,...(mode==='managed'?{sshManaged:true,sshStatus:'connected',status:'offline'}: {})}]:[])],activeId:mode==='relay-data'?'remote':'local',capabilities:{ssh:mode!=='phone',hostAdmin:relayScenario,relayDeploy:relayScenario,serverManagement:mode==='managed'}};
+          if(action==='list') {
+            const local = {id:'local',name:'本机',kind:'local',status:'online'};
+            const managed = mode.startsWith('managed-');
+            const devices = managed ? [{...remote,sshManaged:true,sshStatus:'connected',status:mode.slice(8),lastError:'中继数据通道已关闭'}]
+              : ['relay-data','directory'].includes(mode) ? [remote] : [];
+            return {devices:[local,...devices],activeId:mode==='relay-data'?'remote':'local',capabilities:{ssh:mode!=='phone',hostAdmin:relayScenario,relayDeploy:relayScenario,serverManagement:managed},...(managed ? {group:{enabled:true,manageable:true,members:[{id:'remote'}]}} : {})};
+          }
           if(action==='serverTerminal')return {id:'fixture-terminal',title:'ubuntu@host.test'};
           if(action==='serverTerminalRead')return {output:input.offset?'':'terminal fixture ready',offset:1,closed:false};
           if(action==='serverPairing')return {mode:'public',webUrl:'https://host.test/link/?code=fixture',uri:'benchgo://pair?code=fixture',expiresAt:Date.now()+60000};
           if(action==='serverPairingStatus')return {pending:window.calls.some(item=>item.action==='serverPairingDecide')?[]:[{id:'mobile',name:'手机'}]};
           if(['serverTerminalWrite','serverTerminalClose','serverPairingDecide'].includes(action))return {ok:true};
           if(action==='select' && mode==='directory')return {device:remote,url:'http://127.0.0.1:17872/directory-workbench/'};
+          if(action==='select' && mode==='managed-offline')throw Object.assign(Error('中继数据通道已关闭'),{code:'OFFLINE'});
           if(action==='serverPrefetch')return {jobId:'resources'};
           if(action==='jobCancel')return {ok:true};
           if(action==='sshProbe')return {fingerprint:'SHA256:verified'};
+          if(action==='relayProbe')return {fingerprint:'SHA256:relay-verified'};
+          if(action==='relayDeploy')return {jobId:'relay-deployment'};
+          if(action==='job' && input.jobId==='relay-deployment')return {id:'relay-deployment',kind:'relay',state:'completed',relay:{url:'https://relay.example.test:24680'},steps:[]};
           if(action==='sshConnect')return {jobId:'install'};
           if(action==='job')return input.jobId==='install'?{id:'install',kind:'server',state:'running',cancellable:false,steps:[{label:'上传部署资源',state:'running',message:'远端安装已开始'}]}:resourceJob();
           throw Error('Unexpected action '+action);
@@ -68,6 +78,7 @@ test('device center renders server preparation and relay pool states across them
           if(action==='hostStatus' && window.relayMode==='loading') return new Promise(()=>{});
           if(action==='hostStatus' && window.relayMode==='error') throw Error('读取连接超时');
           if(action==='relayTest') return {ok:true,message:'中继验证通过',latencyMs:23};
+          if(action==='hostStatus' && window.calls.some(call=>call.action==='relayDeploy')) return {relay:{nodes:[{id:'deployed',url:'https://relay.example.test:24680',enabled:true,connected:true}]}};
           return relayScenario?hostStatus():{};
         }};
         root.render(<DeviceCenter key={++serial} runtime={runtime}/>);
@@ -85,9 +96,20 @@ test('device center renders server preparation and relay pool states across them
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + css + '</style></head><body style="margin:0"><div id="root"></div></body></html>' }));
     await page.goto('http://127.0.0.1/'); await page.addScriptTag({ content: script });
-    await page.evaluate(() => window.renderScenario('managed'));
-    await page.getByText('工作台 离线', { exact: true }).waitFor();
-    await page.getByText('SSH 已连接', { exact: true }).waitFor();
+    for (const [width, theme, state, label] of [[1280, 'light', 'online', '可连接'], [390, 'dark', 'offline', '离线'], [1280, 'light', 'unknown', '待检查']]) {
+      await page.setViewportSize({ width, height: 850 });
+      await page.emulateMedia({ colorScheme: theme });
+      await page.evaluate(state => window.renderScenario('managed-' + state), state);
+      const row = page.getByRole('button', { name: new RegExp('远端工作台.*服务器.*' + label) });
+      await row.getByRole('img', { name: label, exact: true }).waitFor();
+      assert.equal(await row.locator('small').innerText(), '服务器');
+      assert.equal(await row.getByText('中继数据通道已关闭').count(), 0);
+      await page.screenshot({ path: join(screenshots, `server-status-${state}-${width}-${theme}.png`) });
+      if (state === 'offline') {
+        await row.click();
+        await page.getByRole('alert').getByText('暂时无法连接「远端工作台」，请重试', { exact: true }).waitFor();
+      }
+    }
     await page.getByRole('button', { name: '打开 远端工作台 的 SSH 终端' }).click();
     await page.getByText('ubuntu@host.test', { exact: true }).waitFor();
     await page.locator('.xterm-helper-textarea').press('a');
@@ -133,7 +155,14 @@ test('device center renders server preparation and relay pool states across them
     for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
       await page.setViewportSize({ width, height: 850 }); await page.emulateMedia({ colorScheme: theme });
       await page.waitForFunction(theme => document.documentElement.getAttribute('data-dsh-device-theme') === theme, theme);
-      await openAddDevice('phone');
+      await page.evaluate(() => window.renderScenario('phone'));
+      const directory = page.getByRole('tabpanel', { name: '设备', exact: true });
+      const addDevice = directory.getByRole('button', { name: '添加设备', exact: true });
+      await addDevice.waitFor();
+      assert.equal(await directory.getByText('尚未添加远程设备', { exact: true }).count(), 0);
+      assert.equal(await directory.getByRole('button', { name: /^(添加服务器|连接已有设备)$/ }).count(), 0);
+      await page.screenshot({ path: join(screenshots, `device-directory-local-${width}-${theme}.png`), fullPage: true });
+      await addDevice.click();
       const paths = page.getByRole('tablist', { name: '添加方式', exact: true });
       const existing = paths.getByRole('tab', { name: '连接已有设备', exact: true });
       const server = paths.getByRole('tab', { name: '添加服务器', exact: true });
@@ -277,12 +306,15 @@ test('device center renders server preparation and relay pool states across them
       await page.getByRole('tab', { name: '中继池', exact: true }).click();
       await page.getByRole('tabpanel', { name: '中继池', exact: true }).getByRole('button', { name: '添加中继' }).click();
       const dialog = page.getByRole('dialog');
-      await dialog.getByRole('group', { name: '中继添加方式' }).getByRole('button', { name: '部署', exact: true }).click();
+      const deploymentTab = dialog.getByRole('group', { name: '中继添加方式' }).getByRole('button', { name: '部署', exact: true });
+      assert.equal(await deploymentTab.getAttribute('aria-pressed'), 'true');
+      await dialog.getByText(/在启用的 UFW 中放行 24680\/TCP/).waitFor();
       assert.equal(await dialog.getByRole('link', { name: '部署指南' }).getAttribute('href'), 'https://benchgo.cn/docs/linux-server');
       const advanced = dialog.getByRole('button', { name: '高级设置', exact: true });
       const relayPort = dialog.getByLabel('中继业务端口', { exact: true });
       assert.equal(await advanced.getAttribute('aria-expanded'), 'false');
       assert.equal(await relayPort.isVisible(), false);
+      assert.equal(await dialog.getByLabel('证书模式', { exact: true }).isVisible(), false);
       await page.screenshot({ path: join(screenshots, `relay-deploy-${width}-${theme}.png`), fullPage: true });
       await advanced.focus();
       await page.keyboard.press('Space');
@@ -308,6 +340,23 @@ test('device center renders server preparation and relay pool states across them
       await advanced.click();
       assert.equal(await relayPort.inputValue(), '24681');
     }
+    await page.evaluate(() => window.renderScenario('relay-empty'));
+    await page.getByRole('tab', { name: '中继池', exact: true }).click();
+    await page.getByRole('button', { name: '添加中继', exact: true }).click();
+    const relayDialog = page.getByRole('dialog');
+    await relayDialog.getByLabel('服务器地址', { exact: true }).fill('relay.example.test');
+    await relayDialog.getByLabel('密码', { exact: true }).fill('fixture-password');
+    await relayDialog.getByRole('button', { name: '检查服务器', exact: true }).click();
+    await relayDialog.getByText('SHA256:relay-verified', { exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.calls.filter(call => ['relayProbe', 'relayDeploy'].includes(call.action))), [
+      { action: 'relayProbe', input: { host: 'relay.example.test', port: 22, username: 'root' } },
+    ]);
+    await relayDialog.getByRole('button', { name: '确认并部署', exact: true }).click();
+    await relayDialog.getByText('本机已接入此节点', { exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.calls.find(call => call.action === 'relayDeploy').input), {
+      host: 'relay.example.test', port: 22, username: 'root', name: 'relay.example.test', source: 'mirror', password: 'fixture-password',
+      sslMode: 'domain', domain: 'relay.example.test', publicIp: '', email: '', relayPort: 24680, challengeMode: 'webroot', webroot: '', fingerprint: 'SHA256:relay-verified',
+    });
     for (const [width, theme] of [[1280, 'light'], [390, 'dark']]) {
       await page.setViewportSize({ width, height: 850 }); await page.emulateMedia({ colorScheme: theme });
       for (const [mode, expected] of [['loading', '正在读取中继…'], ['error', '无法读取中继状态 · 读取连接超时'], ['empty', '尚未添加中继'], ['data', '首选中继']]) {
@@ -327,6 +376,7 @@ test('device center renders server preparation and relay pool states across them
         if (mode === 'data') {
           await relay.getByText(/当前工作台使用/).waitFor();
           await relay.getByText('通道已连接', { exact: true }).waitFor();
+          assert.equal(await relay.getByText('中继数据通道已关闭', { exact: true }).count(), 0);
           await relay.getByText('网络超时', { exact: true }).waitFor();
           assert.equal(await relay.locator('time').count(), 2);
           await relay.getByRole('button', { name: '重试检测' }).click();

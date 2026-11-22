@@ -126,10 +126,10 @@ function allowedRedirect(url, initial) {
     fail('UPDATE_REDIRECT', '更新源返回了不受信任的跳转地址');
 }
 
-async function consumeUpdate(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes, timeoutMs, idleTimeoutMs, signal, consume }) {
+async function consumeUpdate(initial, { fetcher = globalThis.fetch, maxBytes, timeoutMs, idleTimeoutMs, signal, consume }) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isFinite(timeoutMs) || timeoutMs < 1
     || idleTimeoutMs !== undefined && (!Number.isFinite(idleTimeoutMs) || idleTimeoutMs < 1)) fail('UPDATE_REQUEST', '更新请求限制无效');
-  const initial = resolveUpdateUrl(url, config), controller = new AbortController();
+  const controller = new AbortController();
   const timeout = new UpdateFeedError('UPDATE_TIMEOUT', '更新源响应超时，请重试或切换更新源');
   const idleTimeout = new UpdateFeedError('UPDATE_TIMEOUT', '更新下载长时间没有进展，请重试或切换更新源');
   const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
@@ -195,7 +195,7 @@ async function consumeUpdate(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = gl
 
 export async function fetchUpdateBytes(url, { config = DEFAULT_UPDATE_CONFIG, fetcher = globalThis.fetch, maxBytes = 256 * 1024, timeoutMs = 20_000, signal } = {}) {
   const chunks = [];
-  const size = await consumeUpdate(url, { config, fetcher, maxBytes, timeoutMs, signal, consume: value => { chunks.push(Buffer.from(value)); } });
+  const size = await consumeUpdate(resolveUpdateUrl(url, config), { fetcher, maxBytes, timeoutMs, signal, consume: value => { chunks.push(Buffer.from(value)); } });
   return Buffer.concat(chunks, size);
 }
 
@@ -227,7 +227,7 @@ async function streamReleaseArtifact(artifact, { file, config, fetcher, timeoutM
   };
   try {
     report('downloading');
-    const size = await consumeUpdate(artifact.url, { config, fetcher, maxBytes: artifact.size, timeoutMs, idleTimeoutMs, signal, consume: async value => {
+    const size = await consumeUpdate(resolveUpdateUrl(artifact.url, config), { fetcher, maxBytes: artifact.size, timeoutMs, idleTimeoutMs, signal, consume: async value => {
       try { await handle.writeFile(value); }
       catch (cause) { throw new UpdateFeedError('UPDATE_FILE', '无法写入更新文件，请检查磁盘空间与权限', { cause }); }
       hash.update(value);
@@ -300,4 +300,18 @@ export async function fetchVerifiedDownloadCatalog({ releaseVersion, ...options 
   const signed = await fetchSignedJson(releaseDownloadUrl('downloads.json', `v${releaseVersion}`), { ...options,
     missingMetadataMessage: `BenchGo ${releaseVersion} 的部署资源尚未发布，请使用完整离线包或等待匹配发行` });
   return { catalog: validateDownloadCatalog(signed.value, releaseVersion), bytes: signed.bytes, signatureBytes: signed.signatureBytes };
+}
+
+/** Read the same signed download directory as the BenchGo website. */
+export async function fetchLatestDownloadCatalog({ fetcher, publicKey, signal } = {}) {
+  const url = `https://raw.githubusercontent.com/${UPDATE_REPOSITORY}/release-metadata/latest.json`;
+  const chunks = [];
+  await consumeUpdate(url, { fetcher, signal, maxBytes: 256 * 1024, timeoutMs: 8000, consume: value => chunks.push(Buffer.from(value)) });
+  let snapshot;
+  try { snapshot = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { fail('UPDATE_MANIFEST', '下载目录不是有效 JSON'); }
+  if (typeof snapshot?.catalog !== 'string' || typeof snapshot.signature !== 'string') fail('UPDATE_MANIFEST', '下载目录格式无效');
+  const key = publicKey || await readFile(new URL('./update-public-key.pem', import.meta.url));
+  const catalog = verifySignedJson(Buffer.from(snapshot.catalog, 'base64'), Buffer.from(snapshot.signature), key);
+  return validateDownloadCatalog(catalog, snapshot.version);
 }

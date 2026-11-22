@@ -35,6 +35,64 @@ test('connections preserve credentials independently and removing one never remo
   const restored = await openDeviceRegistry(directory); assert.equal(restored.get(b.id).status, 'unknown');
   if (process.platform !== 'win32') assert.equal((await stat(join(directory, 'connections.json'))).mode & 0o777, 0o600);
 });
+test('an SSH registration and group membership with the same fingerprint share one server entry', async t => {
+  const directory = await temp(t);
+  const hostId = 'sha256:' + Buffer.alloc(32, 1).toString('base64');
+  const localId = 'sha256:' + Buffer.alloc(32, 2).toString('base64');
+  const rows = [{ id: localId, name: 'A', routes: [] }, {
+    id: hostId, name: '服务器', generation: 'first', routes: [{ kind: 'direct', url: 'https://server.test', pin: hostId.slice(7) }],
+  }];
+  const group = { localId, members: () => rows, member: id => rows.find(row => row.id === id && !row.removed), enabled: () => true, token: id => 'group-' + id };
+  const registry = await openDeviceRegistry(directory, { group });
+  await registry.select(hostId);
+  await registry.setScope({ mode: 'selected', deviceIds: [hostId] });
+  await registry.upsert({ id: 'ssh-id', kind: 'ssh', hostId, name: '旧服务器别名', token: 'paired', authorizationId: 'old', ssh: { host: 'server.test' } });
+
+  const snapshot = registry.list();
+  assert.equal(snapshot.activeId, 'ssh-id');
+  assert.deepEqual(snapshot.devices.slice(1).map(({ id, kind, name, authorizationId }) => ({ id, kind, name, authorizationId })),
+    [{ id: 'ssh-id', kind: 'ssh', name: '服务器', authorizationId: localId }]);
+  assert.deepEqual(registry.scope(), { mode: 'selected', deviceIds: ['ssh-id'] });
+  const target = registry.get('ssh-id');
+  assert.equal(registry.get(hostId), target);
+  assert.equal(registry.isGroup('ssh-id'), true);
+  assert.equal(target.authorize(), 'group-' + hostId);
+  assert.equal(registry.sshRecords()[0].token, 'paired');
+  registry.markRoute('ssh-id', { kind: 'direct' });
+  registry.mark('ssh-id', 'online');
+  rows[1].name = '襄阳服务器';
+  assert.equal(registry.get('ssh-id'), target);
+  assert.equal(registry.list().devices[1].name, '襄阳服务器');
+  assert.equal(registry.list().devices[1].currentPath, 'direct');
+  assert.equal(registry.list().devices[1].status, 'online');
+
+  const restored = await openDeviceRegistry(directory, { group });
+  assert.equal(restored.list().activeId, 'ssh-id');
+  assert.equal(restored.list().devices[1].kind, 'ssh');
+  rows[1].removed = true;
+  assert.equal(restored.list().devices.length, 1);
+  assert.throws(() => restored.get('ssh-id'), /设备不存在/);
+  assert.throws(() => restored.get(hostId), /设备不存在/);
+});
+test('pairing two hosts through one relay keeps their credentials and aliases independent', async t => {
+  const directory = await temp(t);
+  const registry = await openDeviceRegistry(directory);
+  const url = 'https://shared-relay.example';
+  const hostA = 'sha256:' + Buffer.alloc(32, 1).toString('base64');
+  const hostB = 'sha256:' + Buffer.alloc(32, 2).toString('base64');
+  const first = { url, hostId: hostA, relayTarget: hostA, name: 'A' };
+  const second = { url, hostId: hostB, relayTarget: hostB, name: 'B' };
+  const a = await registry.upsert({ ...first, token: 'a-first' });
+  await registry.rename(a.id, '工作机 A');
+  const b = await registry.upsert({ ...second, token: 'b-first' });
+  assert.notEqual(a.id, b.id);
+  assert.equal((await registry.upsert({ ...first, token: 'a-new' })).id, a.id);
+  const restored = await openDeviceRegistry(directory);
+  assert.equal(restored.get(a.id).name, '工作机 A');
+  assert.equal(restored.get(a.id).token, 'a-new');
+  assert.equal(restored.get(b.id).name, 'B');
+  assert.equal(restored.get(b.id).token, 'b-first');
+});
 test('target rejects insecure addresses, embedded credentials and malformed pins', () => {
   for (const url of ['http://a.test', 'https://u:p@a.test', 'https://a.test/path', 'https://a.test/?token=bad']) assert.throws(() => normalizeTarget({ url }));
   assert.throws(() => normalizeTarget({ url: 'https://a.test', pin: 'invalid' }));
@@ -193,7 +251,7 @@ test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persi
   const hostId = 'sha256:' + identity.pin;
   let authorizationId = 'paired-sidebar';
   const server = createServer({ key: identity.key, cert: identity.cert }, async (req, res) => {
-    if (req.url === '/link/api/info') { assert.equal(req.headers.authorization, 'Bearer private-token'); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"hostName":"Legacy host"}'); return; }
+    if (req.url === '/link/api/info') { assert.equal(req.headers.authorization, 'Bearer private-token'); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ hostName: 'Legacy host', hostId, authorizationId })); return; }
     if (req.url === '/link/api/workbench') { assert.equal(req.headers.authorization, 'Bearer private-token'); authenticated++; res.writeHead(200, { 'set-cookie': 'dsh_link_workbench=private-cookie; HttpOnly; Secure; Path=/link/workbench/' }); res.end(JSON.stringify({ url: '/link/workbench/' })); return; }
     assert.equal(req.headers.cookie, 'dsh_link_workbench=private-cookie'); assert.equal(req.headers.authorization, undefined);
     if (req.url.endsWith('/remote/open')) { res.writeHead(200, { 'content-type': 'application/x-ndjson' }); res.write('{"type":"ready"}\n'); const interval = setInterval(() => res.write('{"type":"heartbeat"}\n'), 200); res.on('close', () => clearInterval(interval)); return; }
@@ -202,9 +260,10 @@ test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persi
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
   const target = { url: 'https://127.0.0.1:' + server.address().port, pin: identity.pin, token: 'private-token' };
   await assert.rejects(remoteJson({ ...target, pin: Buffer.alloc(32, 1).toString('base64') }, '/link/api/workbench', {}), /指纹/); assert.equal(authenticated, 0);
-  const proxy = await createDeviceProxy(target, { parentOrigin: 'http://127.0.0.1:4444' }); t.after(() => proxy.close());
+  let successfulProxyRequests = 0;
+  const proxy = await createDeviceProxy(target, { parentOrigin: 'http://127.0.0.1:4444', onSuccess: () => { successfulProxyRequests++; } }); t.after(() => proxy.close());
   const login = await fetch(await proxy.enter(), { redirect: 'manual' }), path = login.headers.get('location');
-  const response = await fetch(proxy.origin + path); assert.equal(response.headers.get('set-cookie'), null); assert.match(await response.text(), /href="\/s\/[A-Za-z0-9_-]+\/link\/workbench\//);
+  const response = await fetch(proxy.origin + path); assert.equal(response.headers.get('set-cookie'), null); assert.match(await response.text(), /href="\/s\/[A-Za-z0-9_-]+\/link\/workbench\//); assert.equal(successfulProxyRequests, 1, 'successful proxy responses notify the device center');
   assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'self' http:\/\/127.0.0.1:4444 dsh-app:/);
   const publicProxy = await createDeviceProxy(target, { parentOrigin: 'https://owner.test', publicOrigin: 'https://work.test', publicPrefix: '/p/cloud-route' });
   t.after(() => publicProxy.close());

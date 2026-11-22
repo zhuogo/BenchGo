@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readdir, readFile, realpath, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, symlink, writeFile, rm } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -31,6 +31,42 @@ test('browse shows only visible directories with parent, home and name filtering
   assert.deepEqual((await actions.browse({ path: directory, name: 'ALP' })).entries.map(e => e.name), ['Alpha']);
   await assert.rejects(actions.browse({ path: 'relative' }), /absolute/);
   await assert.rejects(actions.browse({ path: join(directory, 'file.txt') }), /not a directory/);
+});
+
+test('picker folder operations preserve contents and refuse collisions, links and registered projects', async t => {
+  const { directory, ctx, registered } = await fixture(t);
+  ctx.workspaceRegistry.list = () => registered.map(path => ({ path }));
+  const root = await realpath(directory);
+  const current = join(root, 'current'), destination = join(current, 'destination');
+  await mkdir(destination, { recursive: true });
+  const actions = projectActions(ctx);
+  const folder = (operation, args, base = current) => actions.folder({ operation, directory: base, ...args });
+  const { path: source } = await folder('create', { name: '新建目录' });
+  await writeFile(join(source, 'kept.txt'), 'contents');
+  const created = await actions.browse({ path: current });
+  assert.equal(created.folderManagement, true);
+  assert(created.entries.some(entry => entry.path === source));
+  await assert.rejects(folder('create', { name: '../outside' }), /有效/);
+  await assert.rejects(folder('rename', { path: source, name: 'destination' }), /同名/);
+  await assert.rejects(folder('move', { path: source, destination: source }), /同级/);
+  await assert.rejects(folder('delete', { path: current }), /当前列表/);
+
+  const { path: renamed } = await folder('rename', { path: source, name: 'renamed' });
+  const { path: moved } = await folder('move', { path: renamed, destination });
+  assert.equal(await readFile(join(moved, 'kept.txt'), 'utf8'), 'contents');
+  const { path: movedUp } = await folder('move', { path: moved, destination: current }, destination);
+  assert.equal(movedUp, renamed);
+  await folder('delete', { path: renamed });
+  await assert.rejects(readFile(join(renamed, 'kept.txt')), { code: 'ENOENT' });
+
+  const alias = join(current, 'alias');
+  await symlink(destination, alias, 'junction');
+  assert((await actions.browse({ path: current })).entries.find(entry => entry.path === alias).link);
+  await assert.rejects(folder('delete', { path: alias }), /普通文件夹/);
+  await assert.rejects(folder('create', { name: 'through-link' }, alias), /普通文件夹/);
+  await actions.project({ path: destination });
+  await assert.rejects(folder('delete', { path: destination }), /已添加的项目/);
+  await assert.rejects(folder('rename', { path: current, name: 'other' }, root), /已添加的项目/);
 });
 
 test('only successful additions update the remembered folder and it survives service reload', async t => {

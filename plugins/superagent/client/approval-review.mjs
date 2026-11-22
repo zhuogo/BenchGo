@@ -14,7 +14,7 @@ export function reviewApprovalResponse({ pending, origin, readOrigins, isCurrent
     busy = true;
     try {
       const origins = await readOrigins();
-      if (!isCurrent() || !pending.answerable || !origins.some(value => sameReviewOrigin(origin, value))) throw new Error('审批来源已失效，请刷新审核列表');
+      if (!isCurrent() || !pending.answerable || !origins.some(value => sameReviewOrigin(origin, value))) throw new Error('审批来源已失效，请查看最新审核请求');
       await pending.answer(outcome); settled = true;
     } finally { busy = false; }
   } };

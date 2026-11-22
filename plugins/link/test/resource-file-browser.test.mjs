@@ -40,7 +40,7 @@ test('cross-device delivery opens files only after its exact remote Session work
     page.on('pageerror', error=>errors.push(error.message));
     await page.route('**/*', async route=>{
       const url=new URL(route.request().url());
-      if(url.pathname==='/api/commander-devices') return route.fulfill({json:{url:'http://127.0.0.1:17883/remote/'}});
+      if(url.pathname==='/api/commander-devices') return route.fulfill({json:{url:'http://127.0.0.1:17883/remote/',device:{id:route.request().postDataJSON().deviceId}}});
       if(url.pathname==='/remote/') return route.fulfill({contentType:'text/html; charset=utf-8',body:'<!doctype html><p>远端执行工作区</p><script>'+receiverScript.replaceAll('</script','<\\/script')+'</script>'});
       return route.fulfill({contentType:'text/html',body:'<!doctype html><div id="root"></div>'});
     });

@@ -73,7 +73,7 @@ test('managed RouterGo lists routes by account capabilities and exact registered
   ]);
 });
 
-test('concurrent reads share a build, then resolve current provider models', async () => {
+test('concurrent and repeated selections share route metadata until configuration changes', async () => {
   let calls = 0, id = 'first';
   const catalog = fixture({ providers: [provider('primary', 'responses')], listModels: async () => {
     calls++;
@@ -84,7 +84,27 @@ test('concurrent reads share a build, then resolve current provider models', asy
   assert.equal(value.routes.find(row => row.tool === 'deepseek').reasoning.efforts[0].id, 'high');
   assert.equal(models[0].reasoning, undefined);
   id = 'second';
+  assert.equal((await catalog.models('codex'))[0].nativeModelId, 'first');
+  assert.equal(calls, 1);
+  catalog.invalidate();
   assert.equal((await catalog.models('codex'))[0].nativeModelId, 'second');
+  assert.equal(calls, 2);
+  id = 'third';
+  assert.equal((await catalog.models('codex', { fresh: true }))[0].nativeModelId, 'third');
+  assert.equal(calls, 3);
+});
+
+test('an in-flight catalog invalidation cannot confirm a stale native route', async () => {
+  let release, calls = 0;
+  const catalog = fixture({ providers: [provider('primary', 'responses')], listModels: async () => {
+    if (++calls === 1) return new Promise(resolve => { release = () => resolve([{ id: 'stale' }]); });
+    return [{ id: 'current' }];
+  } });
+  const pending = catalog.models('codex');
+  await new Promise(resolve => setImmediate(resolve));
+  catalog.invalidate();
+  release();
+  assert.equal((await pending)[0].nativeModelId, 'current');
   assert.equal(calls, 2);
 });
 

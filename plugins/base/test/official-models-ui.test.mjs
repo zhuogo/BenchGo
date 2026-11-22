@@ -6,7 +6,7 @@ import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
 import { officialModelsUi } from '../scripts/official-models-ui.mjs';
 import * as reasoning from '../client/model-reasoning-state.mjs';
-import { routerGo } from '../shared/builtin-providers.mjs';
+import { isRouterGo, routerGo } from '../shared/builtin-providers.mjs';
 import { hasTextCapability } from '../shared/model-capabilities.mjs';
 import * as routerGoAccount from '../shared/routergo-account.mjs';
 import * as providerTemplates from '../shared/provider-templates.mjs';
@@ -173,7 +173,7 @@ async function componentHarness(filename) {
           toggle(index) { setExpanded(current => { const next = new Set(current); if (!next.delete(index)) next.add(index); return next; }); },
           edit() {}, forget() {}, reset() {} };
       } };
-      if (id.endsWith('provider-settings.jsx')) return { ProviderBrandIcon: 'ProviderBrandIcon', routerGo };
+      if (id.endsWith('provider-settings.jsx')) return { ProviderBrandIcon: 'ProviderBrandIcon', isRouterGo, routerGo };
       if (id.endsWith('routergo-account.mjs')) return routerGoAccount;
       if (id.endsWith('provider-templates.mjs')) return providerTemplates;
       if (id.endsWith('DeepSeekModelsEditor.tsx')) return deepSeekModels;

@@ -1,8 +1,9 @@
 import { request } from 'node:https';
 import { WebSocket } from 'ws';
 import { isIP } from 'node:net';
+import { createPublicKey, randomBytes, sign } from 'node:crypto';
 import { remoteAgent } from '../devices/remote.mjs';
-import { RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_CHUNK_BYTES as CHUNK, RELAY_VOICE_PATH as VOICE, relayPathAllowed } from './relay-protocol.mjs';
+import { RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_CHUNK_BYTES as CHUNK, RELAY_VOICE_PATH as VOICE, relayHostClaim, relayPathAllowed } from './relay-protocol.mjs';
 
 const MAX_BUFFERED = 256 * 1024;
 const fail = message => Object.assign(new Error(message), { status: 502 });
@@ -28,7 +29,7 @@ function headersFor(input, target) {
   for (const name of ['accept', 'accept-encoding', 'accept-language', 'content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'cookie']) {
     if (typeof input.headers?.[name] === 'string') headers[name] = input.headers[name];
   }
-  if (['/link/api/rpc', '/link/api/workbench'].includes(input.path.split('?')[0]) && typeof input.headers?.authorization === 'string') headers.authorization = input.headers.authorization;
+  if (['/link/api/info', '/link/api/rpc', '/link/api/workbench'].includes(input.path.split('?')[0]) && typeof input.headers?.authorization === 'string') headers.authorization = input.headers.authorization;
   headers.host = new URL(target.url).host;
   headers.origin = targetOrigin(target);
   return headers;
@@ -37,6 +38,15 @@ function headersFor(input, target) {
 /** Outbound-only Link host tunnel. The upstream is always its pinned loopback Link listener. */
 export function createRelayHost(options) {
   const { relay, target } = validate(options);
+  const relayId = 'sha256:' + target.pin;
+  const publicKey = options.hostKey && createPublicKey(options.hostKey).export({ type: 'spki', format: 'der' }).toString('base64url');
+  const controlHeaders = () => {
+    const headers = { authorization: 'Bearer ' + options.token };
+    if (!publicKey) return headers;
+    const expires = Date.now() + 45_000, nonce = randomBytes(16).toString('base64url');
+    const proof = sign('sha256', Buffer.from(relayHostClaim(relay, relayId, expires, nonce)), options.hostKey).toString('base64url');
+    return { ...headers, 'x-benchgo-relay-target': relayId, 'x-benchgo-relay-proof': [publicKey, expires, nonce, proof].join('.') };
+  };
   const agent = remoteAgent(target), sockets = new Set(), work = new Set();
   let closed = false, connected = false, lastError = null, checkedAt = null, control, retryTimer, retryResolve, heartbeat;
   // Only the authenticated relay control channel supplies this socket address.
@@ -120,7 +130,7 @@ export function createRelayHost(options) {
     while (!closed) {
       try {
         const controlUrl = new URL(CONTROL, relay); controlUrl.protocol = 'wss:';
-        control = new WebSocket(controlUrl, { headers: { authorization: 'Bearer ' + options.token }, ...(options.relayCa ? { ca: options.relayCa } : {}), handshakeTimeout: 10_000, maxPayload: 16 * 1024, perMessageDeflate: false });
+        control = new WebSocket(controlUrl, { headers: controlHeaders(), ...(options.relayCa ? { ca: options.relayCa } : {}), handshakeTimeout: 10_000, maxPayload: 16 * 1024, perMessageDeflate: false });
         const currentControl = control;
         sockets.add(currentControl); currentControl.once('close', () => sockets.delete(currentControl));
         let opened = false;

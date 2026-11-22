@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ import { openStore } from '../src/pairing/store.mjs';
 import { loadIdentity } from '../src/transport/tls.mjs';
 import { createWorkbench } from '../src/transport/workbench.mjs';
 import { listen, validateConfig } from '../src/transport/server.mjs';
+import { mountProjectFiles } from '../../base/workbench/src/project-files.mjs';
 
 function request(f, path, { method = 'POST', body = {}, token, cookie, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
@@ -31,6 +32,15 @@ async function setup(t) {
   await writeFile(join(web, 'workbench.js'), 'globalThis.__DSH_LINK_WORKBENCH__=true;');
   await writeFile(join(directory, 'private.txt'), 'secret');
   await symlink(join(directory, 'private.txt'), join(root, 'escape.txt'));
+  const project = join(directory, 'project');
+  await mkdir(project);
+  let fileRoute;
+  mountProjectFiles({
+    connection: { fetch: { register: route => { fileRoute = route; } } },
+    effect: setup => setup(),
+    workspaceFiles: { scopeOf: async id => id === 'project-session' ? { workspaceRoot: project } : undefined },
+    fs: { processPathFromHostPath: path => path },
+  });
   const store = await openStore(join(directory, 'state')), identity = await loadIdentity(directory);
   const calls = [], opened = [], disposed = [], voiceSockets = [], rendered = [];
   const ctx = {
@@ -38,7 +48,18 @@ async function setup(t) {
     voice: { acceptRealtimeSocket(ws) { voiceSockets.push(ws); ws.on('message', (data, binary) => ws.send(data, { binary })); } },
     connection: {
       createPeer(options) { return { principal: options.principal, id: 'peer-' + (calls.length + 1), async dispose() { disposed.push(this.id); } }; },
-      createSharedFetchHandler(channel) { assert.equal(channel, '/api'); return { requestBodyMode() { return 'buffered'; }, async fetch(request, peer) { calls.push({ path: new URL(request.url).pathname, body: request.method === 'POST' ? await request.json() : null, peer, cookie: request.headers.get('cookie'), auth: request.headers.get('authorization') }); return Response.json({ ok: true, preset: 'same-host', voice: 'same-config' }); } }; },
+      createSharedFetchHandler(channel) { assert.equal(channel, '/api'); return {
+        requestBodyMode({ url }) { return url.pathname === fileRoute.path ? fileRoute.requestBody : 'buffered'; },
+        async fetch(request, peer) {
+          const path = new URL(request.url).pathname;
+          if (path === fileRoute.path) {
+            assert.equal(peer.principal.kind, 'owner');
+            return fileRoute.fetch(request);
+          }
+          calls.push({ path, body: request.method === 'POST' ? await request.json() : null, peer, cookie: request.headers.get('cookie'), auth: request.headers.get('authorization') });
+          return Response.json({ ok: true, preset: 'same-host', voice: 'same-config' });
+        },
+      }; },
     },
     webServer: { renderIndex(html, peer) { assert.equal(peer?.principal.deviceId, store.state.devices[0]?.id); rendered.push(peer); return html.replace('<head>', '<head><script>globalThis.__DSH_BOOT__={entries:[]}</script><script src="/plugins/test.js"></script>'); } },
     clientModules: { async fetchBundle(request) { return new Response('globalThis.sharedPlugin=true;', { headers: { 'content-type': 'text/javascript' } }); } },
@@ -47,7 +68,7 @@ async function setup(t) {
   const workbench = createWorkbench(ctx, store, { workbenchRoot: root, webRoot: pathToFileURL(web + '/') });
   const config = validateConfig({ enabled: true, host: '127.0.0.1', port: 0 }, store.state);
   const server = await listen({ identity, config, webRoot: pathToFileURL(web + '/'), store, workbench, dispatch() {}, onError() {} });
-  const f = { store, identity, workbench, server, calls, opened, disposed, ctx, voiceSockets, rendered, root };
+  const f = { store, identity, workbench, server, calls, opened, disposed, ctx, voiceSockets, rendered, root, project };
   f.call = (path, options) => request(f, path, options);
   const pair = store.begin(), pending = store.request(pair.code, 'Workbench test');
   await store.decide(pending.requestId, true);
@@ -107,6 +128,20 @@ async function login(f) {
   for (const flag of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/link/workbench/']) assert(header.includes(flag));
   return header.split(';')[0];
 }
+
+test('a paired Link workbench mutates files on the device hosting the project', async t => {
+  const f = await setup(t), path = '/link/workbench/api/benchgo/workbench/files';
+  const body = { action: 'new-file', sessionId: 'project-session', path: f.project, workspace: f.project, name: 'example.txt' };
+  assert.equal((await f.call(path, { body })).status, 401);
+  const cookie = await login(f);
+  assert.equal((await f.call(path, { cookie, body })).status, 200);
+  await writeFile(join(f.project, 'example.txt'), 'project content');
+  assert.equal((await f.call(path, { cookie, body: { ...body, action: 'rename', path: 'example.txt', name: 'renamed.txt' } })).status, 200);
+  assert.equal(await readFile(join(f.project, 'renamed.txt'), 'utf8'), 'project content');
+  await f.store.revoke(f.deviceId);
+  assert.equal((await f.call(path, { cookie, body: { ...body, action: 'delete', path: 'renamed.txt' } })).status, 401);
+  assert.equal(await readFile(join(f.project, 'renamed.txt'), 'utf8'), 'project content');
+});
 
 test('the public pairing probe is single-use and pending requests are scoped to their code', async t => {
   const f = await setup(t), probe = f.store.beginProbe();

@@ -12,6 +12,8 @@ export async function loadIdentity(directory) {
   if (!value) {
     const keys = await promisify(generateKeyPair)('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
     const cert = selfsigned.generate([{ name: 'commonName', value: 'DSH Link' }], {
+      // A client can verify this certificate immediately after SSH provisioning.
+      notBeforeDate: new Date(Date.now() - 5 * 60_000),
       keyPair: keys, keySize: 2048, days: 3650, algorithm: 'sha256', extensions: [
         { name: 'basicConstraints', cA: false },
         { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },

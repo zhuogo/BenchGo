@@ -10,6 +10,9 @@ import { createNativeAdapter } from './session/native.mjs';
 import { createSessionActions } from './session/actions.mjs';
 import { projectResources, resourcePage } from './devices/resources.mjs';
 import { createDeviceCenter } from './devices/center.mjs';
+import { openDeviceGroup } from './devices/group.mjs';
+import { remoteJson } from './devices/remote.mjs';
+import { selectRoute } from './devices/routes.mjs';
 import { createWorkbench } from './transport/workbench.mjs';
 import { createCloudAccess } from './cloud-access.mjs';
 import { createCloudDeviceGateway } from './devices/cloud-gateway.mjs';
@@ -19,6 +22,7 @@ import { defaultLinkTransport, LINK_TRANSPORT_SCHEMA, editLinkRelayPool, normali
 import { createLinkSettingsAdapter, LINK_TRANSPORT_NAMESPACE, LINK_RELAY_NAMESPACE } from './settings-adapter.mjs';
 import { settingsSnapshot, settingsFingerprint, assertSettingsExpected, applySettingsOps, notifySettings } from '../../base/shared/settings-adapter-utils.mjs';
 import { captureHostScope, hostScope } from '../../base/shared/host-scope.mjs';
+import { useIntegrationToken } from '../../base/shared/integration-token.mjs';
 
 const executionOperations = ['catalog','submit','get','input','control','ack','archive','archives'];
 
@@ -30,7 +34,8 @@ export function mountLink(ctx, config = {}) {
 async function mountLinkHost(ctx, config) {
   const env = config.env ?? process.env;
   const directory = config.directory ?? join(ctx.get('benchgo').directory, 'link');
-  const store = await openStore(directory);
+  let group;
+  const store = await openStore(directory, { groupPrincipal: id => group?.principal(id) });
   const managementOperations = store.state.managementOperations ??= [];
   for (const operation of managementOperations) {
     if (['applying', 'approved'].includes(operation.state)) operation.state = 'unknown';
@@ -49,6 +54,10 @@ async function mountLinkHost(ctx, config) {
   let relayPool = Array.isArray(store.state.relayPool)
     ? store.state.relayPool
     : (env.DSH_LINK_RELAY_URL ? [{ id: 'primary', url: env.DSH_LINK_RELAY_URL, token: env.DSH_LINK_RELAY_TOKEN, priority: 0, enabled: true }] : []);
+  const relayRevision = value => value && [value.revision, value.writer];
+  const sameRelayRevision = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
+  const enabledNodes = nodes => nodes.filter(node => node.enabled !== false && node.url && node.token);
+  const relayState = () => store.state.groupRelay?.groupId === group.snapshot()?.id ? store.state.groupRelay : undefined;
   const relayNodes = new Map();
   const stopRelay = async () => {
     const active = [...relayNodes.values()];
@@ -58,7 +67,7 @@ async function mountLinkHost(ctx, config) {
   const enabledRelay = () => relayPool.some(node => node.enabled !== false);
   const rankedRelays = () => [...relayPool].sort((a, b) => a.priority - b.priority);
   const connectedRelay = id => rankedRelays().find(node => node.enabled !== false && (!id || node.id === id)
-    && relayNodes.get(node.id)?.instance?.status().connected);
+    && relayNodes.get(node.url)?.instance?.status().connected);
   const probeRelay = node => (config.testRelayConnection ?? testRelayConnection)(node, config.relayTestOptions);
   validateConfig({}, store.state);
   const sessions = createSessionAdapter(ctx, { deletedIds: async () => {
@@ -67,12 +76,54 @@ async function mountLinkHost(ctx, config) {
   } });
   const native = createNativeAdapter(ctx);
   const authorizePairedDevice = device => {
-    if (closed || !device || device.id !== 'local' && !store.state.devices.some(current => current.id === device.id && current.tokenHash === device.tokenHash)) throw Object.assign(new Error('设备授权已失效，请重新配对'), { status: 403, code: 'UNAUTHORIZED' });
+    if (closed || !device || device.id !== 'local' && store.principal(device.id)?.tokenHash !== device.tokenHash) throw Object.assign(new Error('设备授权已失效，请重新配对'), { status: 403, code: 'UNAUTHORIZED' });
   };
   const sessionActions = createSessionActions({ store, official: sessions, native, authorize: authorizePairedDevice });
   const cloudAccess = await createCloudAccess(directory, { env: config.env ?? process.env, probe: config.cloudProbe });
   const dispatch = async (input, device) => {
-    authorizePairedDevice(device);
+    if (!device?.groupInvitation && !device?.groupSyncOnly) authorizePairedDevice(device);
+    if (input?.action === 'deviceGroup') {
+      if (['describe', 'join', 'admit'].includes(input.operation)) {
+        if (!store.groupInvitation(device.id, input.inviter)) throw Object.assign(new Error('请先批准此设备组邀请'), { status: 403 });
+        if (input.operation === 'describe') {
+          if (group.enabled() && input.groupId && group.snapshot().id !== input.groupId) {
+            throw Object.assign(new Error('目标设备已关联其他设备组'), { status: 409 });
+          }
+          return { member: group.description(), ...(group.enabled() ? { groupId: group.snapshot().id } : {}) };
+        }
+        if (input.operation === 'admit') {
+          if (!group.enabled() || group.snapshot().id !== input.groupId)
+            throw Object.assign(new Error('设备组邀请已变更'), { status: 409 });
+          const row = group.verifyOffer(input.groupId, input.inviter, input.offer);
+          const manifest = await group.include(row, true, input.groupId);
+          return { manifest, removals: group.removals(), relay: relayEnvelope(row.id) };
+        }
+        if (input.groupId && input.groupId !== input.manifest?.id) throw Object.assign(new Error('设备组邀请已变更'), { status: 409 });
+        await clearDepartedSettings();
+        await group.adopt(input.manifest, input.inviter, input.removals);
+        return { joined: true, relay: await exchangeRelay(input.inviter, input.relay) };
+      }
+      if (input.operation === 'integrationToken' && device.groupSyncOnly) {
+        const authority = group.authorityMember();
+        if (!group.member(device.id) || authority?.id !== group.localId) throw Object.assign(new Error('设备组 Token 管理设备已变更'), { status: 403 });
+        const { operation, token, revision } = group.unseal(device.id, input.credential, 'integration-request');
+        const result = await useIntegrationToken(ctx.credentials, integrationScope(authority), operation, { token, revision });
+        return { credential: group.seal(device.id, result, 'integration-response') };
+      }
+      if (input.operation === 'sync' && device.groupSyncOnly) {
+        if (input.manifest && (group.member(device.id) || !group.enabled())) await group.adopt(input.manifest, undefined, input.removals);
+        const membership = { manifest: group.snapshot(), removals: group.removals() };
+        if (!group.enabled() || !group.member(device.id)) return membership;
+        const providerService = ctx.get?.('benchgoGroupProviders');
+        const relay = await exchangeRelay(device.id, input.relay);
+        const providers = providerService && input.providers && group.member(device.id)
+          ? group.seal(device.id, await providerService.exchange({ groupId: group.snapshot().id, hostId: group.localId, entries: group.unseal(device.id, input.providers) }))
+          : undefined;
+        const media = input.media ? await exchangeMedia(membership.manifest.id, device.id, input.media).catch(() => undefined) : undefined;
+        return { ...membership, providers, relay, media };
+      }
+      throw Object.assign(new Error('不支持的设备组操作'), { status: 422 });
+    }
     const archive = input?.action === 'sessionAction' && ['archive', 'unarchive'].includes(input.operation);
     const sessionId = input?.id && (input.native === true && input.id.startsWith?.('native:') ? input.id.slice(7) : input.id);
     const owner = sessionId && ctx.get?.('benchgoExecution')?.ownerOfSession?.(sessionId);
@@ -154,43 +205,201 @@ async function mountLinkHost(ctx, config) {
   const connectRelays = async () => {
     if (!listener) return;
     const targetHost = ['::', '::1'].includes(store.state.host) ? '[::1]' : store.state.host === '0.0.0.0' ? '127.0.0.1' : store.state.host;
-    const desired = new Map(relayPool.filter(node => node.enabled !== false && node.url && node.token).map(node => [node.id, node]));
+    const desired = new Map(enabledNodes(relayPool).map(node => [node.url, node]));
+    for (const node of store.state.groupRelay?.previous ?? []) if (!desired.has(node.url)) desired.set(node.url, node);
     const retired = [];
-    for (const [id, runtime] of relayNodes) {
-      const next = desired.get(id);
+    for (const [url, runtime] of relayNodes) {
+      const next = desired.get(url);
       if (next && next.url === runtime.url && next.token === runtime.token) {
-        desired.delete(id);
+        desired.delete(url);
       } else {
-        relayNodes.delete(id);
+        relayNodes.delete(url);
         retired.push(runtime.instance?.close());
       }
     }
     await Promise.allSettled(retired);
-    for (const [id, node] of desired) {
+    for (const [url, node] of desired) {
       const runtime = { url: node.url, token: node.token };
       try {
         runtime.instance = await (config.createRelayHost ?? createRelayHost)({
-          relayUrl: node.url, token: node.token, relayHeaders: listener.relayHeaders,
+          relayUrl: node.url, token: node.token, relayHeaders: listener.relayHeaders, hostKey: identity.key,
           target: { url: `https://${targetHost}:${listener.port}`, pin: identity.pin },
         });
       } catch {
         runtime.lastError = '中继配置无效，请检查 HTTPS 地址、主机密钥及本机监听地址';
         runtime.checkedAt = Date.now();
       }
-      relayNodes.set(id, runtime);
+      relayNodes.set(url, runtime);
     }
   };
   const connectionRoutes = () => {
-    const relays = rankedRelays().filter(node => node.enabled && node.url && node.token)
-      .map(({ url, id, priority }) => ({ url, kind: 'relay', relayId: id, priority }));
+    const relays = enabledNodes(rankedRelays())
+      .map(({ url, id, priority }) => ({ url, kind: 'relay', relayId: id, priority,
+        ...(relayState() ? { relayTarget: group.localId } : {}) }));
     const direct = connectionAddresses(store.state.host).filter(address => !['localhost', '::1'].includes(address) && !/^127\./.test(address))
       .slice(0, 16 - relays.length).map(address => ({ url: `https://${authority(address, listener?.port ?? store.state.port)}`, pin: identity.pin, kind: 'direct' }));
     return [...direct, ...relays];
   };
+  group = await openDeviceGroup(directory, identity, () => ({
+    name: store.state.name, routes: connectionRoutes(), publicUrl: store.state.publicUrl || '',
+  }), async (previous, next, enabled) => {
+    const revoked = previous.filter(row => !row.removed && (!enabled || !next.some(member =>
+      member.id === row.id && !member.removed && member.generation === row.generation))).map(row => row.id);
+    const joined = enabled ? next.filter(row => !row.removed && !previous.some(member =>
+      member.id === row.id && !member.removed && member.generation === row.generation)).map(row => row.id) : [];
+    const changed = [...new Set([...revoked, ...joined])];
+    if (!changed.length) return;
+    await Promise.allSettled([
+      ...revoked.flatMap(id => [sessions.revoke(id), workbench?.revoke(id), sessionActions.revoke(id), ctx.get?.('benchgoExecution')?.revokePrincipal?.(id)]),
+      deviceCenter?.then(center => center.invalidateGroup(changed)),
+      cloudCenter?.then(center => center.invalidateGroup(changed)),
+    ]);
+  });
+  const groupRoutes = (row, { sync = false, groupId = group.snapshot()?.id } = {}) => {
+    const state = groupId === group.snapshot()?.id ? relayState() : undefined;
+    const history = store.state.groupRelayHistory;
+    const nodes = state ? [...enabledNodes(state.nodes), ...state.previous.filter(node => node.targeted)]
+      : sync && history?.groupId === groupId ? history.nodes : [];
+    if ((!group.enabled() && !sync) || !nodes.length) return row.routes;
+    const shared = nodes
+      .map(({ id, url, priority }) => ({ kind: 'relay', relayId: id, url, priority, relayTarget: row.id }));
+    const known = new Set(shared.map(route => route.url));
+    const direct = row.routes.filter(route => route.kind === 'direct');
+    const prior = row.routes.filter(route => route.kind === 'relay' && !known.has(route.url));
+    return [...direct.slice(0, 16 - shared.length), ...shared, ...prior].slice(0, 16);
+  };
+  const groupRequest = async (target, input, signal) => (await remoteJson(target, '/link/api/rpc', { action: 'deviceGroup', ...input }, { signal, timeout: 4000 })).value;
+  const integrationScope = authority => JSON.stringify([group.snapshot().id, authority.id, authority.generation]);
+  async function integrationToken(operation, input) {
+    if (!group.enabled()) return useIntegrationToken(ctx.credentials, 'local', operation, input);
+    const authority = group.authorityMember();
+    if (!authority) throw Object.assign(new Error('设备组的 Token 管理设备已退出，请恢复该设备的成员资格'), { status: 503 });
+    const groupId = group.snapshot().id;
+    if (authority.id === group.localId) return useIntegrationToken(ctx.credentials, integrationScope(authority), operation, input);
+    const routes = groupRoutes(authority).map(route => route.kind === 'relay' ? { ...route, relayTarget: authority.id } : route);
+    const first = routes[0];
+    if (!first && !authority.publicUrl) throw Object.assign(new Error('无法连接设备组的 Token 管理设备'), { status: 503 });
+    const target = { ...first, url: authority.publicUrl || first?.url, pin: authority.publicUrl ? undefined : first?.pin,
+      routes, pairedEndpointFallback: Boolean(authority.publicUrl), authorize: () => group.token(authority.id, { sync: true }) };
+    const signal = AbortSignal.any([groupStop.signal, AbortSignal.timeout(6000)]);
+    const credential = group.seal(authority.id, { operation, token: input.token, revision: input.revision }, 'integration-request');
+    let result;
+    try {
+      // The expected revision prevents a retried rotation from committing twice.
+      await selectRoute(target, { signal, timeout: 600, accept: async selected => {
+        result = await groupRequest(selected, { operation: 'integrationToken', credential }, signal);
+      } });
+    } catch (error) {
+      if (error.status === 403 && error.message === '此授权仅用于同步设备组') {
+        throw Object.assign(new Error(`请更新 Token 管理设备「${authority.name}」上的 BenchGo，更新后重试`), {
+          status: 503, code: 'INTEGRATION_PEER_UPGRADE_REQUIRED',
+        });
+      }
+      if ([401, 403, 409].includes(error.status)) throw error;
+      throw Object.assign(new Error('无法连接设备组的 Token 管理设备'), { status: 503 });
+    }
+    if (group.snapshot()?.id !== groupId || !group.enabled()) throw Object.assign(new Error('设备组已变更'), { status: 409 });
+    return group.unseal(authority.id, result.credential, 'integration-response');
+  }
+  const mediaIdentity = (groupId, peerId) => ({ groupId, hostId: group.localId,
+    active: () => !closed && group.snapshot()?.id === groupId && group.enabled() && (!peerId || Boolean(group.member(peerId))),
+  });
+  async function exchangeMedia(groupId, peerId, envelope) {
+    const service = ctx.get?.('benchgoGroupMedia');
+    const identity = mediaIdentity(groupId, peerId);
+    if (!service || !identity.active()) return;
+    const entries = await service.exchange({ ...identity, entries: group.unseal(peerId, envelope, 'media') });
+    if (entries && identity.active()) return group.seal(peerId, entries, 'media');
+  }
+  async function clearDepartedSettings() {
+    if (group.enabled() || !group.snapshot()) return;
+    const groupId = group.snapshot().id;
+    const results = await Promise.allSettled([
+      ctx.get?.('benchgoGroupProviders')?.leave({ groupId }),
+      ctx.get?.('benchgoGroupMedia')?.leave({ groupId, active: () => !closed && !group.enabled() && group.snapshot()?.id === groupId }),
+      leaveRelay(),
+    ]);
+    for (const result of results) if (result.status === 'rejected') throw result.reason;
+  }
+  const enrollGroup = async target => {
+    const invite = { inviter: group.localId, groupId: group.enabled() ? group.snapshot().id : undefined };
+    const { member, groupId } = await groupRequest(target, { ...invite, operation: 'describe' });
+    if (member?.id !== target.hostId || target.pin && member.id !== 'sha256:' + target.pin || target.relayTarget && member.id !== target.relayTarget) throw new Error('设备组成员与配对主机身份不一致');
+    const routes = member.routes.map(route => target.relayTarget && route.kind === 'relay' && route.url === target.url
+      ? { ...route, relayTarget: target.relayTarget } : route);
+    await clearDepartedSettings();
+    if (groupId && !invite.groupId) {
+      const response = await groupRequest(target, { ...invite, groupId, operation: 'admit', offer: group.offer(groupId) });
+      if (response.manifest?.id !== groupId) throw new Error('设备组邀请已变更');
+      await group.adopt(response.manifest, member.id, response.removals);
+      if (response.relay) await exchangeRelay(member.id, response.relay);
+      return { id: member.id, hostId: member.id, kind: 'computer', name: member.name, status: 'online' };
+    }
+    const manifest = await group.include({ ...member, routes,
+      ...(!target.pin && !target.relayTarget && !member.publicUrl ? { publicUrl: target.url } : {}) }, true, invite.groupId);
+    const response = await groupRequest(target, { ...invite, groupId: manifest.id, operation: 'join', manifest,
+      removals: group.removals(), relay: relayEnvelope(member.id) });
+    if (response.relay) await exchangeRelay(member.id, response.relay);
+    return { id: member.id, hostId: member.id, kind: 'computer', name: member.name, status: 'online' };
+  };
+  let groupSync;
+  const groupStop = new AbortController();
+  async function synchronizeMembership({ row, manifest, removals, authorize }, payload = {}) {
+    const routes = groupRoutes(row, { sync: true, groupId: manifest.id }), first = routes[0];
+    if (!first && !row.publicUrl) return;
+    const signal = AbortSignal.any([groupStop.signal, AbortSignal.timeout(6000)]);
+    const target = { ...first, url: row.publicUrl || first?.url, pin: row.publicUrl ? undefined : first?.pin,
+      routes, pairedEndpointFallback: Boolean(row.publicUrl), authorize };
+    let response;
+    await selectRoute(target, { signal, timeout: 600, accept: async selected => {
+      response = await groupRequest(selected, { operation: 'sync', manifest, removals, ...payload }, signal);
+    } });
+    return response;
+  }
+  const syncGroup = () => {
+    if (closed || !group.snapshot() || groupSync) return groupSync;
+    groupSync = hostScope(ctx)(async () => {
+      if (group.status().canInvite) await group.include(group.description());
+      const manifest = group.snapshot(), providerService = ctx.get?.('benchgoGroupProviders');
+      await clearDepartedSettings().catch(() => {});
+      const entries = group.enabled() ? await providerService?.snapshot({ groupId: manifest.id, hostId: group.localId }).catch(() => undefined) : undefined;
+      const identity = mediaIdentity(manifest.id);
+      const media = identity.active() ? await ctx.get?.('benchgoGroupMedia')?.exchange(identity).catch(() => undefined) : undefined;
+      const active = group.snapshot()?.id === manifest.id ? group.members().filter(row => row.id !== group.localId) : [];
+      await Promise.allSettled([...active.map(async row => {
+        const response = await synchronizeMembership({ row, manifest, removals: group.removals(),
+          authorize: () => group.token(row.id, { sync: true }) }, {
+            ...(entries && group.enabled() && group.member(row.id) ? { providers: group.seal(row.id, entries) } : {}),
+            ...(media && mediaIdentity(manifest.id, row.id).active() ? { media: group.seal(row.id, media, 'media') } : {}),
+            relay: relayEnvelope(row.id),
+        });
+        if (response?.manifest?.id !== manifest.id || group.snapshot()?.id !== manifest.id) return;
+        if (group.member(row.id) || !group.enabled()) await group.adopt(response.manifest, undefined, response.removals);
+        if (response.relay && group.enabled() && group.member(row.id)) await exchangeRelay(row.id, response.relay);
+        if (response.providers && group.enabled() && group.member(row.id)) await providerService?.exchange({ groupId: manifest.id, hostId: group.localId, entries: group.unseal(row.id, response.providers) });
+        if (response.media) await exchangeMedia(manifest.id, row.id, response.media);
+      }), ...group.departures().map(async departure => {
+        const response = await synchronizeMembership(departure);
+        const removal = response?.removals?.find(entry => entry.target === group.localId);
+        if (response?.manifest?.id === departure.manifest.id && removal) {
+          await group.acknowledgeDeparture(departure.manifest.id, departure.row.id, removal.signature);
+        }
+      })]);
+    }).finally(() => { groupSync = undefined; });
+    return groupSync;
+  };
+  const groupTimer = setInterval(() => void syncGroup()?.catch(() => {}), 4000);
+  groupTimer.unref();
+  const syncGroupSoon = () => {
+    void Promise.resolve(groupSync).catch(() => {}).then(syncGroup).catch(() => {});
+  };
   const start = () => hostScope(ctx)(async () => {
     identity ??= await loadIdentity(directory);
-    workbench = createWorkbench(ctx, store, { webRoot, workbenchRoot: config.workbenchRoot, deviceCenter: pairedDeviceCenter });
-    listener = await listen({ identity, config: { ...store.state }, webRoot, store, dispatch, workbench, runRequest: operation => hostScope(ctx)(operation), routes: connectionRoutes,
+    workbench = createWorkbench(ctx, store, { webRoot, workbenchRoot: config.workbenchRoot, deviceCenter: pairedDeviceCenter, resourceNavigation: pairedResourceNavigation });
+    listener = await listen({ identity, config: { ...store.state }, webRoot, store, dispatch, workbench, runRequest: operation => hostScope(ctx)(operation), routes: connectionRoutes, hostName: () => group.member(group.localId)?.name ?? store.state.name, authenticateGroup: (token, path) => {
+      const member = group.authenticate(token);
+      return member?.groupSyncOnly && path !== '/link/api/rpc' ? undefined : member;
+    }, integration: () => ctx.get?.('benchgoIntegration'),
       registerReturn: async (...args) => (await getCenter()).acceptReturn(...args), onError: e => { error = e.message; } });
     error = '';
     await connectRelays();
@@ -200,13 +409,13 @@ async function mountLinkHost(ctx, config) {
     const ranked = rankedRelays();
     const preferred = ranked.find(node => node.enabled !== false);
     const nodes = ranked.map(({ token, ...node }) => {
-      const runtime = relayNodes.get(node.id), channel = runtime?.instance?.status();
+      const runtime = relayNodes.get(node.url), channel = runtime?.instance?.status();
       return { ...node, connected: channel?.connected ?? false,
         lastError: channel?.lastError ?? runtime?.lastError ?? null, checkedAt: channel?.checkedAt ?? runtime?.checkedAt ?? null };
     });
     return {
     enabled: Boolean(listener), host: store.state.host, port: listener?.port ?? store.state.port, publicUrl: store.state.publicUrl,
-    hostName: store.state.name, hostId: 'sha256:' + identity.pin, scopedPairing: true, error: error || null,
+    hostName: group.member(group.localId)?.name ?? store.state.name, hostId: 'sha256:' + identity.pin, scopedPairing: true, error: error || null,
     addresses: connectionAddresses(store.state.host).map(a => `https://${authority(a, listener?.port ?? store.state.port)}`),
     devices: store.state.devices.map(({ tokenHash, alias, pairingReturnExpiresAt, ...device }) => ({ ...device, ...(pairingReturnExpiresAt && pairingReturnExpiresAt <= Date.now() ? { pairingReturn: 'unreachable' } : {}), capabilities: [...PAIRED_DEVICE_CAPABILITIES], name: alias || device.name, ...(alias ? { originalName: device.name } : {}) })), pending: store.pending(),
     relay: { configured: Boolean(nodes.length), enabled: Boolean(preferred), url: selectedRelay?.url || preferred?.url || nodes[0]?.url || '',
@@ -218,6 +427,68 @@ async function mountLinkHost(ctx, config) {
     const task = changes.then(operation);
     changes = task.catch(() => {}); return task;
   };
+  const canListenForRelay = () => ['0.0.0.0', '::', '127.0.0.1', 'localhost', '::1'].includes(store.state.host);
+  async function applyRelayState(nodes, shared, history) {
+    const previous = store.state.relayPool, previousShared = store.state.groupRelay, previousHistory = store.state.groupRelayHistory;
+    store.state.relayPool = nodes;
+    if (shared) store.state.groupRelay = shared;
+    else delete store.state.groupRelay;
+    if (history) store.state.groupRelayHistory = history;
+    else if (shared) delete store.state.groupRelayHistory;
+    try { await store.persist(); }
+    catch (reason) {
+      store.state.relayPool = previous;
+      store.state.groupRelay = previousShared;
+      store.state.groupRelayHistory = previousHistory;
+      throw reason;
+    }
+    relayPool = nodes;
+    if (listener) await connectRelays();
+    else if (enabledRelay()) try { await start(); } catch (reason) { error = reason.message; }
+    notifyConfiguration();
+  }
+  function sharedRelayState(current, version, nodes) {
+    const active = new Set(enabledNodes(nodes).map(node => node.url));
+    const previous = new Map((current?.previous ?? []).map(node => [node.url, node]));
+    for (const node of enabledNodes(relayPool)) previous.set(node.url, { ...node, targeted: Boolean(current) });
+    for (const url of active) previous.delete(url);
+    return { ...version, groupId: group.snapshot().id, nodes, before: current?.before ?? relayPool,
+      previous: [...previous.values()], seen: {} };
+  }
+  const relayEnvelope = id => {
+    const state = relayState();
+    if (!group.enabled() || !group.member(id)) return;
+    if (state) return group.seal(id, { revision: state.revision, writer: state.writer, nodes: state.nodes }, 'relay');
+  };
+  const exchangeRelay = (id, envelope) => serializeChange(async () => {
+    if (closed || !group.enabled() || !group.member(id)) return;
+    if (envelope) {
+      const incoming = group.unseal(id, envelope, 'relay');
+      if (!Number.isSafeInteger(incoming?.revision) || incoming.revision < 1
+        || !group.members().some(member => member.id === incoming.writer)) throw new Error('设备组中继配置版本无效');
+      const nodes = normalizeLinkRelayPool(incoming.nodes);
+      let current = relayState();
+      if (!current || incoming.revision > current.revision || incoming.revision === current.revision && incoming.writer > current.writer) {
+        current = sharedRelayState(current, { revision: incoming.revision, writer: incoming.writer }, nodes);
+        current.seen[id] = relayRevision(incoming);
+        await applyRelayState(nodes, current);
+      } else if (current.previous.length && sameRelayRevision(relayRevision(current), relayRevision(incoming))) {
+        const seen = { ...current.seen, [id]: relayRevision(incoming) };
+        const allSeen = group.members().every(member => member.removed || member.id === group.localId || sameRelayRevision(seen[member.id], relayRevision(current)));
+        if (allSeen || !sameRelayRevision(seen[id], current.seen[id])) {
+          await applyRelayState(current.nodes, { ...current, seen, previous: allSeen ? [] : current.previous });
+        }
+      }
+    }
+    return relayEnvelope(id);
+  });
+  const leaveRelay = () => relayState() ? serializeChange(async () => {
+    const state = relayState();
+    if (!state || group.enabled()) return;
+    // Keep public route coordinates for delivering membership removals after exiting.
+    const nodes = [...enabledNodes(state.nodes), ...state.previous.filter(node => node.targeted)].map(({ id, url, priority }) => ({ id, url, priority }));
+    await applyRelayState(state.before, undefined, { groupId: state.groupId, nodes });
+  }) : undefined;
   const configureTransport = (input, transaction) => serializeChange(async () => {
     if (closed) throw new Error('Link 已关闭');
     if (transaction) {
@@ -259,23 +530,30 @@ async function mountLinkHost(ctx, config) {
     }
     const normalized = normalizeLinkRelayPool(inputNodes, relayPool);
     if (transaction && settingsFingerprint(normalized) !== settingsFingerprint(inputNodes)) throw new Error('请使用规范化的中继节点字段');
-    if (normalized.some(node => node.enabled) && !['0.0.0.0', '::', '127.0.0.1', 'localhost', '::1'].includes(store.state.host)) throw new Error('启用中继需要 Link 监听全部网卡或 loopback');
+    if (normalized.some(node => node.enabled) && !canListenForRelay()) throw new Error('启用中继需要 Link 监听全部网卡或 loopback');
     if (input && ['add', 'update'].includes(input.operation)) {
       const next = normalized.find(node => node.id === input.id.trim()), prior = relayPool.find(node => node.id === next.id);
-      if (!prior || next.url !== prior.url || next.token !== prior.token) {
+      if ((!group.enabled() || !next.enabled) && (!prior || next.url !== prior.url || next.token !== prior.token)) {
         const result = await probeRelay({ url: next.url, token: next.token });
         if (!result.ok) throw new Error(result.message);
       }
     }
     if (closed) throw new Error('Link 已关闭');
     transaction?.signal?.throwIfAborted();
-    const previous = store.state.relayPool;
-    store.state.relayPool = normalized;
-    try { await store.persist(); } catch (reason) { store.state.relayPool = previous; throw reason; }
-    relayPool = normalized;
-    if (listener) await connectRelays();
-    else if (enabledRelay()) try { await start(); } catch (reason) { error = reason.message; }
-    notifyConfiguration();
+    let shared;
+    if (group.enabled()) {
+      const current = relayState();
+      for (const node of enabledNodes(normalized)) {
+        if (current?.nodes.some(prior => prior.enabled && prior.url === node.url && prior.token === node.token)) continue;
+        const probe = await probeRelay(node);
+        if (!probe.ok || !probe.multipleHosts) throw new Error(probe.ok ? '请先更新中继服务以支持设备组共享' : probe.message);
+      }
+      transaction?.authorize?.();
+      transaction?.signal?.throwIfAborted();
+      if (!group.enabled()) throw new Error('此设备已退出设备组');
+      shared = sharedRelayState(current, { revision: (current?.revision ?? 0) + 1, writer: group.localId }, normalized);
+    }
+    await applyRelayState(normalized, shared);
     return transaction ? { ...configurationSnapshot(LINK_RELAY_NAMESPACE), application: enabledRelay() && !connectedRelay()
       ? { state: 'pending', reason: '中继配置已保存，连接状态尚未就绪，请查看设备页面实时状态' }
       : { state: 'applied' } } : status();
@@ -326,10 +604,30 @@ async function mountLinkHost(ctx, config) {
     managementFlights.set(operation.id, task);
     return task;
   };
+  const pairedResourceNavigation = async (input, device, { signal, origin }) => {
+    const authorize = () => {
+      authorizePairedDevice(device);
+      if (!device.groupMember || !group.enabled() || !group.member(device.id))
+        throw Object.assign(new Error('当前工作台未获设备组资源授权'), { status: 403, code: 'GROUP_REQUIRED' });
+      signal.throwIfAborted();
+    };
+    authorize();
+    const center = await getCenter();
+    if (input.action !== 'select') return center.groupResourceApi({ ...input, signal }, authorize);
+    await center.groupResourceApi({ action: 'devices' }, authorize).then(value => {
+      if (!value.devices.some(row => row.id === input.deviceId && row.kind !== 'local')) throw Object.assign(new Error('此设备不在工作台所属设备组中'), { status: 403 });
+    });
+    if (!cloudGateway) throw Object.assign(new Error('请使用桌面工作台打开其他组成员的资源，或配置云端设备网关'), { status: 409, code: 'CLOUD_DEVICE_GATEWAY_REQUIRED' });
+    const cloud = await getCloudCenter();
+    authorize();
+    const value = await cloud.select(input.deviceId, origin, input.resource);
+    authorize();
+    return value;
+  };
   const pairedDeviceCenter = async (input, device) => {
     authorizePairedDevice(device);
     if (input.action === 'list') {
-      const devices = [{ id: 'local', kind: 'local', name: store.state.name }, ...store.state.devices.map(({ id, name, alias, deviceType, lastSeenAt }) => ({
+      const devices = [{ id: 'local', kind: 'local', name: group.member(group.localId)?.name ?? store.state.name }, ...store.state.devices.map(({ id, name, alias, deviceType, lastSeenAt }) => ({
         id, name: alias || name, kind: 'paired', deviceType, lastSeenAt,
       }))];
       return { devices, activeId: 'local', capabilities: { relayManagement: true } };
@@ -398,8 +696,11 @@ async function mountLinkHost(ctx, config) {
       }
       if (!url) throw new Error('未找到可用的连接地址，请检查网络或在高级设置中指定监听地址');
       const pair = store.begin(async (...args) => (await pairingCenter()).acceptReturn(...args));
-      const query = new URLSearchParams({ url, pin: mode === 'lan' ? identity.pin : '', code: pair.code, name: store.state.name });
-      return { ...pair, mode, uri: `benchgo://pair?${query}`, ...(mode !== 'lan' ? { webUrl: `${url}/link/#code=${encodeURIComponent(pair.code)}` } : {}), url };
+      const relayTarget = mode === 'relay' && relayState() ? group.localId : undefined;
+      const query = new URLSearchParams({ url, pin: mode === 'lan' ? identity.pin : '', code: pair.code, name: store.state.name,
+        ...(relayTarget ? { relayTarget } : {}) });
+      const webTarget = relayTarget ? '?relayTarget=' + encodeURIComponent(relayTarget) : '';
+      return { ...pair, mode, uri: `benchgo://pair?${query}`, ...(mode !== 'lan' ? { webUrl: `${url}/link/${webTarget}#code=${encodeURIComponent(pair.code)}` } : {}), url };
     }
     if (action === 'confirm' || action === 'reject') {
       const id = text(input.id, '设备 ID');
@@ -426,9 +727,10 @@ async function mountLinkHost(ctx, config) {
     record: (id, direction) => store.recordReturn(id, direction),
     revoke: id => store.revoke(id),
   };
-  const centerOptions = { webRoot, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name, pairing,
+  const centerOptions = { webRoot, credentials: ctx.credentials, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name, pairing,
     signSource: (target, command) => signExecutionSource(identity, target, command) };
-  const getCenter = () => deviceCenter ??= createDeviceCenter({ ...centerOptions, directory: join(directory, 'outgoing'), hostAdmin: input => admin(input) }).catch(error => { deviceCenter = undefined; throw error; });
+  const getCenter = () => deviceCenter ??= createDeviceCenter({ ...centerOptions, directory: join(directory, 'outgoing'), hostAdmin: input => admin(input),
+    group: { ...group, routes: groupRoutes, enroll: enrollGroup, syncSoon: syncGroupSoon } }).catch(error => { deviceCenter = undefined; throw error; });
   const deviceAction = async input => {
     input = { ...input, action: input.action || ({ diagnose: 'hostStatus' }[input.operation] || input.operation) };
     if (input.action === 'connect' && input.deviceId && input.deviceId !== 'local') return (await getCenter()).resources({ deviceId: input.deviceId, kind: 'capabilities' });
@@ -437,7 +739,7 @@ async function mountLinkHost(ctx, config) {
     if (!['list','devices','rename','remove','reconnect','job','relayProbe','hostStatus'].includes(input?.action)) return { available: false, code: 'SECURE_INPUT_REQUIRED', reason: '请在侧栏设备中心完成连接、授权或受控管理', handoff: { kind: 'device-center' } };
     return (await getCenter()).api(input);
   };
-  const getCloudCenter = () => cloudCenter ??= createDeviceCenter({ ...centerOptions, directory: join(directory, 'cloud-outgoing'), hostAdmin: input => admin(input, getCloudCenter), publicOrigin: cloudAccess.origin, workbenchOrigin: env.DSH_LINK_WORKBENCH_ORIGIN, registerProxy: () => cloudGateway.registerProxy() }).catch(error => { cloudCenter = undefined; throw error; });
+  const getCloudCenter = () => cloudCenter ??= createDeviceCenter({ ...centerOptions, directory: join(directory, 'cloud-outgoing'), hostAdmin: input => admin(input, getCloudCenter), publicOrigin: cloudAccess.origin, workbenchOrigin: env.DSH_LINK_WORKBENCH_ORIGIN, registerProxy: () => cloudGateway.registerProxy(), group: { ...group, routes: groupRoutes, enroll: enrollGroup, syncSoon: syncGroupSoon } }).catch(error => { cloudCenter = undefined; throw error; });
   if (env.DSH_LINK_DEVICE_GATEWAY_PORT && cloudAccess.origin && env.DSH_LINK_WORKBENCH_ORIGIN) {
     cloudGateway = await createCloudDeviceGateway({ ownerOrigin: cloudAccess.origin, workbenchOrigin: env.DSH_LINK_WORKBENCH_ORIGIN, port: Number(env.DSH_LINK_DEVICE_GATEWAY_PORT), getCenter: getCloudCenter });
   }
@@ -478,7 +780,11 @@ async function mountLinkHost(ctx, config) {
   const close = () => {
     if (closing) return closing;
     closed = true;
+    clearInterval(groupTimer);
+    groupStop.abort();
     closing = (async () => {
+      await groupSync?.catch(() => {});
+      await group.flush();
       const cloudClosing = cloudAccess.close();
       await (await deviceCenter?.catch(() => undefined))?.close();
       await cloudGateway?.close();
@@ -507,6 +813,13 @@ async function mountLinkHost(ctx, config) {
   }));
   const service = {
     admin, status, close, configurationSnapshot,
+    integrationToken,
+    integrationEndpoint() {
+      const relay = connectedRelay();
+      const origin = relay?.url || (listener && store.state.publicUrl);
+      if (!origin) return undefined;
+      return { url: new URL('/link/api/rpc', origin).href, relay: Boolean(relay), ...(relay ? { relayTarget: group.localId } : {}) };
+    },
     devices: async () => { const snapshot = (await getCenter()).devices(); const hostId = 'sha256:' + identity.pin; return { ...snapshot, hostId, devices: snapshot.devices.map(device => device.id === 'local' ? { ...device, hostId, authorizationId: null } : device) }; },
     resources: async input => (await getCenter()).resources(input),
     resolveDeviceIdentity: async input => (await getCenter()).resolveDeviceIdentity(input),

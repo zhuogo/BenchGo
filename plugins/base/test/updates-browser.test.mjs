@@ -48,6 +48,9 @@ async function fixture() {
       window.fetch=async(url,options)=>{
         if(!String(url).endsWith('/api/commander/updates'))throw Error('Unexpected fixture request: '+url);
         const body=JSON.parse(options.body);window.updateCalls.push(body);
+        if(body.action==='downloads')return Response.json({files:[
+          ['windows-x64','win-x64-setup.exe'], ['mac-arm64','mac-arm64.dmg'], ['mac-x64','mac-x64.dmg'], ['android','android.apk'], ['linux-server','linux-server.tar.gz'],
+        ].map(([target,name])=>({target,version:'0.1.2',url:'https://github.com/zhuogo/BenchGo/releases/download/v0.1.2/benchgo-0.1.2-'+name}))});
         if(mode==='loading')return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true}));
         if(mode==='error'&&body.action==='check')return new Response(JSON.stringify({error:'测试更新服务暂不可用'}),{status:503,headers:{'content-type':'application/json'}});
         if(body.action==='configure')state={...state,config:{source:body.source,mirrorUrl:body.mirrorUrl}};
@@ -122,7 +125,7 @@ async function mount(page, mode = 'current', dark = false, localDesktop = false)
   await page.waitForFunction(() => window.updateCalls.some(call => call.action === 'status'));
   const launcher = page.locator('.cmd-update-launcher');
   await launcher.click();
-  const dialog = page.getByRole('dialog', { name: '更新', exact: true });
+  const dialog = page.getByRole('dialog', { name: '下载', exact: true });
   await dialog.waitFor();
   return { launcher, dialog };
 }
@@ -159,8 +162,13 @@ test('unified updates render honest states beside the workbench in both themes a
       page.setDefaultTimeout(6000);
       const errors = []; page.on('pageerror', error => errors.push(error.message));
       try {
-        const { dialog } = await mount(page, mode, dark);
+        const { launcher, dialog } = await mount(page, mode, dark);
         await dialog.getByRole('heading', { name: 'BenchGo', exact: true }).waitFor();
+        const downloads = dialog.getByRole('region', { name: '其他设备下载' });
+        assert.equal(await downloads.getByRole('link', { name: '访问官网' }).getAttribute('href'), 'https://benchgo.cn/');
+        await downloads.getByRole('link', { name: /下载 Android APK/ }).waitFor();
+        assert.equal(await downloads.getByRole('link', { name: /下载 macOS/ }).count(), 2);
+        assert.equal(await launcher.getAttribute('data-update-available'), String(['available', 'restart', 'same-release-app'].includes(mode)));
         assert.equal(await dialog.getByRole('button', { name: /^(更新插件|检查应用更新)$/ }).count(), 0, 'component-specific update actions are absent');
         const details = dialog.getByRole('button', { name: '版本详情', exact: true });
         if (mode !== 'loading') assert.equal(await details.getAttribute('aria-expanded'), 'false', 'component versions start collapsed');
@@ -417,7 +425,7 @@ test('unified update details, source picker and install preserve native keyboard
     await dialog.waitFor({ state: 'detached' });
     assert(await launcher.evaluate(node => document.activeElement === node), 'closing the modal returns focus to its actual sidebar launcher');
     await launcher.hover();
-    await page.getByRole('tooltip').getByText(/更新/).waitFor();
+    await page.getByRole('tooltip').getByText(/下载/).waitFor();
   } finally { await browser.close(); }
 });
 
@@ -534,7 +542,7 @@ test('a pending feature restart keeps the native failure in details without a di
         await dialog.getByText('功能包已就绪，重启主机应用后生效', { exact: true }).waitFor();
         assert.equal(await dialog.getByRole('alert').count(), 0);
         assert.equal(await dialog.getByRole('button', { name: '重试应用更新', exact: true }).count(), 0);
-        await dialog.getByRole('button', { name: '关闭更新', exact: true }).click();
+        await dialog.getByRole('button', { name: '关闭下载', exact: true }).click();
         await launcher.click();
         assert.equal(await dialog.getByRole('alert').count(), 0, 'reopening keeps focus on the required restart');
         await fits(page, dialog);
@@ -619,6 +627,8 @@ test('captured touchscreen movement cancels and a context menu never interrupts 
     const page = await browser.newPage({ viewport: { width: 390, height: 900 }, hasTouch: true, isMobile: true, reducedMotion: 'reduce' });
     const { dialog } = await mount(page, 'available');
     const button = dialog.getByRole('button', { name: '长按 2 秒更新', exact: true });
+    await button.scrollIntoViewIfNeeded();
+    await button.click({ trial: true });
     const box = await button.boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 2;
     const input = await page.context().newCDPSession(page);
     await button.evaluate(node => node.addEventListener('pointerdown', event => { window.touchPointer = event.pointerId; }, { once: true }));

@@ -66,8 +66,19 @@ export function mountShellUi(ctx){
     const entry=ctx.slots.entries(name).find(item=>item.children?.[owns]);if(!entry)throw Error('Official shell entry is unavailable: '+name);
     const original=entry.component;entry.component=component;return ()=>{if(entry.component===component)entry.component=original;};
   });
+  // Published Hosts can declare fewer child slots than the bundled view.
+  function CompatibleSettingsRoot({ renderSlot, renderFactorySlot, ...props }) {
+    const children = findSettingsShell(ctx.slots)?.children;
+    const hasSlot = name => Object.hasOwn(children ?? {}, name);
+    return <SettingsRoot {...props}
+      renderSlot={(name, owner, options) => hasSlot(name) ? renderSlot(name, owner, options) : options?.fallback}
+      renderFactorySlot={(name, owner) => name === 'settings.section.view' && hasSlot('settings.section')
+        ? renderSlot('settings.section', { close: owner.close }, { only: owner.id })
+        : renderFactorySlot?.(name, owner)}
+    />;
+  }
   // The official settings shell can arrive after the client's access policy.
-  ctx.effect(() => watchOfficialView(ctx.slots, SETTINGS_SHELL_SLOT, findSettingsShell, SettingsRoot));
+  ctx.effect(() => watchOfficialView(ctx.slots, SETTINGS_SHELL_SLOT, findSettingsShell, CompatibleSettingsRoot));
   // The settings owner also registers a rail badge for the same native update.
   // Hide that specific registration, preserving unrelated badges and its service.
   const badgeSlot = 'sidebar.toggle.badge';

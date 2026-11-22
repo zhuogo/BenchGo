@@ -73,7 +73,9 @@ inheritWorkbenchTheme();
   }
   async function* openStream(endpoint, payload, signal, uplink) {
     signal.throwIfAborted();
-    const id = crypto.randomUUID();
+    // A desktop proxy frame may inherit an insecure ancestor context.
+    // getRandomValues remains available so settings access can initialize.
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
     const lifetime = new AbortController();
     const combined = AbortSignal.any([signal, lifetime.signal]);
     const post = async frame => {

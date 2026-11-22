@@ -1,4 +1,4 @@
-import { routerGo } from '../shared/builtin-providers.mjs';
+import { isRouterGo, routerGo } from '../shared/builtin-providers.mjs';
 import { isRouterGoAccountReference, routerGoOrigin } from '../shared/routergo-account.mjs';
 import { hasTextCapability } from '../shared/model-capabilities.mjs';
 
@@ -15,7 +15,7 @@ const protocols = {
 export const modelProtocol = value => Object.hasOwn(protocols, value) ? protocols[value] : null;
 export const protocolForTool = tool => tool === 'codex' ? 'responses' : tool === 'claude' ? 'anthropic' : null;
 
-export const isManagedRouterGo = (providerId, baseURL, credentialRef) => providerId === routerGo.id
+export const isManagedRouterGo = (providerId, baseURL, credentialRef) => isRouterGo(providerId)
   && typeof baseURL === 'string' && baseURL.replace(/\/$/u, '') === routerGo.baseURL
   && isRouterGoAccountReference(credentialRef);
 

@@ -1,5 +1,11 @@
 /* Connection settings share the resource canvas and the existing BenchGo tokens. */
 .ba-connections{width:100%;max-width:none;--ba-channel-paper:var(--dsw-alias-bg-base,#fff);--ba-channel-accent:var(--dsw-alias-state-business-primary,#315be8);--ba-channel-success:var(--dsw-alias-status-success,#26845b);--ba-channel-error:var(--dsw-alias-status-error,#b44137)}
+.ba-connections>.ba-connections-heading{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:12px 16px}
+.ba-connections-actions{display:grid;justify-items:end;text-align:right}
+.ba-connections-actions>.ba-row-actions{justify-content:flex-end}
+.ba-connections-actions>[role=status]{max-width:15em;color:var(--ba-muted);font-size:12px;line-height:1.5}
+.ba-connections-actions>[role=status][data-dirty=true]{color:var(--ba-channel-accent)}
+.ba-connections-actions>[role=status]:not(:empty){margin-top:4px}
 .ba-connections .bg-segments-scroll{max-width:100%;margin-bottom:0}
 .ba-connections .bg-segments button{gap:7px}
 .ba-connection-form,.ba-connection-form>fieldset{display:grid;gap:16px;min-width:0;margin:16px 0 0;padding:0;border:0}
@@ -7,6 +13,18 @@
 .ba-connection-overview,.ba-connection-section{min-width:0;padding:22px;border:1px solid var(--ba-line);border-radius:14px;background:var(--ba-channel-paper)}
 .ba-connection-overview{display:flex;align-items:center;justify-content:space-between;gap:20px;background:color-mix(in srgb,var(--ba-channel-accent) 3%,var(--ba-channel-paper))}
 .ba-connection-overview>div{min-width:0}
+.ba-integration-overview-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px 16px}
+.bg-ui-dialog-content.ba-integration-docs{display:flex;flex-direction:column;width:min(660px,calc(100vw - 32px));padding:clamp(16px,4vw,28px)}
+.ba-integration-docs>.bg-ui-dialog-description{margin-bottom:16px}
+.ba-integration-docs-preview{display:block;width:100%;height:min(400px,52dvh);min-height:80px;flex:0 1 auto;resize:none;box-sizing:border-box;padding:12px;border:1px solid var(--bg-ui-line);border-radius:8px;background:var(--bg-ui-hover);color:var(--bg-ui-ink);font:13px/1.6 ui-monospace,Consolas,monospace;overflow-wrap:anywhere;scrollbar-width:thin}
+.ba-integration-docs-preview:focus-visible{outline:2px solid var(--bg-ui-accent);outline-offset:2px}
+.ba-integration-docs-actions{display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:8px 12px;margin-top:16px}
+.ba-integration-docs-actions>span{color:var(--bg-ui-muted);font-size:12px}
+.ba-integration-docs-actions>span{flex:1;min-width:0}
+.ba-integration-docs-sensitive{margin:0 0 12px;color:var(--bg-ui-muted);font-size:12px;line-height:1.5}
+.ba-channel-verification-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px}
+.ba-channel-verification-actions>span{max-width:25em;color:var(--ba-muted);font-size:12px;line-height:1.5}
+.ba-channel-verification-actions>.bg-ui-button{flex:none}
 .ba-channel-title{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
 .ba-channel-title strong{font-size:18px;font-weight:650;letter-spacing:-.02em}
 .ba-channel-status,.ba-channel-summary{flex:none;display:inline-flex;align-items:center;gap:7px;padding:4px 9px;border-radius:6px;background:var(--ba-hover);font-size:12px;line-height:1.5;color:var(--ba-muted)}
@@ -71,10 +89,6 @@
 .ba-channel-legacy>button{justify-self:start}
 .ba-channel-advanced{padding:6px 22px}
 .ba-channel-advanced .bg-ui-disclosure-inner>.ba-goal-fields{padding:10px 0 16px}
-.ba-connections .ba-identity-save{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0;padding:16px 0 max(12px,env(safe-area-inset-bottom));border-top:0}
-.ba-connections .ba-identity-save>span{color:var(--ba-muted);font-size:12px}
-.ba-connections .ba-identity-save .ba-row-actions{margin-left:auto}
-.ba-connections .ba-identity-save[data-dirty=true]>span{color:var(--ba-channel-accent)}
 .ba-connections .ba-error{margin:0}
 .ba-connections>.ba-error{margin-top:16px}
 .ba-connection-error{align-items:flex-start}
@@ -100,6 +114,9 @@
 .ba-channel-verification>.ba-connection-inline-note{margin-bottom:14px}
 @media(max-width:600px){
   .ba-connection-overview{align-items:flex-start;flex-direction:column;gap:16px}
+  .ba-integration-overview-actions{width:100%;justify-content:space-between}
+  .ba-integration-docs-actions>.bg-ui-button{min-height:44px}
+  .ba-channel-verification-actions{margin-left:auto}
   .ba-connection-section,.ba-connection-overview{padding:18px;border-radius:12px}
   .ba-connection-section-head{align-items:flex-start;flex-wrap:wrap;gap:12px}
   .ba-connection-section-head>.bg-ui-button{flex:none}
@@ -107,9 +124,6 @@
   .ba-channel-group-row{grid-template-columns:1fr;gap:10px}
   .ba-channel-manual-row{flex-wrap:wrap}
   .ba-channel-manual-row input{min-width:140px}
-  .ba-connections .ba-identity-save{align-items:stretch;flex-direction:column;gap:10px}
-  .ba-connections .ba-identity-save .ba-row-actions{width:100%;margin-left:0}
-  .ba-connections .ba-identity-save .ba-row-actions button{flex:1}
   .ba-connections .bg-ui-button{min-height:44px}
   .ba-connection-checks{grid-template-columns:1fr}
   .ba-connection-check{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px;border-right:0;border-bottom:1px solid var(--ba-line)}

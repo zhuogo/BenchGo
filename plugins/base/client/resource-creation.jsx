@@ -16,7 +16,12 @@ function useProjectBridge(device) {
 }
 function RemoteProjectPicker({ device, ...props }) {
   const { frame, url, bridge } = useProjectBridge(device);
-  return <><ProjectPicker {...props} api={bridge.api} allowDesktop={false} />{url && <iframe hidden ref={frame} src={url} title={device.name + '的项目连接'} onLoad={() => bridge.probe()} referrerPolicy="no-referrer" />}</>;
+  const api = async (action, args) => {
+    const result = await bridge.api(action, args);
+    if (action === 'browse' && result.folderManagement && !await bridge.supports('folder')) return { ...result, folderManagement: false };
+    return result;
+  };
+  return <><ProjectPicker {...props} api={api} allowDesktop={false} />{url && <iframe hidden ref={frame} src={url} title={device.name + '的项目连接'} onLoad={() => bridge.probe()} referrerPolicy="no-referrer" />}</>;
 }
 
 /** The existing confirmation dialog owns consent; this frame discovers and runs target APIs. */

@@ -17,7 +17,7 @@ import { providerOption } from '../../base/client/provider-brand-icon.jsx';
 import { prioritizeRouterGo } from '../../base/client/provider-options.mjs';
 import { routerGo } from '../../base/shared/builtin-providers.mjs';
 import { reasoningLevelLabels } from '../../base/client/model-reasoning-state.mjs';
-import { ModelEffortSlider } from '../../base/client/model-effort-slider.jsx';
+import { ModelEffortPicker } from '../../base/client/model-effort-picker.jsx';
 import { ToolBrandIcon } from '../../base/client/tool-brand-icon.jsx';
 import { Dialog, DialogClose, DialogContent, DialogTitle, DialogTrigger } from '../../shared/client/ui/dialog.jsx';
 import css from './style.css';
@@ -303,7 +303,6 @@ function Studio({ snapshot, ctx, refresh, threadId, SessionProvider, renderSlot,
     models: '设置身份、工作与辅助模型，按优先顺序调用。',
     documents: '整理关于你和助手的档案，作为每次协作的共同背景。',
     memory: '留下值得记住的偏好、决定与经验。',
-    connections: '把助手接入常用平台，在熟悉的地方继续对话。',
     'system-files': '浏览助手的运行文件与目录，查看原始记录。',
   };
   const choose = next => {
@@ -336,7 +335,7 @@ function Studio({ snapshot, ctx, refresh, threadId, SessionProvider, renderSlot,
       : <div className="ba-studio-nav-group" key={group.id}><span className="ba-studio-nav-group-label">{group.label}</span>{group.items.map(navigationItem)}</div>)}</nav>
   </aside><div className="ba-studio-mobile-nav"><label htmlFor="ba-studio-section">资源分区</label><CustomSelect id="ba-studio-section" aria-label="资源分区" value={section} onChange={choose} options={groups.flatMap(group => group.items.map(([id, label]) => ({ value: id, label: `${group.label} · ${label}${dirtySections.includes(id) ? ' · 未保存' : ''}` })))} /></div>
   <div className="ba-studio-body" ref={body} onScroll={event => { if (!restoringScroll.current) scrollPositions.current.set(section, event.currentTarget.scrollTop); }} data-section={section}>
-    {!['artifacts', 'vault', 'goals'].includes(section) && !(section === 'system-files' && systemPreview) && !(section === 'tasks' && taskTab === 'tasks' && taskDetailOpen) && <header className="ba-studio-heading"><div className="ba-studio-heading-main"><div className="ba-studio-heading-row"><h1>{section === 'tasks' ? taskTab === 'tasks' ? '任务' : '审核' : current[1]}</h1>{section === 'tasks' && taskTabs}{section === 'identity' && <NotificationSoundToggle />}</div>{descriptions[section] && <p>{descriptions[section]}</p>}</div>{dirtySections.includes(section) && <span className="ba-studio-draft" role="status"><span aria-hidden="true" />草稿已保留</span>}</header>}
+    {!['artifacts', 'vault', 'goals', 'connections'].includes(section) && !(section === 'system-files' && systemPreview) && !(section === 'tasks' && taskTab === 'tasks' && taskDetailOpen) && <header className="ba-studio-heading"><div className="ba-studio-heading-main"><div className="ba-studio-heading-row"><h1>{section === 'tasks' ? taskTab === 'tasks' ? '任务' : '审核' : current[1]}</h1>{section === 'tasks' && taskTabs}{section === 'identity' && <NotificationSoundToggle />}</div>{descriptions[section] && <p>{descriptions[section]}</p>}</div>{dirtySections.includes(section) && <span className="ba-studio-draft" role="status"><span aria-hidden="true" />草稿已保留</span>}</header>}
     {loadError && <div className="ba-error" role="alert"><span>{loadError}</span><Button variant="ghost" type="button" onClick={onRetryLoad}>重试加载</Button><IconButton icon="close" label="关闭错误" onClick={onDismissLoadError} /></div>}
     <div hidden={section !== 'identity'} style={section !== 'identity' ? { display: 'none' } : undefined}>{(section === 'identity' || dirtySections.includes('identity')) && <Identity snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('identity')} active={visible && section === 'identity'} requestedTab={requestedTab} onDesign={kind => { petDesignIntent.request(threadId, kind); openAssistantThread(ctx, threadId); }} />}</div>
     <div hidden={section !== 'models'} style={section !== 'models' ? { display: 'none' } : undefined}>{(section === 'models' || dirtySections.includes('models')) && <Identity modelsOnly snapshot={snapshot} refresh={refresh} onDirtyChange={dirtyEditor('models')} />}</div>
@@ -394,7 +393,8 @@ function UIIcon({ name, ...props }) {
   return name === 'arrow-up' ? <span style={{ display: 'inline-flex', transform: 'rotate(180deg)' }}>{icon}</span> : icon;
 }
 async function request(action, args, signal) {
-  const url = new URL('api/commander/assistant', document.baseURI), done = perfTrace.time('assistant:' + action);
+  const path = action === 'integrationToken' ? 'api/commander-integration/token' : 'api/commander/assistant';
+  const url = new URL(path, document.baseURI), done = perfTrace.time('assistant:' + action);
   // These finite reads must release shared state/history promises even when a
   // mobile connection stalls after headers. Mutations keep their own semantics.
   const deadline = ['state', 'ensure', 'history', 'replyFileSource'].includes(action) ? AbortSignal.timeout(20000) : null;
@@ -410,7 +410,7 @@ async function request(action, args, signal) {
   finally { done(); }
 }
 // Frequent reads leave the state snapshot valid; every other action may change it.
-const STATE_PRESERVING = new Set(['history', 'ensure', 'tasks', 'approvalOrigins', 'executionSessions', 'nativeWorkerSession', 'executionSummaryActivity', 'petCatalog', 'goalList', 'connectionCatalog', 'connectionStatus', 'replyFileSource', 'artifacts']);
+const STATE_PRESERVING = new Set(['history', 'ensure', 'tasks', 'approvalOrigins', 'executionSessions', 'nativeWorkerSession', 'executionSummaryActivity', 'petCatalog', 'goalList', 'connectionCatalog', 'connectionStatus', 'replyFileSource', 'artifacts', 'integrationToken']);
 const ensuredSessions = new Map();
 let stateEpoch = 0, stateRead = null;
 /** A reader arriving after this point never shares a state read that began before it. */
@@ -584,7 +584,7 @@ function ModelSelection({ open, saved, harness, draft: value, canChangeHarness, 
       </div>
       {loading ? <Loading label="正在读取模型目录" compact /> : errorMessage ? <p className="ba-model-feedback" data-error="true" role="alert"><span>模型目录加载失败：{errorMessage}。</span><Button variant="ghost" type="button" onClick={() => harness === 'official' ? assistantModelCatalog.invalidate() : pickerCatalog.invalidate()}>重试</Button></p> : providers.every(provider => provider.disabled) && <p className="ba-model-feedback" role="status"><UIIcon name="server" size={15} /><span>{harness === 'official' ? '目录中还没有供应商，可在模型设置中配置。' : toolCatalog?.tools?.find(tool => tool.id === harness)?.routeReason || '当前 Harness 没有可用的 API 模型组合。'}</span></p>}
       {unsupportedEffort && <p className="ba-model-feedback" data-error="true" role="alert"><span>原档位已不可用（{effort}）</span><Button variant="ghost" type="button" onClick={() => onChange(withEffort(value))}>恢复默认</Button></p>}
-      {efforts.length > 0 && <ModelEffortSlider options={effortOptions} value={effort ?? ''} disabled={unavailableCatalog} onCommit={index => onChange(withEffort(value, effortOptions[index].id))} />}
+      {efforts.length > 0 && <ModelEffortPicker options={effortOptions} value={effort ?? ''} disabled={unavailableCatalog} onCommit={effortId => onChange(withEffort(value, effortId))} />}
       {!unavailableCatalog && harness !== 'official' && value.modelId && <p className="ba-model-feedback">推理强度使用此 Harness 的高级设置。</p>}
       <div className="ba-model-dialog-actions">
         <DialogClose asChild><Button variant="ghost" type="button">取消</Button></DialogClose>
@@ -724,6 +724,7 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   }, []);
   const openExecution = useCallback(target => openExecutionSession(ctx, target), [ctx]);
   const openResources = useCallback((next, selection) => openAssistantTab(ctx, next, selection), [ctx]);
+  const configureModel = useCallback(() => openResources('models'), [openResources]);
   useEffect(() => {
     if (tab !== 'chat' || !history.sessionId) return;
     let timer, disposed = false;
@@ -834,7 +835,6 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   const selected = threads.find(thread => thread.id === threadId);
   const view = tab === 'chat' ? 'chat' : 'studio';
   const dismissLoadError = () => { loadErrors.current.clear(); setError(''); };
-  const configureModel = () => { selectedAssistantTab = 'models'; setTab('models'); };
   return <ActivityProvider>
     <BackgroundSessions ctx={ctx} state={snapshot?.state} selectedSessionId={history.sessionId} />
     <div className="ba-root"><main className="ba-main">
@@ -887,7 +887,10 @@ export function mountAssistant(ctx) {
     return () => document.removeEventListener('benchgo:assistant-changed', invalidateAssistantState, true);
   });
   mountReplySound(ctx, api);
-  mountAssistantActivity(ctx, api);
+  mountAssistantActivity(ctx, api, () => {
+    invalidateAssistantState();
+    void api('state').catch(() => { /* The existing state readers handle transport failures. */ });
+  });
   mountSessionRoleControls(ctx, api, async role => {
     if (role.role === 'router') { openAssistantThread(ctx, role.threadId); return; }
     const entries = (await api('executionSessions')).sessions || [];

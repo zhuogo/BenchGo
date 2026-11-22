@@ -49,7 +49,7 @@ test('base composition keeps optional service objects out of Cordis disposer col
   };
   const noop = () => {};
   const imports = {
-    mkdir: async () => {}, mountInteractivePrompt: noop, mountLiveReasoning: noop, hostScope: noop,
+    mkdir: async () => {}, mountInteractivePrompt: noop, mountLiveReasoning: noop, mountModelRetryDefaults: noop, hostScope: noop,
     createSettingsManagement: () => ({ register: () => () => {}, close: async () => { managementClosed++; } }),
     mountWorkbench: mockMount('benchgoWorkbench'), mountEfficiency: mockMount('benchgoEfficiency'),
     mountSkills: noop, mountPreviewAssets: noop, mountUsage: noop, mountUpdates: noop,

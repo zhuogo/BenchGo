@@ -251,9 +251,6 @@ export function QuietChat({ home, session, chat, inbox, input, continuation, pro
     </ChatNotice>}
     {petError && <ChatNotice noticeKey="notice:pet-failed" message={`形象信息：${petError}`} />}
     {error && <ChatNotice noticeKey="notice:action-failed" message={error} />}
-    {home.onConfigureModel && <ChatNotice message="还没有配置文本模型" alert={false}>
-      <Button variant="ghost" type="button" onClick={home.onConfigureModel}>去设置模型</Button>
-    </ChatNotice>}
     {(rows.length > 0 || showReplyFailure || failures.length > 0 || home.loadError || petError || error || activity || awaitingChoice) && <div className="ba-chat-tail">
       {!replies.length && awaitingChoice && <div className="ba-chat-work ba-chat-await" role="status">在下方选项卡中作答后继续</div>}
       {activity && !awaitingChoice && <ConversationActivity activity={activity} />}

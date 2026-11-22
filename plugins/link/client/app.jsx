@@ -105,7 +105,7 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
       {pairingConnection(status, defaults).mode === 'lan' && status?.addresses?.length > 1 && <div className="link-advanced-controls"><label className="link-field"><span>手动指定连接地址 <small>通常保持自动即可；连接失败时再尝试其他地址。</small></span><Select aria-label="局域网地址" value={lanAddress} disabled={unavailable} onChange={e => { setLanAddress(e.target.value); setPairing(null); }}><option value="">自动选择地址</option>{status.addresses.map(address => <option key={address} value={address}>{address}</option>)}</Select></label></div>}
       <div className="link-diagnostics"><div className="link-panel-head"><h4>连接诊断</h4><Button icon="refresh" onClick={refreshStatus} disabled={!!busy}>{busy === 'refresh' ? '正在刷新…' : '刷新状态'}</Button></div><p>Link 运行在哪台电脑，就连接哪台电脑。云服务器不属于手机本地局域网，请使用受信任的 HTTPS 地址；本地连接失败时，检查同一 Wi-Fi、网络隔离和电脑防火墙。</p>{status?.relay?.configured && <p role="status">自有中继：{status.relay.connected ? '主机通道已连接（需从访问端验证可达性）' : status.relay.lastError || '正在连接…'}</p>}<div className="link-addresses">{(status?.addresses || []).map(address => <code key={address}>{address}</code>)}{status?.publicUrl && <code>{status.publicUrl}</code>}{status && !status.addresses?.length && <span>未发现可用连接地址，请检查网络或指定监听地址。</span>}</div></div>
     </Disclosure>
-    {!!status?.pending?.length && !pairing && <div className="link-pending-list">{status.pending.map(device => <div className="link-device" key={device.id}><div><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel(device.reciprocal)}</small></div><Button kind="primary" icon="check" className="link-button-success" onClick={() => confirm(device.id, 'confirm')} disabled={unavailable}>允许</Button><Button icon="close" className="link-button-danger" onClick={() => confirm(device.id, 'reject')} disabled={unavailable}>拒绝</Button></div>)}</div>}
+    {!!status?.pending?.length && !pairing && <div className="link-pending-list">{status.pending.map(device => <div className="link-device" key={device.id}><div><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel(device)}</small></div><Button kind="primary" icon="check" className="link-button-success" onClick={() => confirm(device.id, 'confirm')} disabled={unavailable}>允许</Button><Button icon="close" className="link-button-danger" onClick={() => confirm(device.id, 'reject')} disabled={unavailable}>拒绝</Button></div>)}</div>}
     <div className="link-device-list"><div className="link-panel-head"><div><h3>已授权访问此设备</h3></div><span>{status ? `${status.devices?.length || 0} 台` : '—'}</span></div>{status?.devices?.length ? status.devices.map(device => <div className="link-device" key={device.id}><UIIcon name={deviceIcon(device)} size={18} /><div className="link-authorized-device-info">
       {editingDevice?.id === device.id ? <form className="link-device-rename" onSubmit={renameDevice}>
         <input aria-label="设备备注名称" autoFocus value={editingDevice.name} maxLength={100} disabled={unavailable} onFocus={event => event.currentTarget.select()} onChange={event => setEditingDevice(value => ({ ...value, name: event.target.value }))} onCompositionStart={() => { composingDeviceName.current = true; }} onCompositionEnd={() => { composingDeviceName.current = false; }} onKeyDown={deviceNameKeyDown} />
@@ -125,7 +125,8 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
     {pairing && <PairingDialog pairing={pairing} pending={status?.pending || []} onClose={() => setPairing(null)} onConfirm={confirm} busy={busy} error={error} />}
   </section>;
 }
-function deviceAccessLabel(reciprocal) {
+function deviceAccessLabel({ reciprocal, deviceGroup }) {
+  if (deviceGroup) return '加入「我的设备」后，组内成员可互相打开工作台、委派任务，并使用设备提供的连接能力。';
   const capabilities = '已开放的工作台、任务协作及连接管理';
   return reciprocal ? `回程验证通过后，双方可使用对方${capabilities}。回程不可达时，仅对方可访问本机。` : `单向连接，对方可使用本机${capabilities}。`;
 }
@@ -202,7 +203,7 @@ export function PairingDialog({ pairing, pending = [], onClose, onConfirm, busy,
       <h3 id={approvalTitleId}>允许设备连接？</h3>
       <p id={approvalDescriptionId}>仅允许你认识并信任的设备访问此工作台。</p>
       <div className="link-pending-list">{pending.map(device => <div className="link-device" key={device.id}>
-        <UIIcon name={deviceIcon(device)} size={20} /><div className="link-device-info"><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel(device.reciprocal)}</small></div>
+        <UIIcon name={deviceIcon(device)} size={20} /><div className="link-device-info"><strong>{device.name || '新设备'}</strong><small>{deviceAccessLabel(device)}</small></div>
         <div className="link-device-actions"><Button icon="close" className="link-button-danger" onClick={() => onConfirm(device.id, 'reject')} disabled={!!busy}>{busy === 'reject' ? '正在拒绝…' : '拒绝'}</Button><Button kind="primary" icon="check" className="link-button-success" onClick={() => onConfirm(device.id, 'confirm')} disabled={!!busy}>{busy === 'confirm' ? '正在允许…' : '允许'}</Button></div>
       </div>)}</div>
       <ErrorText>{error}</ErrorText>

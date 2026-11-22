@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Switch } from '@deepseek-ai/dsh-client-ui-primitives';
 import { auxiliaryCapabilities, auxiliaryModelPatch, auxiliaryCapabilityPatch, validateModelSettings } from './model-settings.mjs';
 import css from './model-settings.css';
-import effortCss from '../../base/client/model-effort-slider.css';
+import effortCss from '../../base/client/model-effort-picker.css';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { Tooltip as Hint } from '../../shared/client/ui/tooltip.jsx';

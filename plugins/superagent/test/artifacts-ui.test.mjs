@@ -63,7 +63,7 @@ test('compact artifacts open only the verified absolute path and preserve failur
   h.render(); await settle();
   let nodes = h.render();
   assert.equal(nodes.filter(node => node.props.type === 'checkbox').length, 0, 'compact reuses the list without bulk-selection chrome');
-  assert(nodes.some(node => node.children.includes('当前工作台的助手产物库，不限于当前聊天。')));
+  assert.equal(nodes.some(node => node.type === 'header'), false, 'compact artifacts start with the category controls');
   nodes.find(node => node.type?.name === 'FileDetails').props.onOpen({ currentTarget: {} }); await settle();
   nodes = h.render(); assert(nodes.some(node => node.children.includes('工作区尚未就绪')));
   assert.equal(nodes.filter(node => node.props['aria-label'] === '预览 a.md').length, 0, 'failed native opens do not create a parallel preview');

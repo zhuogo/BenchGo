@@ -5,6 +5,7 @@ export const name = 'benchgo-link';
 export const inject = [
   'benchgo',
   'connection',
+  'credentials',
   'workspaceRegistry',
   'typertGateway',
   'sessionController',

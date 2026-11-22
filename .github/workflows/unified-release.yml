@@ -1,4 +1,5 @@
 name: BenchGo unified release
+run-name: BenchGo v${{ inputs.version }} (${{ inputs.publish && 'publish' || 'plan' }})
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +16,9 @@ on:
         required: true
         type: boolean
         default: false
+      source_sha:
+        description: Expected main commit when dispatching from release:update
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -50,7 +54,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
-        run: node scripts/release/plan.mjs --version "$RELEASE_VERSION" --source-sha "$GITHUB_SHA" --out artifacts/release/release-plan.json
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+        run: node scripts/release/plan.mjs --version "$RELEASE_VERSION" --source-sha "$EXPECTED_SOURCE_SHA" --out artifacts/release/release-plan.json
       - uses: actions/upload-artifact@v4
         with:
           name: benchgo-release-plan

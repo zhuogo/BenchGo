@@ -1,9 +1,10 @@
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lstat, mkdir, opendir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, opendir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { manageProjectFolder } from './project-folders.mjs';
 
 export function githubRepository(value) {
   if (typeof value !== 'string' || value.length > 500 || !/^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+\/?$/.test(value)) throw new Error('Use an HTTPS GitHub repository URL: https://github.com/owner/repo');
@@ -60,23 +61,27 @@ async function cloneGit(url, destination, { timeout = 5 * 60_000 } = {}) {
 }
 
 export function projectActions(ctx, { directory, runClone = cloneGit } = {}) {
-  let cloning = false;
+  let cloning = false, cloneDestination;
   const pickerFile = directory && join(directory, 'project-picker.json');
   let writes = Promise.resolve();
-  const registerProject = async path => {
+  const changeFolders = operation => {
+    const task = writes.then(operation);
+    writes = task.catch(() => {});
+    return task;
+  };
+  const registerProject = path => changeFolders(async () => {
     const p = await ctx.workspaceRegistry.create(await realpath(path));
     if (pickerFile) {
-      const task = writes.then(async () => {
+      try {
         const temp = `${pickerFile}.${randomUUID()}.tmp`;
         try { await writeFile(temp, JSON.stringify({ path: p.path }), { mode: 0o600 }); await rename(temp, pickerFile); }
         finally { await rm(temp, { force: true }); }
-      });
-      writes = task.catch(error => ctx.logger?.warn?.(`BenchGo project folder could not be remembered: ${error.message}`));
-      // A preference write failure must not turn an already registered project into a failed add.
-      await writes;
+      } catch (error) {
+        ctx.logger?.warn?.(`BenchGo project folder could not be remembered: ${error.message}`);
+      }
     }
     return { project: { id: p.id, path: p.path, title: p.title } };
-  };
+  });
   const actions = {
     async browse({ path, name = '' } = {}) {
       if (typeof name !== 'string' || name.length > 200) throw new Error('Invalid directory name filter');
@@ -100,12 +105,13 @@ export function projectActions(ctx, { directory, runClone = cloneGit } = {}) {
         const child = join(current, entry.name);
         if (entry.isDirectory()) entries.push({ name: entry.name, path: child });
         else if (entry.isSymbolicLink()) {
-          try { if ((await stat(child)).isDirectory()) entries.push({ name: entry.name, path: child }); } catch {}
+          try { if ((await stat(child)).isDirectory()) entries.push({ name: entry.name, path: child, link: true }); } catch {}
         }
       }
       entries.sort((a, b) => a.name.localeCompare(b.name));
-      return { path: current, parent: dirname(current) === current ? null : dirname(current), home: homedir(), roots: await directoryRoots(), entries };
+      return { path: current, parent: dirname(current) === current ? null : dirname(current), home: homedir(), roots: await directoryRoots(), entries, folderManagement: true };
     },
+    folder: input => changeFolders(() => manageProjectFolder(ctx, input, cloneDestination)),
     async project({ path } = {}) {
       if (typeof path !== 'string' || !path.trim() || path.length > 4096) throw new Error('Invalid path');
       if (!isAbsolute(path)) throw new Error('Project path must be absolute');
@@ -118,23 +124,24 @@ export function projectActions(ctx, { directory, runClone = cloneGit } = {}) {
       let destination, reserved = false;
       try {
         const root = join(profileDirectory(ctx), 'workspaces');
-        await mkdir(root, { recursive: true });
         destination = join(root, repo.name);
-        // Exclusive reservation forbids overwriting any pre-existing path,
-        // including symlinks and concurrent clones from another process.
-        try { await lstat(destination); throw new Error('Repository destination already exists'); }
-        catch (error) { if (error.code !== 'ENOENT') throw error; }
-        try { await mkdir(destination); reserved = true; }
-        catch (error) { if (error.code === 'EEXIST') throw new Error('Repository destination already exists'); throw error; }
+        await changeFolders(async () => {
+          await mkdir(root, { recursive: true });
+          // Exclusive reservation also rejects existing symlinks.
+          try { await mkdir(destination); reserved = true; }
+          catch (error) { if (error.code === 'EEXIST') throw new Error('Repository destination already exists'); throw error; }
+          cloneDestination = await realpath(destination);
+        });
         // Git accepts an empty reserved directory; no platform-dependent
         // directory replacement or second checkout is needed.
         await runClone(repo.url, destination);
         return await registerProject(destination);
       } catch (error) {
-        if (reserved) await rm(destination, { recursive: true, force: true });
+        if (reserved) await changeFolders(() => rm(destination, { recursive: true, force: true }));
         throw error;
       } finally {
         cloning = false;
+        cloneDestination = undefined;
       }
     },
   };

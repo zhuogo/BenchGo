@@ -426,7 +426,7 @@ html[data-commander-no-provider] [data-composer-card] [class*="_primary"]{opacit
 }
 
 /* ============================================================ */
-/* Card 2: Current Model & Reasoning Slider Card                */
+/* Card 2: Current Model & Reasoning Effort                      */
 /* ============================================================ */
 .cmd-model-current-card {
   display: flex;

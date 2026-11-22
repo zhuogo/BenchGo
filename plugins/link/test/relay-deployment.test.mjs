@@ -10,8 +10,26 @@ const python = testCommand(['python3', 'python']);
 const input = { publicIp: '8.8.8.8', email: 'owner@example.com', relayPort: 48730 };
 test('relay deployment validates dedicated ports and explicit webroot, rejects unsafe inputs', () => {
   assert.equal(validateRelayDeployment(input).url, 'https://8.8.8.8:48730');
+  assert.equal(validateRelayDeployment({ publicIp: '8.8.8.8' }).relayPort, 24680);
+  assert.equal(validateRelayDeployment({ domain: 'relay.example.com' }).url, 'https://relay.example.com:24680');
   for (const value of [{relayPort:80},{publicIp:'127.0.0.1'},{email:'x;id'}, {challengeMode:'webroot',webroot:'/tmp/../root'}, {challengeMode:'webroot',webroot:'/tmp/\nroot'}]) assert.throws(()=>validateRelayDeployment({...input,...value}));
   assert.equal(validateRelayDeployment({...input,challengeMode:'webroot',webroot:"/var/www/a'b"}).webroot,"/var/www/a'b");
+});
+test('uninstall matches only BenchGo UFW allow rules for the installed port', requiresBash, () => {
+  const command = relayManagementCommand('uninstall');
+  const rules = command.match(/ufw_relay_rules\(\) \{[\s\S]+?\n\}/)[0];
+  const result = spawnSync(bash, ['-c', rules + '\n' + `ufw() { cat <<'RULES'
+[ 1] 24680/tcp                 ALLOW IN    Anywhere
+[ 2] 24680/tcp                 DENY IN     Anywhere   # BenchGo-Relay-24680
+[15] 24680/tcp                 ALLOW IN    Anywhere   # BenchGo-Relay-24680
+[16] 24680/tcp                 ALLOW IN    203.0.113.1 # BenchGo-Relay-24680
+[20] 24681/tcp                 ALLOW IN    Anywhere   # BenchGo-Relay-24681
+[28] 24680/tcp (v6)            ALLOW IN    Anywhere (v6) # BenchGo-Relay-24680
+RULES
+}
+ufw_relay_rules 24680 BenchGo-Relay-24680 | sort -nr`], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '28\n15');
 });
 test('domain mode defaults to webroot and never tries to own port 80', () => {
   const config = validateRelayDeployment({ ...input, domain: 'relay.example.com' });
@@ -19,7 +37,9 @@ test('domain mode defaults to webroot and never tries to own port 80', () => {
   assert.equal(config.webroot, '/www/wwwroot/relay.example.com');
   const script = relayDeploymentScript({ ...config, token: 'private-token' }, '/tmp/stage');
   assert.match(script, /if\(c\.challengeMode==='standalone'\)/);
-  assert.match(script, /webroot 未被现有网站映射/);
+  assert.match(script, /HTTP-01 验证失败，HTTP 状态/);
+  assert.match(script, /nginx -s reload -c/);
+  assert.doesNotMatch(script, /systemctl reload nginx|service nginx reload/);
 });
 test('generated webroot detector remains valid Python', { skip: !python && 'Requires a Python interpreter for generated script syntax validation' }, () => {
   const config = validateRelayDeployment({ ...input, domain: 'relay.example.com' });
@@ -70,8 +90,21 @@ test('deploy verifies public TLS before host configuration and returns no secret
 test('failed TLS never enables host routing and always removes staging files', async () => {
  let attached=false;const calls=[];
  const execute=async(_client,command)=>{calls.push(command);return {code:0,stdout:command.includes('mktemp')?command.match(/\/tmp\/benchgo-relay-[a-f0-9]+/)[0]+'-abc123\n':''};};
- await assert.rejects(deployRelay({client:{},input,execute,upload:async()=>{},assets:'/assets',step:()=>{},verify:async()=>{throw new Error('TLS failed');},onRelay:async()=>{attached=true;}}),/TLS failed/);
+ await assert.rejects(deployRelay({client:{},input,execute,upload:async()=>{},assets:'/assets',step:()=>{},verify:async()=>{throw new Error('TLS failed');},onRelay:async()=>{attached=true;}}),/中继已启动.*48730\/TCP.*防火墙[^]*TLS failed/);
  assert.equal(attached,false);assert.match(calls.at(-1),/^rm -rf -- '\/tmp\/benchgo-relay-/);
+});
+test('deployment reports the HTTP-01 failure and tracks progress independently of stderr', async () => {
+  const steps = [];
+  const execute = async (_client, command, options) => {
+    if (command.includes('mktemp')) return {code:0,stdout:command.match(/\/tmp\/benchgo-relay-[a-f0-9]+/)[0]+'-abc123\n'};
+    if (!options?.onData) return {code:0,stdout:''};
+    options.onData('BENCHGO_STAGE:验证 ', 'stdout');
+    options.onData('nginx: configuration syntax is ok\n', 'stderr');
+    options.onData('HTTP-01 路由\n', 'stdout');
+    return {code:1,stderr:'nginx: configuration syntax is ok\nHTTP-01 验证失败，HTTP 状态 404',stdout:''};
+  };
+  await assert.rejects(deployRelay({client:{},input,execute,upload:async()=>{},assets:'/assets',step:step=>steps.push(step),verify:async()=>assert.fail('certificate was not issued'),onRelay:async()=>assert.fail('relay was not configured')}), /HTTP-01 验证失败，HTTP 状态 404/);
+  assert.equal(steps.at(-1), '验证 HTTP-01 路由');
 });
 test('all generated Node heredocs and persisted renewal scripts parse without execution', () => {
   const config={...validateRelayDeployment(input),token:'private-token'};

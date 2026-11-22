@@ -147,6 +147,9 @@ export function migrateLegacyConfig(value) {
   if (next.tts && !Object.hasOwn(next.tts, 'protocol')) next.tts.protocol = '';
   return next;
 }
+export function normalizeSharedVoiceSettings(value) {
+  return updateConfig(defaults(), value, { loading: true });
+}
 export function publicConfig(config) {
   return Object.fromEntries(Object.entries({ ...config, listening: config.listening || defaultListening() }).map(([key, value]) => {
     if (key === 'conversation') return [key, { ...value, configured: !!(value.providerId && value.model) }];
@@ -192,7 +195,8 @@ export class VoiceConfig {
     const operation = this.writes.then(async () => {
       if (options.expected || options.ops) assertSettingsExpected(this.settingsSnapshot(), options.expected, options.signal);
       // Ops start from the original private object, preserving credentials without exposing them.
-      const next = options.ops ? managedConfig(this.value, options.ops) : updateConfig(this.value, patch);
+      const next = options.replace ? normalizeSharedVoiceSettings(patch)
+        : options.ops ? managedConfig(this.value, options.ops) : updateConfig(this.value, patch);
       if (JSON.stringify(next) === JSON.stringify(this.value)) return this.snapshot();
       const temp = `${this.path}.${randomUUID()}.tmp`;
       try { await writeFile(temp, JSON.stringify(next, null, 2), { mode: 0o600 }); await rename(temp, this.path); }

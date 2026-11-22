@@ -36,6 +36,7 @@ import { createWorkbenchChannelIngress } from './workbench-channel-ingress.mjs';
 import { createChannelSessionHost, registerChannelSessionProjection } from './channel-session.mjs';
 import { readOwnedSessionRole, superagentSessionInventory } from './execution-session.mjs';
 import { registerAssistantFetchRoute } from './assistant-fetch-route.mjs';
+import { mountIntegrationApi } from './integration-api.mjs';
 import { createExternalActionStore } from './external-action-store.mjs';
 import { createExternalActionRegistry, createExternalActionHost, registerChannelExternalActions } from './external-actions.mjs';
 import { createChannelCredentials } from './channel-credentials.mjs';
@@ -232,7 +233,11 @@ export async function mountAssistant(ctx, commander, providers) {
   });
   orchestrationRuntime.executionFacts.setTaskProjection(projectTasks);
   await orchestrationRuntime.executionFacts.ready;
-  disposeFactsRemote = await installExecutionFactsRemote({ ctx, facts: orchestrationRuntime.executionFacts });
+  disposeFactsRemote = await installExecutionFactsRemote({ ctx, facts: orchestrationRuntime.executionFacts,
+    subscribeIdentity(listener) {
+      return store.documents.subscribe(({ name }) => { if (name === 'IDENTITY.md') listener(); });
+    },
+  });
   executionSummaries = createExecutionSummaries({ executionFacts: orchestrationRuntime.executionFacts,
     store: store.orchestration, llm: ctx.llm, sessionQuery: ctx.sessionQuery, getConfig: () => store.getConfig(),
     config: ctx.get('benchgo')?.config?.executionSummary,
@@ -431,6 +436,7 @@ export async function mountAssistant(ctx, commander, providers) {
     executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state,
     artifacts, auxiliary, systemFiles, skillProvider, workerArchive });
   ctx.effect(() => registerAssistantFetchRoute({ connection: ctx.connection, dispatch }));
+  mountIntegrationApi(ctx, () => !shutdown.signal.aborted && store.connections.read('api').config.enabled);
   for (const [name, handler] of Object.entries(voiceMedia.handlers)) {
     ctx.effect(() => ctx.connection.fetch.register({ path: `/api/commander/assistant/voice/${name}`, methods: [name === 'worklet' ? 'GET' : 'POST'], requestBody: name === 'worklet' ? 'buffered' : 'streaming', async fetch(request) {
       try {

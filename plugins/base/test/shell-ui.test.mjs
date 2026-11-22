@@ -66,11 +66,26 @@ test('only connection recovery occupies the status seat above the unified BenchG
   assert.match(css,/.cmd-narrow \.cmd-sidebar-nav \{ flex-direction: column; padding: 36px 0 0;/);
   assert.match(css,/\.cmd-shell-sidebar \.cmd-sidebar-panels\s*\{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);[^}]*order: 0;/);
 });
+test('automatic onboarding waits for settings to close while explicit onboarding remains available', async () => {
+  const { runInNewContext } = await import('node:vm');
+  const path = fileURLToPath(new URL('../../../deepseek-harness/packages/client/ui-settings-general/src/client/SettingsRoot.tsx', import.meta.url));
+  const { contents } = await handlers.find(handler => handler.filter.test(path)).callback({ path });
+  const selection = contents.match(/  const onboardingStep = [\s\S]*?\n\n/u)?.[0];
+  assert(selection);
+  const onboardingSteps = [{ id: 'welcome' }];
+  const context = { onboardingSteps, onboardingActive: true, completedOnboarding: new Set() };
+  const select = (open, requestedOnboarding) => runInNewContext(`${selection}\nonboardingStep`, { ...context, open, requestedOnboarding });
+  assert.equal(select(true, undefined), undefined);
+  assert.equal(select(false, undefined), onboardingSteps[0]);
+  assert.equal(select(true, 'welcome'), onboardingSteps[0]);
+  assert.doesNotMatch(contents, /if \(appeared && open\) close\(\)/);
+});
 test('the settings shell and native badge adapt to both Host layouts and late registrations',async()=>{
   const {transformSync}=await import('esbuild'),{runInNewContext}=await import('node:vm');
   const source=await readFile(new URL('../client/shell-ui.jsx',import.meta.url),'utf8'),module={exports:{}};
   function SettingsRoot() {}
-  runInNewContext(transformSync(source,{loader:'jsx',format:'cjs'}).code,{module,exports:module.exports,Error,require:id=>id==='./tools-page.jsx'?{mountToolsPage(){}}:id==='./settings-shell.mjs'?settingsShell:{AppFrame(){},SidebarRoot(){},SettingsRoot}});
+  const react = { createElement: (type, props) => ({ type, props }) };
+  runInNewContext(transformSync(source,{loader:'jsx',format:'cjs'}).code,{module,exports:module.exports,Error,require:id=>id==='react'?react:id==='./tools-page.jsx'?{mountToolsPage(){}}:id==='./settings-shell.mjs'?settingsShell:{AppFrame(){},SidebarRoot(){},SettingsRoot}});
   const native=()=> '重试更新',other=()=> '其它提示',cleanups=[];
   const coreModule={exports:{}};
   const coreSource=await readFile(new URL('../../../deepseek-harness/packages/client/ui-slots/src/index.ts',import.meta.url),'utf8');
@@ -97,14 +112,35 @@ test('the settings shell and native badge adapt to both Host layouts and late re
   const store={create:()=>({actions:{openSection:id=>sectionIds.push(id)}})};
   const registerShell = legacy => core.register({name:'sidebar.settings',locale:'settings',store,children:{
     'settings.launcher':single,
-    ...(legacy ? {'settings.section':{kind:'list',scope:'root'}} : {}),
+    ...(legacy ? {'settings.section':{kind:'list',scope:'root'}} : {'settings.notice':single}),
   }},official);
   assert.equal(settingsShell.openSettingsSection(core,'models'),false);
   for (const [legacy, id] of [[true,'models'],[false,'media']]) {
     const dispose=registerShell(legacy);
     const shell=settingsShell.findSettingsShell(core);
     await Promise.resolve();
-    assert.equal(shell.component,SettingsRoot);
+    const close = () => {};
+    const renderSlot = (name, owner, options) => {
+      assert(Object.hasOwn(shell.children, name), 'only declared slots may be rendered');
+      if (name === 'settings.section') {
+        assert.equal(owner.close, close);
+        assert.equal(options.only, id);
+        return 'section slot';
+      }
+      return name;
+    };
+    const renderFactorySlot = (name, owner) => {
+      assert.equal(name, 'settings.section.view');
+      assert.equal(owner.id, id);
+      assert.equal(owner.close, close);
+      return 'section factory';
+    };
+    const view = shell.component({ renderSlot, renderFactorySlot, wide: true });
+    assert.equal(view.type, SettingsRoot);
+    assert.equal(view.props.wide, true);
+    assert.equal(view.props.renderSlot('settings.launcher', {}), 'settings.launcher');
+    assert.equal(view.props.renderSlot('settings.notice', {}), legacy ? undefined : 'settings.notice');
+    assert.equal(view.props.renderFactorySlot('settings.section.view', { id, close }), legacy ? 'section slot' : 'section factory');
     assert.equal(settingsShell.openSettingsSection(core,id),true);
     assert.equal(sectionIds.at(-1),id);
     dispose();

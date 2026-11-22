@@ -37,9 +37,6 @@
 @media(max-width:380px){.ba-artifact-cards{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.ba-artifact-file{transition:none}}
 /* The board shares this file list; only its density and optional bulk controls differ. */
-.ba-artifacts-compact .ba-artifacts-head{align-items:flex-start;flex-wrap:nowrap;gap:8px;margin-bottom:14px}
-.ba-artifacts-compact .ba-artifacts-head p{font-size:12px;line-height:1.65}
-.ba-artifacts-compact .ba-artifact-header-actions{width:auto;flex:none;gap:0}
 .ba-artifacts-compact .ba-artifact-toolbar{gap:10px;margin-bottom:10px}
 .ba-artifacts-compact .ba-artifact-toolbar .bg-segments-scroll{flex:1 1 100%;overflow:auto}
 .ba-artifacts-compact .ba-artifact-toolbar .bg-segments{width:100%}

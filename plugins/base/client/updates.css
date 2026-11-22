@@ -1,11 +1,10 @@
-.cmd-update-launcher{display:flex;align-items:center;gap:9px;width:100%;min-height:36px;padding:8px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary,#242424);font:inherit;font-size:12px;text-align:left;cursor:pointer}
-.cmd-update-icon{position:relative;display:flex;flex:none;pointer-events:none}
-.cmd-update-icon>i{position:absolute;top:-2px;right:-3px;width:6px;height:6px;border-radius:50%;background:#e34d4d;box-shadow:0 0 0 2px var(--dsw-alias-bg-base,#fff)}
+.cmd-update-launcher{display:flex;align-items:center;gap:9px;width:100%;min-height:36px;padding:8px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary,#777);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.cmd-update-launcher[data-update-available=true]{color:var(--dsw-alias-state-business-primary,#4d6bfe)}
 .cmd-update-launcher>small{margin-left:auto;color:var(--dsw-alias-label-secondary,#777);font-size:12px;white-space:nowrap}
 .cmd-update-launcher>small[data-ready=true]{font-weight:550}
-.cmd-update-launcher-rail{flex:none;justify-content:center;width:36px;height:36px;padding:0;color:var(--dsw-alias-label-secondary,#777)}
+.cmd-update-launcher-rail{flex:none;justify-content:center;width:36px;height:36px;padding:0}
 .cmd-update-launcher,.cmd-update-dialog{touch-action:manipulation}
-.cmd-update-dialog{width:min(400px,calc(100vw - 32px))!important;max-width:calc(100vw - 32px);gap:0;padding:0!important;overflow:hidden;color:var(--dsw-alias-label-primary,#242424);font-size:13px}
+.cmd-update-dialog{width:min(550px,calc(100vw - 32px))!important;max-width:calc(100vw - 32px);gap:0;padding:0!important;overflow:hidden;color:var(--dsw-alias-label-primary,#242424);font-size:13px}
 .cmd-update-dialog *{box-sizing:border-box}
 .cmd-update-dialog button,.cmd-update-dialog input{font:inherit}
 .cmd-update-dialog button{cursor:pointer}
@@ -14,8 +13,8 @@
 .cmd-update-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 0}
 .cmd-update-header h2{margin:0;font-size:20px;line-height:1.4;font-weight:600}
 .cmd-update-icon-button{display:grid;place-items:center;flex:none;border:0;width:36px;height:36px;padding:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary,#818181)}
-.cmd-update-content{padding:20px;overflow:auto;max-height:calc(85dvh - 64px);overscroll-behavior:contain}
-.cmd-update-plugin{border:0;padding:0}
+.cmd-update-content{display:grid;gap:14px;padding:16px 20px 20px;overflow:auto;max-height:calc(85dvh - 64px);overscroll-behavior:contain}
+.cmd-update-plugin,.cmd-download-platforms{min-width:0;padding:14px 16px;border:1px solid color-mix(in srgb,currentColor 12%,transparent);border-radius:12px}
 .cmd-update-card-heading{display:flex;align-items:center;gap:10px}
 .cmd-update-card-heading>div{flex:1;min-width:0}
 .cmd-update-plugin-mark{display:grid;place-items:center;flex:none;width:38px;height:38px;background:transparent}
@@ -67,12 +66,27 @@
 .cmd-update-custom{display:flex;gap:7px;margin-top:8px}
 .cmd-update-custom input{width:0;min-width:0;flex:1;padding:7px 9px;border:1px solid color-mix(in srgb,currentColor 15%,transparent);border-radius:7px;background:transparent;color:inherit;font-size:12px}
 .cmd-update-dialog .bg-loading-compact{min-height:64px}
+.cmd-download-heading,.cmd-download-platform,.cmd-download-website{display:flex;align-items:center;gap:8px}
+.cmd-download-heading{justify-content:space-between;gap:12px}
+.cmd-download-heading h3{margin:0;font-size:14px;line-height:1.4;font-weight:600}
+.cmd-download-website{flex:none;gap:4px;min-height:32px;color:inherit;font-size:12px;text-decoration:none}
+.cmd-download-list{margin:8px 0 0;padding:0;list-style:none}
+.cmd-download-list li{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;justify-content:space-between;padding:5px 0;border-top:1px solid color-mix(in srgb,currentColor 9%,transparent)}
+.cmd-download-platform{min-height:32px;font-weight:500}
+.cmd-download-platform .cmd-ui-icon,.cmd-download-website .cmd-ui-icon{color:var(--dsw-alias-label-secondary,#818181)}
+.cmd-download-links{display:flex;min-width:0;flex-wrap:wrap;gap:4px 6px;margin-inline-start:auto;justify-content:flex-end}
+.cmd-download-links a{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:4px 7px;border-radius:6px;color:inherit;font-size:12px;text-decoration:none}
+.cmd-download-links small,.cmd-download-message{color:var(--dsw-alias-label-secondary,#818181);font-size:12px;font-variant-numeric:tabular-nums}
+.cmd-download-message{margin:8px 0 0;line-height:1.5}
+div.cmd-download-message{display:flex;flex-wrap:wrap;gap:0 10px;align-items:center}
 @keyframes cmd-update-details-in{from{opacity:0;transform:translateY(-4px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
 @keyframes cmd-update-details-out{from{opacity:1;transform:translateY(0) scale(1)}to{opacity:0;transform:translateY(-4px) scale(.97)}}
 @media(hover:hover) and (pointer:fine){
   .cmd-update-launcher:hover,.cmd-update-icon-button:not(:disabled):hover,.cmd-update-check:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover,#8881)}
   .cmd-update-text-button:not(:disabled):hover{text-decoration:underline}
+  .cmd-download-links a:hover{background:var(--dsw-alias-interactive-bg-hover,#8881)}
+  .cmd-download-website:hover{text-decoration:underline;text-underline-offset:3px}
 }
 @media(max-width:380px){.cmd-update-header{padding:14px 16px 0}.cmd-update-content{padding:16px}}
-@media(pointer:coarse){.cmd-update-icon-button{width:44px;height:44px}.cmd-update-details-heading .cmd-update-icon-button{width:44px;height:44px;margin:-10px -10px -10px 0}}
+@media(pointer:coarse){.cmd-update-icon-button{width:44px;height:44px}.cmd-update-details-heading .cmd-update-icon-button{width:44px;height:44px;margin:-10px -10px -10px 0}.cmd-download-links a,.cmd-download-website{min-height:44px}}
 @media(prefers-reduced-motion:reduce){.cmd-update-dialog *,.cmd-update-launcher{animation:none!important;transition:none!important}.cmd-update-hold[data-holding=true]{transform:none}.cmd-update-hold[data-holding=true]>.cmd-update-hold-fill{transform:scaleX(1)}}

@@ -30,7 +30,7 @@ import { mountBrand } from '../../link/client/brand.jsx';
 import { DeviceLauncher } from '../../link/client/device-launcher.jsx';
 import { DeviceSwitch } from '../../link/client/device-switch.jsx';
 import { useResourceNavigation, ResourceScope, RemoteProjects, ResourceDeviceState, ResourceProjectGroup, ResourceStage, remoteRecentRows, installResourceReceiver } from '../../link/client/resource-navigation.jsx';
-import { resourceKey, sortResourceRecents, sessionActionAccess } from '../../link/client/resource-state.mjs';
+import { resourceKey, sortResourceRecents, sessionActionAccess, resourceRequestId } from '../../link/client/resource-state.mjs';
 import { installResourceOpener } from '../../link/client/resource-navigation-store.mjs';
 import { mountDiagnosticsSettings } from './diagnostics-settings.jsx';
 import { perfTrace } from '../../shared/client/perf-trace.mjs';
@@ -40,6 +40,7 @@ import { mountWorkbenchClient } from '../workbench/client/index.jsx';
 import { mountWorkbenchRightbarLifecycle } from '../workbench/client/rightbar-lifecycle.jsx';
 import { mountWorkbenchSessionSurface } from '../workbench/client/session-surface.jsx';
 import { mountSessionMascot } from './session-mascot.jsx';
+import { mountChatFeedback } from './chat-feedback.jsx';
 
 const names = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', grok: 'Grok Build', mcode: 'MiniMax Code', deepseek: 'DeepSeek' };
 const liveStates = new Set(['running', 'connecting', 'waiting']);
@@ -121,6 +122,7 @@ export function apply(ctx) {
 function mountBaseUi(ctx) {
   mountBrand(ctx);
   mountSessionMascot(ctx);
+  mountChatFeedback(ctx);
   mountShellUi(ctx);
   applyMobileWorkbench(ctx);
   mountUsageStyle(ctx);
@@ -278,8 +280,8 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
     const selectedPanel = host.layout.panelInfo.getSnapshot().activePanelId;
     return host.layout.panelInfo.subscribe(() => { if (host.layout.panelInfo.getSnapshot().activePanelId !== selectedPanel) setRemoteTarget(null); });
   }, [host, remoteTarget]);
-  const openRemote = (device, resource, returnToDraft = false) => setRemoteTarget({ device, resource, returnToDraft, requestId: crypto.randomUUID() });
-  useEffect(() => modules.link ? installResourceOpener((device, resource, onReturn) => setRemoteTarget({ device, resource, onReturn, requestId: crypto.randomUUID() })) : undefined, [modules.link]);
+  const openRemote = (device, resource, returnToDraft = false) => setRemoteTarget({ device, resource, returnToDraft, requestId: resourceRequestId() });
+  useEffect(() => modules.link ? installResourceOpener((device, resource, onReturn) => setRemoteTarget({ device, resource, onReturn, requestId: resourceRequestId() })) : undefined, [modules.link]);
   const newLocalSession = (projectId, propagateError = false) => { setRemoteTarget(null); return newSession(projectId, propagateError); };
   const selectSessionDevice = id => {
     if (parentSessionDevices) { parentSessionDevices.select(id); return; }
@@ -290,7 +292,7 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
       else void newLocalSession();
     } else openRemote(device, { kind: 'projects', intent: 'newSession' }, remoteTarget?.returnToDraft ?? !remoteTarget);
   };
-  useEffect(() => installResourceReceiver(host, { open, newSession: projectId => newSession(projectId, true), addProject: () => setAddingProject(true), projectApi: api, getDefaultProjectId: async () => defaultWorkspaceId || (await ensureRecent()).workspaceId, onSessionDevices: setParentSessionDevices }), [host, open, newSession, ensureRecent]);
+  useEffect(() => installResourceReceiver(host, { open, newSession: projectId => newSession(projectId, true), addProject: () => setAddingProject(true), projectApi: api, projectFolderActions: true, getDefaultProjectId: async () => defaultWorkspaceId || (await ensureRecent()).workspaceId, onSessionDevices: setParentSessionDevices }), [host, open, newSession, ensureRecent]);
   const [archivePhase, setArchivePhase] = useState('idle');
   const archiveTimers = useRef([]), archiveSwitching = useRef(false);
   useEffect(() => () => archiveTimers.current.forEach(clearTimeout), []);

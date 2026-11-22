@@ -54,7 +54,7 @@ test('Link device directory renders shared loading, error, empty and data with o
           await page.getByRole('status', { name: '正在读取设备…' }).waitFor();
           assert.equal(await page.locator('.dc-loading-preview,.dc-loading-mark').count(), 0);
         } else if (mode === 'error') await page.getByRole('alert').getByText('设备目录暂时无法读取', { exact: true }).waitFor();
-        else if (mode === 'empty') await page.getByText('尚未添加设备', { exact: true }).waitFor();
+        else if (mode === 'empty') await page.getByText('添加一台电脑或服务器，即可在这里打开它的工作台。', { exact: true }).waitFor();
         else {
           await page.getByText('设计工作台', { exact: true }).waitFor();
           const name = page.locator('.dc-device-copy strong'); assert.equal(await name.getAttribute('title'), null);

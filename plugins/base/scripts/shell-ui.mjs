@@ -19,6 +19,11 @@ export function shellUi(){return {name:'commander-shell-ui',setup(build){
     source=once(source,"import { DesktopUpdateIndicator } from './DesktopUpdateIndicator.tsx'\n",'');
     source=once(source,'useDesktopUpdate, openDesktopUpdate, useStore, actions, useShortcuts,','useStore, actions, useShortcuts,');
     source=once(source,'  const desktopUpdate = useDesktopUpdate(state => state)\n','');
+    // An automatic step may arrive after the user has opened settings on a slow Host.
+    source=once(source,'    : onboardingActive\n','    : !open && onboardingActive\n');
+    const closeForOnboarding=source.match(/  const onboardingStepSeen = useRef\(onboardingStep\)\n[\s\S]*?  \}, \[onboardingStep, open, close\]\)\n\n/u)?.[0];
+    if(!closeForOnboarding)throw Error('Official settings onboarding arbitration changed');
+    source=once(source,closeForOnboarding,'');
     source=once(source,"        {renderSlot('settings.launcher', {", '        <div className="cmd-sidebar-status">\n'+connection+'\n        </div>\n'+"        {renderSlot('settings.launcher', {");
     source=once(source,'function navIcon(id: string) {',
       'function navIcon(id: string) {\n'+

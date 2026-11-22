@@ -45,7 +45,7 @@ export async function testRelayConnection({ url, token }, { timeout = 5_000, ca 
       socket.once('close', () => { clearTimeout(timer); reject(new Error('TLS connection closed')); });
     });
     if (alpn !== 'h2') return result(false, '公网入口未启用 HTTP/2，请在最外层反向代理启用 HTTP/2，避免工作台长连接阻塞聊天');
-    return result(true, '中继协议、主机密钥和 HTTP/2 验证通过');
+    return { ...result(true, '中继协议、主机密钥和 HTTP/2 验证通过'), multipleHosts: value.multipleHosts === true };
   } catch (error) {
     if (error.code === 'RELAY_TIMEOUT') return result(false, '连接测试超时，请检查中继地址和网络');
     if (/CERT|TLS|SELF_SIGNED|UNABLE_TO_VERIFY/.test(error.code || '')) return result(false, '中继 TLS 证书验证失败');

@@ -3,7 +3,6 @@ import routerGoSvg from '../../../assets/brand/routergo.svg';
 import brands from './assets/provider-brands/catalog.json';
 import { providerBrand, providerInitial } from './provider-brand.mjs';
 import { isRouterGo } from './provider-options.mjs';
-import { routerGo } from '../shared/builtin-providers.mjs';
 import { UIIcon } from './iconsax.jsx';
 
 const vendorBrands = new Map(Object.entries({
@@ -30,6 +29,5 @@ export function ProviderBrandIcon({ id, name, declared = false, size: preferredS
 
 export function providerOption({ id, name = id, declared, reason, disabled }) {
   const pinned = isRouterGo(id);
-  const label = pinned ? routerGo.name : name;
-  return { value: id, label, icon: <ProviderBrandIcon id={id} name={label} declared={declared} />, pinned, detail: reason, disabled };
+  return { value: id, label: name, icon: <ProviderBrandIcon id={id} name={name} declared={declared} />, pinned, detail: reason, disabled };
 }

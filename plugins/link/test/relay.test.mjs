@@ -9,6 +9,7 @@ import { once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
 import { gunzipSync } from 'node:zlib';
 import { openStore } from '../src/pairing/store.mjs';
@@ -170,11 +171,53 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
   assert.equal((await request(relayPort, '/link/api/info', { headers: { origin: 'https://attacker.example' } })).status, 403);
   assert.equal(relayPathAllowed('POST', '/link/workbench/api/commander-devices'), false);
   assert.equal(relayPathAllowed('GET', '/link/workbench/%2e%2e/api/commander-link'), false);
+  assert.equal(relayPathAllowed('GET', '/link/?relayTarget=sha256%3AAA%2FBB%3D'), true);
   assert.equal(relayPathAllowed('CONNECT', 'http://127.0.0.1:22'), false);
 
   await store.revoke(approved.deviceId); await workbench.revoke(approved.deviceId);
   assert.equal((await request(relayPort, '/link/api/workbench', { method: 'POST', token: tokenValue, body: '{}' })).status, 401);
   assert.equal((await request(relayPort, '/link/workbench/api/stream/echo', { method: 'POST', cookie, body: '{}' })).status, 401);
+});
+
+test('two Link hosts share a relay without replacing each other', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'link-group-relay-'));
+  const relayPort = await freePort(), url = `https://localhost:${relayPort}`;
+  const token = 'shared-test-relay-key';
+  const hosts = [];
+  let relay;
+  t.after(async () => {
+    await Promise.all(hosts.map(async ({ channel, link }) => { await channel.close(); await link.close(); }));
+    await relay?.close();
+    delete request.relayCert; delete request.relayOrigin;
+    await rm(root, { recursive: true, force: true });
+  });
+  await mkdir(join(root, 'relay'));
+  const identity = await loadIdentity(join(root, 'relay'));
+  request.relayCert = identity.cert; request.relayOrigin = url;
+  relay = await createRelayServer({ host: '127.0.0.1', port: relayPort, identity, publicUrl: url, token });
+  for (const name of ['A', 'B']) {
+    const directory = join(root, name), store = await openStore(directory);
+    await writeFile(join(directory, 'index.html'), name);
+    store.state.name = name;
+    const owner = await loadIdentity(directory);
+    const link = await listen({ identity: owner, config: { host: '127.0.0.1', port: 0, publicUrl: '' }, store, onError: () => {},
+      webRoot: new URL('./', pathToFileURL(join(directory, 'index.html'))) });
+    const channel = createRelayHost({ relayUrl: url, relayCa: identity.cert, token, hostKey: owner.key,
+      target: { url: `https://127.0.0.1:${link.port}`, pin: owner.pin } });
+    hosts.push({ channel, link, id: 'sha256:' + owner.pin });
+  }
+  for (let i = 0; i < 100 && hosts.some(host => !host.channel.status().connected); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  const info = host => request(relayPort, '/link/api/info', { headers: { 'x-benchgo-relay-target': host.id } });
+  assert.deepEqual(await Promise.all(hosts.map(async host => JSON.parse((await info(host)).body).hostName)), ['A', 'B']);
+  const page = await request(relayPort, '/link/?relayTarget=' + encodeURIComponent(hosts[1].id));
+  assert.equal(page.status, 200);
+  assert.equal(String(page.body), 'B');
+  const cookie = page.headers['set-cookie'][0].split(';')[0];
+  assert.equal(JSON.parse((await request(relayPort, '/link/api/info', { cookie })).body).hostName, 'B');
+  await hosts[0].channel.close();
+  for (let i = 0; i < 100 && (await info(hosts[0])).status !== 503; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal((await info(hosts[0])).status, 503);
+  assert.equal(JSON.parse((await info(hosts[1])).body).hostName, 'B');
 });
 
 test('real relay isolates anonymous traffic and each verified device quota, including workbench cookies', { timeout: 30_000 }, async t => {
@@ -210,13 +253,13 @@ test('real relay isolates anonymous traffic and each verified device quota, incl
   let now = Date.now() + 60_000; t.mock.method(Date, 'now', () => now);
   const rpc = device => request(relayPort, '/link/api/rpc', { method: 'POST', token: device.token, body: '{}', headers: { 'content-type': 'application/json' } });
   const page = device => request(relayPort, '/link/workbench/api/test', { cookie: device.cookie });
-  const fill = async call => {
+  const fill = async (call, status = 200) => {
     for (let offset = 0; offset < 600; offset += 20) {
       const responses = await Promise.all(Array.from({ length: 20 }, (_, index) => call(offset + index)));
-      assert(responses.every(response => response.status === 200));
+      assert(responses.every(response => response.status === status));
     }
   };
-  await fill(index => request(relayPort, '/link/api/info', { token: 'forged-' + index, headers: { 'x-forwarded-for': `198.51.100.${index % 250}` } }));
+  await fill(index => request(relayPort, '/link/api/info', { token: 'forged-' + index, headers: { 'x-forwarded-for': `198.51.100.${index % 250}` } }), 401);
   assert.equal((await request(relayPort, '/link/api/info', { headers: { 'x-forwarded-for': '203.0.113.2' } })).status, 429);
   assert.equal((await rpc(first)).status, 200, 'anonymous loopback traffic cannot exhaust a verified device');
   assert.equal((await page(first)).status, 200, 'verified workbench cookies use the device quota');

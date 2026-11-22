@@ -1,20 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { officialUiEntries, officialUiLoaders } from '../../link/scripts/official-ui.mjs';
 import { sharedUiStyles } from '../scripts/shared-ui.mjs';
+import { projectActions } from '../src/projects.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const require = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 
-test('the add-project dialog switches devices and renders recoverable states', { skip: !executablePath, timeout: 90000 }, async () => {
+test('the add-project dialog switches devices and renders recoverable states', { skip: !executablePath, timeout: 90000 }, async t => {
   const options = { bundle: true, write: false, outdir: join(root, 'artifacts/unused-resource-creation'), format: 'iife', jsx: 'automatic', target: 'es2022', minify: true,
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), ...await officialUiEntries() },
     nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'plugins/link/node_modules')], plugins: [sharedUiStyles()],
@@ -42,12 +44,20 @@ test('the add-project dialog switches devices and renders recoverable states', {
   ` } });
   const receiver = await build({ ...options, stdin: { resolveDir: root, loader: 'jsx', contents: `
     import {installResourceReceiver} from './plugins/link/client/resource-navigation.jsx';
-    installResourceReceiver({}, {open:()=>{},newSession:()=>{},addProject:()=>{},projectApi:async(action,args)=>{const response=await fetch('/project-api',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,args})});const value=await response.json();if(!response.ok)throw Error(value.error);return value;}});
+    installResourceReceiver({}, {open:()=>{},newSession:()=>{},addProject:()=>{},projectFolderActions:true,projectApi:async(action,args)=>{const response=await fetch('/project-api',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,args})});const value=await response.json();if(!response.ok)throw Error(value.error);return value;}});
   ` } });
   const script = owner.outputFiles.find(file => file.path.endsWith('.js')).text;
   const css = owner.outputFiles.filter(file => file.path.endsWith('.css')).map(file => file.text).join('\n');
   const receiverScript = receiver.outputFiles.find(file => file.path.endsWith('.js')).text;
   const directory = process.env.BENCHGO_RESOURCE_CREATION_SCREENSHOTS || join(root, 'artifacts/resource-creation-20261114'); await mkdir(directory, { recursive: true });
+  const folders = await realpath(await mkdtemp(join(tmpdir(), 'benchgo-picker-browser-')));
+  t.after(() => rm(folders, { recursive: true, force: true }));
+  const localFolder = join(folders, 'local'), remoteFolder = join(folders, 'remote');
+  for (const path of [localFolder, remoteFolder]) {
+    await mkdir(join(path, 'Archive'), { recursive: true });
+    await mkdir(join(path, 'Sample'));
+  }
+  const folderApi = projectActions({ workspaceRegistry: { list: () => [] } });
   const browser = await chromium.launch({ headless: true, executablePath });
   let releaseBrowse = null;
   try {
@@ -59,6 +69,12 @@ test('the add-project dialog switches devices and renders recoverable states', {
       if (url.pathname === '/api/commander-devices') { const input = request.postDataJSON();selections.push(input);return route.fulfill({ json: { device: {id:'opaque:remote/01',hostId:'host:exact/1',authorizationId:'auth:exact/1'}, url: 'http://127.0.0.1:17974/remote/?ticket=' + selections.length } }); }
       if (url.pathname === '/project-api') {
         const { action, args } = request.postDataJSON();calls.push({ remote, action, args });
+        if (mode === 'folder-operations' && (action === 'browse' || action === 'folder')) {
+          try {
+            const value = await folderApi[action](action === 'browse' ? { path: args.path || (remote ? remoteFolder : localFolder) } : args);
+            return route.fulfill({ json: value });
+          } catch (error) { return route.fulfill({ status: error.status || 400, json: { error: error.message } }); }
+        }
         if (action === 'browse') {
           if (remote && holdRemote) await new Promise(resolve => { releaseBrowse = resolve; });
           if (mode === 'browse-error') return route.fulfill({ status: 503, json: { error: '目录读取失败，请重试' } });
@@ -153,10 +169,75 @@ test('the add-project dialog switches devices and renders recoverable states', {
 
     assert.equal(await page.getByRole('textbox', { name: '聊天草稿' }).inputValue(), '保留的草稿');assert.equal(await page.evaluate(() => window.systemPicks), 0);assert.deepEqual(errors, []);
     await open('single');await dialog.getByLabel('当前目录', { exact: true }).filter({ hasText: 'E:\\Workspace' }).waitFor();assert.equal(await dialog.getByRole('button', { name: '目标设备', exact: true }).isDisabled(), true);await geometry();await shot('single-device-aligned');await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    mode = 'folder-operations';
+    await open('remote');
+    const folderButton = (name, scope = dialog) => scope.getByRole('button', { name, exact: true });
+    const menuItem = (name, scope = page) => scope.getByRole('menuitem', { name, exact: true });
+    const editorName = dialog.getByPlaceholder('文件夹名称');
+    await folderButton('新建文件夹').click();
+    await editorName.fill('New Folder');
+    await folderButton('创建').click();
+    await folderButton('New Folder').waitFor();
+    assert.deepEqual(calls.filter(call => call.action === 'folder').at(-1), { remote: true, action: 'folder', args: { operation: 'create', directory: remoteFolder, name: 'New Folder' } });
+    await folderButton('New Folder').click({ button: 'right' });
+    await menuItem('重命名').waitFor();
+    await shot('folder-menu');
+    await menuItem('重命名').click();
+    await editorName.fill('Archive');
+    await folderButton('保存').click();
+    await dialog.getByRole('alert').filter({ hasText: '目标位置已存在同名项目' }).waitFor();
+    await editorName.fill('Renamed');
+    await folderButton('保存').click();
+    await folderButton('Renamed').waitFor();
+
+    const dragSource = await folderButton('Renamed').boundingBox();
+    const dragTarget = await folderButton('Archive').boundingBox();
+    await page.mouse.move(dragSource.x + 20, dragSource.y + dragSource.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(dragTarget.x + 20, dragTarget.y + dragTarget.height / 2, { steps: 8 });
+    await dialog.locator('[data-drag-over]').filter({ hasText: 'Archive' }).waitFor();
+    await shot('folder-drag');
+    await page.mouse.up();
+    await folderButton('Renamed').waitFor({ state: 'detached' });
+    await folderButton('Archive').click();
+    await folderButton('Renamed').focus();
+    await page.keyboard.press('Shift+F10');
+    await menuItem('移到上一级').click();
+    await folderButton('Renamed').waitFor({ state: 'detached' });
+    await folderButton('上一级').click();
+    await folderButton('Renamed的文件夹操作').click();
+    await menuItem('删除').click();
+    await dialog.getByText(join(remoteFolder, 'Renamed'), { exact: true }).waitFor();
+    await shot('folder-delete');
+    await page.keyboard.press('Escape');
+    await folderButton('永久删除').waitFor({ state: 'detached' });
+    await folderButton('Renamed').click({ button: 'right' });
+    await menuItem('删除').click();
+    await folderButton('永久删除').click();
+    await folderButton('Renamed').waitFor({ state: 'detached' });
+    assert.deepEqual(await folderApi.browse({ path: remoteFolder }).then(result => result.entries.map(entry => entry.name)), ['Archive', 'Sample']);
+    assert.deepEqual(errors, []);
+    await folderButton('关闭').click();
+
+    mode = 'data';
     const touch = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
     await touch.route('**/*', handleRoute);await touch.goto('http://127.0.0.1:17973/');await touch.addScriptTag({ content: script });await touch.evaluate(() => window.scenario('data'));
     const touchDialog = touch.getByRole('dialog');await touchDialog.getByLabel('当前目录', { exact: true }).filter({ hasText: 'E:\\Workspace' }).waitFor();
     const touchGeometry = await touchDialog.evaluate(node => { const picker = node.querySelector('[aria-label="目标设备"]').getBoundingClientRect(), tabs = node.querySelector('[role="tablist"]').getBoundingClientRect();return { pickerHeight: picker.height, sameRow: Math.abs(picker.y + picker.height / 2 - tabs.y - tabs.height / 2) <= 1, fits: node.scrollWidth <= node.clientWidth + 1 }; });
-    assert.equal(await touch.evaluate(() => innerWidth), 390);assert(touchGeometry.pickerHeight >= 44 && touchGeometry.sameRow && touchGeometry.fits, JSON.stringify(touchGeometry));await touch.screenshot({ path: join(directory, 'touch-390-data.png'), animations: 'disabled' });await touch.close();
+    assert.equal(await touch.evaluate(() => innerWidth), 390);assert(touchGeometry.pickerHeight >= 44 && touchGeometry.sameRow && touchGeometry.fits, JSON.stringify(touchGeometry));await touch.screenshot({ path: join(directory, 'touch-390-data.png'), animations: 'disabled' });
+    mode = 'folder-operations';
+    await touch.evaluate(() => window.scenario('data'));
+    await folderButton('Sample', touchDialog).waitFor();
+    const handle = await folderButton('Sample', touchDialog).locator('.cmd-folder-drag-handle').boundingBox();
+    const target = await folderButton('Archive', touchDialog).boundingBox();
+    const input = await touch.context().newCDPSession(touch);
+    await input.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: handle.x + handle.width / 2, y: handle.y + handle.height / 2 }] });
+    await touchDialog.locator('.cmd-folder-drag-preview').waitFor();
+    await input.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: target.x + target.width / 2, y: target.y + target.height / 2 }] });
+    await touchDialog.locator('[data-drag-over]').filter({ hasText: 'Archive' }).waitFor();
+    await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await folderButton('Sample', touchDialog).waitFor({ state: 'detached' });
+    assert.deepEqual(await folderApi.browse({ path: join(localFolder, 'Archive') }).then(result => result.entries.map(entry => entry.name)), ['Sample']);
+    await touch.close();
   } finally { releaseBrowse?.();await browser.close(); }
 });

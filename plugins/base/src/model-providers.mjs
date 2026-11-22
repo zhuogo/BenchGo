@@ -1,6 +1,6 @@
 import { isManagedRouterGo, modelProtocol } from './provider-access.mjs';
 import { createModelCapabilitySettings } from './model-capability-settings.mjs';
-import { builtinProvider, routerGo } from '../shared/builtin-providers.mjs';
+import { builtinProvider, isRouterGo, routerGo } from '../shared/builtin-providers.mjs';
 import { isModelCapability, normalizeModelCapabilities, structuredCapabilities } from '../shared/model-capabilities.mjs';
 
 const LIMIT = 4 * 1024 * 1024;
@@ -127,7 +127,7 @@ export async function discoverRouterGoModels(apiKey, signal) {
 export function createModelProviders(ctx, { directory = ctx.get?.('benchgo')?.directory } = {}) {
   const entries = () => ctx.llm.listConfigurableProviders();
   const overrides = createModelCapabilitySettings(directory);
-  let routerGoModels;
+  const routerGoModels = new Map();
   const requireProvider = id => {
     const row = entries().find(entry => entry.provider === id);
     if (!row) throw new ProviderError('Provider is not configured', 404);
@@ -161,9 +161,9 @@ export function createModelProviders(ctx, { directory = ctx.get?.('benchgo')?.di
       const list = await Promise.all(entries().map(async entry => {
         const value = pathValue(documents.get(entry.settingsNs), entry.settingsPath) || {}, baseURL = address(entry, value), identity = await access(entry, value);
         if (!baseURL || !identity.configured) return null;
-        return { ...identity, name: builtinProvider(entry.provider)?.name || value.displayName || entry.displayName || entry.provider, baseURL: endpoint(baseURL), protocol: protocol(entry, value), ...(entry.declared === true && !builtinProvider(entry.provider) ? { declared: true } : {}) };
+        return { ...identity, name: value.displayName || builtinProvider(entry.provider)?.name || entry.displayName || entry.provider, baseURL: endpoint(baseURL), protocol: protocol(entry, value), ...(entry.declared === true && !builtinProvider(entry.provider) ? { declared: true } : {}) };
       }));
-      return list.filter(Boolean).sort((a, b) => Number(b.id === routerGo.id) - Number(a.id === routerGo.id) || a.name.localeCompare(b.name));
+      return list.filter(Boolean).sort((a, b) => Number(isRouterGo(b.id)) - Number(isRouterGo(a.id)) || a.name.localeCompare(b.name));
     },
     async describeAccess(id) {
       const entry = requireProvider(id);
@@ -182,23 +182,24 @@ export function createModelProviders(ctx, { directory = ctx.get?.('benchgo')?.di
       const baseURL = endpoint(address(entry, value));
       return { baseURL, protocol: wire, modelProtocol: modelProtocol(wire), credentialRef: auth?.ref ?? credentialRefs(entry, value).join('|'), ...(isManagedRouterGo(id, baseURL, value.apiKeyEnv) ? { managedRouterGo: true } : {}), ...(auth ? { apiKey: auth.value } : {}) };
     },
-    async routerGoProtocolModels() {
-      const config = await service.describeRoute(routerGo.id);
+    async routerGoProtocolModels(id) {
+      const config = await service.describeRoute(id);
       if (!config.managedRouterGo) throw new ProviderError('RouterGo account is not connected', 409);
-      if (routerGoModels?.credentialRef !== config.credentialRef || routerGoModels?.apiKey !== config.apiKey || routerGoModels.expires <= Date.now()) {
-        const current = { credentialRef: config.credentialRef, apiKey: config.apiKey, expires: Infinity };
+      let current = routerGoModels.get(id);
+      if (current?.credentialRef !== config.credentialRef || current?.apiKey !== config.apiKey || current.expires <= Date.now()) {
+        current = { credentialRef: config.credentialRef, apiKey: config.apiKey, expires: Infinity };
+        const pending = current;
         current.models = discover(config).then(rows => new Map(catalogModels(rows, undefined, undefined, config.apiKey).map(row => [row.id, row]))).then(models => {
-          current.expires = Date.now() + 30_000;
+          pending.expires = Date.now() + 30_000;
           return models;
         }).catch(error => {
-          if (routerGoModels === current) routerGoModels = undefined;
+          if (routerGoModels.get(id) === pending) routerGoModels.delete(id);
           throw error;
         });
-        routerGoModels = current;
+        routerGoModels.set(id, current);
       }
-      const current = routerGoModels;
-      const [models, labels] = await Promise.all([current.models, overrides.list(routerGo.id)]);
-      const latest = await service.describeRoute(routerGo.id);
+      const [models, labels] = await Promise.all([current.models, overrides.list(id)]);
+      const latest = await service.describeRoute(id);
       if (!latest.managedRouterGo || latest.credentialRef !== current.credentialRef || latest.apiKey !== current.apiKey) throw new ProviderError('Provider changed; refresh the model list again', 409);
       if (!labels.length) return models;
       const effective = new Map(models);
@@ -223,7 +224,7 @@ export function createModelProviders(ctx, { directory = ctx.get?.('benchgo')?.di
       const [rows, labels, publicRows] = await Promise.all([
         catalog,
         overrides.list(id),
-        (id === routerGo.id && config.baseURL === routerGo.baseURL) || configured.length > 0
+        (isRouterGo(id) && config.baseURL === routerGo.baseURL) || configured.length > 0
           ? routerGoProfiles() : undefined,
       ]);
       signal?.throwIfAborted();

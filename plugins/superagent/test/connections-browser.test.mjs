@@ -29,8 +29,15 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
     configs.slack={...configs.slack,enabled:true,accountId:'Team:Opaque',botTokenRef:'ref:bot',appTokenRef:'ref:app',ownerIds:['User:Owner']};
     configs.dingtalk={...configs.dingtalk,enabled:true,appId:'App:Opaque',appSecretRef:'ref:secret',robotCode:'Robot:Opaque',ownerIds:['Staff:Owner']};
     configs.telegram={...configs.telegram,enabled:true,botTokenRef:'ref:telegram'};
-    let revision=1;window.calls=[];
-    const state=channel=>{const c=window.mode==='empty'&&channel===window.target?catalog.find(d=>d.id===channel).defaults:configs[channel];return {enabled:c.enabled,authentication:c.enabled&&channel!=='feishu'?'verified':'unverified',events:'unverified',sending:'unverified',connection:{state:c.enabled?'connected':'disabled',...(channel==='feishu'?{authenticated:c.enabled}: {})}};};
+    const revisions=Object.fromEntries(catalog.map(d=>[d.id,1]));
+    if(window.mode==='empty'){
+      configs[window.target]={...catalog.find(d=>d.id===window.target).defaults};
+      revisions[window.target]=0;
+    }
+    window.calls=[];
+    let tokenRevision=1;
+    const integrationEndpoint={url:'https://relay.example.test/link/api/rpc',relay:true,relayTarget:'example-device'};
+    const state=channel=>{const c=configs[channel];return {enabled:c.enabled,authentication:c.enabled&&channel!=='feishu'?'verified':'unverified',events:'unverified',sending:'unverified',connection:{state:c.enabled?'connected':'disabled',...(channel==='feishu'?{authenticated:c.enabled}: {})}};};
     window.syncSignals=[];window.pendingSync=[];
     async function api(action,input={},signal){
       window.calls.push({action,input});const channel=input.channel||'feishu';
@@ -43,12 +50,16 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
       if(action==='connections'){
         if(channel===window.target&&window.mode==='loading')return new Promise(()=>{});
         if(channel===window.target&&window.mode==='error')throw Error('连接配置暂时不可用');
-        return {channel,revision,config:window.mode==='empty'&&channel===window.target?catalog.find(d=>d.id===channel).defaults:configs[channel]};
+        return {channel,revision:revisions[channel],config:configs[channel]};
       }
       if(action==='connectionStatus')return state(channel);
-      if(action==='connectionConfigure'){configs[channel]={...configs[channel],...input.patch};revision++;return {channel,revision,config:configs[channel]};}
+      if(action==='connectionConfigure'){configs[channel]={...configs[channel],...input.patch};return {channel,revision:++revisions[channel],config:configs[channel]};}
       if(action==='connectionVerify')return state(channel);
       if(action==='connectionCredential')return {ref:'encrypted:new-ref'};
+      if(action==='integrationToken'){
+        if(input.operation==='rotate') tokenRevision++;
+        return {endpoint:integrationEndpoint,...(configs.api.enabled?{token:'example-owner-token-'+tokenRevision,revision:tokenRevision}:{})};
+      }
     }
     const root=createRoot(document.getElementById('app'));
     window.setConnectionsActive=active=>root.render(<Connections api={api} active={active}/>);
@@ -81,6 +92,11 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
           else if(mode==='error')await page.getByRole('alert').filter({hasText:'连接配置暂时不可用'}).waitFor();
           else await page.getByLabel(target==='feishu'?'App ID':target==='slack'?'工作区 ID':'Client ID / AppKey',{exact:false}).waitFor();
           assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${target}/${mode}/${width} overflow`);
+          assert(await page.locator('.ba-connections-heading').evaluate(header=>{
+            const title=header.querySelector('h1').getBoundingClientRect();
+            const buttons=header.querySelector('.ba-row-actions').getBoundingClientRect();
+            return buttons.left>title.left && buttons.top<title.bottom && Math.abs(buttons.right-header.getBoundingClientRect().right)<1;
+          }),`${target}/${mode}/${width} actions should align to the right of the heading`);
           await page.screenshot({path:join(output,`${target}-${mode}-${width}.png`),fullPage:true});
         }
       }
@@ -111,8 +127,41 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
       assert.equal(await field.inputValue(),'Changed:Case/X');
       assert.equal(await page.locator('input[type=password]').first().getAttribute('placeholder'),'已配置，留空保持不变');
       await page.getByRole('button',{name:'验证连接',exact:true}).click();
-      await page.getByText('验证完成；认证、接收和发送状态分别显示，实际收发请在原渠道确认。',{exact:true}).waitFor();
+      const verification=page.locator('.ba-channel-verification-actions');
+      await verification.getByText('验证完成。认证、接收和发送状态分别显示，实际收发请在原渠道确认。',{exact:true}).waitFor();
+      assert(await verification.evaluate(node=>node.firstElementChild.getBoundingClientRect().right<node.querySelector('button').getBoundingClientRect().left));
     }
+    await open('feishu','empty',390);
+    const firstAppId=page.getByLabel('App ID',{exact:false});
+    const reload=page.getByRole('button',{name:'重新加载',exact:true});
+    const saveChanges=page.getByRole('button',{name:'保存更改',exact:true});
+    const slackTab=page.getByRole('tab',{name:'Slack',exact:true});
+    const feishuTab=page.getByRole('tab',{name:'飞书',exact:true});
+    const dialog=page.getByRole('dialog');
+    await firstAppId.waitFor();
+    assert(await saveChanges.isDisabled());
+    await reload.click();
+    await page.waitForFunction(()=>window.calls.filter(c=>c.action==='connections'&&c.input.channel==='feishu').length===2);
+    await slackTab.click();
+    await page.getByLabel('工作区 ID',{exact:false}).waitFor();
+    assert.equal(await dialog.count(),0);
+    await feishuTab.click();
+    await firstAppId.fill('New:Feishu');
+    await slackTab.click();
+    await dialog.getByRole('heading',{name:'放弃渠道修改？'}).waitFor();
+    await dialog.getByRole('button',{name:'继续编辑'}).click();
+    assert.equal(await firstAppId.inputValue(),'New:Feishu');
+    await reload.click();
+    await dialog.getByRole('heading',{name:'重新加载渠道？'}).waitFor();
+    await dialog.getByRole('button',{name:'放弃并加载'}).click();
+    await page.waitForFunction(()=>document.getElementById('ba-channel-appId')?.value==='');
+    assert(await saveChanges.isDisabled());
+    await firstAppId.fill('New:Feishu');
+    await saveChanges.click();
+    await page.getByText('已保存',{exact:true}).waitFor();
+    const firstSave=await page.evaluate(()=>window.calls.find(c=>c.action==='connectionConfigure').input);
+    assert.deepEqual(firstSave,{channel:'feishu',revision:0,patch:{appId:'New:Feishu',accessMode:'platform',groups:[]}});
+    assert(await saveChanges.isDisabled());
     await open('telegram','data',390);
     await page.getByText('近期收到的来源 ID',{exact:true}).click();
     await page.getByRole('button',{name:'加入账号名单',exact:true}).click();
@@ -134,6 +183,44 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
     assert.equal(await page.getByRole('tab',{name:/Webhook|API Service/}).count(),0);
     assert.equal(await page.locator('.ba-connection-field').count(),1);
     assert.equal(await page.locator('.ba-channel-status').innerText(),'未启用');
+    const docsButton=page.getByRole('button',{name:'API 文档',exact:true});
+    const apiDocs=page.getByRole('dialog',{name:'外部集成 API 文档'});
+    const preview=apiDocs.getByRole('textbox',{name:'API 文档内容'});
+    const copyDocs=apiDocs.getByRole('button',{name:'复制给 AI'});
+    await page.evaluate(()=>{
+      Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{window.copiedDocs=value;}}});
+    });
+    await docsButton.click();
+    await apiDocs.getByRole('status').getByText('正在读取 API Token…',{exact:true}).waitFor({state:'hidden'});
+    const documentation=await preview.inputValue();
+    assert.match(documentation,/POST https:\/\/relay\.example\.test\/link\/api\/rpc/);
+    assert.match(documentation,/Authorization: Bearer <启用并保存后显示 API Token>/);
+    assert.deepEqual([...documentation.matchAll(/```json\n([\s\S]+?)\n```/g)].map(([,body])=>JSON.parse(body).body.action),['connectionAction','connectionReplies','tasks']);
+    await copyDocs.click();
+    await apiDocs.getByRole('status').getByText('已复制',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.copiedDocs),documentation);
+    for (const width of [390,1440]) {
+      await page.setViewportSize({width,height:900});
+      assert(await apiDocs.evaluate(node=>{
+        const rect=node.getBoundingClientRect();
+        const button=node.querySelector('footer button').getBoundingClientRect();
+        return rect.left>=0 && rect.right<=innerWidth && node.scrollWidth<=node.clientWidth && button.bottom<=rect.bottom;
+      }),`API docs overflow at ${width}px`);
+      await page.screenshot({path:join(output,`api-docs-${width}.png`)});
+    }
+    await page.setViewportSize({width:390,height:900});
+    await page.keyboard.press('Escape');
+    await apiDocs.waitFor({state:'hidden'});
+    await page.waitForFunction(()=>document.activeElement?.textContent==='API 文档');
+    await page.evaluate(()=>{
+      Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined});
+      document.execCommand=()=>false;
+    });
+    await docsButton.click();
+    await copyDocs.click();
+    await apiDocs.getByRole('status').getByText('请手动复制已选中的文档').waitFor();
+    assert(await preview.evaluate(node=>node.selectionStart===0 && node.selectionEnd===node.value.length));
+    await apiDocs.getByRole('button',{name:'关闭 API 文档'}).click();
     await integrationName.fill('My:Integration');
     await page.getByRole('switch',{name:'启用外部集成'}).check();
     await page.getByRole('button',{name:'保存更改',exact:true}).click();
@@ -145,6 +232,23 @@ test('Feishu, Slack and DingTalk render four states and preserve verified availa
     assert.equal(await integrationName.inputValue(),'My:Integration');
     assert.equal(await page.getByRole('switch',{name:'启用外部集成'}).isChecked(),true);
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'integration form overflows the narrow panel');
+    await page.evaluate(()=>{
+      Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{window.copiedDocs=value;}}});
+    });
+    await docsButton.click();
+    const rotate=apiDocs.getByRole('button',{name:'轮换 Token'});
+    await rotate.waitFor();
+    assert.match(await preview.inputValue(),/Authorization: Bearer example-owner-token-1/);
+    await rotate.click();
+    await apiDocs.getByRole('status').getByText('已轮换',{exact:true}).waitFor();
+    await copyDocs.click();
+    await apiDocs.getByRole('status').getByText('已复制',{exact:true}).waitFor();
+    const copied=await page.evaluate(()=>window.copiedDocs);
+    assert.match(copied,/Authorization: Bearer example-owner-token-2/);
+    assert.doesNotMatch(copied,/example-owner-token-1/);
+    assert.match(copied,/X-BenchGo-Relay-Target: example-device/);
+    await page.screenshot({path:join(output,'api-docs-enabled-390.png')});
+    await page.keyboard.press('Escape');
     await open('feishu','data',1440);
     const appId=page.getByLabel('App ID',{exact:false});
     await appId.fill('Unsaved:App/ID');

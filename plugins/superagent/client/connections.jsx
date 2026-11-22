@@ -1,7 +1,7 @@
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { Loading } from '../../shared/client/ui/loading.jsx';
 import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import { ChannelBrandIcon } from '../../shared/client/channel-brand-icon.jsx';
 import { CustomSelect } from '../../shared/client/custom-select.jsx';
@@ -10,9 +10,17 @@ import css from './connections.css';
 import feishuCss from './feishu-settings.css';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
+import { IntegrationApiDocs } from './integration-api-docs.jsx';
 import QRCode from 'qrcode';
 
 const textConfig = config => Object.fromEntries(Object.entries(config || {}).map(([key, value]) => [key, Array.isArray(value) && key !== 'groups' ? value.join('\n') : value]));
+function connectionDraft({ channel, revision, config }) {
+  const draft = textConfig(config);
+  if (channel === 'feishu' && revision === 0 && !config.appId && !config.appSecretRef && !config.ownerOpenIds?.length && !config.chatIds?.length) {
+    Object.assign(draft, { accessMode: 'platform', groups: [], directMessages: true, otherGroups: 'disabled' });
+  }
+  return draft;
+}
 const listField = field => ['list', 'array', 'string[]', 'textarea'].includes(field.type) || Array.isArray(field.default);
 const idsIn = value => String(value || '').split('\n').map(id => id.trim()).filter(Boolean);
 const personalFields = new Set(['ownerIds', 'chatIds']);
@@ -27,9 +35,11 @@ function ConnectionState({ icon = 'link', title, description, loading = false, c
 }
 export function Connections({ api, onDirtyChange, active = true }) {
   const [confirm, confirmation] = useConfirmation();
+  const formId = useId();
   const [catalog, setCatalog] = useState([]), [channel, setChannel] = useState('feishu');
   const [base, setBase] = useState(null), [draft, setDraft] = useState(null), [status, setStatus] = useState(null);
-  const [busy, setBusy] = useState(true), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(true), [error, setError] = useState(''), [notice, setNotice] = useState(null);
+  const [verificationNotice, setVerificationNotice] = useState('');
   const [secrets, setSecrets] = useState({});
   const [login, setLogin] = useState(null);
   const [chatList, setChatList] = useState(null), [chatError, setChatError] = useState('');
@@ -76,7 +86,7 @@ export function Connections({ api, onDirtyChange, active = true }) {
   };
   const loginAction = async operation => {
     retryAction.current = () => loginAction(operation);
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError(''); setNotice(null);
     const request = generation.current;
     try {
       const value = await requestApi('connectionAction', { channel, operation, ...(loginSession.current ? { loginId: loginSession.current.loginId } : {}) });
@@ -89,8 +99,8 @@ export function Connections({ api, onDirtyChange, active = true }) {
       } else if (value.status === 'confirmed') {
         loginSession.current = null; setLogin(null);
         setDraft(current => ({ ...current, accountId: value.config.accountId, tokenRef: value.config.tokenRef, baseUrl: value.config.baseUrl, ...(!current.ownerIds?.trim() && value.config.ownerIds?.length ? { ownerIds: value.config.ownerIds.join('\n') } : {}) }));
-        setNotice('扫码成功，凭据已安全保存。请保存更改后启用连接。');
-      } else if (value.status === 'expired') { loginSession.current = null; setLogin(null); setNotice('二维码已过期，请重新扫码连接。'); }
+        setNotice({ text: '扫码成功，凭据已安全保存。请保存更改后启用连接。', showWhileDirty: true });
+      } else if (value.status === 'expired') { loginSession.current = null; setLogin(null); setNotice({ text: '二维码已过期，请重新扫码连接。', showWhileDirty: true }); }
       else setLogin(current => ({ ...current, status: value.status }));
     } catch (cause) { if (current(request) && cause.name !== 'AbortError') setError(cause.message); } finally { if (current(request)) setBusy(false); }
   };
@@ -103,21 +113,19 @@ export function Connections({ api, onDirtyChange, active = true }) {
   const settingsFields = visibleFields.filter(field => !personal || !personalFields.has(field.key));
   const listSourceIds = key => [...new Set((definition?.recentSources || []).map(source => source[key]).filter(Boolean))];
   const addScopeId = (field, id) => setDraft(current => ({ ...current, [field]: [...new Set([...idsIn(current[field]), id])].join('\n') }));
-  const dirty = !!base && (JSON.stringify(draft) !== JSON.stringify(textConfig(base.config)) || Object.values(secrets).some(Boolean));
+  const dirty = !!base && (JSON.stringify(draft) !== JSON.stringify(connectionDraft(base)) || Object.values(secrets).some(Boolean));
   useEffect(() => { onDirtyChange?.(dirty); return () => onDirtyChange?.(false); }, [dirty, onDirtyChange]);
   const load = async (target = channel, refreshCatalog = false) => {
     retryAction.current = () => load(target, refreshCatalog);
     const request = ++generation.current;
     loadingRequest.current?.abort();
     const controller = new AbortController(); loadingRequest.current = controller;
-    cancelLogin(); setBusy(true); setError(''); setNotice(''); setSecrets({}); setChatList(null); setChatError(''); setChatLoading(false); setChatSearch(''); setManualChatId('');
+    cancelLogin(); setBusy(true); setError(''); setNotice(null); setVerificationNotice(''); setChatList(null); setChatError(''); setChatLoading(false); setChatSearch(''); setManualChatId('');
     try {
       const [value, state, listing] = await Promise.all([requestApi('connections', { channel: target }, controller.signal), requestApi('connectionStatus', { channel: target }, controller.signal), refreshCatalog ? requestApi('connectionCatalog', {}, controller.signal) : null]);
       if (request !== generation.current) return;
       if (listing) confirmCatalog(listing);
-      const nextDraft = textConfig(value.config);
-      if (target === 'feishu' && value.revision === 0 && !value.config.appId && !value.config.appSecretRef && !value.config.ownerOpenIds?.length && !value.config.chatIds?.length) Object.assign(nextDraft, { accessMode: 'platform', groups: [], directMessages: true, otherGroups: 'disabled' });
-      setBase(value); setDraft(nextDraft); confirmStatus(state, target);
+      setBase(value); setDraft(connectionDraft(value)); setSecrets({}); confirmStatus(state, target);
     } catch (cause) { if (current(request) && cause.name !== 'AbortError') { setError(cause.message); markStale(cause.message); } }
     finally { controller.abort(); if (current(request)) setBusy(false); }
   };
@@ -125,6 +133,9 @@ export function Connections({ api, onDirtyChange, active = true }) {
   const choose = async next => {
     if (next === channel || busy || (dirty && !await confirm({ title: '放弃渠道修改？', description: '切换渠道会放弃未保存的修改。', confirmLabel: '放弃并切换', cancelLabel: '继续编辑', destructive: true }))) return;
     setSecrets({}); setChannel(next); setBase(null); setDraft(null); setStatus(null); void load(next);
+  };
+  const reload = async () => {
+    if (!dirty || await confirm({ title: '重新加载渠道？', description: '重新加载会放弃未保存的修改。', confirmLabel: '放弃并加载', cancelLabel: '继续编辑', destructive: true })) void load(channel, true);
   };
   useEffect(() => {
     if (!active || !pageVisible) { markStale(); setRefreshing(false); return; }
@@ -144,8 +155,10 @@ export function Connections({ api, onDirtyChange, active = true }) {
     return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
   }, [active, pageVisible, channel, busy, !!base, api, syncRevision]);
   const save = async event => {
+    event.preventDefault();
+    if (busy || !dirty) return;
     retryAction.current = () => form.current?.requestSubmit();
-    event.preventDefault(); if (busy) return; setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError(''); setNotice(null);
     const request = generation.current;
     try {
       const missingChoice = draft.enabled && visibleFields.find(field => field.options && field.required && (draft[field.key] == null || draft[field.key] === ''));
@@ -161,6 +174,7 @@ export function Connections({ api, onDirtyChange, active = true }) {
         setDraft(current => ({ ...current, [field]: value.ref }));
         setSecrets(current => ({ ...current, [field]: '' }));
       }
+      // The first explicit save persists the displayed defaults for a new Feishu channel.
       const previous = textConfig(base.config), patch = {};
       for (const key of new Set(['enabled', ...fields.map(field => field.key), ...(feishu ? ['accessMode', 'directMessages', 'groups', 'otherGroups'] : [])])) {
         if (JSON.stringify(savedDraft[key]) === JSON.stringify(previous[key])) continue;
@@ -168,19 +182,19 @@ export function Connections({ api, onDirtyChange, active = true }) {
         patch[key] = key === 'groups' ? savedDraft[key] : field && (listField(field) || Array.isArray(base.config[key])) ? idsIn(savedDraft[key]) : field?.type === 'number' ? (savedDraft[key] === '' ? null : Number(savedDraft[key])) : savedDraft[key];
       }
       const value = await requestApi('connectionConfigure', { channel, patch, revision: base.revision });
-      setBase(value); setDraft(textConfig(value.config)); setNotice('已保存');
+      setBase(value); setDraft(connectionDraft(value)); setNotice({ text: '已保存' });
       try { confirmStatus(await requestApi('connectionStatus', { channel })); } catch (cause) { if (current(request) && cause.name !== 'AbortError') markStale(cause.message); }
     } catch (cause) { if (current(request) && cause.name !== 'AbortError') setError(cause.message); } finally { if (current(request)) setBusy(false); }
   };
   const verify = async () => {
     retryAction.current = verify;
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError(''); setVerificationNotice('');
     const request = generation.current;
     try {
       const value = await requestApi('connectionVerify', { channel });
-      if (value.config) { setBase(value); setDraft(textConfig(value.config)); }
+      if (value.config) { setBase(value); setDraft(connectionDraft(value)); }
       confirmStatus(value.status || value);
-      setNotice('验证完成；认证、接收和发送状态分别显示，实际收发请在原渠道确认。');
+      setVerificationNotice('验证完成。认证、接收和发送状态分别显示，实际收发请在原渠道确认。');
     } catch (cause) {
       if (current(request) && cause.name !== 'AbortError') {
         setError(cause.message);
@@ -230,12 +244,22 @@ export function Connections({ api, onDirtyChange, active = true }) {
     { label: '结果发送', value: status?.sending === 'pull' ? '任务 / API 取结果' : status?.sending === 'verified' ? '已验证' : status?.sending === 'accepted' ? '已受理' : '未验证', tone: ['verified', 'pull'].includes(status?.sending) ? 'success' : status?.sending === 'accepted' ? 'pending' : 'neutral' },
   ];
   return <section className="ba-group ba-connections" data-channel={channel}>{confirmation}<style>{css + feishuCss}</style>
+    <header className="ba-studio-heading ba-connections-heading">
+      <div className="ba-studio-heading-main"><h1>多平台</h1><p>把助手接入常用平台，在熟悉的地方继续对话。</p></div>
+      <div className="ba-connections-actions">
+        <div className="ba-row-actions">
+          <Button variant={feishu ? 'outline' : 'ghost'} disabled={busy} onClick={reload}>重新加载</Button>
+          <Button disabled={busy || !dirty} type="submit" form={formId}>{busy ? '处理中…' : '保存更改'}</Button>
+        </div>
+        <span role="status" data-dirty={dirty}>{dirty && !notice?.showWhileDirty ? '有未保存的修改' : notice?.text}</span>
+      </div>
+    </header>
     {!!catalog.length && <SegmentedControl options={catalog.map(item => ({ value: item.id, label: item.label, icon: <ChannelBrandIcon channel={item.id} available={!synced[item.id]?.stale && available(item.id === channel ? status : item.status)} size={18} /> }))} value={channel} onChange={choose} disabled={busy} label="多平台渠道" tabIdPrefix="ba-channel" panelId="ba-channel-panel" />}
     {error && <div className="ba-error ba-connection-error" role="alert"><UIIcon name="link" size={18} /><div><strong>连接操作未完成</strong><p>{error}</p></div><Button variant="outline" type="button" disabled={busy} onClick={() => retryAction.current?.()}>重试</Button></div>}
     <div id="ba-channel-panel" role="tabpanel" aria-labelledby={`ba-channel-${channel}`} aria-busy={busy}>
-      {!draft || !definition ? <ConnectionState icon={busy ? 'refresh' : 'link'} title={busy ? '正在读取连接配置' : error ? '暂时无法读取配置' : '暂未提供可配置渠道'} description={busy ? '正在同步平台信息与连接状态。' : error ? '配置保留在原处，恢复连接后即可继续。' : '刷新渠道目录后，再选择要接入的应用。'} loading={busy}>{!busy && !error && <Button variant="outline" type="button" onClick={() => load(channel, true)}>重新加载</Button>}</ConnectionState> : <form ref={form} className="ba-connection-form" onSubmit={save} onInvalidCapture={event => { if (event.target.closest('.ba-channel-advanced')) setAdvancedOpen(true); }}>
+      {!draft || !definition ? <ConnectionState icon={busy ? 'refresh' : 'link'} title={busy ? '正在读取连接配置' : error ? '暂时无法读取配置' : '暂未提供可配置渠道'} description={busy ? '正在同步平台信息与连接状态。' : error ? '配置保留在原处，恢复连接后即可继续。' : '刷新渠道目录后，再选择要接入的应用。'} loading={busy} /> : <form id={formId} ref={form} className="ba-connection-form" onSubmit={save} onInvalidCapture={event => { if (event.target.closest('.ba-channel-advanced')) setAdvancedOpen(true); }}>
         <section className="ba-connection-overview" aria-label="连接状态"><div><div className="ba-channel-title"><ChannelBrandIcon channel={channel} available={fresh && available(status)} size={28} /><strong>{definition.label}</strong><span className="ba-channel-status" data-tone={fresh ? connectionTone(status) : 'neutral'} role="status"><span className={`ba-connection-dot is-${fresh && status?.enabled ? status?.connection?.state || 'stopped' : 'stopped'}`} aria-hidden="true" />{!fresh ? '状态待确认' : status?.enabled ? stateLabel(status) : '未启用'}</span></div>{definition.description && <p>{definition.description}</p>}{sync?.at && <div className="ba-connection-sync" data-stale={!fresh} role="status"><Tooltip label={new Date(sync.at).toLocaleString()}><span tabIndex={0}>上次同步 {new Date(sync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span></Tooltip>{!fresh && <Tooltip label={sync.error}><span tabIndex={sync.error ? 0 : undefined}>{refreshing ? '正在重新确认…' : sync.error ? '同步失败，稍后自动重试' : '等待同步'}</span></Tooltip>}{!fresh && sync.error && <Button variant="ghost" size="sm" disabled={refreshing || busy} onClick={() => setSyncRevision(value => value + 1)}>同步状态</Button>}</div>}</div>
-          {enableControl}
+          {channel === 'api' ? <div className="ba-integration-overview-actions"><IntegrationApiDocs api={api} enabled={base.config.enabled} />{enableControl}</div> : enableControl}
         </section>
         {status?.error && <div className="ba-error ba-connection-error" role="alert"><UIIcon name="link" size={18} /><div><strong>渠道连接需要检查</strong><p>{typeof status.error === 'string' ? status.error : status.error.message || '渠道暂不可用'}</p></div><Button variant="outline" type="button" disabled={busy || dirty} onClick={verify}>重新验证</Button></div>}
         {!feishu && definition.capabilities?.notes && <p className="ba-connection-inline-note">{Array.isArray(definition.capabilities.notes) ? definition.capabilities.notes.join('；') : definition.capabilities.notes}</p>}
@@ -288,15 +312,10 @@ export function Connections({ api, onDirtyChange, active = true }) {
           {(settingsFields.some(field => field.advanced) || feishu) && <Disclosure className="ba-connection-section ba-channel-advanced" title={feishu ? <span className="ba-feishu-disclosure-title">高级设置<small>{advancedOpen ? '收起' : '展开'}</small></span> : '高级设置'} description={feishu ? undefined : '协议参数与平台扩展配置，按需调整'} open={advancedOpen} onOpenChange={setAdvancedOpen}><div className="ba-goal-fields">{settingsFields.filter(field => field.advanced).map(renderField)}{feishu && draft.groups != null && <div className="ba-connection-field"><label htmlFor="ba-channel-otherGroups">其他群</label><CustomSelect id="ba-channel-otherGroups" value={draft.otherGroups || 'disabled'} onChange={value => setDraft(current => ({ ...current, otherGroups: value }))} disabled={busy} options={[{"value":"disabled","label":"不响应"},{"value":"mentions","label":"仅 @ 时响应"}]} /></div>}{feishu && <div className="ba-connection-field"><label htmlFor="ba-channel-botOpenId">机器人身份（自动识别）</label><input id="ba-channel-botOpenId" readOnly value={draft.botOpenId || ''} placeholder="保存凭据后验证连接" /></div>}</div></Disclosure>}
         </fieldset>
         {status?.voice && <section className="ba-connection-section"><h3>实时语音</h3><p className="ba-connection-inline-note">{status.voice.available ? '在 Discord 文字频道发送 /join 加入、/leave 退出；需要主人已在语音频道。' : status.voice.reason || '当前环境暂不支持实时语音。'}</p></section>}
-        <section className="ba-connection-section ba-channel-verification"><div className="ba-connection-section-head"><div><h3><UIIcon name="scan" size={17} />连接验证</h3><p>{dirty ? '先保存更改，再验证当前连接。' : '检查平台认证、消息接收与发送状态。'}</p></div><Button variant="outline" type="button" disabled={busy || dirty || (feishu ? !base.config.appId || !base.config.appSecretRef : !base.config.enabled)} onClick={verify}>验证连接</Button></div>
+        <section className="ba-connection-section ba-channel-verification"><div className="ba-connection-section-head"><div><h3><UIIcon name="scan" size={17} />连接验证</h3><p>{dirty ? '先保存更改，再验证当前连接。' : '检查平台认证、消息接收与发送状态。'}</p></div><div className="ba-channel-verification-actions"><span role="status">{dirty ? '' : verificationNotice}</span><Button variant="outline" type="button" disabled={busy || dirty || (feishu ? !base.config.appId || !base.config.appSecretRef : !base.config.enabled)} onClick={verify}>验证连接</Button></div></div>
           {feishu && status?.botName && <p className="ba-connection-inline-note">机器人：{status.botName}</p>}
           <div className="ba-connection-checks" role="status">{verification.map(item => <div key={item.label} className="ba-connection-check" data-tone={fresh ? item.tone : 'neutral'}><span>{item.label}</span><strong><span className="ba-connection-dot" aria-hidden="true" />{!fresh ? '状态待确认' : item.value}</strong></div>)}</div>
         </section>
-        <footer className="ba-identity-save" data-dirty={dirty}><span role="status">{notice || (dirty ? '有未保存的修改' : feishu ? '当前配置已保存' : '')}</span><div className="ba-row-actions">
-          <Button variant={feishu ? 'outline' : 'ghost'} type="button" disabled={busy} onClick={async () => { if (!dirty || await confirm({ title: '重新加载渠道？', description: '重新加载会放弃未保存的修改。', confirmLabel: '放弃并加载', cancelLabel: '继续编辑', destructive: true })) void load(channel, true); }}>重新加载</Button>
-
-          <Button className="ba-primary" disabled={busy || !dirty} type="submit">{busy ? '处理中…' : '保存更改'}</Button>
-        </div></footer>
       </form>}
     </div>
   </section>;

@@ -84,7 +84,7 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
         if (existing && (existing.route?.model !== binding.model || existing.model !== nativeModel)) {
           if (['running', 'waiting', 'connecting'].includes(existing.status)) throw new Error('请等待当前轮次完成后再切换模型');
           if (commander.pickerCatalog) {
-            const available = await commander.pickerCatalog.models(native);
+            const available = await commander.pickerCatalog.models(native, { fresh: true });
             if (!available.some(model => model.id === options.model)) throw new Error('工具供应商或模型已变更，请重新选择模型');
           }
           const driver = commander.drivers.get(existing.id);
@@ -101,7 +101,7 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
         }
         if (!existing) {
           if (ownedSessions.length) throw new Error('此对话已绑定其他工具或供应商模型；请新建聊天，已有记录与运行配置不会被修改');
-          const available = await commander.pickerCatalog.models(native);
+          const available = await commander.pickerCatalog.models(native, { fresh: true });
           if (!available.some(model => model.id === options.model)) throw new Error('工具供应商或模型已变更，请重新选择模型');
         }
         const session = existing ?? await commander.create({ provider: native, cwd: directory, route: binding, ownerSessionId: owner, title: human.at(-1).content.map(block => block.text).join('\n').slice(0, 120) });

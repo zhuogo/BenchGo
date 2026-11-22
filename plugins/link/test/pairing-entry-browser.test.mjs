@@ -16,7 +16,7 @@ const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executa
 let assets;
 async function productionAssets() {
   return assets ??= (async () => {
-    const result = await build({ entryPoints: [join(root, 'plugins/link/client/main.jsx')], outfile: join(root, 'artifacts/link-pairing-check/app.js'),
+    const result = await build({ absWorkingDir: root, entryPoints: [join(root, 'plugins/link/client/main.jsx')], outfile: join(root, 'artifacts/link-pairing-check/app.js'),
       bundle: true, write: false, metafile: true, platform: 'browser', format: 'iife', jsx: 'automatic', target: 'es2022', minify: true,
       nodePaths: [join(root, 'plugins/link/node_modules'), join(root, 'plugins/base/node_modules')],
       alias: { react: fileURLToPath(new URL('../node_modules/react', import.meta.url)), 'react-dom': fileURLToPath(new URL('../node_modules/react-dom', import.meta.url)), ...await officialUiEntries() },

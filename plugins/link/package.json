@@ -8,7 +8,7 @@
   "scripts": {
     "build:web": "node scripts/build-web.mjs",
     "build:preview": "node scripts/build-preview.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --import ../../scripts/source-loader.mjs --test test/*.test.mjs"
   },
   "dependencies": {
     "qrcode": "1.5.4",

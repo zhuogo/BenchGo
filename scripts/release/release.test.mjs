@@ -120,6 +120,16 @@ test('changed components require increased versions and Android additionally req
   assert.throws(() => plan({ versions: versions({ plugin: '0.9.0' }) }), /roll back/);
 });
 
+test('one-command release proposes patch bumps only for affected components and preserves explicit increases', () => {
+  const paths = ['plugins/link/client/device-center.jsx', 'plugins/link/src/server/relay-deployment.mjs'];
+  const proposed = plan({ paths, bumpVersions: true });
+  assert.deepEqual(proposed.builds, { plugin: true, windows: false, android: true, macos: true, linux: true });
+  assert.deepEqual(proposed.versions, versions({ plugin: '1.0.1', android: '1.0.1', androidVersionCode: 11, macos: '1.1.0', linux: '1.1.0' }));
+  const manual = versions({ plugin: '1.2.0', android: '1.3.0', androidVersionCode: 14 });
+  assert.deepEqual(plan({ paths, versions: manual, bumpVersions: true }).versions, plan({ paths, versions: manual }).versions);
+  assert.throws(() => plan({ paths, bumpVersions: true, versions: versions({ androidVersionCode: 9 }) }), /increased versionCode/);
+});
+
 test('official engine or brand changes cannot skip a component build', () => {
   const value = plan({ paths: ['deepseek-harness'], versions: versions({ plugin: '1.1.0', windows: '1.1.0', android: '1.1.0', androidVersionCode: 11 }) });
   assert.deepEqual(value.builds, { plugin: true, windows: true, android: true, macos: true, linux: true });

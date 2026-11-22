@@ -10,6 +10,7 @@ import { ActivityTrigger } from './activity-panel.jsx';
 import { ConversationActivity } from './conversation-activity.jsx';
 import { conversationActivity } from './reply-stream.mjs';
 import activityCss from './quiet-chat.css';
+import notebookCss from './notebook.css';
 import { PetAvatar } from '../../shared/client/pet-avatar.jsx';
 import { applyPetDraft, latestPetExpression, petActionForEvent, petActionForSession, petExpressionForAction, petImageUrl, petDesignIntent, isRetiredPetDraft } from './pet-state.mjs';
 import { assistantConfigSync } from './config-sync.mjs';
@@ -30,6 +31,16 @@ export const ASSISTANT_CONVERSATION_SLOT = 'benchgo.assistant.conversation';
 export const assistantConversationChildren = {
   [ASSISTANT_CONVERSATION_SLOT]: { kind: 'single', scope: 'session' },
 };
+
+function ModelSetupDock() {
+  const onConfigureModel = useContext(HomeContext)?.onConfigureModel;
+  if (!onConfigureModel) return null;
+  return <div className="ba-model-setup">
+    <span className="ba-model-setup-mark"><UIIcon name="bulb" size={20} /></span>
+    <span className="ba-model-setup-copy" role="status">还没有给你的助手配置模型</span>
+    <Button variant="ghost" className="ba-model-setup-action" onClick={onConfigureModel}>配置模型</Button>
+  </div>;
+}
 
 function FixedChatView({ useSession, useConversation, useInput, useProjection, useAccess, inputActions }) {
   const home = useContext(HomeContext);
@@ -182,7 +193,8 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
     ? <div className="ba-resource-initial"><ResourceState kind="error" title="执行会话暂未连接" description={error} actionLabel="重新连接" onAction={reconnect} /></div>
     : <ChatNoticeFeed message="聊天暂未连接" onRetry={reconnect} />;
   if (!retained || retained.sessionId !== sessionId) return <div className="ba-resource-initial"><ResourceState kind="loading" title={execution ? "正在连接执行会话" : "正在连接聊天"} /></div>;
-  return <div className="ba-official-conversation" data-assistant-chat="" style={{ display: 'flex', flex: '1 1 0', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
+  return <div className="ba-official-conversation" data-assistant-chat="" data-assistant-notebook={execution ? undefined : ''} style={{ display: 'flex', flex: '1 1 0', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
+    <style>{notebookCss}</style>
     <SuperAgentSurfaceContext.Provider value={true}><HomeContext.Provider value={home}><SessionProvider session={retained.reference}>
       {renderSlot(ASSISTANT_CONVERSATION_SLOT, {})}
     </SessionProvider></HomeContext.Provider></SuperAgentSurfaceContext.Provider>
@@ -194,4 +206,7 @@ export function mountAssistantConversation(ctx) {
     name: ASSISTANT_CONVERSATION_SLOT,
     children: workbenchSessionSurfaceChildren,
   }, OfficialConversation)));
+  ctx.effect(() => ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock', id: 'benchgo-assistant-model-setup', order: 100,
+  }, ModelSetupDock)));
 }

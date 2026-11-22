@@ -21,6 +21,19 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
   const runtimeSettings = options.runtimeSettings ?? createRuntimeSettings({ directory });
   const routeService = createSessionRoutes({ directory, providers, runtimeSettings });
   const pickerCatalog = createPickerCatalog({ commander, installer, providers, routeService, llm: ctx.llm, isHarnessAvailable: () => !!getCommander() });
+  for (const event of ['llm/adapters-updated', 'llm/models-updated', 'credentials/record-updated', 'credentials/reference-updated']) {
+    ctx.on?.(event, () => pickerCatalog.invalidate());
+  }
+  ctx.on?.('settings/document-updated', namespace => {
+    if (namespace !== 'agent-default-model') pickerCatalog.invalidate();
+  });
+  ctx.effect(() => {
+    const refreshInstallations = job => {
+      if (job.finishedAt) pickerCatalog.invalidate({ installations: true });
+    };
+    installer.on?.('job', refreshInstallations);
+    return () => installer.off?.('job', refreshInstallations);
+  });
   const service = { installer, routeService, pickerCatalog, providers, runtimeSettings };
   if (commander) Object.assign(commander, { toolInstaller: installer, routeService, pickerCatalog, runtimeSettings });
   // Configurable model routes use the API credentials from Models settings.
@@ -45,7 +58,7 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
       }
       if (access.managedRouterGo) {
         let reason;
-        try { reason = routerGoModelProtocolReason('deepseek', (await providers.routerGoProtocolModels()).get(options.model), access.modelProtocol); }
+        try { reason = routerGoModelProtocolReason('deepseek', (await providers.routerGoProtocolModels(options.provider)).get(options.model), access.modelProtocol); }
         catch { reason = '无法读取 RouterGo 账号支持的模型，请重试。'; }
         if (reason) {
           yield { type: 'finish', reason: { kind: 'error', failure: { code: 'ROUTERGO_MODEL_UNAVAILABLE', message: reason } } };
@@ -79,7 +92,11 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
         }
       }
       case 'modelCapabilities': return { overrides: await providers.modelCapabilities(input.providerId) };
-      case 'saveModelCapabilities': return providers.saveModelCapabilities(input.providerId, input.modelId, input.capabilities);
+      case 'saveModelCapabilities': {
+        const result = await providers.saveModelCapabilities(input.providerId, input.modelId, input.capabilities);
+        pickerCatalog.invalidate();
+        return result;
+      }
       case 'modelProfiles': return fetchPublicModelProfiles(options.fetcher ?? globalThis.fetch, AbortSignal.any([signal, AbortSignal.timeout(15000)]));
       case 'job': return { job: installer.job(input.id) };
       case 'install': return { job: installer.install(input.tool) };

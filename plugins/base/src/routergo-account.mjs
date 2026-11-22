@@ -1,21 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { routerGo } from '../shared/builtin-providers.mjs';
-import { routerGoAccountPath, routerGoOrigin, isRouterGoAccountReference } from '../shared/routergo-account.mjs';
+import { isRouterGo, routerGo } from '../shared/builtin-providers.mjs';
+import { routerGoAccountPath, routerGoOrigin, isRouterGoAccountReference, routerGoAccountTokenReference as tokenRef } from '../shared/routergo-account.mjs';
 import { assertSameOrigin, HttpError, readJson, readLimited } from '../shared/http.mjs';
 import { discoverRouterGoModels } from './model-providers.mjs';
 import { createModelCapabilitySettings } from './model-capability-settings.mjs';
 import { createRouterGoModelState, reconcileRouterGoModels } from './routergo-model-sync.mjs';
 
 const namespace = 'llm-pi-ai';
-const providerPath = ['providers', routerGo.id];
-const set = (field, value) => ({ op: 'set', path: [...providerPath, field], value });
-const accountFields = { displayName: routerGo.name, baseURL: routerGo.baseURL };
-const accountFieldOps = previous => Object.entries({ ...accountFields, api: previous.api || routerGo.protocol })
-  .filter(([field, value]) => previous[field] !== value)
-  .map(([field, value]) => set(field, value));
 const remotePath = routerGoOrigin + '/api/x/benchgo-auth';
 const manualRef = 'ROUTERGO_API_KEY';
-const tokenRef = ref => ref.replace('_KEY_', '_ACCOUNT_');
 const deviceGrant = 'urn:ietf:params:oauth:grant-type:device_code';
 const headers = { 'cache-control': 'no-store' };
 const validText = (value, limit) => typeof value === 'string' && value.length > 0 && value.length <= limit && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -34,15 +27,19 @@ function accountIdentity(account, secrets) {
   };
 }
 
-export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discover = discoverRouterGoModels, now = Date.now, directory } = {}) {
+function createConnectionAccount(ctx, providerId, { fetcher, discover, now, modelState, capabilitySettings }) {
   let current, timer, starting = false, lastSync, syncInFlight;
-  const modelState = createRouterGoModelState(directory);
-  const capabilitySettings = createModelCapabilitySettings(directory);
   const lifetime = new AbortController();
+  const providerPath = ['providers', providerId];
+  const set = (field, value) => ({ op: 'set', path: [...providerPath, field], value });
+  const accountFields = { baseURL: routerGo.baseURL };
+  const accountFieldOps = previous => Object.entries({ ...accountFields, api: previous.api || routerGo.protocol })
+    .filter(([field, value]) => previous[field] !== value)
+    .map(([field, value]) => set(field, value));
   const document = () => ctx.settings.describe().find(row => row.ns === namespace);
-  const profile = doc => doc?.value?.providers?.[routerGo.id];
+  const profile = doc => doc?.value?.providers?.[providerId];
   const resolve = async ref => ref ? (await ctx.credentials.resolve(ref))?.value : undefined;
-  const modelRows = doc => doc?.user?.providers?.[routerGo.id]?.models ?? profile(doc)?.models ?? [];
+  const modelRows = doc => doc?.user?.providers?.[providerId]?.models ?? profile(doc)?.models ?? [];
   const clear = () => { clearTimeout(timer); current = undefined; };
   const expire = (session, seconds) => {
     session.expiresAt = now() + seconds * 1000;
@@ -100,7 +97,7 @@ export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discove
     const prior = isRouterGoAccountReference(priorRef) ? await modelState.load(priorRef, existing) : { models: [], excluded: [] };
     const protectedIds = new Set([
       ...Object.keys(profile(doc)?.modelOverrides ?? {}),
-      ...(await capabilitySettings.list(routerGo.id)).map(row => row.modelId),
+      ...(await capabilitySettings.list(providerId)).map(row => row.modelId),
     ]);
     return { prior, result: reconcileRouterGoModels(existing, models, prior, protectedIds) };
   }
@@ -146,8 +143,10 @@ export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discove
     finally { syncInFlight = undefined; }
   }
 
-  async function start(signal) {
-    writableDocument();
+  async function start(displayName, signal) {
+    const previous = profile(writableDocument());
+    const name = displayName?.trim() || routerGo.name;
+    if (!validText(name, 128)) throw new HttpError('RouterGo 显示名称无效');
     if (starting || current?.applying) throw new HttpError('正在处理 RouterGo 授权，请稍后重试', 409);
     starting = true;
     try {
@@ -161,7 +160,8 @@ export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discove
         || !Number.isInteger(expires) || expires < 1 || expires > 1800 || !Number.isInteger(interval) || interval < 1 || interval > 60) {
         throw new HttpError('RouterGo 授权信息无效', 502);
       }
-      const session = { id: randomUUID(), deviceCode, interval, nextPollAt: now() + interval * 1000 };
+      const session = { id: randomUUID(), deviceCode, interval, nextPollAt: now() + interval * 1000, name,
+        hadProfile: !!previous, previousRef: previous?.apiKeyEnv };
       current = session;
       expire(session, expires);
       return { id: session.id, verificationURL: url.href, retryAfter: interval };
@@ -216,6 +216,9 @@ export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discove
       if (!models.length) throw new HttpError('该账号暂无可通过 API 调用的模型，请检查账号权限后重试', 422);
       requireSession(id);
       const doc = writableDocument(), previous = profile(doc);
+      if (!!previous !== session.hadProfile || previous?.apiKeyEnv !== session.previousRef) {
+        throw new HttpError('RouterGo 连接已变更，请重新登录', 409);
+      }
       const oldRef = previous ? previous.apiKeyEnv || manualRef : undefined;
       const previousKey = await resolve(oldRef);
       if (previousKey && previousKey !== apiKey && replace !== true) {
@@ -235,7 +238,7 @@ export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discove
             ...(sameKey ? [] : [set('apiKeyEnv', keyRef)]),
             ...(changed ? [set('models', result.next)] : []),
           ] : [{ op: 'set', path: providerPath, value: {
-            ...accountFields, api: routerGo.protocol, apiKeyEnv: keyRef, models: result.next,
+            ...accountFields, displayName: session.name, api: routerGo.protocol, apiKeyEnv: keyRef, models: result.next,
           } }];
           requireSession(id);
           if (!sameKey) await ctx.credentials.set(keyRef, apiKey);
@@ -264,7 +267,8 @@ export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discove
     const previous = profile(document());
     if (!isRouterGoAccountReference(previous?.apiKeyEnv) || !fixedAddress(previous.baseURL)) return { state: 'disconnected' };
     const [apiKey, token] = await Promise.all([resolve(previous.apiKeyEnv), resolve(tokenRef(previous.apiKeyEnv))]);
-    if (!apiKey || !token) return { state: 'disconnected' };
+    if (!apiKey) return { state: 'disconnected' };
+    if (!token) return { state: 'key-only' };
     const view = await account(token, apiKey, signal);
     if (profile(document())?.apiKeyEnv !== previous.apiKeyEnv) return { state: 'disconnected' };
     return { state: 'connected', ...view };
@@ -273,7 +277,10 @@ export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discove
   async function dispatch(input, signal) {
     switch (input.action) {
       case 'status': return status(signal);
-      case 'start': return start(signal);
+      case 'start': {
+        if (input.displayName !== undefined && typeof input.displayName !== 'string') throw new HttpError('RouterGo 显示名称无效');
+        return start(input.displayName, signal);
+      }
       case 'poll': return poll(input.id, signal);
       case 'save': return save(input.id, input.replace, signal);
       case 'sync': return sync(input.force === true);
@@ -289,12 +296,42 @@ export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discove
 
   return {
     clear,
+    dispatch,
     sync,
+    get pending() { return starting || !!current || !!syncInFlight; },
     dispose() { clear(); lifetime.abort(); },
+  };
+}
+
+export function createRouterGoAccount(ctx, { fetcher = globalThis.fetch, discover = discoverRouterGoModels, now = Date.now, directory } = {}) {
+  const connections = new Map();
+  const modelState = createRouterGoModelState(directory);
+  const capabilitySettings = createModelCapabilitySettings(directory);
+  const connection = id => {
+    if (!connections.has(id)) connections.set(id, createConnectionAccount(ctx, id, { fetcher, discover, now, modelState, capabilitySettings }));
+    return connections.get(id);
+  };
+  const clear = () => { for (const service of connections.values()) service.clear(); };
+  return {
+    clear,
+    async sync() {
+      const doc = ctx.settings.describe().find(row => row.ns === namespace);
+      const profiles = doc?.value?.providers ?? {};
+      for (const [id, service] of connections) {
+        if (!profiles[id] && !service.pending) { service.dispose(); connections.delete(id); }
+      }
+      for (const [id, profile] of Object.entries(profiles)) {
+        if (isRouterGo(id) && isRouterGoAccountReference(profile.apiKeyEnv)) await connection(id).sync().catch(() => {});
+      }
+    },
+    dispose() { for (const service of connections.values()) service.dispose(); connections.clear(); },
     async fetch(request) {
       try {
         assertSameOrigin(request, { allowDesktopOrigin: true });
-        return Response.json(await dispatch(await readJson(request, 2048), request.signal), { headers });
+        const input = await readJson(request, 2048);
+        const id = input.providerId;
+        if (!isRouterGo(id)) throw new HttpError('RouterGo 连接无效');
+        return Response.json(await connection(id).dispatch(input, request.signal), { headers });
       } catch (error) {
         const known = error instanceof HttpError;
         return Response.json({ error: known ? error.message : 'RouterGo 操作失败，请重试', code: known ? error.code : undefined }, {

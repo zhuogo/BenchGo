@@ -15,6 +15,7 @@ const { build } = createRequire(new URL('../package.json', import.meta.url))('es
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const origin = 'http://127.0.0.1:17880';
 const remoteOrigin = 'http://127.0.0.1:17882';
+const workbenchPath = '/s/work/link/workbench/';
 const localName = '本机 · BenchGo 设计与开发工作台（保留完整设备名称）';
 const remoteName = '开发服务器 · BenchGo 项目与长期任务工作台（完整名称）';
 const devices = [{ id: 'local', name: localName, kind: 'local', status: 'online' }, { id: 'cloud', name: remoteName, kind: 'computer', status: 'online' }];
@@ -34,6 +35,9 @@ async function fixtureAssets() {
   const result = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
     import React,{useState} from 'react';import {createRoot} from 'react-dom/client';
     import {SidebarRoot} from './deepseek-harness/packages/client/ui-sidebar/src/client/SidebarRoot.tsx';
+    import {SettingsRoot} from './deepseek-harness/packages/client/ui-settings-general/src/client/SettingsRoot.tsx';
+    import {ClientAccessState} from './deepseek-harness/packages/api/remote-access/src/client/state.ts';
+    import {createWebConnectionRpc} from './deepseek-harness/packages/client/connection/src/client/rpc.ts';
     import {DeviceSwitch} from './plugins/link/client/device-switch.jsx';
     import {UIIcon} from './plugins/base/client/iconsax.jsx';
     import css from './plugins/base/client/style.css';
@@ -44,8 +48,34 @@ async function fixtureAssets() {
     const themeContext={effect:effect=>effect(),on(){}};
     installThemeStyles(themeContext);installIconSprite(themeContext,undefined);
     const params=new URLSearchParams(location.search),embedded=window.parent!==window;
+    const transport=window.__DSH_TRANSPORT__;
     if(embedded)window.__DSH_LINK_WORKBENCH__=true;
+    const rpc=transport&&createWebConnectionRpc(transport.fetch,transport.openStream);
+    const access=new ClientAccessState(embedded?undefined:{type:'baseline',owner:true});
+    const settingsAccess=access.global('settings/describe');
+    if(rpc)void(async()=>{
+      const lifetime=new AbortController();
+      window.addEventListener('pagehide',()=>lifetime.abort(),{once:true});
+      for await(const baseline of rpc.open('/api','remoteAccess/follow',{args:{}},lifetime.signal))access.replace(baseline);
+    })().catch(error=>{if(error.name!=='AbortError')setTimeout(()=>{throw error;});});
     document.body.toggleAttribute('data-ds-dark-theme',params.get('theme')==='dark');
+    function HostSettings({wide}){
+      const allowed=React.useSyncExternalStore(settingsAccess.subscribe,settingsAccess.getSnapshot);
+      const [open,setOpen]=useState(false),[value,setValue]=useState('');
+      const [saved,setSaved]=useState(false);
+      const read=async()=>{const result=await rpc?.call('/api','settings/describe',{args:{}});setValue(result?.value.name||'本机');setSaved(false);};
+      const save=async()=>{await rpc?.call('/api','settings/update',{args:{namespace:'fixture',patch:{name:value}}});setSaved(true);};
+      const openSettings=()=>{setOpen(true);void read();};
+      if(!allowed)return null;
+      return <SettingsRoot wide={wide} reconnect={()=>{}} useConnectionState={select=>select('connected')}
+        useSections={select=>select([{id:'general',label:'通用'}])} useOnboardingSteps={select=>select([])}
+        useSessions={select=>select({phase:'loading',byId:{}})} useDesktopUpdate={select=>select({})}
+        openDesktopUpdate={()=>{}} useStore={select=>select({open})} useShortcuts={()=>undefined}
+        actions={{open:openSettings,openSection:openSettings,close:()=>setOpen(false),select:()=>{}}}
+        t={key=>key==='trigger'?'设置':key}
+        renderSlot={(name,props,options)=>name==='settings.trigger'?<UIIcon name='settings' size={16}/>:name==='settings.close'?'关闭':name==='settings.header'?'设置':options?.fallback}
+        renderFactorySlot={()=> <section><input aria-label='工作台名称' value={value} onChange={event=>setValue(event.target.value)}/><button type='button' onClick={()=>void save()}>保存</button>{saved&&<p role='status'>已保存</p>}</section>}/>;
+    }
     function App(){const [collapsed,setCollapsed]=useState(false),[drawer,setDrawer]=useState(false),[active,setActive]=useState(null);
       window.scenario=(collapsed,drawer)=>{setCollapsed(collapsed);setDrawer(drawer)};
       const panels=[{id:'plugins',label:'工具'},{id:'schedules',label:'自动化任务'}];
@@ -57,7 +87,7 @@ async function fixtureAssets() {
           <section className={'cmd-projects '+(props.wide?'':'cmd-narrow')}><nav className='cmd-sidebar-nav' aria-label='快捷工具栏'>
             <button type='button' aria-label='设备中心'><UIIcon name='link' size={16}/></button><button type='button' className='cmd-new-chat' aria-label='创建新聊天'><UIIcon name='edit' size={16}/></button><button type='button' className='cmd-search-toggle' aria-label='搜索对话'><UIIcon name='search' size={16}/></button><DeviceSwitch/>
           </nav>{props.panelNavigation}{props.wide&&<div className='cmd-sidebar-content'><section className='cmd-section-title'><button type='button' className='cmd-section-toggle'>项目</button></section><div className='cmd-project-name'><button type='button'><UIIcon name='folder' size={16}/>BenchGo</button></div><section className='cmd-section-title'><button type='button' className='cmd-section-toggle'>最近</button></section>{Array.from({length:12},(_,i)=><div className='cmd-session-row' key={i}><button type='button' className='cmd-session'><UIIcon name='chat' size={16}/><span>项目讨论与执行进展 {i+1}</span></button></div>)}</div>}</section>:
-          name==='sidebar.settings'?<button type='button' aria-label='设置'><UIIcon name='settings' size={16}/></button>:null}/></aside><main className={frameCss.centerCol} inert={drawer?'':undefined}><p>BenchGo 工作台</p><h1>把想法，推进成结果。</h1><p>选择设备，继续你的工作。</p><textarea aria-label='尚未发送的消息' defaultValue='保留本机草稿'/><button type='button' aria-label='正文操作'>继续工作</button></main></div></>;
+          name==='sidebar.settings'?<HostSettings wide={props.wide}/>:null}/></aside><main className={frameCss.centerCol} inert={drawer?'':undefined}><p>BenchGo 工作台</p><h1>把想法，推进成结果。</h1><p>选择设备，继续你的工作。</p><textarea aria-label='尚未发送的消息' defaultValue='保留本机草稿'/><button type='button' aria-label='正文操作'>继续工作</button></main></div></>;
     }createRoot(document.getElementById('root')).render(<App/>);
   ` }, bundle: true, write: false, outdir: join(root, 'artifacts/unused-device-switch'), format: 'iife', jsx: 'automatic', target: 'es2022',
     alias: { react: dirname(require.resolve('react/package.json')), 'react-dom': dirname(require.resolve('react-dom/package.json')), ...await officialUiEntries() },
@@ -78,6 +108,27 @@ test('sidebar device selector renders real menus, preserves drafts and remains r
       const page = await context.newPage(), errors = [], requests = [];
       page.setDefaultTimeout(6000); page.on('pageerror', error => errors.push(error.message));
       let mode = 'single', failing = false, holdSelection = false, releaseSelection, holdWorkbench = false, releaseWorkbench, serial = 0;
+      let remoteSetting = '远端工作台';
+      const settingsRequests = [], accessRequests = [];
+      const loopbackProxy = theme === 'light';
+      const accessFrames = [{ type: 'ready' }, { type: 'item', value: { type: 'baseline', owner: true } }, { type: 'end' }];
+      const recordAccess = ({ id, endpoint }, transport) => {
+        assert.equal(endpoint, 'remoteAccess/follow');
+        assert.match(id, /^[0-9a-f]{32}$/);
+        accessRequests.push(transport);
+      };
+      await context.addInitScript(origin => {
+        if (location.origin === origin) Object.defineProperty(Crypto.prototype, 'randomUUID', { value: undefined });
+      }, remoteOrigin);
+      if (loopbackProxy) await context.routeWebSocket('ws://127.0.0.1:17882/s/work/socket', socket => {
+        socket.onMessage(message => {
+          const request = JSON.parse(message);
+          if (request.type !== 'open') return;
+          recordAccess(request.body, 'websocket');
+          assert.equal(request.id, request.body.id);
+          for (const value of accessFrames) socket.send(JSON.stringify({ id: request.id, type: 'data', value }));
+        });
+      });
       await context.route('**/*', async route => {
         const url = new URL(route.request().url());
         if (url.pathname === '/api/commander-devices') {
@@ -85,16 +136,28 @@ test('sidebar device selector renders real menus, preserves drafts and remains r
           if (body.action === 'devices') return route.fulfill({ json: { devices: mode === 'empty' ? [] : mode === 'single' ? [devices[0]] : mode === 'unknown' ? devices.map(device => device.kind === 'local' ? device : { ...device, status: 'unknown' }) : devices } });
           if (body.action === 'select') {
             if (holdSelection) await new Promise(resolve => { releaseSelection = resolve; });
-            return route.fulfill(failing ? { status: 503, json: { error: '目标设备暂时无法连接，请重试' } } : { json: { device: devices[1], url: remoteOrigin + '/s/work/?theme=' + (theme === 'dark' ? 'light' : 'dark') } });
+            return route.fulfill(failing ? { status: 503, json: { error: '目标设备暂时无法连接，请重试' } } : { json: { device: devices[1], url: remoteOrigin + workbenchPath + '?theme=' + (theme === 'dark' ? 'light' : 'dark') } });
           }
           return route.fulfill({ status: 400, json: { error: 'Unexpected device action' } });
         }
         if (url.pathname === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: assets.script });
         if (url.pathname === '/app.css') return route.fulfill({ contentType: 'text/css', body: assets.css });
         if (url.pathname === '/workbench.js') return route.fulfill({ contentType: 'text/javascript', body: assets.bridge });
+        if (url.pathname === workbenchPath + 'remote/open') {
+          recordAccess(route.request().postDataJSON(), 'http');
+          return route.fulfill({ contentType: 'application/x-ndjson', body: accessFrames.map(frame => JSON.stringify(frame) + '\n').join('') });
+        }
+        if (url.pathname === workbenchPath + 'remote/uplink') return route.fulfill({ json: { ok: true } });
+        if (/\/api\/settings\/(describe|update)$/.test(url.pathname)) {
+          const { method, payload, rpcId } = route.request().postDataJSON();
+          settingsRequests.push({ origin: url.origin, path: url.pathname, method });
+          if (method === 'settings/update') remoteSetting = payload.args.patch.name;
+          return route.fulfill({ json: { type: 'server-response', rpcId, result: { ok: true, value: { name: remoteSetting } } } });
+        }
         const embedded = url.origin === remoteOrigin;
-        if (embedded && url.pathname === '/s/work/' && holdWorkbench) await new Promise(resolve => { releaseWorkbench = resolve; });
-        return route.fulfill({ contentType: 'text/html', body: '<!doctype html><html lang="zh-CN"' + (embedded ? '' : ' data-windows-titlebar') + '><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + (embedded ? '<script src="/workbench.js"></script>' : '') + '<link rel="stylesheet" href="/app.css"><style>html{--dsh-windows-titlebar-height:40px}body{margin:0}#root{height:100dvh}main{min-width:0;flex:1;padding:80px 36px}h1{font-size:32px}textarea{display:block;max-width:100%;box-sizing:border-box;width:440px;min-height:110px;margin-top:40px;padding:16px;background:var(--dsw-alias-bg-layer-2);color:inherit;border:1px solid var(--dsw-alias-border-l2);border-radius:14px}main>button{margin-top:16px;color:inherit;background:transparent;border:0;padding:8px}@media(max-width:600px){main{padding:40px 12px}main h1{font-size:24px}}</style></head><body><div id="root"></div><script src="/app.js"></script></body></html>' });
+        if (embedded && url.pathname === workbenchPath && holdWorkbench) await new Promise(resolve => { releaseWorkbench = resolve; });
+        const bridge = embedded ? (loopbackProxy ? '<script>globalThis.__DSH_LINK_LOCAL_PROXY__=true</script>' : '') + '<script src="/workbench.js"></script>' : '';
+        return route.fulfill({ contentType: 'text/html', body: '<!doctype html><html lang="zh-CN"' + (embedded ? '' : ' data-windows-titlebar') + '><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + bridge + '<link rel="stylesheet" href="/app.css"><style>html{--dsh-windows-titlebar-height:40px}body{margin:0}#root{height:100dvh}main{min-width:0;flex:1;padding:80px 36px}h1{font-size:32px}textarea{display:block;max-width:100%;box-sizing:border-box;width:440px;min-height:110px;margin-top:40px;padding:16px;background:var(--dsw-alias-bg-layer-2);color:inherit;border:1px solid var(--dsw-alias-border-l2);border-radius:14px}main>button{margin-top:16px;color:inherit;background:transparent;border:0;padding:8px}@media(max-width:600px){main{padding:40px 12px}main h1{font-size:24px}}</style></head><body><div id="root"></div><script src="/app.js"></script></body></html>' });
       });
       const trigger = page.locator('.dsh-device-switch-trigger'), menu = page.locator('.dsh-device-switch-menu');
       const capture = async label => {
@@ -203,6 +266,20 @@ test('sidebar device selector renders real menus, preserves drafts and remains r
       await page.setViewportSize({ width: 1280, height: 850 }); await page.evaluate(() => window.scenario(false, false));
       failing = true; await trigger.click();
       await menu.getByRole('menuitem').filter({ hasText: remoteName }).click();
+      await page.locator('.dsh-device-switch-trigger[data-connection-error]').waitFor();
+      assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
+      assert.equal(await menu.count(), 0);
+      assert.equal(await page.getByRole('button', { name: '重试', exact: true }).count(), 0);
+      const marker = await trigger.evaluate(element => {
+        const dot = getComputedStyle(element, '::after');
+        return { top: dot.top, right: dot.right, width: dot.width, color: dot.backgroundColor };
+      });
+      assert.equal(marker.top, '2px');
+      assert.equal(marker.right, '2px');
+      assert.equal(marker.width, '7px');
+      assert.notEqual(marker.color, 'rgba(0, 0, 0, 0)');
+      await capture('error-marker');
+      await trigger.click();
       await menu.getByRole('alert').getByText('目标设备暂时无法连接，请重试', { exact: false }).waitFor();
       await capture('error');
       assert.equal(await page.getByRole('textbox', { name: '尚未发送的消息' }).inputValue(), '保留本机草稿');
@@ -235,6 +312,7 @@ test('sidebar device selector renders real menus, preserves drafts and remains r
       const remoteTrigger = remote.locator('.dsh-device-switch-trigger');
       await remoteTrigger.waitFor();
       assert.equal(await remoteTrigger.getAttribute('aria-label'), '当前工作台：' + remoteName);
+      assert.equal(await remoteTrigger.getAttribute('data-connection-error'), null);
       const captionToggle = page.locator('[data-sidebar-toggle]');
       const uniqueCaptionToggle = async () => {
         assert.equal(await captionToggle.count(), 1);
@@ -249,6 +327,28 @@ test('sidebar device selector renders real menus, preserves drafts and remains r
       await capture('remote');
       const remoteFrame = page.frames().find(frame => frame.url().startsWith(remoteOrigin));
       assert(remoteFrame);
+      assert.equal(await remoteFrame.evaluate(() => typeof crypto.randomUUID), 'undefined');
+      const settings = remote.getByRole('button', { name: '设置', exact: true });
+      const settingsName = remote.getByRole('textbox', { name: '工作台名称' });
+      await settings.click();
+      await remoteFrame.waitForFunction(() => document.querySelector('input[aria-label="工作台名称"]')?.value === '远端工作台');
+      await settingsName.fill('服务器偏好');
+      await remote.getByRole('button', { name: '保存', exact: true }).click();
+      await remote.getByRole('status').filter({ hasText: '已保存' }).waitFor();
+      await remote.getByRole('button', { name: '关闭', exact: true }).click();
+      await settings.click();
+      await remoteFrame.waitForFunction(() => document.querySelector('input[aria-label="工作台名称"]')?.value === '服务器偏好');
+      await remote.getByRole('button', { name: '关闭', exact: true }).click();
+      assert.deepEqual(settingsRequests, ['describe', 'update', 'describe'].map(action => ({
+        origin: remoteOrigin, path: workbenchPath + 'api/settings/' + action, method: 'settings/' + action,
+      })));
+      assert.deepEqual(accessRequests, [loopbackProxy ? 'websocket' : 'http']);
+      await remoteTrigger.click();
+      const remoteMenu = remote.locator('.dsh-device-switch-menu');
+      await remoteMenu.waitFor();
+      assert.doesNotMatch(await remoteMenu.innerText(), /设为默认工作台|默认启动/);
+      await remoteTrigger.click();
+      await page.waitForFunction(() => localStorage.getItem('benchgo:default-workbench') === 'cloud');
       assert.equal(new URL(remoteFrame.url()).searchParams.get('theme'), theme === 'dark' ? 'light' : 'dark');
       const expectTheme = async value => {
         await remote.locator('html[data-dsh-workbench-theme=' + value + ']').waitFor({ state: 'attached' });
@@ -311,6 +411,19 @@ test('sidebar device selector renders real menus, preserves drafts and remains r
       assert.equal(await menu.evaluate(element => getComputedStyle(element).transitionDuration), '0s');
       await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
       assert.deepEqual(errors, []);
+      await trigger.click();
+      await menu.getByRole('menuitem').filter({ hasText: remoteName }).click();
+      await page.waitForFunction(() => localStorage.getItem('benchgo:default-workbench') === 'cloud');
+      await page.reload();
+      await remoteTrigger.waitFor();
+      assert.equal(await remoteTrigger.getAttribute('aria-label'), '当前工作台：' + remoteName);
+      await remoteTrigger.click();
+      await remote.locator('.dsh-device-switch-menu').getByRole('menuitem').filter({ hasText: localName }).click();
+      await page.waitForFunction(() => document.querySelector('.dsh-device-switch-stage')?.hidden === true);
+      assert.equal(await page.evaluate(() => localStorage.getItem('benchgo:default-workbench')), null);
+      await page.reload();
+      await trigger.waitFor();
+      assert.equal(await trigger.getAttribute('aria-label'), '当前工作台：' + localName);
       const standalone = await context.newPage();
       await standalone.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -357,10 +470,17 @@ test('legacy workbench handshake times out with a fresh-entry retry and device-c
       await page.evaluate(() => document.dispatchEvent(new CustomEvent('benchgo:device-select', { detail: { deviceId: 'cloud' } })));
       await page.locator('.dsh-device-switch-stage iframe').waitFor();
       await page.clock.runFor(15_100);
-      await page.getByRole('alert').filter({ hasText: '设备工作台未响应' }).waitFor();
+      const trigger = page.locator('.dsh-device-switch-trigger[data-connection-error]');
+      await trigger.waitFor();
+      assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.getByRole('button', { name: '重试', exact: true }).count(), 0);
+      assert.equal(await page.getByRole('textbox', { name: '尚未发送的消息' }).inputValue(), '保留本机草稿');
       if (process.env.BENCHGO_DEVICE_SCREENSHOTS) await page.screenshot({ path: join(process.env.BENCHGO_DEVICE_SCREENSHOTS, theme + '-handshake-timeout.png') });
       compatible = true;
-      await page.getByRole('button', { name: '重试', exact: true }).click();
+      await trigger.click();
+      const menu = page.locator('.dsh-device-switch-menu');
+      await menu.getByRole('alert').filter({ hasText: '设备工作台未响应' }).waitFor();
+      await menu.getByRole('menuitem').filter({ hasText: remoteName }).click();
       const remote = page.frameLocator('.dsh-device-switch-stage iframe');
       await remote.locator('.dsh-device-switch-trigger').waitFor();
       await page.locator('.dsh-device-switch-loading').waitFor({ state: 'detached' });

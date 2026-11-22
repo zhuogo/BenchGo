@@ -129,13 +129,13 @@ export function Artifacts({ api, compact = false, onOpenFile }) {
   return <section ref={root} className={`ba-group ba-artifacts${compact ? ' ba-artifacts-compact' : ''}`} aria-busy={!!opening || undefined}>
     <style>{css}</style>
     <div hidden={!!selected}>
-      <header className="ba-group-head ba-artifacts-head">
-        <div>{!compact && <h1>产物与工作区文件</h1>}<p>{compact ? '当前工作台的助手产物库，不限于当前聊天。' : '预览和管理助手交付的文件。'}</p></div>
-        <div className="ba-artifact-header-actions"><Button variant="ghost" disabled={loading || busy} onClick={() => void load(category)}><UIIcon name="refresh" size={16} />{loading && page.artifacts.length ? '刷新中…' : error ? '重试' : '刷新'}</Button>{!compact && <div className="ba-artifact-view" role="group" aria-label="产物视图">
+      {!compact && <header className="ba-group-head ba-artifacts-head">
+        <div><h1>产物与工作区文件</h1><p>预览和管理助手交付的文件。</p></div>
+        <div className="ba-artifact-header-actions"><Button variant="ghost" disabled={loading || busy} onClick={() => void load(category)}><UIIcon name="refresh" size={16} />{loading && page.artifacts.length ? '刷新中…' : error ? '重试' : '刷新'}</Button><div className="ba-artifact-view" role="group" aria-label="产物视图">
           <Button variant="ghost" type="button" aria-pressed={view === 'list'} onClick={() => changeView('list')}>列表</Button>
           <Button variant="ghost" type="button" aria-pressed={view === 'cards'} onClick={() => changeView('cards')}>卡片</Button>
-        </div>}</div>
-      </header>
+        </div></div>
+      </header>}
       <div className="ba-artifact-toolbar">
         <SegmentedControl options={categories.map(([value, optionLabel, icon]) => ({ value, label: optionLabel, icon: ['document', 'video'].includes(value) ? <ResourceIcon name={icon} size={16} /> : <UIIcon name={icon} size={16} /> }))} value={category} onChange={setCategory} disabled={busy} label="产物分类" panelId={`${id}-files`} />
         {(page.artifacts.length > 0 || query) && <label className="ba-artifact-search"><UIIcon name="search" size={16} /><input type="search" aria-label="筛选已加载文件" placeholder="查找文件" value={query} onChange={event => { setQuery(event.target.value); setChecked([]); }} /></label>}
@@ -145,7 +145,14 @@ export function Artifacts({ api, compact = false, onOpenFile }) {
         {notice && <p className="ba-artifact-status" role="status">{notice}</p>}
         {!compact && !!visibleFiles.length && <div className="ba-artifact-batch"><Button variant="ghost" disabled={busy || loading} onClick={() => setChecked(checked.length === visibleFiles.length ? [] : visibleFiles.map(file => file.name))}>{checked.length === visibleFiles.length && checked.length ? '取消全选' : query ? '全选当前结果' : '全选已加载文件'}</Button>{!!checked.length && <><span>已选 {checked.length} 个</span><Button variant="destructive" disabled={busy || loading} onClick={() => { setOperationError(''); setOperation({ type: 'batchDelete', files: page.artifacts.filter(file => checked.includes(file.name)) }); }}>删除所选</Button></>}</div>}
         {openError && <div className="ba-artifact-error" role="alert"><div><strong>文件暂时无法打开</strong><span>{openError.message}</span></div><Button variant="ghost" type="button" onClick={() => void open(openError.file)}>重试打开</Button></div>}
-        {error && <div className="ba-artifact-error" role="alert"><UIIcon name="box" size={20} /><div><strong>文件读取或操作未完成</strong><span>{error}{page.artifacts.length > 0 ? '。当前保留上次读取的文件，可在页眉重试。' : '。请在页眉重试。'}</span></div></div>}
+        {error && <div className="ba-artifact-error" role="alert">
+          <UIIcon name="box" size={20} />
+          <div><strong>文件读取或操作未完成</strong><span>{error}{
+            compact ? (page.artifacts.length ? '。当前保留上次读取的文件。' : '')
+              : (page.artifacts.length ? '。当前保留上次读取的文件，可在页眉重试。' : '。请在页眉重试。')
+          }</span></div>
+          {compact && <Button variant="ghost" type="button" disabled={loading || busy} onClick={() => void load(category)}>重试</Button>}
+        </div>}
         {loading && !page.artifacts.length && <Loading className="ba-artifact-loading" label="正在整理工作区文件…" />}
         {!loading && !error && !query && !page.artifacts.length && <div className="ba-artifact-empty"><span className="ba-artifact-empty-icon" aria-hidden="true"><UIIcon name="box" size={26} /></span><strong>暂无{label}产物</strong><p>让助手创建{label}并保存到工作区，完成后即可在这里查看与下载。</p></div>}
         {query && !visibleFiles.length && !loading && <div className="ba-artifact-empty"><span className="ba-artifact-empty-icon"><UIIcon name="search" size={26} /></span><strong>没有匹配的文件</strong><p>{page.nextCursor ? '当前仅筛选已加载文件，可继续加载或更换名称。' : '试试其他名称，或清空搜索查看全部文件。'}</p></div>}

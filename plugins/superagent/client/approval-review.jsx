@@ -64,8 +64,8 @@ export function ApprovalDetail({ entry, api, current, SessionProvider, renderSlo
   </article>;
 }
 
-function ConnectionErrors({ items }) {
-  return <section className="ba-review-connection-errors" aria-label="会话连接详情"><header><p>以下会话尚未连接，无法确认其中的待审核操作。</p></header><ul>{items.map(item => <li key={item.origin.sessionId}>
+function ConnectionErrors({ items, onRetry }) {
+  return <section className="ba-review-connection-errors" aria-label="会话连接详情"><header><p>以下会话尚未连接，无法确认其中的待审核操作。</p>{onRetry && <Button variant="outline" type="button" onClick={onRetry}>重试</Button>}</header><ul>{items.map(item => <li key={item.origin.sessionId}>
     <strong>{reviewDisplayText(item.origin.sourceTitle || (item.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊'))}{item.origin.title ? ` · ${reviewDisplayText(item.origin.title)}` : ''}</strong>
     <span>{({ ensure: '准备对话', retain: '保留会话', open: '打开会话' })[item.stage]}（{item.stage}）</span><pre>{item.error}</pre>
   </li>)}</ul></section>;
@@ -126,7 +126,7 @@ export function useApprovalIndex({ ctx, api, enabled = true, ownerThreadId }) {
           if (origin.kind === 'router') {
             const ensured = await api('ensure', { threadId: origin.ownerThreadId }, item.controller.signal);
             item.controller.signal.throwIfAborted();
-            if (ensured.sessionId !== id) throw new Error('对话已切换，请刷新审核列表');
+            if (ensured.sessionId !== id) throw new Error('对话已切换，请重试连接');
           }
           item.stage = 'retain';
           const reference = await retainAssistantSession(ctx.sessions, id, item.controller.signal);
@@ -182,18 +182,18 @@ export function ApprovalReview({ ctx, api, SessionProvider, renderSlot, compact 
   return <section className={`ba-approval-review${compact ? ' is-compact' : ''}`} aria-label="审核" data-sync-state={lastFailure ? 'reconnecting' : 'ready'} data-sync-error={lastFailure || undefined} hidden={!active} onKeyDown={event => {
     if (selectedKey && event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); setSelectedKey(null); }
   }}><style>{css}</style>
-    <header className="ba-review-heading"><div ref={back}>{selectedKey && <TaskIconButton icon="chevronLeft" label="返回审核列表" onClick={() => setSelectedKey(null)} />}</div><TaskIconButton icon="refresh" label="刷新审核" onClick={retry} /></header>
+    {selectedKey && <header className="ba-review-heading" ref={back}><TaskIconButton icon="chevronLeft" label="返回审核列表" onClick={() => setSelectedKey(null)} /></header>}
     <div hidden={!!selectedKey} className="ba-review-overview">
-    {!selectedKey && !error && connectionErrors.length > 0 && <ConnectionErrors items={connectionErrors} />}
-    {error ? !selectedKey && <ResourceState kind="error" title="审核列表暂时无法读取" description={error} />
+    {!selectedKey && !error && connectionErrors.length > 0 && <ConnectionErrors items={connectionErrors} onRetry={entries.length ? retry : undefined} />}
+    {error ? !selectedKey && <ResourceState kind="error" title="审核列表暂时无法读取" description={error} onAction={retry} />
       : origins === null || (!entries.length && connecting) ? <ResourceState kind="loading" title="正在同步待审核操作" description="正在连接真实会话，读取仍可答复的授权请求。" />
-      : !entries.length && connectionErrors.length ? <ResourceState kind="error" title="部分会话暂未连接" description="暂时无法确认这些会话是否有待审核操作。" />
+      : !entries.length && connectionErrors.length ? <ResourceState kind="error" title="部分会话暂未连接" description="暂时无法确认这些会话是否有待审核操作。" onAction={retry} />
       : !entries.length ? <ResourceState icon="check" title="没有待审核的操作" description="需要你授权时，Router 会在原聊天里提醒；你可以到这里查看对象与内容。" />
       : <nav className="ba-review-list" aria-label="待审核操作">{entries.map(entry => <button type="button" className="ba-review-row" key={entry.key} onClick={event => openDetail(entry.key, event)}><span className="ba-review-row-icon"><ResourceIcon name="key" size={18} /></span><span className="ba-review-row-copy"><strong>{reviewDisplayText(entry.origin.title || '待授权操作')}</strong><span>{reviewDisplayText(entry.origin.sourceTitle || (entry.origin.ownerThreadId === 'main' ? '主聊天' : '旁聊'))} · {entry.origin.kind === 'worker' ? '任务操作' : '对话操作'}</span><small>等待你的决定</small></span><span className="ba-review-row-arrow"><UIIcon name="chevronLeft" size={16} /></span></button>)}</nav>}
     </div>
-    {selectedKey && (error ? <ResourceState kind="error" title="审核列表暂时无法读取" description={error} />
+    {selectedKey && (error ? <ResourceState kind="error" title="审核列表暂时无法读取" description={error} onAction={retry} />
       : selected ? <ApprovalDetail key={selected.key} entry={selected} api={api} current={current} SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenReminder={onOpenReminder} />
-      : selectedConnectionError ? <ResourceState kind="error" title="此审核所属会话暂未连接" description={selectedConnectionError.error} />
+      : selectedConnectionError ? <ResourceState kind="error" title="此审核所属会话暂未连接" description={selectedConnectionError.error} onAction={retry} />
       : origins === null || connecting ? <ResourceState kind="loading" title="正在核对审核状态" />
       : <ResourceState icon="check" title="此审核已处理或失效" description="原请求已不可答复。返回列表查看仍需你决定的操作。" />)}
   </section>;

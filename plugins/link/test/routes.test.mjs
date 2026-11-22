@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:https';
+import { X509Certificate } from 'node:crypto';
 import { openDeviceRegistry, normalizeRoutes } from '../src/devices/registry.mjs';
 import { orderRoutes, selectRoute } from '../src/devices/routes.mjs';
 import { probeRemote, remoteJson } from '../src/devices/remote.mjs';
@@ -261,4 +262,33 @@ test('TLS-only selection verifies pins, rejects an untrusted relay and never sen
   assert.equal(requests, 0);
   await assert.rejects(remoteJson(selected, '/link/api/rpc', { action: 'write' }), { statusCode: 403 });
   assert.equal(requests, 1, 'denied business requests are never replayed');
+});
+
+test('new Link certificates tolerate small clock skew and still enforce their validity period', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-route-clock-'));
+  const generatedAt = Date.now();
+  const identity = await loadIdentity(directory);
+  const certificate = new X509Certificate(identity.cert);
+  let requests = 0;
+  const server = createServer({ key: identity.key, cert: identity.cert }, (_req, res) => {
+    requests++;
+    res.end('{}');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const target = { url: 'https://127.0.0.1:' + server.address().port, pin: identity.pin };
+  const clock = t.mock.method(Date, 'now', () => generatedAt - 30_000);
+  await probeRemote(target);
+  await remoteJson(target, '/link/api/rpc', {}, { token: 'fixture-token' });
+  assert.equal(requests, 1);
+  clock.mock.mockImplementation(() => Date.parse(certificate.validFrom) - 1);
+  await assert.rejects(remoteJson(target, '/link/api/rpc', {}, { token: 'fixture-token' }),
+    { code: 'ERR_LINK_CERTIFICATE', message: /尚未生效.*系统时间/ });
+  clock.mock.mockImplementation(() => Date.parse(certificate.validTo));
+  await assert.rejects(probeRemote(target), { code: 'ERR_LINK_CERTIFICATE', message: /已过期/ });
+  assert.equal(requests, 1);
 });

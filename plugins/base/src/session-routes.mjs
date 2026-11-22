@@ -41,7 +41,7 @@ export function createSessionRoutes({ directory, providers, runtimeSettings } = 
       if (protocol !== undefined && modelProtocol(protocol) !== route.protocol) fail('所选协议与供应商配置不一致。');
       if (value.managedRouterGo) {
         let rows;
-        try { rows = await providers.routerGoProtocolModels(); } catch { fail('无法读取 RouterGo 账号支持的模型，请重试。'); }
+        try { rows = await providers.routerGoProtocolModels(providerId); } catch { fail('无法读取 RouterGo 账号支持的模型，请重试。'); }
         const reason = routerGoModelProtocolReason(tool, rows.get(model));
         if (reason) fail(reason);
       }

@@ -8,6 +8,7 @@ import { createMediaGeneration } from './generation.mjs';
 import { createMediaGenerationSettingsAdapter } from './generation-settings-adapter.mjs';
 import { mountMediaGenerationWeb } from './generation-web.mjs';
 import { createNativeMediaTools, mediaToolDefinitions } from './generation-tools.mjs';
+import { createGroupMedia } from './group-settings.mjs';
 import { join } from 'node:path';
 
 export const name = 'voice';
@@ -24,6 +25,9 @@ export async function apply(ctx, config = {}) {
   });
   ctx.effect(() => () => { shutdown.abort(); return generation.dispose(); });
   ctx.provide('mediaGeneration', { ...generation, ...createNativeMediaTools(generation) });
+  ctx.provide('benchgoGroupMedia', createGroupMedia({ voice: store, generation, credentials: ctx.credentials,
+    providerBindings: groupId => ctx.get?.('benchgoGroupProviders')?.bindings(groupId) ?? new Map(),
+  }));
   mountMediaGenerationWeb(ctx, generation);
   ctx.inject(['tools'], child => {
     for (const { when, ...definition } of mediaToolDefinitions({ generation, attachments: () => child.get('attachments') })) {

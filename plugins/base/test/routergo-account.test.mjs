@@ -70,7 +70,7 @@ function fixture({ manual = false, base = baseURL, directory } = {}) {
 
 async function call(service, action, extra = {}, origin = 'http://localhost:4000') {
   const response = await service.fetch(new Request('http://localhost:4000/api/benchgo/routergo', {
-    method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ action, ...extra }),
+    method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ action, providerId: 'routergo', ...extra }),
   }));
   const body = await response.json();
   for (const secret of [device, key, token, 'old-manual-secret']) assert(!JSON.stringify(body).includes(secret));
@@ -118,7 +118,7 @@ test('manual credential needs explicit replacement, retry preserves existing con
   f.fail();
   assert.equal((await call(f.service, 'save', { id, replace: true })).body.imported, 1);
   assert.equal(f.doc.value.providers.routergo.api, 'openai-completions');
-  assert.equal(f.doc.value.providers.routergo.displayName, 'RouterGo');
+  assert.equal(f.doc.value.providers.routergo.displayName, '手填名称');
   assert.deepEqual(f.doc.value.providers.routergo.models[0], f.existing);
   assert.equal(f.refs.get('ROUTERGO_API_KEY'), 'old-manual-secret');
 });
@@ -133,10 +133,36 @@ test('existing account sync updates the managed connection and preserves the exa
   f.catalog([]);
   assert.deepEqual((await call(f.service, 'sync')).body, { state: 'synced', added: 0, updated: 0, removed: 0 });
   assert.deepEqual(profile, {
-    displayName: 'RouterGo', api: 'openai-completions', baseURL, apiKeyEnv: ref, models: [f.existing],
+    displayName: '手填名称', api: 'openai-completions', baseURL, apiKeyEnv: ref, models: [f.existing],
   });
   assert.equal(f.refs.get(ref), key);
   assert.equal(f.refs.get('ROUTERGO_API_KEY'), 'old-manual-secret');
+});
+
+test('two independently named connections keep separate authorization, credentials and model state', async t => {
+  const f = fixture({ manual: true });
+  t.after(f.service.dispose);
+  const work = 'routergo-' + 'a'.repeat(32), personal = 'routergo-' + 'b'.repeat(32);
+  const [{ body: first }, { body: second }] = await Promise.all([
+    call(f.service, 'start', { providerId: work, displayName: '工作账号' }),
+    call(f.service, 'start', { providerId: personal, displayName: '个人账号' }),
+  ]);
+  f.advance(2); f.mode(null);
+  assert.equal((await call(f.service, 'poll', { providerId: work, id: second.id })).status, 410);
+  const workRequest = { providerId: work, id: first.id }, personalRequest = { providerId: personal, id: second.id };
+  assert.equal((await call(f.service, 'poll', workRequest)).body.requireSwitch, false);
+  assert.equal((await call(f.service, 'poll', personalRequest)).body.requireSwitch, false);
+  assert.equal((await call(f.service, 'save', workRequest)).status, 200);
+  f.catalog([{ id: 'Independent/Model' }]);
+  assert.equal((await call(f.service, 'save', personalRequest)).status, 200);
+  const rows = f.doc.value.providers;
+  assert.equal(rows[work].displayName, '工作账号');
+  assert.equal(rows[personal].displayName, '个人账号');
+  assert.notEqual(rows[work].apiKeyEnv, rows[personal].apiKeyEnv);
+  assert.deepEqual(rows[work].models.map(row => row.id), ['Opaque/Model:A', 'Opaque/Model:a']);
+  assert.deepEqual(rows[personal].models.map(row => row.id), ['Independent/Model']);
+  assert.equal(rows.routergo.apiKeyEnv, 'ROUTERGO_API_KEY');
+  assert.deepEqual((await call(f.service, 'status', { providerId: work })).body.account, identity);
 });
 
 test('custom endpoint and foreign origins are rejected before outbound requests, cancel and timeout invalidate the code', async t => {

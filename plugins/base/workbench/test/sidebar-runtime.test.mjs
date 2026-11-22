@@ -58,7 +58,10 @@ test('deployed sidebar runs without its npm source graph and serves real lazy as
       provide(name, service) { this[name] = service; },
       effect(callback) { const dispose = callback(); if (typeof dispose === 'function') disposers.push(dispose); return dispose; },
       on() { return () => {}; }, get(name) { return this[name]; },
-      inject(services, callback) { const result = callback(this); if (result?.then) pending.push(result); },
+      inject(services, callback) {
+        if (!services.every(name => this.get(name))) return;
+        const result = callback(this); if (result?.then) pending.push(result);
+      },
     };
     const workbench = await mountWorkbench(ctx, {
       directory: join(temporary, 'settings'), loadSidebar: async () => sidebar,

@@ -18,7 +18,7 @@ export const text = (value, name, max = 200) => {
 };
 
 /** Device credentials are persisted as hashes. Pairing secrets exist for five minutes only. */
-export async function openStore(directory) {
+export async function openStore(directory, { groupPrincipal = () => undefined } = {}) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const file = join(directory, 'devices.json');
   let saved = {};
@@ -32,14 +32,15 @@ export async function openStore(directory) {
   const validSession = value => value && typeof value.digest === 'string' && /^[a-f0-9]{64}$/.test(value.digest)
     && typeof value.tokenHash === 'string' && /^[a-f0-9]{64}$/.test(value.tokenHash)
     && Number.isFinite(value.expires) && value.expires > Date.now()
-    && state.devices.some(device => device.id === value.id && device.tokenHash === value.tokenHash);
+    && (state.devices.some(device => device.id === value.id && device.tokenHash === value.tokenHash)
+      || groupPrincipal(value.id)?.tokenHash === value.tokenHash);
   const pruneSessions = sessions => {
     const counts = new Map();
     return sessions.filter(validSession).reverse().filter(session => {
       const count = counts.get(session.id) || 0; counts.set(session.id, count + 1); return count < 8;
     }).reverse();
   };
-  state.workbenchSessions = pruneSessions(Array.isArray(saved.workbenchSessions) ? saved.workbenchSessions : []);
+  state.workbenchSessions = Array.isArray(saved.workbenchSessions) ? saved.workbenchSessions : [];
   const pairings = new Map(), pending = new Map(), probes = new Map(), returnProofs = new Map();
   let writes = Promise.resolve();
   let sessionChanges = Promise.resolve();
@@ -80,6 +81,11 @@ export async function openStore(directory) {
   if (retiredGrants) await persist();
   return {
     state, persist, flush: async () => { await sessionChanges; await writes; },
+    principal(id) { return state.devices.find(device => device.id === id) ?? groupPrincipal(id); },
+    groupInvitation(id, inviter) {
+      prune();
+      return [...pending.values()].some(row => row.status === 'approved' && row.deviceId === id && row.groupInvitation && row.groupInvitation === inviter);
+    },
     workbenchSession(digest) { return state.workbenchSessions.find(session => session.digest === digest && validSession(session)); },
     saveWorkbenchSession(digest, session) {
       return changeSessions(async () => {
@@ -100,7 +106,7 @@ export async function openStore(directory) {
     pending(code) {
       prune();
       const pairingHash = code === undefined ? undefined : hash(text(code, '配对码', 128));
-      return [...pending.values()].filter(p => p.status === 'pending' && (pairingHash === undefined || p.pairingHash === pairingHash)).map(({ id, name, createdAt, expiresAt, returnOffer }) => ({ id, name, createdAt, expiresAt, reciprocal: Boolean(returnOffer), capabilities: [...PAIRED_DEVICE_CAPABILITIES] }));
+      return [...pending.values()].filter(p => p.status === 'pending' && (pairingHash === undefined || p.pairingHash === pairingHash)).map(({ id, name, createdAt, expiresAt, returnOffer, groupInvitation }) => ({ id, name, createdAt, expiresAt, reciprocal: Boolean(returnOffer), ...(groupInvitation ? { deviceGroup: true } : {}), capabilities: [...PAIRED_DEVICE_CAPABILITIES] }));
     },
     beginProbe() {
       prune();
@@ -129,13 +135,13 @@ export async function openStore(directory) {
       const code = secret(), expiresAt = Date.now() + 300_000;
       pairings.set(hash(code), { expiresAt, registerReturn }); return { code, expiresAt };
     },
-    request(code, name, deviceType = 'unknown', returnOffer) {
+    request(code, name, deviceType = 'unknown', returnOffer, groupInvitation) {
       prune(); const key = hash(text(code, '配对码', 128)); const value = pairings.get(key);
       if (!value) throw new Error('配对码已使用或过期');
       pairings.delete(key);
       const pollToken = secret(), id = randomUUID();
-      pending.set(id, { id, name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: returnOffer ? 'computer' : ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pairingHash: key, pollHash: hash(pollToken), status: 'pending', returnOffer, registerReturn: value.registerReturn });
-      return { requestId: id, pollToken, expiresAt: value.expiresAt, ...(returnOffer ? { reciprocal: true } : {}) };
+      pending.set(id, { id, name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: returnOffer ? 'computer' : ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pairingHash: key, pollHash: hash(pollToken), status: 'pending', returnOffer, groupInvitation, registerReturn: value.registerReturn });
+      return { requestId: id, pollToken, expiresAt: value.expiresAt, ...(returnOffer ? { reciprocal: true } : {}), ...(groupInvitation ? { deviceGroup: true } : {}) };
     },
     poll(id, pollToken) {
       const p = pairedRequest(id, pollToken);
@@ -146,7 +152,10 @@ export async function openStore(directory) {
       if (!p || p.status !== 'pending') throw new Error('配对请求已失效');
       if (!allow) { p.status = 'rejected'; return; }
       p.status = 'approving';
-      try { Object.assign(p, await issueDevice({ name: p.name, deviceType: p.deviceType, pairingReturnExpiresAt: p.returnOffer ? p.expiresAt : undefined })); }
+      try {
+        if (p.groupInvitation) Object.assign(p, { token: secret(), deviceId: randomUUID() });
+        else Object.assign(p, await issueDevice({ name: p.name, deviceType: p.deviceType, pairingReturnExpiresAt: p.returnOffer ? p.expiresAt : undefined }));
+      }
       catch (error) { p.status = 'pending'; throw error; }
       p.status = 'approved';
     },
@@ -183,6 +192,12 @@ export async function openStore(directory) {
       if (typeof token !== 'string' || token.length > 256) return;
       const d = state.devices.find(d => sameSecret(token, d.tokenHash));
       if (d) { d.lastSeenAt = Date.now(); return { ...d, capabilities: [...PAIRED_DEVICE_CAPABILITIES] }; }
+    },
+    authenticateInvitation(token) {
+      if (typeof token !== 'string' || token.length !== 43) return;
+      prune();
+      const p = [...pending.values()].find(row => row.status === 'approved' && row.groupInvitation && row.token === token);
+      if (p) return { id: p.deviceId, groupInvitation: p.groupInvitation };
     },
     async renameDevice(id, name) {
       const device = state.devices.find(device => device.id === id);

@@ -5,11 +5,13 @@ import { mountModelRetryDefaults } from './model-retry-defaults.mjs';
 import { mountTooling } from './tooling.mjs';
 import { mountUsage } from './usage.mjs';
 import { mountUpdates } from './updates.mjs';
+import { mountFeedbackRoute } from './feedback.mjs';
 import { mountWeb } from './web.mjs';
 import { assertSameOrigin } from '../shared/http.mjs';
 import { mountPreviewAssets } from './preview-assets.mjs';
 import { mountVault } from './vault.mjs';
 import { mountRouterGoAccount } from './routergo-account.mjs';
+import { createGroupProviders } from './group-providers.mjs';
 import { mountSkills } from './skills.mjs';
 import { mountEfficiency } from '../lib/modules/efficiency/src/plugin.mjs';
 import { mountInteractivePrompt } from '../lib/modules/interactive/src/prompt.mjs';
@@ -94,6 +96,7 @@ export async function apply(ctx, config = {}) {
     await mountWatchdog(child, { directory, config: config.watchdog });
   });
   mountInteractivePrompt(ctx);
+  ctx.inject(['connection'], mountFeedbackRoute);
   ctx.inject(['connection', 'webServer'], async child => { await mountWorkbench(child, { directory }); });
   ctx.inject(['connection'], async child => { await mountEfficiency(child, { directory }); });
   ctx.inject(['connection'], child => {
@@ -131,6 +134,7 @@ export async function apply(ctx, config = {}) {
   });
   ctx.inject(['connection', 'settings', 'credentials', 'llm'], async child => {
     const providers = createModelProviders(child, { directory });
+    child.provide('benchgoGroupProviders', createGroupProviders(child));
     mountRouterGoAccount(child, { directory });
     const tooling = await mountTooling(child, undefined, providers, { directory });
     child.provide('benchgoTooling', tooling);

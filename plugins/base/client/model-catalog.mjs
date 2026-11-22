@@ -49,9 +49,12 @@ export const pickerCatalog = catalog('api/commander/tooling', 'pickerCatalog');
 export const assistantModelCatalog = catalog('api/commander/assistant', 'catalog');
 export function invalidateModelCatalogs() { pickerCatalog.invalidate(); assistantModelCatalog.invalidate(); }
 
-/** Mirror the official directory's input lifecycle without replacing its selection authority. */
+/** Refresh route metadata when its inputs change. The session default is not a catalog input. */
 export function mountModelCatalogs(ctx) {
   ctx.effect(() => { invalidateModelCatalogs(); return invalidateModelCatalogs; });
   ctx.on('connection/reset', invalidateModelCatalogs);
-  for (const event of ['llm/adapters-updated', 'llm/models-updated', 'settings/document-updated', 'credentials/record-updated', 'credentials/reference-updated']) ctx.remote.$on(event, invalidateModelCatalogs);
+  for (const event of ['llm/adapters-updated', 'llm/models-updated', 'credentials/record-updated', 'credentials/reference-updated']) ctx.remote.$on(event, invalidateModelCatalogs);
+  ctx.remote.$on('settings/document-updated', namespace => {
+    if (namespace !== 'agent-default-model') invalidateModelCatalogs();
+  });
 }

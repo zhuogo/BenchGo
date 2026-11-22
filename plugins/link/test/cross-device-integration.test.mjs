@@ -3,33 +3,61 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
+import { Agent, createServer as createHttpsServer } from 'node:https';
+import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { mountLink } from '../src/index.mjs';
 import { createDeviceProxy } from '../src/devices/proxy.mjs';
+import { openDeviceGroup } from '../src/devices/group.mjs';
+import { remoteJson } from '../src/devices/remote.mjs';
 import { connectionAddresses, listen, validateConfig } from '../src/transport/server.mjs';
 import { openStore } from '../src/pairing/store.mjs';
 import { loadIdentity } from '../src/transport/tls.mjs';
+import { createRelayHost } from '../src/transport/relay-host.mjs';
+import { createRelayServer } from '../src/transport/relay-server.mjs';
 import { mountWeb } from '../../base/src/web.mjs';
+import { createGroupProviders } from '../../base/src/group-providers.mjs';
+import { createModelProviders } from '../../base/src/model-providers.mjs';
+import { VoiceConfig } from '../../media/src/config.mjs';
+import { createMediaGeneration } from '../../media/src/generation.mjs';
+import { createGroupMedia } from '../../media/src/group-settings.mjs';
+import { mountIntegrationApi } from '../../superagent/src/integration-api.mjs';
 
-async function host(t, name, projects, assistant, stored = {}) {
+async function freePort() {
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const { port } = reservation.address();
+  await new Promise(resolve => reservation.close(resolve));
+  return port;
+}
+
+async function host(t, name, projects, assistant, stored = {}, serviceContext = {}) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-cross-device-')), directory = join(root, 'link');
   await mkdir(directory);
   await writeFile(join(directory, 'devices.json'), JSON.stringify({ name, host: '127.0.0.1', port: 0, ...stored }));
   const routes = [];
   const ctx = {
-    get: key => key === 'assistant' ? assistant : undefined,
+    ...serviceContext,
+    get: key => key === 'assistant' ? assistant : serviceContext.get?.(key),
     workspaceRegistry: { list: () => projects },
     connection: { fetch: { register: value => { routes.push(value); return () => {}; } } },
     effect: fn => fn(),
   };
-  const link = await mountLink(ctx, { directory, env: {}, testRelayConnection: async () => ({ ok: true }) });
+  const start = () => mountLink(ctx, { directory, env: {}, testRelayConnection: async () => ({ ok: true, multipleHosts: true }),
+    ...serviceContext.linkConfig });
+  let link = await start();
   t.after(async () => { await link.close(); await rm(root, { recursive: true, force: true }); });
-  const route = routes.find(route => route.path === '/api/commander-devices');
-  const launchResponse = await route.fetch(new Request('http://127.0.0.1' + route.path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'launch' }) }));
-  assert.equal(launchResponse.status, 200);
-  const launch = await launchResponse.json();
-  const entry = await fetch(launch.url, { redirect: 'manual' });
-  assert.equal(entry.status, 303);
-  const base = new URL(entry.headers.get('location'), launch.url);
+  const openCenter = async () => {
+    const route = routes.findLast(route => route.path === '/api/commander-devices');
+    const launchResponse = await route.fetch(new Request('http://127.0.0.1' + route.path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'launch' }) }));
+    assert.equal(launchResponse.status, 200);
+    const launch = await launchResponse.json();
+    const entry = await fetch(launch.url, { redirect: 'manual' });
+    assert.equal(entry.status, 303);
+    return new URL(entry.headers.get('location'), launch.url);
+  };
+  let base = await openCenter();
   const deviceApi = async input => {
     const response = await fetch(new URL('api/devices', base), {
       method: 'POST', headers: { 'content-type': 'application/json', origin: base.origin }, body: JSON.stringify(input),
@@ -38,7 +66,11 @@ async function host(t, name, projects, assistant, stored = {}) {
     assert.equal(response.status, 200, value.error || 'device-center operation');
     return value;
   };
-  return { link, ctx, directory, routes, deviceApi };
+  return {
+    get link() { return link; },
+    ctx, directory, routes, deviceApi,
+    async restart() { await link.close(); link = await start(); base = await openCenter(); },
+  };
 }
 
 async function pair(source, target) {
@@ -54,6 +86,514 @@ async function pair(source, target) {
   assert.equal(new URL(saved.url).hostname, '127.0.0.1', 'explicit local pairing endpoint remains usable independently of advertised routes');
   return result.device;
 }
+
+async function joinGroup(creator, peers) {
+  for (const peer of peers) {
+    const independent = peer.link.status().devices.map(device => device.id);
+    const invitation = await peer.link.admin({ action: 'pairing', mode: 'lan' });
+    const request = await creator.deviceApi({ action: 'pair', uri: invitation.uri, joinGroup: true });
+    assert.equal(peer.link.status().pending[0].deviceGroup, true);
+    await peer.link.admin({ action: 'confirm', id: peer.link.status().pending[0].id });
+    assert.equal((await creator.deviceApi({ action: 'pairStatus', requestId: request.requestId })).direction, 'group');
+    assert.deepEqual(peer.link.status().devices.map(device => device.id), independent, 'joining must preserve independent grants without creating one');
+  }
+}
+
+async function waitForGroup(condition) {
+  const deadline = Date.now() + 15_000;
+  do {
+    if (await condition()) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
+  assert.fail('device group changes did not propagate');
+}
+
+test('one device-group owner token works through the relay and expires on every device after rotation', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-owner-relay-'));
+  const relayIdentity = await loadIdentity(directory);
+  const port = await freePort();
+  const publicUrl = `https://127.0.0.1:${port}`;
+  const relayKey = 'test-integration-relay-key';
+  const relay = await createRelayServer({ host: '127.0.0.1', port, publicUrl, identity: relayIdentity, token: relayKey });
+  t.after(async () => { await relay.close(); await rm(directory, { recursive: true, force: true }); });
+
+  async function member(name, useRelay) {
+    const values = new Map(), records = new Map(), fetchRoutes = new Map();
+    const credentials = {
+      readRecord: async key => records.get(key),
+      async modifyRecord(key, mutate) {
+        const value = await mutate(records.get(key));
+        if (value !== undefined) records.set(key, value);
+      },
+    };
+    const device = await host(t, name, [], null, { host: '::', ...(useRelay ? { relayPool: [{ url: publicUrl, token: relayKey, enabled: true, priority: 0 }] } : {}) }, {
+      get: key => values.get(key), credentials,
+      linkConfig: { createRelayHost: input => createRelayHost({ ...input, relayCa: relayIdentity.cert }) },
+    });
+    values.set('benchgoLink', device.link);
+    const owner = { principal: { kind: 'owner' } };
+    let webHandler;
+    let enabled = true;
+    mountIntegrationApi({
+      get: key => values.get(key), provide: (key, value) => values.set(key, value), credentials,
+      effect: operation => operation(), inject: (_services, mount) => mount({
+        effect: operation => operation(), webServer: { register(route) { webHandler = route.handler; } },
+      }),
+      connection: {
+        fetch: { register: route => fetchRoutes.set(route.path, route) }, browserPeer: owner,
+        createSharedFetchHandler: () => ({ async fetch(request, peer) {
+          assert.equal(peer, owner);
+          assert.equal(new URL(request.url).pathname, '/api/commander/assistant');
+          return Response.json({ device: name, input: await request.json() });
+        } }),
+      },
+    }, () => enabled);
+    async function token(operation = 'read', revision) {
+      const path = '/api/commander-integration/token';
+      const response = await fetchRoutes.get(path).fetch(new Request('https://benchgo.invalid' + path, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operation, revision }),
+      }));
+      return { status: response.status, ...await response.json() };
+    }
+    return { ...device, token, webHandler, setEnabled: value => { enabled = value; } };
+  }
+
+  const a = await member('A', false), b = await member('B', true);
+  await joinGroup(a, [b]);
+  await waitForGroup(() => Boolean(b.link.integrationEndpoint()?.relay));
+  const original = await a.token();
+  const remote = await b.token();
+  assert.equal(remote.status, 200);
+  assert.equal(remote.token, original.token);
+  assert.equal(remote.endpoint.url, `${publicUrl}/link/api/rpc`);
+  const input = { path: '/api/commander/assistant', body: { action: 'tasks' } };
+  const agent = new Agent({ ca: relayIdentity.cert });
+  t.after(() => agent.destroy());
+  async function request(token, body = input) {
+    try {
+      const result = await remoteJson({ url: publicUrl, relayTarget: remote.endpoint.relayTarget }, '/link/api/rpc', body, { token, agent });
+      return result.value;
+    } catch (error) { return { status: error.status, message: error.message }; }
+  }
+  assert.equal((await request(undefined)).status, 401);
+  assert.deepEqual(await request(original.token), { device: 'B', input: input.body });
+  assert.equal((await request(original.token, { path: '/api/commander-integration/token', body: { operation: 'rotate' } })).status, 403);
+  const rotated = await b.token('rotate', original.revision);
+  assert.equal(rotated.status, 200);
+  assert.notEqual(rotated.token, original.token);
+  assert.equal((await a.token()).token, rotated.token);
+  assert.equal((await a.token('rotate', original.revision)).status, 409);
+  assert.equal((await request(original.token)).status, 401);
+  assert.deepEqual(await request(rotated.token), { device: 'B', input: input.body });
+  const web = createHttpServer(a.webHandler);
+  await new Promise(resolve => web.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => web.close(resolve)));
+  const direct = `http://127.0.0.1:${web.address().port}/api/commander-integration`;
+  const directCall = token => fetch(direct, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify(input) });
+  const directResponse = await directCall(rotated.token);
+  assert.equal(directResponse.status, 200);
+  assert.deepEqual(await directResponse.json(), { device: 'A', input: input.body });
+  assert.equal((await directCall(original.token)).status, 401);
+  b.setEnabled(false);
+  assert.equal((await request(rotated.token)).status, 401);
+  b.setEnabled(true);
+
+  const authorityPort = a.link.status().port;
+  await a.link.close();
+  const identity = await loadIdentity(a.directory);
+  const group = await openDeviceGroup(a.directory, identity);
+  const legacy = createHttpsServer({ key: identity.key, cert: identity.cert }, async (req, res) => {
+    const device = group.authenticate(req.headers.authorization?.replace(/^Bearer /, ''));
+    if (!device?.groupSyncOnly) { res.writeHead(401).end(); return; }
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const input = JSON.parse(Buffer.concat(chunks).toString());
+    if (input.action === 'deviceGroup' && input.operation === 'sync') {
+      res.end(JSON.stringify({ manifest: group.snapshot(), removals: group.removals() }));
+    } else {
+      res.writeHead(403).end(JSON.stringify({ error: '此授权仅用于同步设备组' }));
+    }
+  });
+  await new Promise((resolve, reject) => legacy.once('error', reject).listen(authorityPort, '::', resolve));
+  t.after(() => new Promise(resolve => legacy.close(resolve)));
+  assert.deepEqual(await b.token(), {
+    status: 503, code: 'INTEGRATION_PEER_UPGRADE_REQUIRED',
+    error: '请更新 Token 管理设备「A」上的 BenchGo，更新后重试',
+  });
+});
+
+test('device group peers can access one another while the creator is offline', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const a = await host(t, 'A', [], null, { host: '::' });
+  const b = await host(t, 'B', [{ id: 'b-project', title: 'B', sessionIds: [] }], null, { host: '::' });
+  const c = await host(t, 'C', [{ id: 'c-project', title: 'C', sessionIds: [] }], null, { host: '::' });
+  await joinGroup(a, [b]);
+  assert.equal((await b.deviceApi({ action: 'groupStatus' })).canInvite, true);
+  await joinGroup(b, [c]);
+  const target = async (source, peer) => (await source.link.devices()).devices.find(row => row.hostId === peer.link.status().hostId);
+  await waitForGroup(() => target(b, c));
+  await a.link.close();
+  const cOnB = await target(b, c);
+  const bOnC = await target(c, b);
+  const projectIds = async (source, device) => (await source.link.resources({ deviceId: device.id, kind: 'projects' })).devices[0].items.map(row => row.resourceId);
+  assert.deepEqual(await projectIds(b, cOnB), ['c-project']);
+  assert.deepEqual(await projectIds(c, bOnC), ['b-project']);
+  await b.deviceApi({ action: 'groupRemove', deviceId: cOnB.id });
+  await waitForGroup(async () => !(await c.deviceApi({ action: 'groupStatus' })).enabled);
+  assert.equal(await target(b, c), undefined);
+  assert.equal(await target(c, b), undefined);
+});
+
+test('the device center uses group authorization for a server already registered over SSH', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const a = await host(t, 'A', [], null, { host: '::' });
+  const b = await host(t, '服务器 B', [{ id: 'b-project', title: 'B', sessionIds: [] }], null, { host: '::' });
+  const hostId = b.link.status().hostId;
+  const id = 'saved-ssh';
+  await writeFile(join(a.directory, 'outgoing', 'connections.json'), JSON.stringify({
+    version: 1, activeId: id, devices: [{ id, hostId, kind: 'ssh', url: '', name: '旧 SSH 名称',
+      authorizationId: 'old-authorization', token: 'a-revoked-credential', ssh: { host: 'server.example' } }],
+  }));
+  await a.restart();
+  await joinGroup(a, [b]);
+  const { devices } = await a.deviceApi({ action: 'list' });
+  const matching = devices.filter(device => device.hostId === hostId);
+  assert.equal(matching.length, 1);
+  const [device] = matching;
+  assert.equal(device.id, id);
+  assert.equal(device.kind, 'ssh');
+  assert.equal(device.name, '服务器 B');
+  assert.equal(device.sshManaged, true);
+  assert.equal(device.authorizationId, a.link.status().hostId);
+  const result = await a.link.resources({ deviceId: id, kind: 'projects' });
+  assert.deepEqual(result.devices[0].items.map(row => row.resourceId), ['b-project']);
+  await a.deviceApi({ action: 'groupRemove', deviceId: id });
+  assert.equal((await a.link.devices()).devices.some(device => device.hostId === hostId), false);
+  assert.equal((await a.link.resources({ deviceId: id, kind: 'projects' })).devices[0].code, 'NOT_FOUND');
+});
+
+test('removing C on A updates B and revokes C even when C is offline', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const a = await host(t, 'A', [], null, { host: '::' });
+  const b = await host(t, 'B', [], null, { host: '::' });
+  const c = await host(t, 'C', [], null, { host: '::' });
+  await joinGroup(a, [b, c]);
+  const bId = b.link.status().hostId, cId = c.link.status().hostId;
+  const names = async host => (await host.deviceApi({ action: 'list' })).devices.map(row => row.name).sort();
+  await waitForGroup(async () => (await names(b)).includes('C'));
+  const cGroup = await openDeviceGroup(c.directory, await loadIdentity(c.directory));
+  const oldGrant = { ...cGroup.member(bId).routes[0], token: cGroup.token(bId) };
+  assert.equal((await remoteJson(oldGrant, '/link/api/info')).value.authorizationId, cId);
+
+  await c.link.close();
+  await a.deviceApi({ action: 'groupRemove', deviceId: cId });
+  await waitForGroup(async () => !(await names(b)).includes('C'));
+  assert.deepEqual(await names(a), ['A', 'B']);
+  assert.deepEqual(await names(b), ['A', 'B']);
+  await assert.rejects(remoteJson(oldGrant, '/link/api/info'), { status: 401 });
+  await c.restart();
+  await waitForGroup(async () => (await c.link.devices()).devices.length === 1);
+  assert.deepEqual((await c.link.devices()).devices.map(row => row.name), ['C']);
+  assert.deepEqual(await names(b), ['A', 'B']);
+});
+
+test('a group device rename reaches an offline member and survives a restart', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const a = await host(t, 'A', [], null, { host: '::', port: await freePort() });
+  const b = await host(t, 'B', [], null, { host: '::', port: await freePort() });
+  const c = await host(t, 'C', [], null, { host: '::', port: await freePort() });
+  await joinGroup(a, [b, c]);
+  const bId = b.link.status().hostId;
+  const bOn = async source => (await source.link.devices()).devices.find(row => row.hostId === bId);
+  await waitForGroup(() => bOn(c));
+
+  await c.link.close();
+  const aIdentity = await loadIdentity(a.directory);
+  const oldSnapshot = (await openDeviceGroup(a.directory, aIdentity)).snapshot();
+  assert.equal(oldSnapshot.renames, undefined);
+  const changed = await a.deviceApi({ action: 'groupRename', deviceId: bId, name: '开发服务器' });
+  assert.equal(changed.device.name, '开发服务器');
+  const aGroup = await openDeviceGroup(a.directory, aIdentity);
+  assert.deepEqual(aGroup.snapshot().operations, oldSnapshot.operations);
+  assert.deepEqual(aGroup.snapshot().renames.map(({ target, name }) => ({ target, name })), [
+    { target: bId, name: '开发服务器' },
+  ]);
+  await aGroup.adopt(oldSnapshot);
+  assert.equal(aGroup.member(bId).name, '开发服务器');
+  assert.deepEqual(aGroup.snapshot().members, oldSnapshot.members);
+  await waitForGroup(() => b.link.status().hostName === '开发服务器');
+  assert.equal((await b.link.devices()).devices.find(row => row.id === 'local').name, '开发服务器');
+
+  await b.restart();
+  assert.equal(b.link.status().hostName, '开发服务器');
+  await c.restart();
+  await waitForGroup(async () => (await bOn(c))?.name === '开发服务器');
+  assert.equal((await bOn(c)).id, bId);
+  assert.equal((await c.link.resources({ deviceId: bId, kind: 'projects' })).devices[0].available, true);
+});
+
+test('the creator can leave without breaking the remaining device group', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const member = async name => host(t, name, [], null, { host: '::', port: await freePort() });
+  const a = await member('A');
+  const b = await member('B');
+  const c = await member('C');
+  const d = await member('D');
+  await joinGroup(a, [b, c]);
+  const oldGroupId = (await a.deviceApi({ action: 'groupStatus' })).id;
+  await waitForGroup(async () => (await b.link.devices()).devices.some(row => row.name === 'C'));
+  await b.link.close();
+  await c.link.close();
+  assert.equal((await a.deviceApi({ action: 'groupLeave' })).enabled, false);
+  await joinGroup(a, [d]);
+  await a.restart();
+  await b.restart();
+  await c.restart();
+  const deadline = Date.now() + 15000;
+  for (const [source, peer] of [[b, c], [c, b]]) {
+    let devices;
+    do {
+      devices = (await source.link.devices()).devices;
+      if (devices.length === 2 && devices.some(row => row.hostId === peer.link.status().hostId)) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } while (Date.now() < deadline);
+    assert.deepEqual(devices.map(row => row.name).sort(), ['B', 'C']);
+    const target = devices.find(row => row.hostId === peer.link.status().hostId);
+    assert.equal((await source.link.resources({ deviceId: target.id, kind: 'projects' })).devices[0].available, true);
+  }
+  const regrouped = await a.deviceApi({ action: 'groupStatus' });
+  assert.notEqual(regrouped.id, oldGroupId);
+  assert.deepEqual(regrouped.members.map(row => row.name).sort(), ['A', 'D']);
+  assert.equal((await d.deviceApi({ action: 'groupStatus' })).id, regrouped.id);
+});
+
+test('relay configuration from a group member reaches the whole group including an offline peer', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-group-relays-'));
+  const trusted = getCACertificates('default');
+  const relays = [];
+  t.after(async () => {
+    setDefaultCACertificates(trusted);
+    await Promise.all(relays.map(relay => relay.close()));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const relayIdentity = await loadIdentity(directory);
+  setDefaultCACertificates([...trusted, relayIdentity.cert]);
+  const token = 'test-group-relay-key';
+  const relayUrl = async () => {
+    const port = await freePort();
+    const publicUrl = `https://127.0.0.1:${port}`;
+    relays.push(await createRelayServer({ host: '127.0.0.1', port, publicUrl, identity: relayIdentity, token }));
+    return publicUrl;
+  };
+  const options = { linkConfig: { createRelayHost: input => createRelayHost({ ...input, relayCa: relayIdentity.cert }) } };
+  const a = await host(t, 'A', [], null, { host: '::' }, options);
+  const b = await host(t, 'B', [], null, { host: '::' }, options);
+  const c = await host(t, 'C', [], null, { host: '127.0.0.1' }, options);
+  await joinGroup(a, [b]);
+  const initialUrl = await relayUrl(), nextUrl = await relayUrl();
+  const configure = (host, edit) => host.link.admin({ action: 'relay-pool-configure',
+    expected: { fingerprint: host.link.status().relay.fingerprint }, id: 'shared', ...edit });
+  const onRelay = (peer, url) => peer.link.status().relay.connected && peer.link.status().relay.url === url;
+  await configure(b, { operation: 'add', url: initialUrl, token });
+  await waitForGroup(() => [a, b].every(peer => onRelay(peer, initialUrl)));
+  const invite = await b.link.admin({ action: 'pairing', mode: 'relay' });
+  const request = await c.deviceApi({ action: 'pair', uri: invite.uri, joinGroup: true });
+  await b.link.admin({ action: 'confirm', id: b.link.status().pending[0].id });
+  assert.equal((await c.deviceApi({ action: 'pairStatus', requestId: request.requestId })).direction, 'group');
+  await waitForGroup(() => [a, b, c].every(peer => onRelay(peer, initialUrl)));
+  await waitForGroup(async () => (await a.link.devices()).devices.length === 3);
+  const cOnA = (await a.link.devices()).devices.find(row => row.name === 'C');
+  assert.equal((await a.link.resources({ deviceId: cOnA.id, kind: 'projects' })).devices[0].available, true);
+  assert.equal(JSON.stringify(a.link.status()).includes(token), false);
+  for (const peer of [a, b, c]) await peer.link.admin({ action: 'configure', host: '127.0.0.1' });
+  await waitForGroup(() => [a, b, c].every(peer => onRelay(peer, initialUrl)));
+
+  await c.link.close();
+  await configure(b, { operation: 'update', url: nextUrl, token });
+  await waitForGroup(() => [a, b].every(peer => onRelay(peer, nextUrl)));
+  await c.restart();
+  await waitForGroup(() => onRelay(c, nextUrl));
+  await configure(a, { operation: 'update', enabled: false });
+  await configure(a, { operation: 'remove' });
+  await waitForGroup(() => [b, c].every(host => !host.link.status().relay.configured));
+});
+
+test('device group synchronizes RouterGo connections and preserves deletion across an offline restart', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const personal = 'routergo-' + 'a'.repeat(32);
+  const work = 'routergo-' + 'b'.repeat(32);
+  async function providerHost(name) {
+    const providers = {};
+    const records = new Map(), credentials = new Map();
+    let revision = 1;
+    const ctx = {
+      settings: {
+        describe: () => [{ ns: 'llm-pi-ai', revision, value: { providers: structuredClone(providers) } }],
+        async mutate(namespace, operations, expectedRevision) {
+          assert.equal(namespace, 'llm-pi-ai');
+          if (expectedRevision !== revision) throw new Error('Settings revision changed');
+          for (const { op, path: [, id], value } of operations) {
+            if (op === 'unset') delete providers[id];
+            else providers[id] = structuredClone(value);
+          }
+          revision++;
+        },
+      },
+      credentials: {
+        resolve: async ref => credentials.get(ref),
+        set: async (ref, value) => credentials.set(ref, { value, source: 'file' }),
+        unset: async ref => credentials.delete(ref),
+        readRecord: async key => structuredClone(records.get(key)),
+        modifyRecord: async (key, update) => records.set(key, structuredClone(update(records.get(key)))),
+      },
+      llm: {
+        listConfigurableProviders: () => Object.keys(providers).map(provider => ({
+          provider, settingsNs: 'llm-pi-ai', settingsPath: ['providers', provider],
+        })),
+      },
+    };
+    let groupProviders = createGroupProviders(ctx);
+    ctx.get = name => name === 'benchgoGroupProviders' ? groupProviders : undefined;
+    const peer = await host(t, name, [], null, { host: '::' }, ctx);
+    return {
+      peer, providers, credentials, modelProviders: createModelProviders(ctx),
+      bindings: groupId => groupProviders.bindings(groupId),
+      async configure(id, displayName, key) {
+        const apiKeyEnv = 'BENCHGO_ROUTERGO_KEY_' + id.slice('routergo-'.length);
+        await ctx.credentials.set(apiKeyEnv, key);
+        await ctx.settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', id], value: {
+          displayName, apiKeyEnv, baseURL: 'https://routergo.cn/api/v1', api: 'openai-responses',
+          models: [{ id: 'Vendor/Exact:Model' }],
+        } }], revision);
+      },
+      remove: id => ctx.settings.mutate('llm-pi-ai', [{ op: 'unset', path: ['providers', id] }], revision),
+      rename: (id, displayName) => ctx.settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', id],
+        value: { ...providers[id], displayName } }], revision),
+      async restart() {
+        groupProviders = createGroupProviders(ctx);
+        await peer.restart();
+      },
+    };
+  }
+
+  async function waitFor(condition, label) {
+    const deadline = Date.now() + 20_000;
+    do {
+      if (condition()) return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } while (Date.now() < deadline);
+    assert.fail(label);
+  }
+
+  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map(providerHost));
+  for (const target of [b, c]) {
+    const invitation = await target.peer.link.admin({ action: 'pairing', mode: 'lan' });
+    const request = await a.peer.deviceApi({ action: 'pair', uri: invitation.uri, joinGroup: true });
+    await target.peer.link.admin({ action: 'confirm', id: target.peer.link.status().pending[0].id });
+    const joined = await a.peer.deviceApi({ action: 'pairStatus', requestId: request.requestId });
+    assert.equal(joined.direction, 'group');
+  }
+  await a.configure(personal, '个人账号', 'fixture-personal-model-key');
+  await b.configure(work, '工作账号', 'fixture-work-model-key');
+  const workSourceRef = b.providers[work].apiKeyEnv;
+  const workTokenRef = workSourceRef.replace('_KEY_', '_ACCOUNT_');
+  b.credentials.set(workTokenRef, { value: 'fixture-work-account-token', source: 'file' });
+  await waitFor(() => [a, b, c].every(member => member.providers[personal] && member.providers[work]), 'both RouterGo accounts reach every member');
+  const { id: groupId } = await a.peer.deviceApi({ action: 'groupStatus' });
+
+  for (const member of [b, c]) {
+    assert.equal((await member.bindings(groupId)).get(personal), personal);
+    assert.equal((await member.bindings(groupId)).get(work), work);
+    assert.deepEqual((await member.modelProviders.list()).map(row => row.name).sort(), ['个人账号', '工作账号']);
+    assert.equal((await member.modelProviders.resolve(personal)).apiKey, 'fixture-personal-model-key');
+    assert.equal((await member.modelProviders.resolve(work)).apiKey, 'fixture-work-model-key');
+    assert.equal(member.providers[work].models[0].id, 'Vendor/Exact:Model');
+  }
+
+  const staleRef = c.providers[work].apiKeyEnv;
+  await c.peer.link.close();
+  await c.rename(work, '离线修改');
+  await a.remove(work);
+  await waitFor(() => !b.providers[work] && !b.credentials.has(workSourceRef) && !b.credentials.has(workTokenRef),
+    'A sends the deletion to B and B clears its RouterGo authorization while C is offline');
+  await a.peer.link.close();
+  await c.restart();
+  await waitFor(() => !c.providers[work] && !c.credentials.has(staleRef), 'B replays the deletion to C after restart');
+  assert.deepEqual(Object.keys(b.providers), [personal]);
+  assert.deepEqual(Object.keys(c.providers), [personal]);
+  assert.equal((await c.modelProviders.resolve(personal)).apiKey, 'fixture-personal-model-key');
+});
+
+test('media settings converge across the device group and catch up after an offline restart', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  async function mediaHost(name, route) {
+    const directory = await mkdtemp(join(tmpdir(), 'benchgo-media-group-'));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const voice = await new VoiceConfig({ dataDir: directory }).open();
+    const generation = await createMediaGeneration({ directory });
+    const records = new Map();
+    const credentials = {
+      readRecord: async key => structuredClone(records.get(key)),
+      modifyRecord: async (key, update) => records.set(key, structuredClone(update(records.get(key)))),
+      deleteRecord: async key => records.delete(key),
+    };
+    const bindings = new Map([['shared-provider', route]]);
+    const makeService = () => createGroupMedia({ voice, generation, credentials, providerBindings: async () => bindings });
+    let service = makeService();
+    const peer = await host(t, name, [], null, { host: '::' }, { get: key => key === 'benchgoGroupMedia' ? service : undefined });
+    return { peer, voice, generation, bindings,
+      async restart() { service = makeService(); await peer.restart(); },
+      async update(patch) { await generation.updateSettings(patch, (await generation.getSettings()).revision); },
+    };
+  }
+  async function waitFor(condition, description) {
+    const deadline = Date.now() + 20_000;
+    do {
+      if (await condition()) return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } while (Date.now() < deadline);
+    assert.fail(description);
+  }
+  const [a, b] = await Promise.all([mediaHost('A', 'routergo-a'), mediaHost('B', 'routergo-b')]);
+  b.bindings.clear();
+  await a.update({
+    image: { enabled: true, routes: [{ providerId: 'routergo-a', modelId: 'Vendor/Image:01', size: '1024x1024' }] },
+    video: { enabled: false, routes: [{ providerId: 'routergo-a', modelId: 'Vendor/Video:02' }] },
+    audio: { enabled: true, routes: [{ providerId: 'routergo-a', modelId: 'Vendor/Audio:03', voices: [{ name: 'voice-1' }] }] },
+  });
+  await a.voice.configure({ call: true, asr: { baseURL: 'https://speech.example/v1', model: 'ASR:01', apiKey: 'fixture-asr' },
+    conversation: { providerId: 'routergo-a', model: 'Vendor/Call:04' } });
+  await b.voice.configure({ readAloud: true, tts: { baseURL: 'https://speech.example/v1', model: 'TTS:01', apiKey: 'fixture-tts', voice: 'voice-2', speed: 1.35 } });
+  await joinGroup(a.peer, [b.peer]);
+  await waitFor(() => b.voice.value.asr.apiKey === 'fixture-asr' && a.voice.value.tts.apiKey === 'fixture-tts', 'independent voice sections and credentials converge');
+  assert.deepEqual((await b.generation.getSettings()).image.routes, []);
+  assert.equal(b.voice.value.conversation.providerId, '');
+  b.bindings.set('shared-provider', 'routergo-b');
+  await waitFor(async () => (await b.generation.getSettings()).audio.enabled && b.voice.value.conversation.providerId === 'routergo-b', 'provider bindings unblock pending media settings');
+  const loaded = await b.generation.getSettings();
+  assert.deepEqual(loaded.image.routes, [{ providerId: 'routergo-b', modelId: 'Vendor/Image:01', size: '1024x1024' }]);
+  assert.deepEqual(loaded.video, { enabled: false, routes: [{ providerId: 'routergo-b', modelId: 'Vendor/Video:02' }] });
+  assert.equal(loaded.audio.routes[0].defaultVoice, 'voice-1');
+  assert.equal(b.voice.value.conversation.model, 'Vendor/Call:04');
+  assert.doesNotMatch(JSON.stringify(b.voice.snapshot()), /fixture-asr|fixture-tts/);
+  assert.equal(b.voice.value.call, true);
+  assert.equal(a.voice.value.readAloud, true);
+
+  await b.peer.link.close();
+  await a.update({ image: { enabled: false, routes: [] } });
+  await b.update({ image: { ...loaded.image, routes: [{ ...loaded.image.routes[0], quality: 'high' }] } });
+  await a.voice.configure({ asr: { apiKey: '' } });
+  await b.voice.configure({ tts: { speed: 1.5 } });
+  await b.restart();
+  await waitFor(async () => !(await b.generation.getSettings()).image.routes.length && b.voice.value.asr.apiKey === ''
+    && a.voice.value.tts.speed === 1.5, 'offline member receives removals while its separate edit reaches the group');
+  await b.peer.deviceApi({ action: 'groupLeave' });
+  await waitFor(async () => !(await b.generation.getSettings()).audio.routes.length && !b.voice.value.asr.baseURL, 'leaving restores local settings');
+  assert.equal(b.voice.value.tts.apiKey, 'fixture-tts');
+  assert.equal(b.voice.value.tts.speed, 1.5);
+});
 
 test('one approval pairs both Link hosts over real TLS and each host can revoke its grant', async t => {
   if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
@@ -514,7 +1054,50 @@ test('paired workbench device center uses the target session without granting ac
   assert.deepEqual(await call({ action: 'hostRelayOperation', requestId: change.requestId }), updated);
   assert.equal((await call({ ...change, token: 'forged-secret' })).status, 422);
   for (const action of ['select', 'pair', 'hostPairing', 'hostRevoke', 'callDevice', 'sshProbe']) assert.equal((await call({ action })).status, 403);
+  for (const action of ['devices', 'resourceScope', 'setResourceScope', 'resources', 'sessionAction']) assert.equal((await post('api/commander-devices', { action })).status, 403);
   assert.equal((await post('api/commander-devices', { action: 'launch' })).status, 403);
   await b.link.admin({ action: 'revoke', id: directory.value.devices[1].id });
   assert.equal((await call({ action: 'list' })).status, 401);
+});
+
+test('group workbench lists and saves the target host resource scope without exposing independent devices', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const a = await host(t, 'A', [], null, { host: '::' });
+  const b = await host(t, 'B', [{ id: 'b-project', title: 'B project', sessionIds: [] }], null, { host: '::' });
+  const c = await host(t, 'C', [{ id: 'c-project', title: 'C project', sessionIds: [] }], null, { host: '::' });
+  const isolated = await host(t, 'Private');
+  b.ctx.connection.createPeer = () => ({ dispose() {} });
+  const privateDevice = await pair(b, isolated);
+  await joinGroup(a, [b, c]);
+  const aId = a.link.status().hostId, bId = b.link.status().hostId, cId = c.link.status().hostId;
+  await waitForGroup(async () => (await b.link.devices()).devices.some(row => row.hostId === cId));
+  const aGroup = await openDeviceGroup(a.directory, await loadIdentity(a.directory));
+  const target = { ...aGroup.member(bId).routes[0], token: aGroup.token(bId) };
+  const proxy = await createDeviceProxy(target);
+  t.after(() => proxy.close());
+  const entry = await fetch(await proxy.enter(), { redirect: 'manual' });
+  const base = new URL(entry.headers.get('location'), proxy.origin);
+  const call = async input => {
+    const response = await fetch(new URL('api/commander-devices', base), { method: 'POST', headers: { 'content-type': 'application/json', origin: base.origin }, body: JSON.stringify(input) });
+    return { status: response.status, value: await response.json() };
+  };
+  const list = await call({ action: 'devices' });
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.value.devices.map(row => row.name).sort(), ['A', 'B', 'C']);
+  assert.deepEqual((await call({ action: 'resourceScope' })).value.scope, { mode: 'current', deviceIds: [] });
+  const scope = { mode: 'selected', deviceIds: ['local', cId] };
+  assert.deepEqual((await call({ action: 'setResourceScope', scope })).value.scope, scope);
+  assert.deepEqual((await call({ action: 'resourceScope' })).value.scope, scope);
+  assert.deepEqual((await b.deviceApi({ action: 'resourceScope' })).scope, scope);
+  assert.deepEqual((await a.deviceApi({ action: 'resourceScope' })).scope, { mode: 'current', deviceIds: [] });
+  for (const [deviceId, resourceId] of [['local', 'b-project'], [cId, 'c-project']]) {
+    const result = await call({ action: 'resources', deviceId, kind: 'projects' });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.value.devices[0].items.map(row => row.resourceId), [resourceId]);
+  }
+  assert.equal((await call({ action: 'resources', deviceId: privateDevice.id, kind: 'projects' })).status, 403);
+  assert.equal((await call({ action: 'setResourceScope', scope: { mode: 'all', deviceIds: [privateDevice.id] } })).status, 403);
+  assert.equal((await call({ action: 'launch' })).status, 403);
+  await b.deviceApi({ action: 'groupRemove', deviceId: aId });
+  assert.equal((await call({ action: 'devices' })).status, 401);
 });

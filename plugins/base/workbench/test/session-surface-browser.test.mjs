@@ -141,7 +141,7 @@ test('assistant session surfaces share official file panes, corner and lifecycle
     },
     nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text', '.png': 'dataurl' },
-    plugins: [{name:'surface-shell',setup(build){build.onLoad({filter:/benchgo[\\/]client[\\/]shell-ui\.jsx$/},async({path})=>({loader:'jsx',resolveDir:dirname(path),contents:(await readFile(path,'utf8'))+'\nexport {ResponsiveAppFrame};'}));}},shellUi(),sharedUiStyles()],
+    plugins: [{name:'surface-shell',setup(build){build.onLoad({filter:/plugins[\\/]base[\\/]client[\\/]shell-ui\.jsx$/},async({path})=>({loader:'jsx',resolveDir:dirname(path),contents:(await readFile(path,'utf8'))+'\nexport {ResponsiveAppFrame};'}));}},shellUi(),sharedUiStyles()],
     define: { 'process.env.NODE_ENV': '"production"', 'process.env.DSH_CLIENT_TITLE': 'undefined', 'process.env.DSH_CLIENT_VERSION': 'undefined', 'process.env.DSH_CLIENT_COMMIT_HASH': 'undefined', 'process.env.DSH_CLIENT_GIT_DIRTY': 'undefined' }, logLevel: 'silent',
   });
   const browser = await chromium.launch({ headless: true, executablePath });

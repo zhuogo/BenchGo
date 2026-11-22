@@ -21,7 +21,10 @@ test('actual pinned vendor hosts mount through the composition without model too
     effect(callback) { const dispose = callback(); if (typeof dispose === 'function') disposers.push(dispose); return dispose; },
     on() { return () => {}; },
     get(name) { return this[name]; },
-    inject(services, callback) { const result = callback(this); if (result?.then) pending.push(result); },
+    inject(services, callback) {
+      if (!services.every(name => this.get(name))) return;
+      const result = callback(this); if (result?.then) pending.push(result);
+    },
   };
   try {
     const service = await mountWorkbench(ctx, { directory });

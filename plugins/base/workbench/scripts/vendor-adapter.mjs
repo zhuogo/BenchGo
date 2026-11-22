@@ -52,7 +52,50 @@ function builtinSidebar(source) {
   for (const region of ['SideCardSection.module.css.mjs', 'src/client/open-with-settings.tsx', 'src/client/plugins-shared.ts', 'src/client/plugins-tabs.ts', 'src/client/plugins-viewers.ts', 'src/client/add-plugin-modal.tsx', 'src/client/SideCardSection.tsx']) result = omitRegion(result, region);
   // The retired catalog's copy is no longer shipped in either locale.
   result = result.replace(/^\s*(?:plugin[A-Z]\w*|addPlugins\w*): "(?:\\.|[^"\\])*",?\r?\n/gm, '');
+  result = projectFileTree(result);
   return result.replaceAll('[dsh-better-sidebar]', '[BenchGo 工作台]').replaceAll('dsh-better-sidebar: ', 'BenchGo workbench: ');
+}
+
+function projectFileTree(source) {
+  const start = source.indexOf('const FileRow$1 =');
+  const end = source.indexOf('//#region src/client/frame-batcher.ts', start);
+  if (start < 0 || end < 0) throw new Error('Workbench file tree seam changed');
+  let tree = source.slice(start, end);
+  const markRow = (anchor, kind, path) => replaceReviewed(tree, anchor,
+    `"data-benchgo-file-kind": "${kind}", "data-benchgo-file-path": ${path},\n\t\t\t\t${anchor}`);
+  tree = markRow('title: entry.broken ?', 'file', 'entry.path');
+  tree = markRow('title: target.path,', 'directory', 'target.path');
+  tree = markRow('title: path,\n\t\t\t\tonDragOver:', 'directory', 'path');
+  tree = replaceReviewed(tree, 'ref: bodyRef,', 'ref: bodyRef, "data-benchgo-file-tree": cwd, "data-benchgo-file-session": sessionId,');
+  tree = replaceReviewed(tree, 'const retryDirs =', `const dispatchFileAction = (id, target) => !document.dispatchEvent(new CustomEvent("benchgo-project-file-action", {
+    cancelable: true, detail: { id, sessionId, cwd, path: target.path, isDir: target.isDir }
+  }));
+  const retryDirs =`);
+  tree = replaceReviewed(tree, 'const validName =', `(0, react.useEffect)(() => {
+    const changed = ({ detail }) => {
+      if (detail.workspace !== cwd || visibleRef.current === false) return;
+      if (detail.action === "move") {
+        pruneTree(detail.path);
+        onPathRenamed?.(detail.path, detail.result.path);
+      }
+      retryDirs([cwd, ...propsRef.current.expanded].filter(dir => detail.action !== "move" || dir !== detail.path && !dir.startsWith(detail.path + "/") && !dir.startsWith(detail.path + "\\\\")));
+    };
+    document.addEventListener("benchgo-project-files-changed", changed);
+    return () => document.removeEventListener("benchgo-project-files-changed", changed);
+  }, [cwd, pruneTree, retryDirs, onPathRenamed]);
+  const validName =`);
+  tree = replaceReviewed(tree, '...rowMenu === null ? [] : zipEntries(rowMenu),', `...rowMenu === null ? [] : zipEntries(rowMenu),
+    ...rowMenu?.isDir && dispatchFileAction("can-paste", rowMenu) ? [{ id: "benchgo-paste", label: "粘贴到此处" }] : [],
+    ...rowMenu !== null && rowMenu.path !== cwd ? [
+      { id: "benchgo-copy", label: rowMenu.isDir ? "复制文件夹" : "复制文件" },
+      { id: "benchgo-move", label: "移动到…" }
+    ] : [],`);
+  tree = replaceReviewed(tree, 'copyPath(id === "relative"', `if (id.startsWith("benchgo-")) {
+    dispatchFileAction(id.slice(8), target);
+    return;
+  }
+  copyPath(id === "relative"`);
+  return source.slice(0, start) + tree + source.slice(end);
 }
 
 function builtinAudioPerformance(source) {

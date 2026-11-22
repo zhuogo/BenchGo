@@ -3,6 +3,7 @@ import { admittedWorkbenchRejection, contextFacade, ownerWebServer } from './bou
 import { openPreferences, SIDEBAR_NS } from './preferences.mjs';
 import { openSshTrust, probeFingerprint } from './ssh-trust.mjs';
 import { mountWorkbenchMedia } from './media.mjs';
+import { mountProjectFiles } from './project-files.mjs';
 
 async function readBody(req) {
   if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) throw new Error('请使用 JSON 请求');
@@ -22,6 +23,7 @@ export async function mountWorkbench(ctx, { directory, loadSidebar = () => impor
   let disposed = false;
   ctx.effect(() => () => { disposed = true; challenges.clear(); return trust.close(); });
   ctx.inject(['connection', 'webServer', 'sessions'], child => { mountWorkbenchMedia(child); });
+  ctx.inject(['connection', 'workspaceFiles', 'fs'], child => { mountProjectFiles(child); });
   ctx.inject(['connection', 'webServer'], child => {
     const server = ownerWebServer(child.webServer, child.connection);
     child.effect(() => server.register({ kind: 'exact', path: '/api/benchgo/workbench', async handler(req, res) {

@@ -4,6 +4,7 @@ import { networkInterfaces } from 'node:os';
 import { isIP } from 'node:net';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { normalizeReturnOffer, returnCredential } from '../pairing/return.mjs';
+import { integrationBearer } from '../../../base/shared/integration-token.mjs';
 export { validateLinkTransport as validateConfig } from '../config.mjs';
 
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap(items => (items ?? []).filter(x => !x.internal && !x.address.includes('%')).map(x => x.address)))];
@@ -60,7 +61,7 @@ async function body(request, limit = 256 * 1024) {
 }
 
 /** Separate encrypted carrier: it exposes only Link's allowlist, never the Host admin API. */
-export async function listen({ identity, config, webRoot, store, dispatch, workbench, onError, routes, registerReturn, runRequest = operation => operation() }) {
+export async function listen({ identity, config, webRoot, store, dispatch, workbench, onError, routes, registerReturn, authenticateGroup, integration, hostName = () => store.state.name, runRequest = operation => operation() }) {
   const rates = new Map(), deviceRates = new Map();
   const relayKey = randomBytes(32);
   const signRelaySource = source => createHmac('sha256', relayKey).update(source).digest('hex');
@@ -85,10 +86,12 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
     if (!host || !allowed.has(host)) throw fail('主机地址未授权', 403);
     if ((requireOrigin || req.headers.origin) && req.headers.origin !== `https://${host}`) throw fail('来源未授权', 403);
     const url = new URL(req.url, `https://${host}`);
+    const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
     const device = url.pathname.startsWith('/link/workbench/')
       ? workbench?.authenticate?.(req)
       : ['/link/api/info', '/link/api/rpc', '/link/api/workbench'].includes(url.pathname)
-        ? store.authenticate(req.headers.authorization?.replace(/^Bearer\s+/i, '')) : undefined;
+        ? store.authenticate(token) ?? authenticateGroup?.(token, url.pathname)
+          ?? (url.pathname === '/link/api/rpc' ? store.authenticateInvitation(token) : undefined) : undefined;
     // Relay traffic shares one loopback socket address. Only verified device
     // identities may use the independent authenticated quota.
     const buckets = device ? deviceRates : rates;
@@ -130,7 +133,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
             if (!proof) throw fail('连接检查已失效', 404);
             return send(res, 200, { proof });
           }
-          return send(res, 200, { name: 'DSH Link', hostName: store.state.name, version: '0.1.0',
+          return send(res, 200, { name: 'DSH Link', hostName: hostName(), version: '0.1.0',
             ...(device ? { hostId: 'sha256:' + identity.pin, authorizationId: device.id, executionSourceProof: 1, ...(routes ? { routes: routes() } : {}) } : {}) });
         }
         const file = { '/link': 'index.html', '/link/': 'index.html', '/link/index.html': 'index.html', '/link/app.js': 'app.js', '/link/app.css': 'app.css' }[url.pathname];
@@ -148,7 +151,8 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
         const deviceType = /iPad|Tablet/i.test(agent) ? 'tablet' : /Android|iPhone|Mobile/i.test(agent) ? 'mobile' : /Windows|Macintosh|X11/i.test(agent) ? 'computer' : 'unknown';
         const offer = registerReturn && normalizeReturnOffer(input.returnOffer);
         if (offer?.hostId === 'sha256:' + identity.pin) throw fail('不能配对当前设备');
-        return send(res, 200, store.request(input.code, input.name, deviceType, offer));
+        const groupInvitation = typeof input.groupInvitation === 'string' && /^sha256:[A-Za-z0-9+/]{43}=$/.test(input.groupInvitation) ? input.groupInvitation : undefined;
+        return send(res, 200, store.request(input.code, input.name, deviceType, offer, groupInvitation));
       }
       if (url.pathname === '/link/api/pair/status') {
         const input = await body(req);
@@ -157,9 +161,17 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
           return send(res, 200, { direction });
         }
         const result = store.poll(input.requestId, input.pollToken);
-        return send(res, 200, { ...result, ...(result.status === 'approved' && routes ? { routes: routes(), hostId: 'sha256:' + identity.pin } : {}) });
+        return send(res, 200, { ...result, ...(result.status === 'approved' ? { hostName: hostName(), ...(routes ? { routes: routes(), hostId: 'sha256:' + identity.pin } : {}) } : {}) });
       }
       if (!['/link/api/rpc', '/link/api/workbench'].includes(url.pathname)) throw fail('未找到', 404);
+      const ownerToken = url.pathname === '/link/api/rpc' && integrationBearer(req.headers);
+      if (ownerToken) {
+        const service = integration?.();
+        if (!service) throw fail('外部集成不可用', 401);
+        await service.authorize(ownerToken);
+        const result = await service.call(await body(req, RPC_BODY_BYTES), ownerToken);
+        return send(res, result.status, result.value);
+      }
       if (!device) throw fail('设备授权已失效，请重新配对', 401);
       if (url.pathname === '/link/api/workbench') {
         if (!workbench) throw fail('网页工作台尚未就绪', 503);
@@ -167,7 +179,15 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
         return send(res, 200, await workbench.begin(device, res));
       }
       const input = await body(req, RPC_BODY_BYTES);
-      if (!active || !store.state.devices.some(d => d.id === device.id)) throw fail('设备授权已失效', 401);
+      if (device.groupSyncOnly) {
+        if (input.action !== 'deviceGroup' || !['sync', 'integrationToken'].includes(input.operation)) throw fail('此授权仅用于同步设备组', 403);
+        return send(res, 200, await dispatch(input, device));
+      }
+      if (device.groupInvitation) {
+        if (input.action !== 'deviceGroup' || !['describe', 'join', 'admit'].includes(input.operation)) throw fail('此授权仅用于加入设备组', 403);
+        return send(res, 200, await dispatch(input, device));
+      }
+      if (!active || (store.principal?.(device.id) ?? store.state.devices.find(row => row.id === device.id))?.tokenHash !== device.tokenHash) throw fail('设备授权已失效', 401);
       return send(res, 200, await dispatch(input, device));
     } catch (e) { if (res.headersSent) res.destroy(); else send(res, e.status ?? 400, { error: e.message, code: e.code }); }
   }));

@@ -86,11 +86,15 @@ function adaptProviderAdd(source) {
     "          <div className={styles['addCard']}>",
     '            <ProviderAddForm selection={selection} protocols={protocols}',
     '              busy={addBusy} onSelect={setSelection} onBack={() => setSelection(undefined)} onClose={closeAdd}>',
-    '              {selection && piAi !== undefined && <CustomProviderCard key={selection.id}',
+    '              {selection && piAi !== undefined && (() => {',
+    '                const card = <CustomProviderCard key={selection.id}',
     '                preset={selection.type === "custom" ? undefined : selection}',
     '                taken={taken} protocols={protocols} reasoningLevels={reasoningLevels} revision={piAi.revision}',
     '                operations={operations} t={t} readOnly={!state.writable}',
-    '                onClose={closeEditor} onBusyChange={setAddBusy} />}',
+    '                onClose={closeEditor} onBusyChange={setAddBusy} />',
+    '                return selection.type === "routergo" ? <RouterGoAdd key={selection.id} providerId={selection.id}',
+    '                  writable={state.writable} ready={state.status === "ready"} onSaved={() => { closeAdd(); refreshProviders() }}>{card}</RouterGoAdd> : card',
+    '              })()}',
     '            </ProviderAddForm>',
     '          </div>',
     '        ) : protocols.length > 0 && (',
@@ -206,16 +210,15 @@ export function officialModelsUi() {
   return { name: 'commander-official-models-ui', setup(build) {
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ModelsSection\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
-      source = 'import { ModelSettingsNotice, ProviderAddForm, ProviderBrandIcon, prioritizeRouterGo, routerGo } from ' + JSON.stringify(selector) + ';\n' + source;
-      source = 'import { RouterGoAccount, RouterGoBrand } from ' + JSON.stringify(routerGoAccount) + ';\n' + source;
+      source = 'import { ModelSettingsNotice, ProviderAddForm, ProviderBrandIcon, isRouterGo, prioritizeRouterGo } from ' + JSON.stringify(selector) + ';\n' + source;
+      source = 'import { RouterGoAccount, RouterGoAdd, RouterGoBrand } from ' + JSON.stringify(routerGoAccount) + ';\n' + source;
       source = 'import { isRouterGoAccountReference } from ' + JSON.stringify(accountReference) + ';\n' + source;
       source = 'import { UIIcon } from ' + JSON.stringify(fileURLToPath(new URL('../client/iconsax.jsx', import.meta.url))) + ';\n' + source;
       source = 'import { Tooltip } from ' + JSON.stringify(fileURLToPath(new URL('../../shared/client/ui/tooltip.jsx', import.meta.url))) + ';\n' + source;
       source = 'import { Loading } from ' + JSON.stringify(loading) + ';\n' + source;
       source = 'import { deepSeekProviderRow, disconnectDeepSeekProvider } from ' + JSON.stringify(deepSeekProvider) + ';\n' + source;
-      source = once(source, "displayName: t('deepSeekAccount') } } : row) }", "displayName: t('deepSeekAccount') } } : row.entry.provider === routerGo.id ? { ...row, entry: { ...row.entry, displayName: routerGo.name } } : row) }", 'builtin provider display name');
       source = once(source, 'rows: snapshot.rows.map(row =>', "rows: snapshot.rows.filter(row => row.apiKeyEnv || !row.entry.nativeAuth?.oauth || row.entry.nativeAuth.env.some(ref => /api[_-]?key/i.test(ref) && !/oauth/i.test(ref))).map(row =>", 'hide providers that only support OAuth');
-      source = once(source, 'displayName: routerGo.name } } : row) }', 'displayName: routerGo.name } } : deepSeekProviderRow(row, snapshot.namespaces.get(row.entry.settingsNs))) }', 'DeepSeek provider display and removal state');
+      source = once(source, "displayName: t('deepSeekAccount') } } : row) }", "displayName: t('deepSeekAccount') } } : deepSeekProviderRow(row, snapshot.namespaces.get(row.entry.settingsNs))) }", 'DeepSeek provider display and removal state');
       source = once(source, 'const [deleteTarget, setDeleteTarget] = useState<EditorTarget | undefined>(undefined)', 'const [deleteTarget, setDeleteTarget] = useState<(EditorTarget & { settingsRevision: SettingsNamespaceView["revision"] }) | undefined>(undefined)', 'DeepSeek connection removal revision');
       source = once(source, '                          setDeleteTarget(target)', '                          setDeleteTarget({ ...target, settingsRevision: namespace.revision })', 'capture provider revision before deletion');
       source = once(source, '    void removeProviderProfile(operations, controller, deleteTarget)', '    void (deleteTarget.provider === "deepseek-official" && deleteTarget.settingsPath.length === 0\n      ? disconnectDeepSeekProvider(operations, controller, deleteTarget.settingsNs, deleteTarget.settingsRevision)\n      : removeProviderProfile(operations, controller, deleteTarget))', 'DeepSeek official connection removal');
@@ -236,7 +239,7 @@ export function officialModelsUi() {
       ].join('\n'), 'provider directory error feedback');
       source = 'import type { ProviderSelection } from ' + JSON.stringify(providerSelection) + ';\n' + adaptProviderAdd(source);
       source = once(source, "                  <span className={styles['rowName']}>{row.entry.displayName}</span>", [
-        '                  {isRouterGo ? <RouterGoBrand /> : <>',
+        '                  {routerGoRow ? <RouterGoBrand name={row.entry.displayName} /> : <>',
         '                    <ProviderBrandIcon id={row.entry.provider} name={row.entry.displayName} declared={row.entry.declared === true} />',
         "                    <span className={styles['rowName']}>{row.entry.displayName}</span>",
         '                  </>}',
@@ -246,38 +249,30 @@ export function officialModelsUi() {
       source = once(source, "                </span>\n                <span className={styles['rowActions']}>", "                  {open && target.provider !== target.displayName ? <span className={styles['editorRoute']}>{target.provider}</span> : null}\n                </span>\n                <span className={styles['rowActions']}>", 'show expanded provider route in heading');
       source = once(source, "aria-label={providerCopy(t('editProvider'), target)}", "aria-label={providerCopy(t('editProvider'), target)}\n                        aria-expanded={open}", 'provider editor expanded state');
       source = once(source, '  const configured = state.rows.filter(row => row.configured)', '  const configured = prioritizeRouterGo(state.rows.filter(row => row.configured), undefined, row => row.entry.provider)', 'prioritize RouterGo');
-      source = once(source, "      <ul className={styles['rows']}>\n        {configured.map", [
-        "      <ul className={styles['rows'] + ' cmd-routergo-provider-list'}>",
-        "        {!configured.some(row => row.entry.provider === routerGo.id) ? <li className={styles['rowCard'] + ' cmd-routergo-row'}>",
-        "          <RouterGoAccount writable={state.writable && protocols.includes(routerGo.protocol)} ready={state.status === 'ready'} onSaved={() => announceSaved({ provider: routerGo.id, displayName: routerGo.name })} onEdit={() => {",
-        "            setEditing(undefined); setSelection({ type: 'routergo', ...routerGo }); setAddOpen(true)",
-        "            requestAnimationFrame(() => document.querySelector('[data-routergo-manual-draft] input[aria-label]')?.focus())",
-        "          }} />",
-        '        </li> : null}',
-        '        {configured.map',
-      ].join('\n'), 'RouterGo first-run card');
-      source = once(source, '          if (needsSetup(row, anyUsable) &&', '          const isRouterGo = row.entry.provider === routerGo.id\n          const routerGoAccountConfigured = isRouterGo && isRouterGoAccountReference(row.apiKeyEnv)\n          const routerGoAvailable = row.entry.active && row.credential?.configured === true\n          if (!isRouterGo && row.entry.provider !== "deepseek-official" && needsSetup(row, anyUsable) &&', 'configured DeepSeek and RouterGo own their row actions');
+      source = once(source, "      <ul className={styles['rows']}>\n        {configured.map",
+        "      <ul className={styles['rows'] + ' cmd-routergo-provider-list'}>\n        {configured.map", 'configured provider list');
+      source = once(source, '          if (needsSetup(row, anyUsable) &&', '          const routerGoRow = isRouterGo(row.entry.provider)\n          const routerGoAccountConfigured = routerGoRow && isRouterGoAccountReference(row.apiKeyEnv)\n          const routerGoAvailable = row.entry.active && row.credential?.configured === true\n          if (!routerGoRow && row.entry.provider !== "deepseek-official" && needsSetup(row, anyUsable) &&', 'configured DeepSeek and RouterGo own their row actions');
       source = once(source, "          return (\n            <li key={row.entry.provider} className={styles['rowCard']}>\n              <div className={styles['rowHead']}>", [
         '          const renderHeader = (login?: ReactNode, routerGoConnected = false) => (',
-        "              <div className={styles['rowHead'] + (isRouterGo ? ' cmd-routergo-head' : '')}>",
+        "              <div className={styles['rowHead'] + (routerGoRow ? ' cmd-routergo-head' : '')}>",
       ].join('\n'), 'RouterGo configured header');
       source = once(source, '                  {credentialConfigured\n', '                  {!routerGoConnected && credentialConfigured\n', 'RouterGo connected status in account summary');
       source = once(source, '                    : credentialMissing\n', '                    : !routerGoConnected && credentialMissing\n', 'RouterGo credential indicator when disconnected');
-      source = once(source, "                <span className={styles['rowActions']}>", "                <span className={styles['rowActions'] + (isRouterGo ? ' cmd-routergo-actions' : '')}>\n                  {login}", 'RouterGo header login');
+      source = once(source, "                <span className={styles['rowActions']}>", "                <span className={styles['rowActions'] + (routerGoRow ? ' cmd-routergo-actions' : '')}>\n                  {login}", 'RouterGo header login');
       source = once(source, "              </div>\n              {error}\n              {renderSlot(", [
         '              </div>',
         '          )',
         '          return (',
-        "            <li key={row.entry.provider} className={styles['rowCard'] + (isRouterGo ? ' cmd-routergo-row' : '')}>",
-        "              {isRouterGo ? <RouterGoAccount renderHeader={renderHeader} writable={state.writable} ready={state.status === 'ready'} configuredRef={row.apiKeyEnv} available={routerGoAvailable}",
+        "            <li key={row.entry.provider} className={styles['rowCard'] + (routerGoRow ? ' cmd-routergo-row' : '')}>",
+        "              {routerGoRow ? <RouterGoAccount providerId={row.entry.provider} renderHeader={renderHeader} writable={state.writable} ready={state.status === 'ready'} configuredRef={row.apiKeyEnv} available={routerGoAvailable}",
         '                onSaved={() => { closeAdd(); announceSaved(target) }} /> : renderHeader()}',
         '              {error}',
         '              {renderSlot(',
       ].join('\n'), 'RouterGo configured account actions');
-      source = once(source, "                        {t('edit')}\n                      </button>", "                        {isRouterGo ? <span className=\"cmd-routergo-setting-action\"><UIIcon name={routerGoAccountConfigured ? 'cube' : 'key'} size={14} />{routerGoAccountConfigured ? '模型' : 'API 密钥与模型'}</span> : t('edit')}\n                      </button>", 'RouterGo editor action');
-      source = once(source, "                        {t('remove')}\n                      </button>", "                        {isRouterGo ? <span className=\"cmd-routergo-setting-action\"><UIIcon name=\"trash\" size={14} /><span className=\"cmd-routergo-remove-label\">{t('remove')}</span></span> : t('remove')}\n                      </button>", 'RouterGo remove action');
+      source = once(source, "                        {t('edit')}\n                      </button>", "                        {routerGoRow ? <span className=\"cmd-routergo-setting-action\"><UIIcon name={routerGoAccountConfigured ? 'cube' : 'key'} size={14} />{routerGoAccountConfigured ? '设置与模型' : 'API 密钥与模型'}</span> : t('edit')}\n                      </button>", 'RouterGo editor action');
+      source = once(source, "                        {t('remove')}\n                      </button>", "                        {routerGoRow ? <span className=\"cmd-routergo-setting-action\"><UIIcon name=\"trash\" size={14} /><span className=\"cmd-routergo-remove-label\">{t('remove')}</span></span> : t('remove')}\n                      </button>", 'RouterGo remove action');
       source = once(source, "            : <p role=\"alert\" className={styles['error']}>{row.entry.error}</p>", '            : <Tooltip label={row.entry.error}><span className="cmd-provider-error-mark" tabIndex={0} role="img" aria-label={row.entry.error}><UIIcon name="close" size={16} /></span></Tooltip>', 'provider row error indicator');
-      source = once(source, "                <span className={styles['rowActions'] + (isRouterGo ? ' cmd-routergo-actions' : '')}>\n                  {login}", "                <span className={styles['rowActions'] + (isRouterGo ? ' cmd-routergo-actions' : '')}>\n                  {error}\n                  {login}", 'place provider error indicator in header');
+      source = once(source, "                <span className={styles['rowActions'] + (routerGoRow ? ' cmd-routergo-actions' : '')}>\n                  {login}", "                <span className={styles['rowActions'] + (routerGoRow ? ' cmd-routergo-actions' : '')}>\n                  {error}\n                  {login}", 'place provider error indicator in header');
       source = once(source, "                onSaved={() => { closeAdd(); announceSaved(target) }} /> : renderHeader()}\n              {error}", "                onSaved={() => { closeAdd(); announceSaved(target) }} /> : renderHeader()}", 'remove separate provider error row');
       const editorStart = '              {open\n                ? renderProviderEditor({';
       const editorEnd = '            </li>';
@@ -285,21 +280,19 @@ export function officialModelsUi() {
       const end = source.indexOf(editorEnd, start);
       if (start < 0 || end < 0) throw Error('Official Models UI changed: configured provider editor');
       const editor = source.slice(start, end).trim().slice(1, -1);
-      source = once(source, source.slice(start, end), '              {!isRouterGo && renderEditor()}\n', 'render unmanaged provider editor');
+      source = once(source, source.slice(start, end), '              {!routerGoRow && renderEditor()}\n', 'render unmanaged provider editor');
       source = once(source, '          const renderHeader =', '          const renderEditor = (syncing = false, renderSyncAction?: ProviderEditorRenderProps["renderSyncAction"]) => ' +
         editor.replace('hideTitle: true,', 'hideTitle: true, renderSyncAction,').replace('readOnly: !state.writable,', 'readOnly: !state.writable || syncing,')
         + '\n          const renderHeader =', 'reuse editor inside RouterGo account');
       source = once(source, 'available={routerGoAvailable}', 'available={routerGoAvailable} editorOpen={open} renderEditor={renderEditor} refreshProviders={() => controller.load()}', 'RouterGo catalog sync owner');
       source = once(source, "        {deleteFailure === undefined ? null : <p className={styles['error']}>{deleteFailure}</p>}", '        {deleteFailure === undefined ? null : <ModelSettingsNotice key={deleteFailure} message={deleteFailure} />}', 'provider deletion error notification');
       source = once(source, "                  {row.removable\n                    ? (", "                  {row.removable ? (() => {\n                    const removeButton = (", 'RouterGo remove tooltip trigger');
-      source = once(source, "                      </button>\n                    )\n                    : null}", "                      </button>\n                    )\n                    return isRouterGo ? <Tooltip label={providerCopy(t('removeProvider'), target)}>{removeButton}</Tooltip> : removeButton\n                  })() : null}", 'RouterGo remove tooltip');
-      source = once(source, "          <div className={styles['addCard']}>", "          <div className={styles['addCard']} data-routergo-manual-draft={selection?.type === 'routergo' ? true : undefined}>", 'RouterGo manual draft focus');
+      source = once(source, "                      </button>\n                    )\n                    : null}", "                      </button>\n                    )\n                    return routerGoRow ? <Tooltip label={providerCopy(t('removeProvider'), target)}>{removeButton}</Tooltip> : removeButton\n                  })() : null}", 'RouterGo remove tooltip');
       source = replaceSection(source, '                  {/* Only the adapter can tell a hand-declared route', '                  {/* The store keeps the account row', '', 'remove custom badge');
       source = source.replace(/^  const \[savedTarget, setSavedTarget\].*\n/m, '');
       source = source.replace(/^ *setSavedTarget\(undefined\);? *\n?/gm, '');
       source = source.replace(/  const announceSaved = [\s\S]*?\n  }\n/, '  const refreshProviders = (): void => { void controller.load() }\n');
       source = source.replaceAll('announceSaved(target)', 'refreshProviders()');
-      source = source.replaceAll('announceSaved({ provider: routerGo.id, displayName: routerGo.name })', 'refreshProviders()');
       source = once(source, 'const closeEditor = (changed: boolean, target: ProviderIdentity)', 'const closeEditor = (changed: boolean)', 'remove saved row identity from editor close');
       source = source.replaceAll('closeEditor(changed, target)', 'closeEditor(changed)');
       source = source.replace(/  \/\/ The saved provider as the directory currently names it\.[\s\S]*?(?=  \/\/ One fact decides both first-run postures)/, '');
@@ -329,7 +322,7 @@ export function officialModelsUi() {
         "        {baseUrlInvalid ? <p className={styles['error']}>{t('customBaseUrlInvalid')}</p> : null}\n      </div>", 'address error within field');
       source = source.slice(0, identityStart) + '{!props.preset ? <>\n' + source.slice(identityStart, nameStart) + '</> : null}\n'
         + '      <div className="cmd-provider-fields">\n'
-        + '{props.preset?.type !== "routergo" ? <>\n' + source.slice(nameStart, identityEnd) + '</> : null}\n'
+        + source.slice(nameStart, identityEnd)
         + source.slice(keyStart, modelsStart) + addressFields + '      </div>\n' + source.slice(modelsStart);
       source = once(source, "<div className={styles['editor']}>", "<div className={styles['editor']} data-provider-create>", 'scope new connection form');
       source = once(source, 'export interface CustomProviderCardProps {', 'export interface CustomProviderCardProps {\n  preset?: ProviderPreset', 'preset interface');
@@ -369,9 +362,9 @@ export function officialModelsUi() {
       source = 'import { validateModelReasoning, reasoningLevelLabels } from ' + JSON.stringify(reasoningState) + ';\n' + source;
       source = 'import { ProviderBrandIcon } from ' + JSON.stringify(selector) + ';\n' + source;
       source = 'import { isRouterGoAccountReference } from ' + JSON.stringify(accountReference) + ';\n' + source;
-      source = 'import { routerGo } from ' + JSON.stringify(selector) + ';\n' + source;
+      source = 'import { isRouterGo, routerGo } from ' + JSON.stringify(selector) + ';\n' + source;
       source = once(source, "  const probeApi = stringAt(draft, 'api') ?? stringAt(fallback, 'api')", [
-        '  const managedRouterGo = props.provider === routerGo.id && isRouterGoAccountReference(keyRef)',
+        '  const managedRouterGo = isRouterGo(props.provider) && isRouterGoAccountReference(keyRef)',
         "  const probeApi = managedRouterGo ? routerGo.protocol : stringAt(draft, 'api') ?? stringAt(fallback, 'api')",
       ].join('\n'), 'identify RouterGo account credentials');
       source = once(source, "  const probeBaseURL = stringAt(draft, 'baseURL') ?? stringAt(fallback, 'baseURL')", [
@@ -417,7 +410,11 @@ export function officialModelsUi() {
 `, 'direct DeepSeek reasoning control');
       source = once(source, "defaultMaxTokens={typeof defaultMaxTokens === 'number' ? defaultMaxTokens : undefined}\n                />", "defaultMaxTokens={typeof defaultMaxTokens === 'number' ? defaultMaxTokens : undefined}\n                />\n                </>", 'direct DeepSeek reasoning layout');
       source = once(source, '                  catalogProvider={props.declared === true ? undefined : props.provider}', '                  catalogProvider={props.declared === true ? undefined : props.provider}\n                  defaultReasoningEffort={defaultReasoningEffort}', 'reasoning provider editor properties');
-      source = once(source, '        {keylessNativeAuth\n', '        {!managedRouterGo && <div className="cmd-provider-fields">\n        {keylessNativeAuth\n', 'connection fields opening');
+      const nameField = source.match(/                <div className=\{styles\['field'\]\}>\n                  <span className=\{styles\['fieldLabel'\]\}>\{t\('customDisplayName'\)\}<\/span>[\s\S]*?\n                <\/div>/u)?.[0];
+      if (!nameField) throw Error('Provider display name field changed');
+      source = once(source, '        {keylessNativeAuth\n',
+        '        {managedRouterGo && props.credentialOnly !== true && ' + nameField.trim() + '}\n'
+        + '        {!managedRouterGo && <div className="cmd-provider-fields">\n        {keylessNativeAuth\n', 'connection fields opening');
       source = once(source, "import { RetryPolicyEditor, retryPolicyDefaults, retryPolicyFailure } from './RetryPolicyEditor.tsx'\n", '', 'remove provider retry editor import');
       source = replaceSection(source, '  const [draft, setDraft]', '  // Undefined is untouched;', "  const [draft, setDraft] = useState(() => draftAt(schema, namespace, settingsPath))\n", 'remove retry draft initialization');
       source = replaceSection(source, '  const retryNode = useMemo(', '  const keyFailure =', '', 'remove inline retry validation');

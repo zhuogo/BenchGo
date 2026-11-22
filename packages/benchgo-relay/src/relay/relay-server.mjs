@@ -1,7 +1,7 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes, timingSafeEqual, verify } from 'node:crypto';
 import { createSecureServer } from 'node:http2';
 import { WebSocketServer } from 'ws';
-import { RELAY_CHUNK_BYTES as CHUNK, RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_VOICE_PATH as VOICE, RELAY_WORKBENCH_PATH as WORKBENCH, RELAY_PROBE_PATH as PROBE, RELAY_PROTOCOL, RELAY_PROTOCOL_VERSION, relayPathAllowed } from './relay-protocol.mjs';
+import { RELAY_CHUNK_BYTES as CHUNK, RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_VOICE_PATH as VOICE, RELAY_WORKBENCH_PATH as WORKBENCH, RELAY_PROBE_PATH as PROBE, RELAY_PROTOCOL, RELAY_PROTOCOL_VERSION, relayHostClaim, relayPathAllowed } from './relay-protocol.mjs';
 
 const MAX_BUFFERED = 256 * 1024;
 const MAX_STREAM_BYTES = 512 * 1024 * 1024;
@@ -25,7 +25,7 @@ const requestHeaders = (headers, path) => {
   for (const key of ['accept', 'accept-encoding', 'accept-language', 'content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'cookie']) {
     if (typeof headers[key] === 'string') result[key] = key === 'cookie' ? workbenchCookie(headers[key]) : headers[key];
   }
-  if (['/link/api/rpc', '/link/api/workbench'].includes(path) && typeof headers.authorization === 'string') result.authorization = headers.authorization;
+  if (['/link/api/info', '/link/api/rpc', '/link/api/workbench'].includes(path) && typeof headers.authorization === 'string') result.authorization = headers.authorization;
   return result;
 };
 const responseHeaders = headers => {
@@ -36,14 +36,42 @@ const responseHeaders = headers => {
   return result;
 };
 
-/** One TLS origin and one registered Link host. TLS ends here; HTTP content is visible to this relay. */
+/** TLS ends here; HTTP content is visible to this relay. */
 export async function createRelayServer({ host = '0.0.0.0', port, identity, publicUrl, token, onError = () => {} }) {
   if (!identity?.key || !identity?.cert) throw new Error('中继 TLS 证书无效');
   if (typeof token !== 'string' || token.length < 6 || token.length > 256) throw new Error('中继主机密钥至少需要 6 个字符');
   const publicOrigin = new URL(publicUrl);
   if (publicOrigin.protocol !== 'https:' || publicOrigin.origin !== publicUrl || publicOrigin.username || publicOrigin.password) throw new Error('中继公网地址必须是独立 HTTPS origin');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('中继监听端口无效');
-  let closed = false, activeHost;
+  let closed = false, defaultHost;
+  const hosts = new Map();
+  const hostKey = value => value === undefined || typeof value === 'string' && /^sha256:[A-Za-z0-9+/]{43}=$/.test(value);
+  const proofs = new Map();
+  const verifyHost = (id, proof) => {
+    if (!id) return true;
+    if (typeof proof !== 'string' || proof.length > 2048) return false;
+    const [key, expiry, nonce, signature, extra] = proof.split('.');
+    const now = Date.now(), expires = Number(expiry);
+    if (extra !== undefined || !/^[\w-]{22}$/.test(nonce ?? '') || !signature
+      || !Number.isSafeInteger(expires) || expires <= now || expires > now + 90_000) return false;
+    for (const [prior, until] of proofs) if (until <= now) proofs.delete(prior);
+    if (proofs.has(nonce) || proofs.size >= 4096) return false;
+    try {
+      const der = Buffer.from(key, 'base64url');
+      const publicKey = createPublicKey({ key: der, type: 'spki', format: 'der' });
+      if (id !== 'sha256:' + createHash('sha256').update(der).digest('base64')
+        || !verify('sha256', Buffer.from(relayHostClaim(publicOrigin.origin, id, expires, nonce)), publicKey, Buffer.from(signature, 'base64url'))) return false;
+      proofs.set(nonce, expires);
+      return true;
+    } catch { return false; }
+  };
+  const targetCookie = 'dsh_link_relay_target';
+  const hostFor = (req, selected) => {
+    const cookie = req.headers.cookie?.split(';').map(item => item.trim()).find(item => item.startsWith(targetCookie + '='));
+    const target = req.headers['x-benchgo-relay-target'] ?? selected ?? cookie?.slice(targetCookie.length + 1);
+    if (!hostKey(target)) throw fail('中继目标无效', 400);
+    return hosts.get(target ?? defaultHost);
+  };
   const tickets = new Map(), transactions = new Set(), sockets = new Set();
   const anonymousRates = new Map();
   const limitAnonymous = req => {
@@ -73,7 +101,8 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
     return entry;
   };
   const remove = transaction => { clearTimeout(transaction.attachTimer); clearTimeout(transaction.voiceTimer); tickets.delete(digest(transaction.ticket)); transactions.delete(transaction); };
-  const makeTransaction = (req, res, method, path, headers, kind = 'http') => {
+  const makeTransaction = (req, res, method, path, headers, { selected, kind = 'http' } = {}) => {
+    const activeHost = hostFor(req, selected);
     if (!activeHost || activeHost.readyState !== activeHost.OPEN) throw fail('目标设备离线', 503);
     if (transactions.size >= 64) throw fail('中继连接数已满', 429);
     const value = ticket();
@@ -92,11 +121,14 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
     return transaction;
   };
   const relayHttp = async (req, res, path) => {
-    const query = new URL(req.url, publicOrigin).search;
+    const url = new URL(req.url, publicOrigin);
+    const selected = path === '/link/' && req.method === 'GET' ? url.searchParams.get('relayTarget') ?? undefined : undefined;
+    if (selected !== undefined) url.searchParams.delete('relayTarget');
+    const query = url.search;
     if (!relayPathAllowed(req.method, path + query)) throw fail('Link 路径未授权', 404);
     if (req.headers.origin && req.headers.origin !== publicOrigin.origin) throw fail('来源未授权', 403);
-    const transaction = makeTransaction(req, res, req.method, path + query, requestHeaders(req.headers, path));
-    json(activeHost, { type: 'http', ticket: transaction.ticket, method: transaction.method, path: transaction.path, headers: transaction.headers, clientAddress: req.socket.remoteAddress });
+    const transaction = makeTransaction(req, res, req.method, path + query, requestHeaders(req.headers, path), { selected });
+    json(transaction.host, { type: 'http', ticket: transaction.ticket, method: transaction.method, path: transaction.path, headers: transaction.headers, clientAddress: req.socket.remoteAddress });
     let timer = setTimeout(() => transaction.socket?.close(1011, 'relay timeout'), 120_000); timer.unref?.();
     const touch = () => { clearTimeout(timer); timer = setTimeout(() => transaction.socket?.close(1011, 'relay timeout'), 120_000); timer.unref?.(); };
     let requestBytes = 0, responseBytes = 0;
@@ -113,7 +145,13 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
           return;
         }
         let frame; try { frame = JSON.parse(raw.toString()); } catch { transaction.socket.close(1002, 'invalid frame'); return; }
-        if (frame.type === 'response' && !res.headersSent && Number.isInteger(frame.status) && frame.status >= 100 && frame.status <= 599 && frame.headers && typeof frame.headers === 'object') res.writeHead(frame.status, { ...responseHeaders(frame.headers), ...securityHeaders });
+        if (frame.type === 'response' && !res.headersSent && Number.isInteger(frame.status) && frame.status >= 100 && frame.status <= 599 && frame.headers && typeof frame.headers === 'object') {
+          const headers = responseHeaders(frame.headers);
+          if (selected && frame.status === 200) {
+            headers['set-cookie'] = [...(headers['set-cookie'] ?? []), `${targetCookie}=${selected}; Path=/link; Secure; HttpOnly; SameSite=Lax`];
+          }
+          res.writeHead(frame.status, { ...headers, ...securityHeaders });
+        }
         else if (frame.type === 'end') { clearTimeout(timer); if (!res.headersSent) res.writeHead(502, securityHeaders); res.end(); remove(transaction); transaction.socket.close(1000); }
         else if (frame.type === 'error') { clearTimeout(timer); if (!res.headersSent) { res.writeHead(502, securityHeaders); res.end('目标设备请求失败'); } else res.destroy(); remove(transaction); transaction.socket.close(); }
         else { transaction.socket.close(1002, 'unexpected frame'); }
@@ -147,7 +185,7 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
         const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, '');
         if (!supplied || !same(supplied, token)) throw fail('中继主机密钥无效', 401);
         res.writeHead(200, { ...headers, 'content-type': 'application/json' });
-        res.end(JSON.stringify({ protocol: RELAY_PROTOCOL, version: RELAY_PROTOCOL_VERSION, authenticated: true })); return;
+        res.end(JSON.stringify({ protocol: RELAY_PROTOCOL, version: RELAY_PROTOCOL_VERSION, authenticated: true, multipleHosts: true })); return;
       }
       if (!relayPathAllowed(req.method, raw)) throw fail('Link 路径未授权', 404);
       const url = new URL(raw, publicOrigin);
@@ -164,25 +202,30 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
     if (req.url === CONTROL) {
       const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, '');
       if (!supplied || !same(supplied, token)) { socket.destroy(); return; }
-      if (closed || req.headers.host !== publicOrigin.host || req.headers.origin && req.headers.origin !== publicOrigin.origin) return reject(403);
+      const id = req.headers['x-benchgo-relay-target'];
+      if (closed || !hostKey(id) || req.headers.host !== publicOrigin.host || req.headers.origin && req.headers.origin !== publicOrigin.origin
+        || !verifyHost(id, req.headers['x-benchgo-relay-proof'])) return reject(403);
+      const key = id ?? '';
+      if (!hosts.has(key) && hosts.size >= 128) return reject(429);
       controls.handleUpgrade(req, socket, head, ws => {
-        const previous = activeHost;
-        activeHost = ws; previous?.close(1012, 'host replaced');
+        const previous = hosts.get(key);
+        defaultHost ??= key;
+        hosts.set(key, ws); previous?.close(1012, 'host replaced');
         ws.on('message', () => ws.close(1008, 'control messages are server initiated'));
         ws.on('error', () => {});
         ws.once('close', () => {
-          if (activeHost === ws) activeHost = undefined;
+          if (hosts.get(key) === ws) hosts.delete(key);
           for (const entry of transactions) if (entry.host === ws) { entry.data?.close(1011, 'host disconnected'); entry.browser?.close(1011, 'host disconnected'); entry.rejectData?.(new Error('主机已断开')); entry.res?.destroy(); entry.rawSocket?.destroy(); remove(entry); }
         });
       }); return;
     }
     if (req.url !== DATA) {
-      if (req.url !== VOICE || req.headers.host !== publicOrigin.host || req.headers.origin !== publicOrigin.origin || closed || !activeHost || activeHost.readyState !== activeHost.OPEN) return reject(403);
+      if (req.url !== VOICE || req.headers.host !== publicOrigin.host || req.headers.origin !== publicOrigin.origin || closed) return reject(403);
       let transaction;
-      try { transaction = makeTransaction(req, undefined, 'GET', VOICE, {}, 'voice'); }
+      try { transaction = makeTransaction(req, undefined, 'GET', VOICE, {}, { kind: 'voice' }); }
       catch (error) { return reject(error.status ?? 502); }
       transaction.rawSocket = socket;
-      json(activeHost, { type: 'voice', ticket: transaction.ticket, path: VOICE, cookie: workbenchCookie(req.headers.cookie).slice(0, 4096), clientAddress: req.socket.remoteAddress });
+      json(transaction.host, { type: 'voice', ticket: transaction.ticket, path: VOICE, cookie: workbenchCookie(req.headers.cookie).slice(0, 4096), clientAddress: req.socket.remoteAddress });
       transaction.attachVoice = dataSocket => {
         clearTimeout(transaction.attachTimer);
         transaction.data = dataSocket;
@@ -239,7 +282,7 @@ export async function createRelayServer({ host = '0.0.0.0', port, identity, publ
     port: server.address().port,
     origin: publicOrigin.origin,
     async close() {
-      closed = true; activeHost?.close(1001, 'relay closed');
+      closed = true; for (const channel of hosts.values()) channel.close(1001, 'relay closed');
       for (const transaction of transactions) { transaction.data?.close(1001, 'relay closed'); transaction.browser?.close(1001, 'relay closed'); transaction.res?.destroy(); transaction.rawSocket?.destroy(); transaction.rejectData?.(new Error('relay closed')); remove(transaction); }
       tickets.clear(); anonymousRates.clear();
       const done = new Promise(resolve => server.close(resolve));

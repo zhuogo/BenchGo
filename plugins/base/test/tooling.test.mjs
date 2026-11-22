@@ -83,7 +83,7 @@ test('runtime resolves the selected system executable', async () => {
 
 test('configurable provider requests require model settings API credentials', async () => {
   let gate, nextCalls = 0; const lookedUp = [];
-  const ctx = { effect() {}, on(event, listener) { assert.equal(event, 'llm/stream'); gate = listener; }, llm: { listConfigurableProviders: () => [{ provider: 'openai-codex' }, { provider: 'routergo' }] } };
+  const ctx = { effect() {}, on(event, listener) { if (event === 'llm/stream') gate = listener; }, llm: { listConfigurableProviders: () => [{ provider: 'openai-codex' }, { provider: 'routergo' }] } };
   const providers = { resolve: async () => ({}), describeAccess: async id => { lookedUp.push(id); return { id, authMode: id === 'openai-codex' ? 'unconfigured' : 'api' }; } };
   await mountTooling(ctx, { sessions: new Map(), store: { directory: '/unused' } }, providers, { installer: {} });
   async function* next() { nextCalls++; yield { type: 'passthrough' }; }
@@ -102,7 +102,7 @@ test('configurable provider requests require model settings API credentials', as
 test('managed RouterGo chat checks the exact model supports Responses before calling the engine', async () => {
   let gate;
   let modelProtocol = 'responses';
-  const ctx = { effect() {}, on(_event, listener) { gate = listener; }, llm: { listConfigurableProviders: () => [{ provider: 'routergo' }] } };
+  const ctx = { effect() {}, on(event, listener) { if (event === 'llm/stream') gate = listener; }, llm: { listConfigurableProviders: () => [{ provider: 'routergo' }] } };
   const providers = {
     resolve: async () => ({}),
     describeAccess: async () => ({ authMode: 'api', managedRouterGo: true, modelProtocol }),

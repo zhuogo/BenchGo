@@ -115,7 +115,7 @@ export async function verifyServerWorkbench(target) {
     });
   } finally { agent.destroy(); }
 }
-export function createServerManager({ directory, registry: sharedRegistry, onDevice = async () => {}, runtimeRoot, assetsRoot, relayAssetsRoot, resourceFetcher = ensureServerResources, onRelay = async () => { throw new Error('本机中继接入未配置'); }, clientFactory = () => new Client() } = {}) {
+export function createServerManager({ directory, registry: sharedRegistry, credentials, onDevice = async () => {}, runtimeRoot, assetsRoot, relayAssetsRoot, resourceFetcher = ensureServerResources, onRelay = async () => { throw new Error('本机中继接入未配置'); }, clientFactory = () => new Client() } = {}) {
   if (!directory) throw new Error('服务器管理目录未配置');
   const clients = new Set(), terminals = new Map(), commands = new Map(), reconnecting = new Map(), sshErrors = new Map(), pairings = new Map();
   const revisions = new WeakMap();
@@ -127,6 +127,20 @@ export function createServerManager({ directory, registry: sharedRegistry, onDev
     for (const device of registry.sshRecords()) records.set(device.id, device);
   });
   const ensure = () => { if (closed) throw new Error('服务器管理已关闭'); };
+  const credentialKey = id => 'benchgo-plugin/link-ssh-' + createHash('sha256').update(id).digest('hex');
+  const sshIdentity = ({ host, port, username, fingerprint }) => JSON.stringify([host, port, username, fingerprint]);
+  async function savedCredential(device) {
+    const record = await credentials?.readRecord(credentialKey(device.id));
+    return record?.payload?.identity === sshIdentity(device.ssh) ? record.payload.auth : undefined;
+  }
+  async function saveCredential(device, input) {
+    const auth = input.privateKey ? { privateKey: input.privateKey, ...(input.passphrase ? { passphrase: input.passphrase } : {}) }
+      : input.password ? { password: input.password } : undefined;
+    if (!auth) return credentials?.deleteRecord(credentialKey(device.id));
+    await credentials?.modifyRecord(credentialKey(device.id), async () => ({
+      kind: 'grant', payload: { identity: sshIdentity(device.ssh), auth },
+    }));
+  }
   const open = async (input, probe = false) => { const client = await sshConnect(input, () => { const value = clientFactory(); clients.add(value); value.once('close', () => clients.delete(value)); return value; }, probe); ensure(); return client; };
   async function resources(input, job, step, signal) {
     const labels = { checking: '检查固定版本部署资源', downloading: '下载服务器部署资源', verifying: '校验部署资源', extracting: '准备服务器部署资源', 'verifying-offline': '校验离线部署资源', 'verifying-cache': '校验缓存部署资源', 'repairing-cache': '重新获取损坏的部署资源', ready: '部署资源已就绪' };
@@ -229,10 +243,17 @@ export function createServerManager({ directory, registry: sharedRegistry, onDev
     if (reconnecting.has(id)) return reconnecting.get(id);
     const opening = (async () => {
       let client;
-      try { client = await open(device.ssh); }
+      try {
+        const auth = await savedCredential(device);
+        client = await open({ ...device.ssh, ...auth });
+      }
       catch (error) { if (records.get(id) === device && !sessions.has(id)) sshErrors.set(id, error.code); throw error; }
       try {
         if (records.get(id) !== device) throw operationError('服务器登记已变化，请重试', 'IDENTITY_CHANGED');
+        if (sessions.has(id)) {
+          client.end();
+          return sessions.get(id);
+        }
         await attach(client, device);
         return sessions.get(id);
       } catch (error) { client.end(); throw error; }
@@ -368,7 +389,8 @@ export function createServerManager({ directory, registry: sharedRegistry, onDev
       const tunnel = await session.tunnel;
       if (sessions.get(id) !== session) { await closeTunnel(session); throw operationError('SSH 连接已关闭', 'OFFLINE', 503); }
       const saved = registry.get(id);
-      return { ...device, ...saved, kind: 'ssh', pin: device.hostId ? device.hostId.slice('sha256:'.length) : device.pin, url: tunnel.url };
+      if (saved.hostId && device.hostId !== saved.hostId) throw operationError('服务器登记或主机身份已变化', 'IDENTITY_CHANGED');
+      return { ...device, ...saved, kind: 'ssh', pin: device.hostId ? device.hostId.slice('sha256:'.length) : device.pin, url: tunnel.url, relayTarget: undefined, routes: undefined };
     },
     async sshCommand({ deviceId, command, expectedRevision, signal }) {
       if (typeof command !== 'string' || !command.trim() || command.length > 16384 || command.includes('\0')) throw new Error('SSH 命令无效');
@@ -503,7 +525,7 @@ export function createServerManager({ directory, registry: sharedRegistry, onDev
           if (installed === 'present') {
             step('核验已有设备身份');
             const status = await owner(client, { action: 'status', expectedHostId: input.device?.hostId });
-            existing = input.device || registry.findByHostId(status.hostId);
+            existing = registry.findByHostId(status.hostId);
             result = existing ? { port: status.port, pin: status.hostId.slice('sha256:'.length), token: existing.token, deviceId: existing.authorizationId } : await authorizeExisting(client, status, name);
           } else {
             if (input.device) throw new Error('此 SSH 账号下没有找到已配对的 BenchGo 实例');
@@ -511,12 +533,18 @@ export function createServerManager({ directory, registry: sharedRegistry, onDev
           }
           ensure(); step('验证安全工作台');
           const ssh = { ...target, fingerprint: input.fingerprint, remotePort: result.port };
-          const device = { id: existing?.id ?? randomUUID(), name: existing?.name ?? name, kind: 'ssh', hostId: 'sha256:' + result.pin,
+          const device = { id: existing?.id ?? input.device?.id ?? randomUUID(), name: input.device?.name ?? existing?.name ?? name, kind: 'ssh', hostId: 'sha256:' + result.pin,
             authorizationId: result.deviceId, pin: result.pin, token: result.token, ssh,
             ...(result.warning ? { warning: result.warning } : {}) };
           if (existing || installed === 'absent') await verify(client, device);
+          if (input.device && registry.get(input.device.id) !== input.device) throw operationError('原设备登记已变化，请重新打开设备中心', 'IDENTITY_CHANGED');
           if (existing && registry.findByHostId(existing.hostId) !== existing) throw operationError('原设备登记已变化，请重新打开设备中心', 'IDENTITY_CHANGED');
-          return await attach(client, device, { register: true });
+          await saveCredential(device, input);
+          try { return await attach(client, device, { register: true }); }
+          catch (error) {
+            if (!records.has(device.id)) await credentials?.deleteRecord(credentialKey(device.id)).catch(() => {});
+            throw error;
+          }
         } catch (error) { client?.end(); throw error; }
         finally { connecting.delete(key); }
       });
@@ -524,7 +552,15 @@ export function createServerManager({ directory, registry: sharedRegistry, onDev
     async reconnect(input) {
       ensure(); await ready; const device = records.get(input.id); if (!device) throw new Error('未找到此服务器');
       const value = { ...device.ssh, password: input.password, privateKey: input.privateKey, passphrase: input.passphrase }; validateSshInput(value, { credentials: true });
-      return startJob(async () => { const client = await open(value).catch(error => { if (!sessions.has(input.id)) sshErrors.set(input.id, error.code); throw error; }); try { if (records.get(input.id) !== device) throw new Error('服务器登记已变化'); return await attach(client, device); } catch (error) { client.end(); throw error; } });
+      return startJob(async () => {
+        const client = await open(value).catch(error => { if (!sessions.has(input.id)) sshErrors.set(input.id, error.code); throw error; });
+        try {
+          if (records.get(input.id) !== device) throw new Error('服务器登记已变化');
+          await saveCredential(device, input);
+          if (records.get(input.id) !== device) throw new Error('服务器登记已变化');
+          return await attach(client, device);
+        } catch (error) { client.end(); throw error; }
+      });
     },
     async job(id) { ensure(); const job = jobs.get(typeof id === 'string' ? id : id?.id); if (!job) throw new Error('任务已过期'); return structuredClone(job); },
     activeRelayJob() { ensure(); const job = [...jobs.values()].reverse().find(item => item.kind === 'relay'); return job ? structuredClone(job) : null; },
@@ -537,7 +573,8 @@ export function createServerManager({ directory, registry: sharedRegistry, onDev
         const result = await install(session.client, { source: device.ssh.source }, 'update', job, step, signal);
         const pin = device.hostId ? device.hostId.slice('sha256:'.length) : device.pin;
         if (records.get(device.id) !== device || result.pin !== pin || sessions.get(device.id) !== session) throw operationError('服务器登记或主机身份已变化', 'IDENTITY_CHANGED');
-        const updated = { ...device, ...registry.get(device.id), pin, ssh: { ...device.ssh, remotePort: result.port } };
+        const saved = registry.get(device.id);
+        const updated = { ...(saved.authorize ? device : { ...device, ...saved }), name: saved.name, pin, ssh: { ...device.ssh, remotePort: result.port } };
         await verify(session.client, updated);
         return attach(session.client, updated, { register: true });
       });
@@ -547,7 +584,23 @@ export function createServerManager({ directory, registry: sharedRegistry, onDev
       const result = await execute(session.client, prefix + commands[operation]); if (result.code !== 0 && operation !== 'status') throw new Error('服务器服务操作失败');
       return { operation, status: operation === 'status' ? result.stdout.trim() : operation === 'stop' ? 'stopped' : undefined, ...(operation === 'logs' ? { logs: redactServerLog(result.stdout) } : {}) };
     },
-    async disconnect(id) { await ready; if (!records.delete(id)) return; sshErrors.delete(id); pairings.delete(id); for (const controller of commands.get(id) ?? []) controller.abort(); for (const [key, terminal] of terminals) if (terminal.deviceId === id) closeTerminal(key); const session = sessions.get(id); sessions.delete(id); if (session) { await closeTunnel(session); session.client.end(); } if (!sharedRegistry) await registry.remove(id); },
+    async disconnect(id) {
+      await ready;
+      const device = records.get(id);
+      if (!device) return;
+      records.delete(id);
+      try { await credentials?.deleteRecord(credentialKey(id)); }
+      catch (error) {
+        if (!records.has(id)) records.set(id, device);
+        throw error;
+      }
+      sshErrors.delete(id); pairings.delete(id);
+      for (const controller of commands.get(id) ?? []) controller.abort();
+      for (const [key, terminal] of terminals) if (terminal.deviceId === id) closeTerminal(key);
+      const session = sessions.get(id); sessions.delete(id);
+      if (session) { await closeTunnel(session); session.client.end(); }
+      if (!sharedRegistry) await registry.remove(id);
+    },
     async close() { if (closed) return; closed = true; for (const controller of controls.values()) controller.abort(); for (const id of terminals.keys()) closeTerminal(id); for (const client of clients) client.destroy(); await ready; for (const session of sessions.values()) { await closeTunnel(session); session.client.end(); } sessions.clear(); await registry.flush(); },
   };
 }

@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_UPDATE_CONFIG, normalizeUpdateConfig, fetchVerifiedRelease, fetchUpdateArtifact, compareVersions, isNewerVersion, resolveUpdateUrl } from '../shared/update-feed.mjs';
+import { DEFAULT_UPDATE_CONFIG, normalizeUpdateConfig, fetchVerifiedRelease, fetchUpdateArtifact, fetchLatestDownloadCatalog, compareVersions, isNewerVersion, resolveUpdateUrl } from '../shared/update-feed.mjs';
 import { prepareRelease, activateRelease, getInstallState } from '../shared/plugin-install.mjs';
 import { assertSameOrigin } from '../shared/http.mjs';
 import { readLimited } from '../shared/http.mjs';
@@ -29,6 +29,15 @@ export async function createUpdates({ directory, profile, runtime, version, rele
   const updateFetch = (url, options = {}) => fetcher(url, { ...options, signal: AbortSignal.any([lifetime.signal, ...(options.signal ? [options.signal] : [])]) });
   let config = { ...DEFAULT_UPDATE_CONFIG }, phase = 'idle', release = null, error = '', checkedAt = null, task = null, lastAction = null, closed = false, progress = null, staged = null;
   let confirmedReleaseVersion = releaseVersion;
+  let downloads, downloadsRead, downloadsExpiresAt = 0;
+  const readDownloads = () => {
+    if (downloads && Date.now() < downloadsExpiresAt) return downloads;
+    return downloadsRead ??= fetchLatestDownloadCatalog({ fetcher: updateFetch, publicKey, signal: lifetime.signal }).then(catalog => {
+      downloads = { files: catalog.files };
+      downloadsExpiresAt = Date.now() + 5 * 60_000;
+      return downloads;
+    }).finally(() => { downloadsRead = null; });
+  };
   try { config = normalizeUpdateConfig(await json(configFile)); } catch (failure) { if (failure.code !== 'ENOENT') error = '更新源配置读取失败，请重新选择更新来源'; }
   const installed = async () => profile ? await install.getInstallState(profile) : { managed: false };
   const compatibility = state => {
@@ -122,6 +131,7 @@ export async function createUpdates({ directory, profile, runtime, version, rele
   const dispatch = async input => {
     if (input.action === 'status') return status();
     if (closed) throw conflict('更新服务已关闭');
+    if (input.action === 'downloads') return readDownloads();
     if (dispatching || task) throw conflict('更新正在进行，请稍候');
     dispatching = true;
     try {

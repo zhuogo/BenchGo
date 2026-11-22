@@ -77,5 +77,10 @@ test('official configuration, credentials, model and connection events invalidat
   for (const event of ['connection/reset', 'llm/adapters-updated', 'llm/models-updated', 'settings/document-updated', 'credentials/record-updated', 'credentials/reference-updated']) {
     const before = pickerCatalog.getSnapshot(); events.get(event)(); assert.equal(pickerCatalog.getSnapshot(), before + 1);
   }
+  const revision = pickerCatalog.getSnapshot();
+  events.get('settings/document-updated')('agent-default-model');
+  assert.equal(pickerCatalog.getSnapshot(), revision);
+  events.get('settings/document-updated')('llm-deepseek');
+  assert.equal(pickerCatalog.getSnapshot(), revision + 1);
   const before = pickerCatalog.getSnapshot(); cleanups[0](); assert.equal(pickerCatalog.getSnapshot(), before + 1);
 });

@@ -7,7 +7,31 @@ import { validateConfig as validateCertificateConfig } from '../../scripts/ip-ce
 
 const ROOT = '/opt/benchgo-relay';
 const MARKER = '# Managed by BenchGo relay deployment v1';
+const BAOTA_MASTER_RELOAD = String.raw`import os, signal, subprocess, sys
+binary = '/www/server/nginx/sbin/nginx'
+command = 'nginx: master process ' + binary + ' -c /www/server/nginx/conf/nginx.conf'
+masters = []
+for row in subprocess.check_output(['ps', '-eo', 'pid=,args='], text=True).splitlines():
+ fields = row.strip().split(None, 1)
+ if len(fields) != 2 or fields[1] != command: continue
+ pid = fields[0]
+ try:
+  if os.path.samefile('/proc/' + pid + '/exe', binary): masters.append(int(pid))
+ except FileNotFoundError:
+  pass
+if len(masters) != 1: sys.exit('无法唯一识别正在运行的宝塔 Nginx 主进程')
+os.kill(masters[0], signal.SIGHUP)`;
 const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
+const UFW_RELAY_RULE = 'BenchGo-Relay';
+const UFW_RULES = String.raw`ufw_relay_rules() {
+ LC_ALL=C LANGUAGE=C ufw status numbered | awk -v port="$1" -v marker="$2" '
+  $0 ~ "# " marker "[[:space:]]*$" {
+   line=$0
+   sub(/^\[[[:space:]]*/, "", line)
+   split(line, rule, /\][[:space:]]+/)
+   if (rule[1] ~ /^[0-9]+$/ && rule[2] ~ ("^" port "/tcp([[:space:]]+[(]v6[)])?[[:space:]]+ALLOW IN[[:space:]]+Anywhere([[:space:]]+[(]v6[)])?[[:space:]]+# ")) print rule[1]
+  }'
+}`;
 const WEBROOT_DETECTOR = String.raw`import glob, os, re, sys
 domain=sys.argv[1]
 files=[]
@@ -36,8 +60,8 @@ export function validateRelayDeployment(input) {
   const publicIp = String(input.publicIp ?? '').trim();
   const domain = String(input.domain ?? '').trim().toLowerCase();
   if (domain && (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain))) throw new Error('请输入有效域名');
-  if (!isIP(publicIp) || /^(?:0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(publicIp) || publicIp === '::1' || /^(?:f[cd]|fe80:)/i.test(publicIp)) throw new Error('请输入服务器实际公网 IP');
-  const relayPort = Number(input.relayPort ?? 48730);
+  if ((publicIp || !domain) && (!isIP(publicIp) || /^(?:0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(publicIp) || publicIp === '::1' || /^(?:f[cd]|fe80:)/i.test(publicIp))) throw new Error('请输入服务器实际公网 IP');
+  const relayPort = Number(input.relayPort ?? 24680);
   if (!Number.isInteger(relayPort) || relayPort < 20000 || relayPort > 49151) throw new Error('中继端口须为 20000–49151');
   const email = String(input.email ?? '').trim();
   if (email && !/^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}$/.test(email)) throw new Error('请输入有效联系邮箱');
@@ -61,6 +85,7 @@ export function verifyRelayTls(url) {
 }
 export function relayDeploymentScript(config, stage) {
   const payload = Buffer.from(JSON.stringify(config)).toString('base64');
+  const challengeHost = new URL(config.url).hostname;
   return `set -eu
 [ "$(id -u)" = 0 ] || { echo '需要 root 或免密 sudo'; exit 1; }
 command -v systemctl >/dev/null
@@ -109,7 +134,7 @@ if ! env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy 
  fi
 fi
 rm -f "$ROOT/pip-error.log"
-echo 'BENCHGO_STAGE:检查公网端口'
+echo 'BENCHGO_STAGE:检查中继监听端口'
 node --input-type=module - "$ROOT" "$NODE" <<'JS'
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {createServer} from 'node:net';
@@ -129,6 +154,7 @@ if(c.challengeMode==='standalone'){
 }
 JS
 systemctl daemon-reload
+WEBROOT=${quote(config.webroot)}
 ${config.challengeMode === 'standalone' ? `CHALLENGE_STARTED=0
 if ! systemctl is-active --quiet benchgo-relay-challenge.service; then
  systemctl enable --now benchgo-relay-challenge.service
@@ -143,7 +169,8 @@ cleanup_challenge() {
  fi
  exit "$code"
 }
-trap cleanup_challenge EXIT` : `WEBROOT=${quote(config.webroot)}
+trap cleanup_challenge EXIT` : `NGINX_RELAY_CONF=/www/server/panel/vhost/nginx/benchgo-relay-${config.domain}.conf
+RELOAD_NGINX=0
 if [ "${config.webrootAuto ? '1' : '0'}" = 1 ]; then
  DETECTED_WEBROOT=$(python3 - ${quote(config.domain)} <<'PYWEBROOT'
 ${WEBROOT_DETECTOR}
@@ -151,17 +178,16 @@ PYWEBROOT
 )
  if [ -n "$DETECTED_WEBROOT" ]; then WEBROOT=$DETECTED_WEBROOT; fi
  if [ ! -d "$WEBROOT" ]; then
-  for candidate in "/var/www/${config.domain}" "/var/www/html" "/srv/www/${config.domain}" "/www/server/nginx/html/${config.domain}"; do
+  for candidate in "/var/www/${config.domain}" "/srv/www/${config.domain}" "/www/server/nginx/html/${config.domain}"; do
    if [ -d "$candidate" ]; then WEBROOT="$candidate"; break; fi
   done
  fi
 fi
-if [ ! -d "$WEBROOT" ] && command -v nginx >/dev/null; then
+if [ ! -d "$WEBROOT" ] && [ "${config.webrootAuto ? '1' : '0'}" = 1 ] && [ -n ${quote(config.domain)} ] && [ -d /www/server/panel/vhost/nginx ] && [ -x /www/server/nginx/sbin/nginx ]; then
  WEBROOT="$ROOT/acme-webroot"
  mkdir -p "$WEBROOT/.well-known/acme-challenge"
- NGINX_RELAY_CONF=/www/server/panel/vhost/nginx/benchgo-relay-${config.domain}.conf
- if [ -e "$NGINX_RELAY_CONF" ] && ! grep -q '^# Managed by BenchGo relay deployment v1$' "$NGINX_RELAY_CONF"; then
-  echo '目标域名已有未归属的 Nginx 配置，拒绝覆盖'; exit 1
+ if [ -L "$NGINX_RELAY_CONF" ] || { [ -e "$NGINX_RELAY_CONF" ] && [ "$(head -n 1 "$NGINX_RELAY_CONF")" != "$MARKER" ]; }; then
+  echo '目标域名已有未归属的 Nginx 配置，拒绝覆盖' >&2; exit 1
  fi
  cat > "$NGINX_RELAY_CONF" <<NGINX
 # Managed by BenchGo relay deployment v1
@@ -174,9 +200,11 @@ server {
     location / { return 404; }
 }
 NGINX
- nginx -t >/dev/null && (systemctl reload nginx 2>/dev/null || service nginx reload 2>/dev/null)
 fi
-if ! command -v nginx >/dev/null && ! command -v apache2 >/dev/null && ! command -v httpd >/dev/null && ! command -v caddy >/dev/null; then
+if [ "$WEBROOT" = "$ROOT/acme-webroot" ] && [ -f "$NGINX_RELAY_CONF" ] && [ ! -L "$NGINX_RELAY_CONF" ] && [ "$(head -n 1 "$NGINX_RELAY_CONF")" = "$MARKER" ]; then
+ RELOAD_NGINX=1
+fi
+if [ "${config.webrootAuto ? '1' : '0'}" = 1 ] && [ ! -d "$WEBROOT" ] && [ ! -x /www/server/nginx/sbin/nginx ] && ! command -v nginx >/dev/null && ! command -v apache2 >/dev/null && ! command -v httpd >/dev/null && ! command -v caddy >/dev/null; then
  WEBROOT="$ROOT/challenge"
  mkdir -p "$WEBROOT"
  cat > /etc/systemd/system/benchgo-relay-challenge.service <<CHALLENGE
@@ -199,14 +227,34 @@ const [root,webroot]=process.argv.slice(2), config=JSON.parse(readFileSync(root+
 config.webroot=webroot; writeFileSync(root+'/deploy.json',JSON.stringify(config),{mode:0o600});
 JS
 fi
-CHALLENGE_FILE="$WEBROOT/.well-known/acme-challenge/.benchgo-${randomBytes(8).toString('hex')}"
-printf '%s' 'benchgo-http01-check' > "$CHALLENGE_FILE"
+echo 'BENCHGO_STAGE:验证 HTTP-01 路由'
+CHALLENGE_FILE="$WEBROOT/.well-known/acme-challenge/benchgo-${randomBytes(8).toString('hex')}"
 cleanup_webroot() { rm -f "$CHALLENGE_FILE"; }
 trap cleanup_webroot EXIT
-if ! command -v curl >/dev/null; then echo '域名模式需要 curl 检查现有网站的 challenge 路径'; exit 1; fi
-if ! env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy curl --fail --silent --show-error --location --insecure --max-time 10 -H ${quote('Host: ' + config.domain)} http://127.0.0.1/.well-known/acme-challenge/$(basename "$CHALLENGE_FILE") | grep -Fx 'benchgo-http01-check' >/dev/null; then
- echo '域名的 webroot 未被现有网站映射，无法通过 HTTP-01 验证；请检查宝塔站点根目录和 80 端口'; exit 1
-fi`}
+printf '%s' "$(basename "$CHALLENGE_FILE")" > "$CHALLENGE_FILE"
+chmod 644 "$CHALLENGE_FILE"
+if ! command -v curl >/dev/null; then echo 'webroot 验证需要 curl' >&2; exit 1; fi
+if [ "$RELOAD_NGINX" = 1 ]; then
+ if ! /www/server/nginx/sbin/nginx -t -c /www/server/nginx/conf/nginx.conf; then echo 'Nginx 配置校验失败，请检查其错误日志' >&2; exit 1; fi
+ if ! /www/server/nginx/sbin/nginx -s reload -c /www/server/nginx/conf/nginx.conf 2>/dev/null; then
+  if ! python3 - <<'PYRELOAD'
+${BAOTA_MASTER_RELOAD}
+PYRELOAD
+  then echo 'Nginx 未能重载，请检查宝塔 Nginx 的主进程和 PID 文件' >&2; exit 1; fi
+ fi
+fi
+for attempt in 1 2 3 4 5; do
+ if CHALLENGE_RESPONSE=$(curl --noproxy '*' --silent --show-error --location --insecure --max-redirs 3 --proto-redir '=http,https' \
+  --max-time 3 --max-filesize 1024 --write-out '\\n%{http_code}' \
+  --connect-to ${quote(challengeHost + '::127.0.0.1:')} "http://${challengeHost}/.well-known/acme-challenge/$(basename "$CHALLENGE_FILE")") &&
+  [ "$CHALLENGE_RESPONSE" = "$(basename "$CHALLENGE_FILE")"$'\\n200' ]; then break; fi
+ if [ "$attempt" = 5 ]; then
+  HTTP_STATUS=${'${CHALLENGE_RESPONSE##*$\'\\n\'}'}
+  printf 'HTTP-01 验证失败，HTTP 状态 %s。请检查公网 80 端口和 /.well-known/acme-challenge/ 到 %s 的映射\\n' "$HTTP_STATUS" "$WEBROOT" >&2
+  exit 1
+ fi
+ sleep 1
+done`}
 echo 'BENCHGO_STAGE:申请公网证书'
  env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy node "$ROOT/ip-certificate.mjs" issue --state-dir "$ROOT/state" ${config.domain ? '--domain ' + quote(config.domain) : '--ip ' + quote(config.publicIp)} ${config.email ? '--email ' + quote(config.email) : ''} --webroot "$WEBROOT" --challenge-port 80 --relay-port ${config.relayPort} --confirm-public-ip true --certbot "$ROOT/certbot/bin/certbot"
 echo 'BENCHGO_STAGE:配置并启动中继'
@@ -234,20 +282,36 @@ systemctl enable --now benchgo-relay-cert-renew.timer
 systemctl enable benchgo-relay.service
 systemctl restart benchgo-relay.service
 systemctl is-active --quiet benchgo-relay.service
+if command -v ufw >/dev/null; then
+ UFW_STATUS=$(LC_ALL=C LANGUAGE=C ufw status)
+ if printf '%s\\n' "$UFW_STATUS" | grep -qx 'Status: active'; then
+  echo 'BENCHGO_STAGE:配置服务器防火墙'
+  UFW_RULES=$(LC_ALL=C LANGUAGE=C ufw show added)
+  if ! printf '%s\\n' "$UFW_RULES" | grep -Eq "^ufw allow ${config.relayPort}/tcp([[:space:]]+comment[[:space:]]+.*)?$"; then
+   if ! LC_ALL=C LANGUAGE=C ufw allow ${config.relayPort}/tcp comment ${UFW_RELAY_RULE}-${config.relayPort}; then
+    echo '中继已启动，UFW 放行失败，请检查服务器防火墙' >&2
+    exit 1
+   fi
+  fi
+ fi
+fi
 `;
 }
 export async function deployRelay({ client, input, execute, upload, assets, step, onRelay, verify = verifyRelayTls }) {
-  const config = validateRelayDeployment(input); let token = randomBytes(32).toString('base64url');
+  let config = validateRelayDeployment(input);
+  let token = randomBytes(32).toString('base64url');
   if (config.domain) {
     const [a, aaaa] = await Promise.all([
       resolve4(config.domain).catch(() => []),
       resolve6(config.domain).catch(() => []),
     ]);
     const records = [...a, ...aaaa];
+    const publicIp = config.publicIp || records[0];
     // Do not issue a certificate when another address could send ACME traffic elsewhere.
-    if (!records.length || records.some(record => record !== config.publicIp)) {
+    if (!records.length || records.some(record => record !== publicIp)) {
       throw new Error('域名 DNS 未解析到服务器公网 IP，或存在指向其他服务器的记录，请先完成解析后重试');
     }
+    config = validateRelayDeployment({ ...input, publicIp });
   }
   // Preserve an existing registered relay identity on retry; read only our marked directory.
   const saved = await execute(client, 'if [ "$(id -u)" = 0 ]; then bash -s; else sudo -n bash -s; fi', { stdin: 'if [ ! -L ' + quote(ROOT) + ' ] && [ "$(cat ' + quote(ROOT + '/.managed') + ' 2>/dev/null)" = ' + quote(MARKER) + ' ] && [ -f ' + quote(ROOT + '/relay.json') + ' ]; then cat ' + quote(ROOT + '/relay.json') + '; fi' });
@@ -262,13 +326,18 @@ export async function deployRelay({ client, input, execute, upload, assets, step
     for (const name of ['run-relay-server.cjs','ip-certificate.mjs']) await upload(client, join(assets, name), stage + '/' + name);
     step('检查端口、申请公网证书并安装服务');
     let stageOutput = '';
-    const deployed = await execute(client, 'if [ "$(id -u)" = 0 ]; then bash -s; else sudo -n bash -s; fi', { stdin: relayDeploymentScript({...config,token}, stage), timeout: 25 * 60 * 1000, onData: data => {
+    const deployed = await execute(client, 'if [ "$(id -u)" = 0 ]; then bash -s; else sudo -n bash -s; fi', { stdin: relayDeploymentScript({...config,token}, stage), timeout: 25 * 60 * 1000, onData: (data, source) => {
+      if (source !== 'stdout') return;
       stageOutput += data;
       const lines = stageOutput.split(/\r?\n/); stageOutput = lines.pop() ?? '';
       for (const line of lines) if (line.startsWith('BENCHGO_STAGE:')) step(line.slice('BENCHGO_STAGE:'.length));
     } });
     if (deployed.code !== 0) throw new Error((deployed.stderr || deployed.stdout || '中继部署失败').split(token).join('[redacted]').slice(-3000));
-    step('验证公网可信 TLS'); await verify(config.url);
+    step('验证公网可信 TLS');
+    try { await verify(config.url); }
+    catch (error) {
+      throw new Error(`中继已启动，公网 TLS 验证失败（${config.relayPort}/TCP）。请确认云安全组和服务器防火墙允许该端口。\n${error.message}`, { cause: error });
+    }
     step('接入本机 Link'); try { await onRelay({ ...config, token }); } catch { throw new Error('中继服务及可信 TLS 已部署，但本机接入失败；请修正本机配置后重试部署'); }
     return { relay: { url: config.url, publicIp: config.publicIp, port: config.relayPort, tls: 'verified', host: 'pending' } };
   } finally { await execute(client, 'rm -rf -- ' + quote(stage), { timeout: 10000 }).catch(() => {}); }
@@ -287,5 +356,23 @@ export function relayManagementCommand(operation) {
   };
   if (Object.hasOwn(commands, operation)) return prefix + commands[operation];
   if (operation !== 'uninstall') throw new Error('不支持的中继操作');
-  return prefix + `for unit in benchgo-relay.service benchgo-relay-challenge.service benchgo-relay-cert-renew.service benchgo-relay-cert-renew.timer; do if [ -e "/etc/systemd/system/$unit" ] || [ -L "/etc/systemd/system/$unit" ]; then [ ! -L "/etc/systemd/system/$unit" ] && [ "$(head -n 1 "/etc/systemd/system/$unit")" = ${quote(MARKER)} ]; fi; done; for unit in benchgo-relay.service benchgo-relay-challenge.service benchgo-relay-cert-renew.timer; do systemctl disable --now "$unit" 2>/dev/null || true; done; rm -f /etc/systemd/system/benchgo-relay.service /etc/systemd/system/benchgo-relay-challenge.service /etc/systemd/system/benchgo-relay-cert-renew.service /etc/systemd/system/benchgo-relay-cert-renew.timer; systemctl daemon-reload; rm -rf -- "$ROOT"`;
+  return prefix + `
+for unit in benchgo-relay.service benchgo-relay-challenge.service benchgo-relay-cert-renew.service benchgo-relay-cert-renew.timer; do
+ if [ -e "/etc/systemd/system/$unit" ] || [ -L "/etc/systemd/system/$unit" ]; then
+  [ ! -L "/etc/systemd/system/$unit" ] && [ "$(head -n 1 "/etc/systemd/system/$unit")" = ${quote(MARKER)} ]
+ fi
+done
+for unit in benchgo-relay.service benchgo-relay-challenge.service benchgo-relay-cert-renew.timer; do
+ systemctl disable --now "$unit" 2>/dev/null || true
+done
+if [ -f "$ROOT/relay.json" ] && command -v ufw >/dev/null; then
+ PORT=$(node -e 'const {port}=require("/opt/benchgo-relay/relay.json"); if (!Number.isInteger(port) || port < 20000 || port > 49151) process.exit(1); console.log(port)')
+ ${UFW_RULES}
+ for rule in $(ufw_relay_rules "$PORT" "${UFW_RELAY_RULE}-$PORT" | sort -nr); do
+  LC_ALL=C LANGUAGE=C ufw --force delete "$rule"
+ done
+fi
+rm -f /etc/systemd/system/benchgo-relay.service /etc/systemd/system/benchgo-relay-challenge.service /etc/systemd/system/benchgo-relay-cert-renew.service /etc/systemd/system/benchgo-relay-cert-renew.timer
+systemctl daemon-reload
+rm -rf -- "$ROOT"`;
 }

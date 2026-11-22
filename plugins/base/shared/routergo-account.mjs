@@ -5,3 +5,7 @@ export const routerGoRecharge = routerGoOrigin + '/workbench/recharge';
 export function isRouterGoAccountReference(ref) {
   return typeof ref === 'string' && /^BENCHGO_ROUTERGO_KEY_[a-f0-9]{32}$/.test(ref);
 }
+
+export function routerGoAccountTokenReference(ref) {
+  return ref.replace('_KEY_', '_ACCOUNT_');
+}

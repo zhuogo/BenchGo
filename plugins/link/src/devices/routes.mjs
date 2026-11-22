@@ -20,7 +20,7 @@ export function deviceIdentity(candidate, value) {
     throw Object.assign(new Error('目标设备身份或配对授权已变化'), { code: 'IDENTITY_CHANGED', status: 409 });
   }
   const routes = normalizeRoutes(value?.routes);
-  if (routes?.some(route => route.kind === 'direct' && 'sha256:' + route.pin !== hostId)) {
+  if (routes?.some(route => route.kind === 'direct' && 'sha256:' + route.pin !== hostId || route.relayTarget && route.relayTarget !== hostId)) {
     throw Object.assign(new Error('主机提供的连接路线与已配对身份不一致'), { code: 'IDENTITY_CHANGED', status: 409 });
   }
   return { hostId, authorizationId, routes };
@@ -54,7 +54,7 @@ export async function selectRoute(target, { timeout = 2500, signal, probe = prob
   const candidates = routes.filter(route => route.kind !== 'direct' || !loopback(route.url) || loopback(admitted) && route.url === admitted);
   const now = Date.now(), ordered = orderRoutes(candidates, now);
   if (target.pairedEndpointFallback === true && !target.pin && !loopback(admitted) && !candidates.some(route => route.kind === 'relay' && route.url === admitted)) {
-    ordered.push({ kind: 'public', url: admitted });
+    ordered.push({ kind: 'public', url: admitted, relayTarget: target.relayTarget });
   }
   const retryAt = Math.min(...candidates.filter(route => route.kind === 'relay' && cooling(route, now)).map(route => route.cooldownUntil));
   const recovering = () => Object.assign(new Error('中继连接正在恢复，请稍后重试或在设备中心检查连接'), { code: 'ROUTES_COOLDOWN', status: 503, retryAt });
@@ -68,7 +68,7 @@ export async function selectRoute(target, { timeout = 2500, signal, probe = prob
   const attempts = [...ordered];
   for (const route of attempts) {
     signal?.throwIfAborted();
-    const candidate = { ...target, url: route.url, pin: route.kind === 'direct' ? route.pin : '' };
+    const candidate = { ...target, url: route.url, pin: route.kind === 'direct' ? route.pin : '', relayTarget: route.relayTarget };
     try {
       await probe({ url: candidate.url, pin: candidate.pin }, { timeout, signal });
       await accept?.(candidate, route.kind === 'public' ? undefined : route);

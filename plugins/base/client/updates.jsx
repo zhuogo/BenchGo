@@ -2,7 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Select } from '../../shared/client/select.jsx';
 import { readJsonResponse } from './http-response.mjs';
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { LinkIconMedium, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
+import { IconDownloadOutlineMedium, LinkIconMedium, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
 import { Tooltip as BubbleTooltip } from '../../shared/client/ui/tooltip.jsx';
 import { UIIcon } from './iconsax.jsx';
 import css from './updates.css';
@@ -10,6 +10,13 @@ import { brandIcon } from '../../link/client/brand.jsx';
 import { Loading } from '../../shared/client/ui/loading.jsx';
 
 const activePhases = new Set(['checking', 'downloading']);
+const updatePath = 'api/commander/updates';
+const downloadPlatforms = [
+  { name: 'Windows', icon: 'computer', packages: [['windows-x64', '.exe', 'x64 · EXE']] },
+  { name: 'macOS', icon: 'computer', packages: [['mac-arm64', '.dmg', 'Apple 芯片'], ['mac-x64', '.dmg', 'Intel 芯片']] },
+  { name: 'Android', icon: 'mobile', packages: [['android', '.apk', 'APK']] },
+  { name: 'Linux 服务端', icon: 'server', packages: [['linux-server', '.tar.gz', 'x64 · TAR.GZ']] },
+];
 const sourceNames = { mirror: '国内加速', github: 'GitHub 直连', custom: '自定义镜像' };
 const httpsUrl = value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : null; } catch { return null; } };
 const nativeActivePhases = new Set(['checking', 'downloading', 'verifying', 'installing']);
@@ -157,6 +164,58 @@ export function mountUpdatesStyle(ctx) {
   ctx.effect(() => () => style.remove());
 }
 
+function DeviceDownloads({ active }) {
+  const id = useId();
+  const [files, setFiles] = useState(null), [error, setError] = useState(false), [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const controller = new AbortController();
+    const url = new URL(updatePath, document.baseURI);
+    setError(false);
+    void (async () => {
+      try {
+        const response = await fetch(url, {
+          method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'downloads' }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]),
+        });
+        const catalog = await readJsonResponse(response, url);
+        if (!Array.isArray(catalog.files)) throw new Error('下载目录不可用');
+        if (!controller.signal.aborted) setFiles(catalog.files);
+      } catch { if (!controller.signal.aborted) setError(true); }
+    })();
+    return () => controller.abort();
+  }, [active, attempt]);
+
+  const available = files && downloadPlatforms.flatMap(({ name, icon, packages }) => {
+    const links = packages.flatMap(([target, suffix, label]) => {
+      const file = files.find(item => item?.target === target && typeof item.url === 'string' && item.url.endsWith(suffix));
+      return file ? [{ ...file, label }] : [];
+    });
+    return links.length ? [{ name, icon, links }] : [];
+  });
+  return <section className="cmd-download-platforms" aria-labelledby={id}>
+    <div className="cmd-download-heading">
+      <h3 id={id}>其他设备下载</h3>
+      <a className="cmd-download-website" href="https://benchgo.cn/" target="_blank" rel="noopener noreferrer">访问官网<UIIcon name="external" size={14} /></a>
+    </div>
+    {!!available?.length && <ul className="cmd-download-list">
+      {available.map(({ name, icon, links }) => <li key={name}>
+          <span className="cmd-download-platform"><UIIcon name={icon} size={18} />{name}</span>
+          <span className="cmd-download-links">{links.map(file => <a key={file.target} href={file.url} target="_blank" rel="noopener noreferrer" aria-label={`下载 ${name} ${file.label} v${file.version}`}>
+            {file.label}<small>v{file.version}</small><IconDownloadOutlineMedium size={14} aria-hidden="true" />
+          </a>)}</span>
+        </li>)}
+    </ul>}
+    {!files && !error && <p className="cmd-download-message" role="status">正在读取下载列表…</p>}
+    {available?.length === 0 && !error && <p className="cmd-download-message" role="status">暂无可下载的安装包</p>}
+    {error && <div className="cmd-download-message" role="status">
+      <span>{files ? '暂时无法刷新下载列表' : '暂时无法读取下载列表'}</span>
+      <button type="button" className="cmd-update-text-button" onClick={() => setAttempt(value => value + 1)}>重试下载列表</button>
+    </div>}
+    <p className="cmd-download-message">iPhone 和 iPad 可通过 Safari 配对使用。</p>
+  </section>;
+}
+
 /** A host update changes the connected computer; it never updates a mobile APK. */
 export function UpdateLauncher({ host, wide = true }) {
   const [open, setOpen] = useState(false), [data, setData] = useState(null), [error, setError] = useState(''), [pending, setPending] = useState('');
@@ -186,11 +245,12 @@ export function UpdateLauncher({ host, wide = true }) {
     controllers.current.add(controller); flight.current = controller;
     if (mounted.current && action !== 'status') { setPending(action); setError(''); }
     try {
-      const response = await fetch(new URL('api/commander/updates', document.baseURI), {
+      const url = new URL(updatePath, document.baseURI);
+      const response = await fetch(url, {
         method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action, ...args }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
       });
-      const value = await readJsonResponse(response, new URL('api/commander/updates', document.baseURI));
+      const value = await readJsonResponse(response, url);
       if (mounted.current && !controller.signal.aborted) {
         setData(value);
         if (value.config) { setSource(value.config.source); setMirrorUrl(value.config.mirrorUrl || ''); }
@@ -282,12 +342,7 @@ export function UpdateLauncher({ host, wide = true }) {
     catch (failure) { if (mounted.current) { retryAction.current = { action: 'app' }; setError(failure?.message || '无法打开应用更新，请重试。'); } }
     finally { if (flight.current === operation) { flight.current = null; if (mounted.current) setPending(''); } }
   };
-  const check = async () => {
-    const current = await run('check');
-    // The public native bridge intentionally owns checking, confirmation and
-    // installation. Product code never supplies a package URL or authorizes it.
-    if (current && !current.restartRequired && canOpenAppUpdates && !current.busy) await openAppUpdates();
-  };
+  const check = () => run('check');
   const finishUpdate = async (current = data) => {
     if (!canAutoUpdate || flight.current || updatingAll || restarting || current?.busy || current?.installation === 'server') return;
     restartAttempted.current = true;
@@ -374,14 +429,14 @@ export function UpdateLauncher({ host, wide = true }) {
   const nativeFailureInDetails = restart || nativeStopFailed;
   const nativeFailure = nativeFailureMessage && <div className="cmd-update-error" role="alert"><span>{nativeFailureMessage}</span>{!restart && <button type="button" className="cmd-update-text-button" disabled={working || !!data?.busy} onClick={() => void openAppUpdates()}>重试应用更新</button>}</div>;
   return <>
-    <Tooltip label={status ? `更新 · ${status}` : '更新'} side="top" gap={10} delayMs={450} portal>
-      <button type="button" className={`cmd-update-launcher ${wide ? '' : 'cmd-update-launcher-rail'}`} aria-label={status ? `更新，${status}` : '更新'} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
-        <span className="cmd-update-icon"><UIIcon name="refresh" size={16} />{(updateAvailable || restart) && <i aria-hidden="true" />}</span>
-        {wide && <><span>更新</span>{status && <small data-ready={restart}>{status}</small>}</>}
+    <Tooltip label={status ? `下载 · ${status}` : '下载'} side="top" gap={10} delayMs={450} portal>
+      <button type="button" className={`cmd-update-launcher ${wide ? '' : 'cmd-update-launcher-rail'}`} data-update-available={updateAvailable || restart} aria-label={status ? `下载，${status}` : '下载'} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
+        <UIIcon name="computer" size={16} />
+        {wide && <><span>下载</span>{status && <small data-ready={restart}>{status}</small>}</>}
       </button>
     </Tooltip>
-    <Modal open={open} headless onClose={close} title="更新" className="cmd-update-dialog">
-      <header className="cmd-update-header"><h2>更新</h2><button type="button" className="cmd-update-icon-button" aria-label="关闭更新" onClick={close}><UIIcon name="close" size={16} /></button></header>
+    <Modal open={open} headless onClose={close} title="下载" className="cmd-update-dialog">
+      <header className="cmd-update-header"><h2>下载</h2><button type="button" className="cmd-update-icon-button" aria-label="关闭下载" onClick={close}><UIIcon name="close" size={16} /></button></header>
       <div className="cmd-update-content">
         <section className="cmd-update-plugin" aria-labelledby={`${id}-plugin`}>
           <Dialog.Root modal={false}>
@@ -391,7 +446,6 @@ export function UpdateLauncher({ host, wide = true }) {
               <dl><div><dt>当前主机</dt><dd>{localDesktop ? '本机' : globalThis.location?.hostname || '本机'}</dd></div><div><dt>功能包</dt><dd>{data?.current?.plugin ? `v${data.current.plugin}` : '版本未知'}{pluginAvailable && ` → v${plugin.version}`}</dd></div>{!serverDeployment && <div><dt>主机应用</dt><dd>{data?.current?.app ? `v${data.current.app}` : '版本未知'}{appTargetVersion && appTargetVersion !== data?.current?.app && ` → v${appTargetVersion}`}</dd></div>}<div><dt>引擎</dt><dd>{data?.current?.engine || '版本未知'}</dd></div></dl>
               {data?.release?.notes && <div className="cmd-update-notes"><strong>更新内容</strong><p>{data.release.notes}</p></div>}
               {nativeFailureInDetails && nativeFailure && <><p className="cmd-update-warning">应用更新尚未完成</p>{nativeFailure}{restart && !canAutoUpdate && <p className="cmd-update-warning">请先重启主机应用，使功能包生效，再重试应用更新。</p>}</>}
-              {canOpenAppUpdates && !serverDeployment && !restart && !nativeStopFailed && <button type="button" className="cmd-update-text-button" disabled={working || !!data?.busy} onClick={() => void openAppUpdates()}>检查安装器更新</button>}
             </Dialog.Content>
           </Dialog.Root>
           {!data && !error ? <Loading label="正在读取更新信息" compact /> : restart ? <div className="cmd-update-notice" role="status"><UIIcon name="check" size={16} /><span>{canAutoUpdate ? restarting ? '正在重启主机应用，更新后自动返回工作台' : updatingAll ? '功能包已就绪，正在完成主机应用更新' : data?.busy ? '功能包已就绪，任务结束后自动完成更新并重启' : error ? '功能包已就绪，更新尚未完成，请重试' : '功能包已就绪，即将自动完成更新并重启' : <>功能包已就绪，重启主机{serverDeployment ? '服务' : '应用'}后生效{data?.busy && '，请先结束运行中的任务'}</>}</span></div> : <>
@@ -399,7 +453,6 @@ export function UpdateLauncher({ host, wide = true }) {
             {data?.managed === false && !updateAvailable && <p className="cmd-update-warning">{serverManaged ? '此主机由服务器部署管理' : '当前安装方式需要新版应用才能启用功能包更新。'}</p>}
             <div className="cmd-update-actions"><BubbleTooltip label={actionable && (!enabled || appOnHost) ? installBlockReason || '当前暂不能更新' : undefined} portal><span className="cmd-update-action" tabIndex={actionable && (!enabled || appOnHost) ? 0 : undefined}>{actionable ? <HoldToUpdate key={holdKey} label={appUpdateFailed && enabled && !appOnHost ? '长按 2 秒重试' : undefined} disabled={!open || working || !enabled || appOnHost} onComplete={primary} /> : <button type="button" className="cmd-update-button cmd-update-check" disabled={working} onClick={() => void primary()}>{preparing ? '准备中…' : pending === 'install' || data?.phase === 'downloading' || nativeState?.phase === 'downloading' ? '下载中…' : pending === 'app' ? '更新中…' : working ? '检查中…' : '检查更新'}</button>}</span></BubbleTooltip>{updateAvailable && <button type="button" className="cmd-update-icon-button" aria-label="重新检查" disabled={working} onClick={() => void check()}><UIIcon name="refresh" size={16} /></button>}</div>
           </>}
-        </section>
         {open && (!restart || canAutoUpdate) && (data?.phase === 'downloading'
           ? <UpdateProgress phase={data.phase} progress={data.progress} />
           : !serverDeployment && ['downloading', 'verifying', 'installing', 'ready'].includes(nativeState?.phase)
@@ -410,6 +463,8 @@ export function UpdateLauncher({ host, wide = true }) {
           <div className="cmd-update-source-row"><label htmlFor={`${id}-source-select`} id={`${id}-source`}><LinkIconMedium kind="url" href="https://github.com" size={16} />更新来源</label><Select id={`${id}-source-select`} value={source} disabled={working || restart} onChange={event => { const value = event.target.value; setSource(value); setError(''); if (value !== 'custom') void configure(value); }}>{Object.entries(sourceNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></div>
           {source === 'custom' && <form className="cmd-update-custom" onSubmit={event => { event.preventDefault(); void configure('custom', event.currentTarget.elements.namedItem('mirrorUrl').value); }}><input name="mirrorUrl" type="url" required aria-label="自定义 HTTPS 镜像地址" placeholder="https://mirror.example.com/" value={mirrorUrl} disabled={working || restart} onChange={event => setMirrorUrl(event.target.value)} /><button type="submit" className="cmd-update-button" disabled={working || restart}>保存</button></form>}
         </section>
+        </section>
+        <DeviceDownloads active={open} />
       </div>
     </Modal>
   </>;

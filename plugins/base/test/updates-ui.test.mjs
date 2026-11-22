@@ -72,15 +72,15 @@ test('host checks once in background, badges the visible launcher and refreshes 
   const view = await mount(() => update());
   try {
     assert.deepEqual(view.calls.map(call => call.action), ['status', 'check']);
-    assert(view.button('更新，有更新'));
+    assert(view.button('下载，有更新'));
     assert.equal(view.document.querySelector('[role="dialog"]'), null);
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     assert.equal(view.calls.at(-1).action, 'status');
     assert.doesNotMatch(view.document.querySelector('[role="dialog"]').textContent, /当前连接主机|此处更新连接主机|系统自动检查所需组件/);
     assert.equal(view.document.querySelector('.cmd-update-details'), null, 'version information is only mounted after clicking the information icon');
     await view.click('版本详情');
     assert.match(view.document.querySelector('.cmd-update-details').textContent, /desktop.example/);
-    await view.click('关闭更新');
+    await view.click('关闭下载');
     await view.flush(() => view.document.dispatchEvent(new view.window.Event('commander:updates')));
     assert.equal(view.calls.at(-1).action, 'status');
     assert.equal(view.calls.filter(call => call.action === 'check').length, 1);
@@ -91,12 +91,12 @@ test('plugin install gives truthful staged restart feedback without claiming aut
   let state = update();
   const view = await mount(({ action }) => { if (action === 'install') state = { ...state, phase: 'ready', restartRequired: true }; return state; });
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     await view.hold();
     assert.equal(view.calls.at(-1).action, 'install');
     assert.match(view.document.querySelector('[role="dialog"]').textContent, /重启主机应用后生效/);
     assert.equal(view.button('长按 2 秒更新'), undefined);
-    assert(view.button('更新，待重启'));
+    assert(view.button('下载，待重启'));
   } finally { await view.dispose(); }
 });
 
@@ -112,10 +112,10 @@ test('one hold stages the feature package then updates the application with one 
     async restart() { sequence.push('restart'); },
   } } });
   try {
-    await view.click('更新，有更新'); await view.hold(); await view.flush();
+    await view.click('下载，有更新'); await view.hold(); await view.flush();
     assert.deepEqual(sequence, ['plugin', 'app']);
     assert.match(view.document.querySelector('.cmd-update-notice').textContent, /正在重启主机应用/);
-    await view.click('关闭更新'); await view.flush();
+    await view.click('关闭下载'); await view.flush();
     assert.deepEqual(sequence, ['plugin', 'app'], 'a rerender never starts a second installer');
   } finally { await view.dispose(); }
 });
@@ -129,9 +129,9 @@ test('feature-only update automatically restarts after confirming the applicatio
     async apply() { applications++; return { phase: 'idle' }; }, async restart() { restarts++; },
   } } });
   try {
-    await view.click('更新，有更新'); await view.hold(); await view.flush();
+    await view.click('下载，有更新'); await view.hold(); await view.flush();
     assert.equal(applications, 1); assert.equal(restarts, 1);
-    assert(view.button('更新，正在重启'));
+    assert(view.button('下载，正在重启'));
   } finally { await view.dispose(); }
 });
 
@@ -146,7 +146,7 @@ test('a prepared package waits for tasks even with the panel closed and failed r
     state = { ...state, busy: false };
     await view.flush(tick); await view.flush();
     assert.equal(attempts, 1);
-    await view.click('更新，待重启');
+    await view.click('下载，待重启');
     assert.match(view.document.querySelector('[role="alert"]').textContent, /主机未能安全完成关闭/);
     await view.flush(); assert.equal(attempts, 1, 'failure does not create an automatic retry loop');
     await view.hold('长按 2 秒重试'); await view.flush();
@@ -179,7 +179,7 @@ test('a legacy shell chains its native app updater after staging both components
     if (action === 'install') state = { ...state, phase: 'ready', restartRequired: true };
     return state;
   }, {}, { dshDesktop: { updates: { async open() { opens++; } } } });
-  try { await view.click('更新，有更新'); await view.hold(); assert.equal(opens, 1); }
+  try { await view.click('下载，有更新'); await view.hold(); assert.equal(opens, 1); }
   finally { await view.dispose(); }
 });
 
@@ -188,9 +188,9 @@ test('a current server plugin with an unknown application version has no update 
     release: { plugin: { version: '0.1.8', available: false }, app: { version: '0.1.6', available: true } } };
   const view = await mount(() => state);
   try {
-    assert(view.button('更新'));
-    assert.equal(view.document.querySelector('.cmd-update-icon i'), null);
-    await view.click('更新');
+    assert(view.button('下载'));
+    assert.equal(view.document.querySelector('.cmd-update-launcher[data-update-available="true"]'), null);
+    await view.click('下载');
     assert.match(view.document.querySelector('[role="dialog"]').textContent, /已是最新版本/);
     assert.equal(view.button('长按 2 秒更新'), undefined);
   } finally { await view.dispose(); }
@@ -202,7 +202,7 @@ test('an unknown host application version reports a check limitation instead of 
     decision: { action: 'blocked', available: false, enabled: false, reason: '无法识别当前应用版本' } };
   const view = await mount(() => state);
   try {
-    await view.click('更新');
+    await view.click('下载');
     const dialog = view.document.querySelector('[role="dialog"]').textContent;
     assert.match(dialog, /暂无法确认更新状态/); assert.match(dialog, /无法识别当前应用版本/);
     assert.doesNotMatch(dialog, /已是最新版本/); assert(view.button('检查更新'));
@@ -213,9 +213,9 @@ test('a verified application update is identified as application-only and remain
   const state = { ...initial(), release: { plugin: { version: '0.1.1', available: false }, app: { version: '0.1.2', available: true } } };
   const view = await mount(() => state);
   try {
-    assert(view.button('更新，有更新'));
-    assert(view.document.querySelector('.cmd-update-icon i'));
-    await view.click('更新，有更新');
+    assert(view.button('下载，有更新'));
+    assert(view.document.querySelector('.cmd-update-launcher[data-update-available="true"]'));
+    await view.click('下载，有更新');
     assert.match(view.document.querySelector('[role="dialog"]').textContent, /请在当前连接主机上打开 BenchGo/);
     await view.click('版本详情');
     assert.match(view.document.querySelector('.cmd-update-details').textContent, /主机应用v0.1.1 → v0.1.2/);
@@ -223,17 +223,17 @@ test('a verified application update is identified as application-only and remain
   } finally { await view.dispose(); }
 });
 
-test('unknown desktop version retains manual application checks without an update badge', async () => {
+test('unknown desktop version retains the unified check without an update badge', async () => {
   const state = { ...initial(), current: { plugin: '0.1.8' }, release: { plugin: { version: '0.1.8', available: false }, app: { version: '0.1.6', available: true } } };
   const view = await mount(() => state, {}, { dshDesktop: { updates: { open() {} } } });
   try {
-    assert(view.button('更新'));
-    assert.equal(view.document.querySelector('.cmd-update-icon i'), null);
-    await view.click('更新');
+    assert(view.button('下载'));
+    assert.equal(view.document.querySelector('.cmd-update-launcher[data-update-available="true"]'), null);
+    await view.click('下载');
     await view.click('版本详情');
     assert.match(view.document.querySelector('.cmd-update-details').textContent, /主机应用版本未知/);
     assert(view.button('检查更新'));
-    assert(view.button('检查安装器更新'));
+    assert.equal(view.button('检查安装器更新'), undefined);
   } finally { await view.dispose(); }
 });
 
@@ -246,7 +246,7 @@ test('same public release identifies a remaining component update without a dupl
         app: { version: appAvailable ? '0.1.3' : '0.1.2', available: appAvailable } } };
     const view = await mount(() => state, {}, kind === 'native' ? { dshDesktop: { updates: { status: async () => ({ phase: 'available', version: '0.1.3' }), open() {} } } } : {});
     try {
-      await view.click(kind === 'current' ? '更新' : '更新，有更新');
+      await view.click(kind === 'current' ? '下载' : '下载，有更新');
       const heading = view.document.querySelector('.cmd-update-card-heading').textContent;
       assert.doesNotMatch(heading, /v0\.1\.4 → v0\.1\.4/);
       if (kind === 'new-release') assert.match(heading, /v0\.1\.4 → v0\.1\.5/);
@@ -255,7 +255,7 @@ test('same public release identifies a remaining component update without a dupl
       if (kind !== 'new-release') assert.doesNotMatch(heading, /发现新版本/);
       await view.click('版本详情');
       if (['app', 'native', 'new-release'].includes(kind)) assert.match(view.document.querySelector('.cmd-update-details').textContent, /主机应用v0\.1\.2 → v0\.1\.3/);
-      if (kind === 'current') assert.equal(view.document.querySelector('.cmd-update-icon i'), null);
+      if (kind === 'current') assert.equal(view.document.querySelector('.cmd-update-launcher[data-update-available="true"]'), null);
     } finally { await view.dispose(); }
   }
 });
@@ -268,12 +268,12 @@ test('missing release, unknown plugin and failed checks never claim the plugin i
   ]) {
     const view = await mount(() => state);
     try {
-      assert(view.button('更新'));
-      await view.click('更新');
+      assert(view.button('下载'));
+      await view.click('下载');
       const dialog = view.document.querySelector('[role="dialog"]');
       assert.match(dialog.textContent, message);
       assert.doesNotMatch(dialog.textContent, /已是最新版本/);
-      assert.equal(view.document.querySelector('.cmd-update-icon i'), null);
+      assert.equal(view.document.querySelector('.cmd-update-launcher[data-update-available="true"]'), null);
     } finally { await view.dispose(); }
   }
 });
@@ -282,7 +282,7 @@ test('busy host disables installing; incompatible and unmanaged hosts explain re
   for (const [patch, message] of [[{ busy: true }, /有任务正在运行/], [{ managed: false }, /当前安装方式不支持独立更新/], [{ release: { plugin: { version: '0.1.2', available: true, compatible: false, reason: '需要引擎 2.0' } } }, /需要引擎 2.0/]]) {
     const view = await mount(() => ({ ...update(), ...patch }));
     try {
-      await view.click('更新，有更新');
+      await view.click('下载，有更新');
       if (patch.busy) { assert(view.button('长按 2 秒更新').disabled); await view.hold(); }
       else { assert.equal(view.button('长按 2 秒更新'), undefined); assert(view.button('检查更新')); }
       assert(!view.calls.some(call => call.action === 'install'));
@@ -296,7 +296,7 @@ test('source selection persists on host and rechecks; invalid custom mirrors nev
   let state = initial();
   const view = await mount(body => { if (body.action === 'configure') state = { ...state, config: { source: body.source, mirrorUrl: body.mirrorUrl } }; return state; });
   try {
-    await view.click('更新');
+    await view.click('下载');
     const select = view.document.querySelector('select');
     assert.equal(select.value, 'mirror');
     await view.flush(() => { select.value = 'github'; select.dispatchEvent(new view.window.Event('change', { bubbles: true })); });
@@ -322,15 +322,15 @@ test('backend errors can retry and application packages are delegated only to th
   const desktop = { dshDesktop: { updates: { open() {} } } };
   const view = await mount(() => failed ? { httpError: 403, error: '仅主机可执行更新' } : { ...initial(), release: { app: { version: '0.1.2', available: true, url: 'https://github.com/example/repo/releases/latest' } } }, {}, desktop);
   try {
-    await view.click('更新');
+    await view.click('下载');
     assert.match(view.document.querySelector('[role="alert"]').textContent, /仅主机可执行更新/);
     await view.flush(() => { failed = false; }); await view.click('重试');
     assert.equal(view.document.querySelector('[role="alert"]'), null);
-    assert.equal(view.document.querySelector('a'), null, 'product documents cannot supply package URLs to native installation');
+    assert.equal(view.document.querySelector('.cmd-update-plugin a'), null, 'product documents cannot supply package URLs to native installation');
     assert(view.button('长按 2 秒更新'));
   } finally { await view.dispose(); }
   const unsafe = await mount(() => ({ ...initial(), release: { app: { version: '0.1.2', available: true, url: 'javascript:alert(1)' } } }), {}, desktop);
-  try { await unsafe.click('更新，有更新'); assert.equal(unsafe.document.querySelector('a'), null); }
+  try { await unsafe.click('下载，有更新'); assert.equal(unsafe.document.querySelector('.cmd-update-plugin a'), null); }
   finally { await unsafe.dispose(); }
 });
 
@@ -344,35 +344,48 @@ test('only an active operation polls status, then stops when installation is rea
     await view.flush(tick);
     assert.deepEqual(view.calls.map(call => call.action), ['status', 'status']);
     assert.equal(cleared, 1);
-    assert(view.button('更新，待重启'));
+    assert(view.button('下载，待重启'));
   } finally { await view.dispose(); }
 });
 
 test('desktop app update opens the public bridge without a feed entry, prevents reentry and retries errors; mobile shows only its host version', async () => {
-  let calls = 0, rejectOpen;
+  let calls = 0, rejectOpen, nativeAvailable = false;
   const blocked = new Promise((_resolve, reject) => { rejectOpen = reject; });
-  const updates = { open() { assert.equal(this, updates); calls++; return calls === 1 ? blocked : undefined; } };
+  const updates = { status: async () => nativeAvailable ? { phase: 'available', version: '0.1.2' } : { phase: 'idle' },
+    open() { assert.equal(this, updates); calls++; return calls === 1 ? blocked : undefined; } };
   const view = await mount(initial, {}, { dshDesktop: { updates } });
   try {
-    await view.click('更新');
+    await view.click('下载');
     assert(view.button('检查更新'));
     await view.click('检查更新');
-    assert.equal(calls, 1);
-    assert(view.button('更新中…').disabled);
-    await view.click('更新中…');
-    assert.equal(calls, 1);
-    await view.flush(() => rejectOpen(Error('桌面更新服务不可用')));
-    assert.match(view.document.querySelector('[role="alert"]').textContent, /桌面更新服务不可用/);
-    await view.click('重试');
-    assert.equal(calls, 2);
-    assert.equal(view.document.querySelector('[role="alert"]'), null);
+    assert.equal(view.calls.at(-1).action, 'check');
+    assert.equal(calls, 0);
     assert(view.button('检查更新'));
   } finally { await view.dispose(); }
+  nativeAvailable = true;
+  const native = await mount(initial, {}, { dshDesktop: { updates } });
+  try {
+    await native.click('下载，有更新');
+    await native.click('重新检查');
+    assert.equal(native.calls.at(-1).action, 'check');
+    assert.equal(calls, 0);
+    await native.hold();
+    assert.equal(calls, 1);
+    assert(native.button('长按 2 秒更新').disabled);
+    await native.hold();
+    assert.equal(calls, 1);
+    await native.flush(() => rejectOpen(Error('桌面更新服务不可用')));
+    assert.match(native.document.querySelector('[role="alert"]').textContent, /桌面更新服务不可用/);
+    await native.click('重试');
+    assert.equal(calls, 2);
+    assert.equal(native.document.querySelector('[role="alert"]'), null);
+  } finally { await native.dispose(); }
   const mobile = await mount(() => ({ ...initial(), release: { app: { version: '0.1.2', available: true, url: 'https://github.com/example/repo/releases/latest' } } }));
-  try { await mobile.click('更新，有更新'); await mobile.click('版本详情'); assert.equal(mobile.button('检查安装器更新'), undefined); assert.equal(mobile.document.querySelector('a'), null); assert.match(mobile.document.querySelector('.cmd-update-details').textContent, /主机应用v0.1.1/); }
+  try { await mobile.click('下载，有更新'); await mobile.click('版本详情'); assert.equal(mobile.button('检查安装器更新'), undefined); assert.equal(mobile.document.querySelector('.cmd-update-plugin a'), null); assert.match(mobile.document.querySelector('.cmd-update-details').textContent, /主机应用v0.1.1/); }
   finally { await mobile.dispose(); }
+  nativeAvailable = false;
   const older = await mount(() => ({ ...initial(), release: { app: { version: '0.1.0', available: false } } }), {}, { dshDesktop: { updates } });
-  try { assert(older.button('更新')); await older.click('更新'); assert.doesNotMatch(older.document.querySelector('[role="dialog"]').textContent, /发现新版本/); assert(older.button('检查更新')); }
+  try { assert(older.button('下载')); await older.click('下载'); assert.doesNotMatch(older.document.querySelector('[role="dialog"]').textContent, /发现新版本/); assert(older.button('检查更新')); }
   finally { await older.dispose(); }
 });
 
@@ -380,7 +393,7 @@ test('server deployment with an unpublished feed explains deployment ownership w
   let state = { ...initial(), installation: 'server', managed: false, phase: 'unpublished', notice: '更新通道尚未就绪', error: 'HTTP 404' };
   const view = await mount(() => state);
   try {
-    await view.click('更新');
+    await view.click('下载');
     const dialog = view.document.querySelector('[role="dialog"]');
     assert.match(dialog.textContent, /此主机由服务器部署管理/);
     assert.doesNotMatch(dialog.textContent, /系统自动检查所需组件|镜像仅用于下载|手机应用在设备页检查/);
@@ -402,10 +415,10 @@ test('server deployment with an unpublished feed explains deployment ownership w
 
 test('legacy desktop keeps its migration guidance while a managed server can still install plugin updates', async () => {
   const legacy = await mount(() => ({ ...initial(), installation: 'desktop', managed: false }));
-  try { await legacy.click('更新'); assert.match(legacy.document.querySelector('[role="dialog"]').textContent, /当前安装方式需要新版应用/); }
+  try { await legacy.click('下载'); assert.match(legacy.document.querySelector('[role="dialog"]').textContent, /当前安装方式需要新版应用/); }
   finally { await legacy.dispose(); }
   const managed = await mount(() => ({ ...update(), installation: 'server', managed: true }));
-  try { await managed.click('更新，有更新'); assert.equal(managed.button('长按 2 秒更新').disabled, false); assert.doesNotMatch(managed.document.querySelector('[role="dialog"]').textContent, /此主机由服务器部署管理/); }
+  try { await managed.click('下载，有更新'); assert.equal(managed.button('长按 2 秒更新').disabled, false); assert.doesNotMatch(managed.document.querySelector('[role="dialog"]').textContent, /此主机由服务器部署管理/); }
   finally { await managed.dispose(); }
 });
 
@@ -417,13 +430,13 @@ test('opening status refresh never disables installation or swallows a click; la
     return action === 'install' ? { ...update(), phase: 'ready', restartRequired: true } : update();
   });
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     assert.equal(view.button('长按 2 秒更新').disabled, false);
     await view.hold();
     assert.equal(view.calls.at(-1).action, 'install');
     assert.match(view.document.querySelector('[role="dialog"]').textContent, /重启主机应用后生效/);
     await view.flush(() => refresh(update()));
-    assert(view.button('更新，待重启'));
+    assert(view.button('下载，待重启'));
     assert.equal(view.button('长按 2 秒更新'), undefined);
   } finally { await view.dispose(); }
 });
@@ -432,7 +445,7 @@ test('failed plugin installation retries installation and shows an explicit bloc
   let installations = 0;
   const view = await mount(({ action }) => action === 'install' && ++installations === 1 ? { httpError: 409, error: '下载期间有新任务开始，结束后再点更新' } : update());
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     await view.hold();
     assert.match(view.document.querySelector('[role="alert"]').textContent, /有新任务开始/);
     await view.click('长按 2 秒重试');
@@ -447,7 +460,7 @@ test('host activity becoming idle enables installation without reopening or disa
   let state = { ...update(), busy: true, canInstall: false }, tick, refresh, hold = false;
   const view = await mount(() => hold ? new Promise(resolve => { refresh = resolve; }) : state, {}, { setInterval: callback => { tick = callback; return 1; }, clearInterval() {} });
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     assert(view.button('长按 2 秒更新').disabled);
     assert.match(view.document.querySelector('[role="dialog"]').textContent, /有任务正在运行/);
     assert.equal(typeof tick, 'function');
@@ -465,7 +478,7 @@ test('host activity becoming idle enables installation without reopening or disa
 test('transient unavailable install status explains the reason and keeps a visible recheck path', async () => {
   const view = await mount(() => ({ ...update(), canInstall: false }));
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     assert(view.button('长按 2 秒更新').disabled);
     assert.match(view.document.querySelector('[role="dialog"]').textContent, /更新状态尚未就绪/);
     assert.equal(view.button('重新检查').disabled, false);
@@ -477,7 +490,7 @@ test('transient unavailable install status explains the reason and keeps a visib
 test('asynchronous installation failure retries the failed operation from host state', async () => {
   const view = await mount(({ action }) => action === 'install' ? update() : { ...update(), phase: 'error', error: '下载校验失败', lastAction: 'install' });
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     assert.match(view.document.querySelector('[role="alert"]').textContent, /下载校验失败/);
     await view.hold('长按 2 秒重试');
     assert.equal(view.calls.at(-1).action, 'install');
@@ -488,7 +501,7 @@ test('failed status polling can recover an active download instead of trying a c
   let state = { ...update(), phase: 'downloading' }, tick, failed = false;
   const view = await mount(() => failed ? { httpError: 503, error: '暂时无法连接' } : state, {}, { setInterval: callback => { tick = callback; return 1; }, clearInterval() {} });
   try {
-    await view.click('更新，下载中');
+    await view.click('下载，下载中');
     failed = true;
     await view.flush(tick);
     assert.match(view.document.querySelector('[role="alert"]').textContent, /暂时无法连接/);
@@ -497,7 +510,7 @@ test('failed status polling can recover an active download instead of trying a c
     await view.click('重试');
     assert.equal(view.calls.at(-1).action, 'status');
     assert.equal(view.document.querySelector('[role="alert"]'), null);
-    assert(view.button('更新，待重启'));
+    assert(view.button('下载，待重启'));
   } finally { await view.dispose(); }
 });
 
@@ -508,7 +521,7 @@ test('host decision selects an application upgrade without exposing a plugin cho
     release: { ...update().release, releaseVersion: '0.3.0', app: { version: '0.2.0', available: true } } };
   const view = await mount(() => state, {}, { dshDesktop: { updates: { open() { nativeOpens++; } } } });
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     assert.match(view.document.querySelector('.cmd-update-card-heading').textContent, /v0.2.0 → v0.3.0/);
     assert.equal(view.document.querySelectorAll('.cmd-update-primary').length, 1);
     await view.hold();
@@ -525,11 +538,11 @@ test('native status subscription survives a late initial status and cleans up on
   try {
     await view.flush(() => receive({ phase: 'available', version: '0.2.0' }));
     await view.flush(() => resolveStatus({ phase: 'idle' }));
-    assert(view.button('更新，有更新'), 'late initial native status cannot hide a newer event');
-    await view.click('更新，有更新');
+    assert(view.button('下载，有更新'), 'late initial native status cannot hide a newer event');
+    await view.click('下载，有更新');
     assert.equal(view.button('长按 2 秒更新').disabled, false);
     await view.flush(() => receive({ phase: 'downloading', version: '0.2.0', percent: 25 }));
-    assert(view.button('更新，下载中'));
+    assert(view.button('下载，下载中'));
     assert.equal(view.button('长按 2 秒更新').disabled, true);
     assert.equal(opens, 0);
   } finally { await view.dispose(); }
@@ -548,7 +561,7 @@ test('a newer native event supersedes the status snapshot requested after an app
     const state = { ...update(), decision: { action: 'blocked', available: true, enabled: false, reason: '引擎版本暂不可识别' } };
     const view = await mount(() => state, {}, { dshDesktop: { updates: native } });
     try {
-      await view.click('更新，有更新');
+      await view.click('下载，有更新');
       assert.match(view.document.querySelector('[role="alert"]').textContent, /无法连接安装器更新服务/);
       await view.click('重试应用更新');
       assert.equal(opens, 1, 'native recovery remains available while plugin installation is blocked');
@@ -565,7 +578,7 @@ test('native failure classifications distinguish checking, downloading and insta
   for (const [failure, expected] of [['check', /检查安装器更新失败/], ['download-space', /磁盘空间不足/], ['install', /应用安装未完成/], ['tasks-changed', /有新任务开始/]]) {
     const view = await mount(initial, {}, { dshDesktop: { updates: { status: async () => ({ phase: 'error', failure }), open() {} } } });
     try {
-      await view.click('更新');
+      await view.click('下载');
       assert.match(view.document.querySelector('[role="alert"]').textContent, expected);
       assert(view.button('重试应用更新'));
     } finally { await view.dispose(); }
@@ -576,15 +589,15 @@ test('plugin progress shows real bytes and speed, then separates local preparati
   let state = { ...update(), phase: 'downloading', progress: { stage: 'downloading', total: 4 * 1024 * 1024, transferred: 1024 * 1024, bytesPerSecond: 512 * 1024, updatedAt: new Date().toISOString() } };
   const view = await mount(() => state);
   try {
-    await view.click('更新，下载中');
+    await view.click('下载，下载中');
     const bar = () => view.document.querySelector('[role="progressbar"]');
     assert.equal(bar().getAttribute('aria-valuenow'), '25');
     assert.match(view.document.querySelector('.cmd-update-progress').textContent, /1\.0 MB \/ 4\.0 MB.*512\.0 KB\/s/);
     state = { ...state, progress: { ...state.progress, stage: 'extracting' } };
-    await view.click('关闭更新'); await view.click('更新，下载中');
+    await view.click('关闭下载'); await view.click('下载，下载中');
     assert.match(view.document.querySelector('.cmd-update-progress').textContent, /正在解包功能包/);
     assert.equal(bar(), null, 'local extraction is not a fake download percentage');
-    assert(view.button('更新，准备中'));
+    assert(view.button('下载，准备中'));
     assert.equal(view.button('准备中…').disabled, true);
   } finally { await view.dispose(); }
 });
@@ -595,12 +608,12 @@ test('unknown download progress stays indeterminate and active progress timers s
     setInterval(callback, delay) { const id = ++serial; intervals.set(id, { callback, delay }); return id; }, clearInterval(id) { intervals.delete(id); },
   });
   try {
-    await view.click('更新，下载中');
+    await view.click('下载，下载中');
     const progress = view.document.querySelector('[role="progressbar"]');
     assert.equal(progress.hasAttribute('aria-valuenow'), false);
     assert.match(view.document.querySelector('.cmd-update-progress').textContent, /等待下载数据/);
     assert.equal([...intervals.values()].filter(item => item.delay === 1000).length, 1);
-    await view.click('关闭更新');
+    await view.click('关闭下载');
     assert.equal([...intervals.values()].filter(item => item.delay === 1000).length, 0, 'closing only disposes the display clock');
     assert.equal(view.calls.some(call => call.action === 'install'), false);
   } finally { await view.dispose(); }
@@ -615,7 +628,7 @@ test('stalled progress is a warning and clears only after a real native percenta
     dshDesktop: { updates: { status: async () => ({ phase: 'downloading', percent: 12 }), subscribe(listener) { receive = listener; return () => {}; }, open() {} } },
   });
   try {
-    await view.click('更新，下载中');
+    await view.click('下载，下载中');
     const bar = () => view.document.querySelector('[role="progressbar"]');
     assert.equal(bar().getAttribute('aria-valuenow'), '12');
     await view.flush(() => { now += 31_000; for (const tick of intervals) tick(); });
@@ -635,7 +648,7 @@ test('native ready, verification and install failure distinguish downloading fro
     status: async () => ({ phase: 'verifying', percent: 100 }), subscribe(listener) { receive = listener; return () => {}; }, open() {},
   } } });
   try {
-    await view.click('更新，准备中');
+    await view.click('下载，准备中');
     assert.match(view.document.querySelector('.cmd-update-progress').textContent, /正在校验安装包/);
     assert.equal(view.document.querySelector('[role="progressbar"]'), null);
     await view.flush(() => receive({ phase: 'ready', version: '0.1.3' }));
@@ -664,7 +677,7 @@ test('native shutdown failures keep one main recovery state and retain diagnosti
       async status() { return failure; }, subscribe(listener) { receive = listener; return () => {}; }, async open() { opens++; },
     } } });
     try {
-      await view.click(kind === 'current' ? '更新' : '更新，有更新');
+      await view.click(kind === 'current' ? '下载' : '下载，有更新');
       const heading = () => view.document.querySelector('.cmd-update-card-heading').textContent;
       assert.equal(view.document.querySelector('[role="alert"]'), null, 'the native window already owns the full shutdown failure');
       assert.equal(view.button('重试应用更新'), undefined);
@@ -703,7 +716,7 @@ test('a staged feature package moves native failures into details until restart 
       subscribe(listener) { receive = listener; return () => {}; }, async open() { opens++; },
     } } });
     try {
-      await view.click('更新，有更新');
+      await view.click('下载，有更新');
       assert.equal(!!view.document.querySelector('[role="alert"]'), unavailable);
       assert.equal(view.button('重试应用更新') !== undefined, unavailable);
       assert.doesNotMatch(view.document.querySelector('.cmd-update-card-heading').textContent, /应用更新未完成/);
@@ -711,7 +724,7 @@ test('a staged feature package moves native failures into details until restart 
       assert.match(view.document.querySelector('.cmd-update-notice').textContent, /功能包已就绪，重启主机应用后生效/);
       assert.equal(view.document.querySelector('[role="alert"]'), null, 'the pending restart is the primary state');
       assert.equal(view.button('重试应用更新'), undefined, 'do not present a recovery action that cannot run before restart');
-      await view.click('关闭更新'); await view.click('更新，待重启');
+      await view.click('关闭下载'); await view.click('下载，待重启');
       assert.equal(view.document.querySelector('[role="alert"]'), null, 'reopening does not restore the unrelated failure banner');
       await view.click('版本详情');
       const details = view.document.querySelector('.cmd-update-details');
@@ -730,7 +743,7 @@ test('a remote page cannot operate a desktop updater even if a bridge object is 
   const state = { ...initial(), release: { app: { version: '0.2.0', available: true } } };
   const view = await mount(() => state, {}, { remote: true, dshDesktop: { updates: { status() { nativeCalls++; }, open() { nativeCalls++; } } } });
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     assert.equal(view.button('长按 2 秒更新').disabled, true);
     assert.equal(view.button('检查安装器更新'), undefined);
     assert.equal(nativeCalls, 0);
@@ -741,7 +754,7 @@ test('a too-new engine blocker never becomes an app upgrade through unrelated na
   const state = { ...update(), decision: { action: 'blocked', available: true, enabled: false, reason: '请等待兼容当前引擎的版本' } };
   const view = await mount(() => state, {}, { dshDesktop: { updates: { status: async () => ({ phase: 'available', version: '0.2.0' }), open() { assert.fail('must not try to resolve incompatible engine automatically'); } } } });
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     assert.equal(view.button('长按 2 秒更新'), undefined);
     assert.match(view.document.querySelector('[role="dialog"]').textContent, /请等待兼容当前引擎的版本/);
   } finally { await view.dispose(); }
@@ -750,7 +763,7 @@ test('a too-new engine blocker never becomes an app upgrade through unrelated na
 test('a click or a short hold never installs, while a completed hold submits only once', async () => {
   const view = await mount(() => update());
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     await view.click('长按 2 秒更新');
     assert.equal(view.calls.filter(call => call.action === 'install').length, 0, 'click cannot bypass the confirmation hold');
     await view.pointer('长按 2 秒更新', 'pointerdown');
@@ -771,10 +784,10 @@ test('pointer cancellation, leaving, focus loss, hiding and closing abandon a pe
   for (const cancellation of ['pointercancel', 'pointerout', 'blur', 'hidden', 'close']) {
     const view = await mount(() => update());
     try {
-      await view.click('更新，有更新');
+      await view.click('下载，有更新');
       await view.pointer('长按 2 秒更新', 'pointerdown');
       await view.advance(1000);
-      if (cancellation === 'close') await view.click('关闭更新');
+      if (cancellation === 'close') await view.click('关闭下载');
       else if (cancellation === 'blur') await view.flush(() => view.window.dispatchEvent(new view.window.Event('blur')));
       else if (cancellation === 'hidden') await view.flush(() => { Object.defineProperty(view.document, 'visibilityState', { configurable: true, value: 'hidden' }); view.document.dispatchEvent(new view.window.Event('visibilitychange')); });
       else await view.pointer('长按 2 秒更新', cancellation, { relatedTarget: view.document.body });
@@ -788,7 +801,7 @@ test('keyboard and primary touch follow the same two-second confirmation', async
   for (const input of [' ', 'Enter', 'touch']) {
     const view = await mount(() => update());
     try {
-      await view.click('更新，有更新');
+      await view.click('下载，有更新');
       const button = view.button('长按 2 秒更新');
       if (input === 'touch') await view.pointer(button, 'pointerdown', { pointerType: 'touch' });
       else await view.flush(() => {
@@ -811,14 +824,14 @@ test('keyboard and primary touch follow the same two-second confirmation', async
 test('losing keyboard focus or unmounting clears an incomplete hold', async () => {
   const view = await mount(() => update());
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     const button = view.button('长按 2 秒更新');
     await view.flush(() => {
       button.focus();
       button.dispatchEvent(new view.window.KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
     });
     await view.advance(1000);
-    await view.flush(() => view.button('关闭更新').focus());
+    await view.flush(() => view.button('关闭下载').focus());
     await view.advance(1500);
     assert.equal(view.calls.filter(call => call.action === 'install').length, 0);
     await view.pointer('长按 2 秒更新', 'pointerdown');
@@ -832,7 +845,7 @@ test('a host becoming busy during a hold cancels rather than queuing an installa
   let state = update(), tick;
   const view = await mount(() => state, {}, { setInterval: callback => { tick = callback; return 1; }, clearInterval() {} });
   try {
-    await view.click('更新，有更新');
+    await view.click('下载，有更新');
     await view.pointer('长按 2 秒更新', 'pointerdown');
     await view.advance(1000);
     state = { ...state, busy: true, canInstall: false };
@@ -853,7 +866,7 @@ test('captured touch movement and lost capture cancel, while a long-press contex
   for (const event of ['pointermove', 'lostpointercapture', 'contextmenu']) {
     const view = await mount(() => update());
     try {
-      await view.click('更新，有更新');
+      await view.click('下载，有更新');
       const button = view.button('长按 2 秒更新');
       button.getBoundingClientRect = () => ({ left: 20, right: 220, top: 30, bottom: 74 });
       await view.pointer(button, 'pointerdown', { pointerType: 'touch', pointerId: 7, clientX: 100, clientY: 50 });
@@ -869,7 +882,7 @@ test('a failed refresh preserves known versions without advertising stale curren
   const current = { ...initial(), release: { plugin: { version: '0.1.1', available: false, compatible: true } } };
   const view = await mount(({ action }) => action === 'check' ? { httpError: 503, error: '更新服务暂不可用' } : current);
   try {
-    await view.click('更新');
+    await view.click('下载');
     const heading = view.document.querySelector('.cmd-update-card-heading');
     assert.match(heading.textContent, /暂时无法检查更新/);
     assert.doesNotMatch(heading.textContent, /已是最新版本/);
@@ -884,7 +897,7 @@ test('a failed refresh preserves known versions without advertising stale curren
 test('retired version rollback has no entry and an old host action can only recheck', async () => {
   const view = await mount(() => ({ ...initial(), canRollback: true, phase: 'error', lastAction: 'rollback', error: '旧版操作已停止' }));
   try {
-    await view.click('更新');
+    await view.click('下载');
     assert.equal(view.button('回退上版'), undefined);
     assert.equal(view.document.querySelector('.cmd-update-footer'), null);
     await view.click('重试');

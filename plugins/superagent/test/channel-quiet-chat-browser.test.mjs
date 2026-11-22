@@ -14,12 +14,14 @@ const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [chromium.executa
 
 async function fixture() {
   const bundle = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
-    import React from 'react';import {createRoot} from 'react-dom/client';
+    import React,{useState} from 'react';import {createRoot} from 'react-dom/client';
     import {ActivityProvider} from './plugins/superagent/client/activity-panel.jsx';
     import {AssistantConversation,mountAssistantConversation} from './plugins/superagent/client/conversation.jsx';
     import {channelMessageDefinition} from './plugins/superagent/client/channel-session.jsx';
     import css from './plugins/superagent/client/style.css';
     import hostCss from './plugins/base/client/style.css';
+    import native from './deepseek-harness/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css';
+    import input from './deepseek-harness/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css';
     const root=createRoot(document.getElementById('root'));let serial=0;
     const source={channel:'feishu',sourceType:'direct',conversationId:'oc_exact'};
     const events=['inbound','delivery'].map((direction,i)=>({type:'plugin:benchgo-plugin/channel-message',ignorable:true,seq:i+3,time:1794218400000+i,
@@ -35,14 +37,18 @@ async function fixture() {
       const human={id:'human',source:{kind:'user',rpcId:'human-rpc'},content:[{type:'text',text:idleMode?'这是已发送的真实要求':'这是运行中补充的真实要求'}]};
       const ordering=!idleMode&&['mixed','reordered'].includes(stage),second={...human,id:'second',source:{kind:'user',rpcId:'second-rpc'},content:[{type:'text',text:'这是第二条排队要求'}]};
       const inbox=ordering?{'next-turn':stage==='reordered'?[second,human]:[human,second]}:inputMode&&stage==='inbox'?{[queued?'next-turn':'next-step']:[human,{...human,id:'private',source:{kind:'benchgo-task-reply'},content:[{type:'text',text:'PRIVATE_NOTICE'}]}]}:{};
-      let Official, retains=0;
-      const ctx={effect:fn=>fn(),slots:{inject:(_name,fn)=>fn(),register:(_meta,Component)=>{Official=Component;return()=>{}}},
+      let Official, ModelSetup, retains=0;
+      const ctx={effect:fn=>fn(),slots:{inject:(_name,fn)=>fn(),register:({name},Component)=>{
+        if(name==='benchgo.assistant.conversation')Official=Component;
+        if(name==='conversation.input.dock')ModelSetup=Component;
+        return()=>{};
+      }},
         uiConversation:{binding:()=>({activate:()=>{}})},sessions:{retain:()=>{retains++;if(mode==='error')throw Error('offline');return {binding:{session:{getSnapshot:()=>({openState:mode==='settled-error'&&retains===1?'error':'open'})}},ready:mode==='loading'?new Promise(()=>{}):Promise.resolve(),release(){}}}}};
       mountAssistantConversation(ctx);
       const session={sessionId:'feishu-session',openState:'open',running:inputMode&&!idleMode||mode.startsWith('activity-')||mode==='segments-live',blank:!inputMode,awaitingFirstTurn:!inputMode,pendingSubmissions:inputMode&&stage!=='inbox'?[{requestId:'human-rpc',placement,text:human.content[0].text,time:1794218400100,attachments:[]}]:[]};
       if(ordering)session.pendingSubmissions=[{requestId:'second-rpc',placement:'queued',text:second.content[0].text,time:1,attachments:[]}];
       if(idleMode&&stage==='mixed')session.pendingSubmissions.push({requestId:'second-rpc',placement:'transcript',text:second.content[0].text,time:1794218400200,attachments:[]});
-      const chat={legacy:{nodes:inputMode?(stage==='admitted'||idleMode&&stage==='mixed'?[{...human,kind:idleMode?'user':'steering',messageId:'human',seq:7,time:1794218400100}]:[]):mode==='empty'?[]:[...nodes,{kind:'context',seq:6,source:{kind:'system'},content:[{type:'text',text:'PRIVATE_CONTEXT'}]}]}};
+      const chat={legacy:{nodes:inputMode?(stage==='admitted'||idleMode&&stage==='mixed'?[{...human,kind:idleMode?'user':'steering',messageId:'human',seq:7,time:1794218400100}]:[]):['empty','main-model-setup'].includes(mode)?[]:[...nodes,{kind:'context',seq:6,source:{kind:'system'},content:[{type:'text',text:'PRIVATE_CONTEXT'}]}]}};
       if(mode==='activity-thinking')chat.legacy.partial={blocks:[{kind:'reasoning',text:'PRIVATE_REASONING'}]};
       if(mode==='activity-search')chat.legacy.runningCalls=[{name:'assistant_memory_search'}];
       if(mode==='segments-live')Object.assign(chat.legacy,{nodes:[{kind:'user',messageId:'human',seq:1,source:{kind:'user'}},{kind:'assistant',messageId:'model-one',seq:2,turn:1,step:1,blocks:[{kind:'text',text:'我先检查服务器的状态。'}]}],partial:{turn:1,step:2,blocks:[{kind:'text',text:'检查完成，服务运行正常。'}]}});
@@ -50,7 +56,10 @@ async function fixture() {
       const conversation={activeTargets:new Set(),views:new Map([['chat',chat]])};
       const select=value=>selector=>selector(value),noop=()=>{};
       const hooks={useSession:select(session),useConversation:select(conversation),useInput:select({phase:'plain',draft:''}),useProjection:name=>name==='inbox'?inbox:undefined,inputActions:{setDraft:noop,persistDraft:noop}};
-      const renderFactorySlot=(_name,_props,children)=>{const View=children.slots.views;return <View {...hooks}/>};
+      const renderFactorySlot=(_name,_props,children)=>{
+        const View=children.slots.views;
+        return mode==='main-model-setup'?<div className={native.body} data-conversation-content=''><div className={native.scrollBody} data-conversation-scroll=''><View {...hooks}/><div className={native.composerSeat} data-composer-seat=''><div className={native.composerStack}><div data-slot='conversation.input.dock' style={{display:'contents'}}><ModelSetup/></div><div className={input.root}><div className={input.card} data-composer-card=''><textarea aria-label='消息草稿' style={{width:'100%',minHeight:76,padding:10,border:0,background:'transparent',color:'inherit',font:'inherit',resize:'none'}}/></div></div></div></div></div></div>:<View {...hooks}/>;
+      };
       const renderSlot=name=>name==='benchgo.assistant.conversation'?<Official {...hooks} renderSlot={()=>null} renderFactorySlot={renderFactorySlot}/>:null;
       const history={sessionId:'feishu-session',threadId,messages:inputMode&&stage==='history'?[{id:'human',rpcId:'human-rpc',seq:7,role:'user',text:human.content[0].text,time:1794218400100},{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}]:mode==='history'?messages:[],hasMore:false,
         requests:inputMode?[{threadId:'main',requestId:'internal',status:'failed',text:'PRIVATE_NOTICE',error:'PRIVATE_ERROR',taskReply:{}}]:[]};
@@ -70,7 +79,13 @@ async function fixture() {
       window.clearCalls=0;
       const onClear=()=>{window.clearCalls++;return new Promise(resolve=>{window.finishClear=resolve;});};
       const id=++serial;
-      root.render(<ActivityProvider><div key={mode==='history'?'data':mode.startsWith('segments-')?'segments':mode} data-render={id} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}><style>{hostCss}{css}</style><header style={{padding:16}}>{threadId==='main'?'BenchGo 主聊天':'feishu · oc_exact'}</header><AssistantConversation active={false} ctx={ctx} sessionId='feishu-session' threadId={threadId} channel={threadId==='channel-thread'} history={history} api={api} assistantName='BenchGo' assistantConfig={{cardMotion:false,cardHtml:'<b>PRIVATE_CUSTOM_CARD</b>'}} SessionProvider={({children})=>children} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop} onClear={onClear}/></div></ActivityProvider>);
+      const SessionProvider=({children})=>children;
+      function SetupScenario(){
+        const [configured,setConfigured]=useState(false);
+        window.setModelConfigured=setConfigured;
+        return <AssistantConversation active={false} ctx={ctx} sessionId='feishu-session' threadId={threadId} history={history} api={api} assistantName='BenchGo' SessionProvider={SessionProvider} renderSlot={renderSlot} onOpenResources={noop} onConfigureModel={configured?undefined:()=>document.dispatchEvent(new CustomEvent('fixture:open-models'))}/>;
+      }
+      root.render(<ActivityProvider><div key={mode==='history'?'data':mode.startsWith('segments-')?'segments':mode} data-render={id} className='ba-root' style={{height:720,display:'flex',flexDirection:'column',maxWidth:960,margin:'auto'}}><style>{hostCss}{css}</style><header style={{padding:16}}>{threadId==='main'?'BenchGo 主聊天':'feishu · oc_exact'}</header>{mode==='main-model-setup'?<SetupScenario/>:<AssistantConversation active={false} ctx={ctx} sessionId='feishu-session' threadId={threadId} channel={threadId==='channel-thread'} history={history} api={api} assistantName='BenchGo' assistantConfig={{cardMotion:false,cardHtml:'<b>PRIVATE_CUSTOM_CARD</b>'}} SessionProvider={SessionProvider} renderSlot={renderSlot} onRefresh={noop} onOpenResources={noop} onClear={onClear}/>}</div></ActivityProvider>);
       return id;
     };
     window.renderRetry=(threadId,channel=false)=>{
@@ -79,7 +94,7 @@ async function fixture() {
       const session={sessionId,openState:'open',running:false,subagent:null,pendingSubmissions:[]};
       let history={sessionId,threadId,lastEndSeq:11,error:'服务器历史中的旧错误',messages:[{id:'human',role:'user',seq:7,text:'请检查服务是否正常'}]};
       let continuation=11, turnEnd={seq:11,data:{reason:{kind:'error',error:{message:'模型响应超时'}}}}, blocked, inbox={}, statuses=new Map(), promptAllowed=true;
-      const ctx={effect:fn=>fn(),slots:{inject:(_name,fn)=>fn(),register:(_meta,Component)=>{Official=Component;return noop}},
+      const ctx={effect:fn=>fn(),slots:{inject:(_name,fn)=>fn(),register:({name},Component)=>{if(name==='benchgo.assistant.conversation')Official=Component;return noop}},
         uiConversation:{binding:()=>({activate:noop})},uiSession:{sessionStatus:{getSnapshot:()=>statuses,subscribe:()=>noop}},
         remoteAccess:{source:(resource,id,action)=>({getSnapshot:()=>resource==='session'&&id===sessionId&&action==='session/prompt'&&promptAllowed})},
         conversation:{input:{for:scope=>{if(scope!==binding.ctx)throw Error('wrong input scope');return {state:{getSnapshot:()=>input}}}},
@@ -133,6 +148,62 @@ async function fixture() {
   const theme=(await Promise.all(['base.css','design-platform.css','focus.css'].map(name=>readFile(join(root,'deepseek-harness/packages/client/ui-theme/src/styles',name),'utf8')))).join('\n');
   return `<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><style>${theme}${styles}body{margin:0;font:14px/1.6 var(--dsw-font-family);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}</style></head><body><div id='root'></div><script>${script.replaceAll('</script','<\\/script')}</script></body></html>`;
 }
+
+test('model setup stays attached to the native composer and leaves its draft intact', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
+  const screenshots = process.env.BENCHGO_NOTEBOOK_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    for (const width of [1440, 390, 320]) {
+      const page = await browser.newPage({ viewport: { width, height: 760 }, hasTouch: width < 400 });
+      page.setDefaultTimeout(6000);
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await page.route('http://localhost/', route => route.fulfill({ contentType: 'text/html', body: html }));
+      await page.goto('http://localhost/');
+      await page.evaluate(() => {
+        window.modelOpens = 0;
+        document.addEventListener('fixture:open-models', () => window.modelOpens++);
+        window.renderScenario('main-model-setup');
+      });
+      const dock = page.locator('[data-composer-seat] .ba-model-setup');
+      const copy = '还没有给你的助手配置模型';
+      const action = dock.getByRole('button', { name: '配置模型' });
+      const draft = page.getByRole('textbox', { name: '消息草稿' });
+      await dock.getByText(copy, { exact: true }).waitFor();
+      assert.equal(await page.getByLabel('聊天记录').getByText(copy).count(), 0);
+      for (const dark of [false, true]) {
+        await page.evaluate(async dark => {
+          document.body.toggleAttribute('data-ds-dark-theme', dark);
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+          await Promise.allSettled(document.getAnimations().map(animation => animation.finished));
+        }, dark);
+        const note = await dock.boundingBox(), card = await page.locator('[data-composer-card]').boundingBox();
+        assert(note.x > card.x && note.x + note.width < card.x + card.width);
+        assert(Math.abs(note.y + note.height - card.y) < 1, 'note ends at the input card edge');
+        assert(await dock.evaluate(node => node.scrollWidth <= node.clientWidth));
+        assert(await dock.getByText(copy, { exact: true }).evaluate(node => {
+          const text = document.createRange();
+          text.selectNodeContents(node);
+          return new Set(Array.from(text.getClientRects(), rect => rect.top)).size === 1;
+        }), `note copy stays on one line at ${width}px`);
+        assert(note.height <= (width < 400 ? 48 : 32));
+        if (width < 400) assert((await action.boundingBox()).height >= 44);
+        if (screenshots) await page.screenshot({ path: join(screenshots, `notebook-${width}-${dark ? 'dark' : 'light'}.png`) });
+      }
+      await draft.fill('保留草稿');
+      await action.focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await page.evaluate(() => window.modelOpens), 1);
+      await page.evaluate(() => window.setModelConfigured(true));
+      await dock.waitFor({ state: 'detached' });
+      assert.equal(await draft.inputValue(), '保留草稿');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
 
 test('real assistant conversations display connection states, channel history and main chat recovery', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
   const html=await fixture(),browser=await chromium.launch({headless:true,executablePath});

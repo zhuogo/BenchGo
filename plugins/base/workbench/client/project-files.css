@@ -1,0 +1,117 @@
+li[data-benchgo-draggable] > div {
+  position: relative;
+}
+
+li[data-benchgo-draggable] > div > :first-child {
+  padding-inline-end: 34px;
+}
+
+.bg-project-file-more {
+  position: absolute;
+  inset-inline-end: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base, Canvas);
+  color: inherit;
+  cursor: pointer;
+}
+
+.bg-project-file-more svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .bg-project-file-more { opacity: 0; }
+  li[data-benchgo-draggable] > div:hover > .bg-project-file-more,
+  li[data-benchgo-draggable] > div:focus-within > .bg-project-file-more { opacity: 1; }
+}
+
+@media (pointer: coarse) {
+  .bg-project-file-more { width: 44px; }
+  li[data-benchgo-draggable] > div > :first-child { padding-inline-end: 48px; }
+}
+
+[data-benchgo-drop-target] > div:first-child,
+[data-benchgo-file-kind][data-benchgo-drop-target],
+[data-files-navigator][data-benchgo-drop-target] {
+  outline: 1px solid var(--dsw-alias-state-business-primary, Highlight);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary, Highlight) 14%, transparent);
+}
+
+.bg-project-files-toolbar.bg-ui-button { width: 28px; height: 28px; }
+
+.bg-project-file-dialog.bg-ui-dialog-content {
+  width: min(440px, calc(100vw - 24px));
+}
+
+.bg-project-file-description,
+.bg-project-file-name {
+  display: grid;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.bg-project-file-name input {
+  color: inherit;
+  background: var(--dsw-alias-bg-base, Canvas);
+  border: 1px solid var(--dsw-alias-border-trans, color-mix(in srgb, currentColor 28%, transparent));
+  border-radius: 8px;
+  font: inherit;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.bg-project-file-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.bg-project-file-error {
+  color: var(--dsw-alias-state-danger, #c43232);
+  overflow-wrap: anywhere;
+  margin-top: 12px;
+}
+
+.bg-project-picker-location {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.bg-project-picker-location > span,
+.bg-project-picker-list button > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bg-project-picker-list {
+  min-height: 80px;
+  max-height: min(240px, 30dvh);
+  overflow: auto;
+}
+
+.bg-project-picker-list button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.bg-project-picker-list > p {
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+}

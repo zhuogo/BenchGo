@@ -1,9 +1,5 @@
 const statuses = { online: '可连接', connected: '已连接', offline: '离线', connecting: '连接中', failed: '连接失败', disconnected: '未连接', 'auth-required': '待认证', unknown: '' };
 export function deviceStatus(device) { return statuses[device?.status] || ''; }
-export function sshStatus(device) {
-  if (!device?.sshManaged) return '';
-  return deviceStatus({ status: device.sshStatus }) || '待检查';
-}
 export function deviceIcon(device) {
   const type = device?.sshManaged ? 'server' : device?.deviceType || device?.kind;
   if (['mobile', 'phone', 'android', 'ios', 'tablet'].includes(type)) return 'mobile';

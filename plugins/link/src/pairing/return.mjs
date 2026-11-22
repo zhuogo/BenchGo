@@ -15,7 +15,7 @@ export function normalizeReturnOffer(input) {
   const routes = normalizeRoutes(input.routes);
   const target = normalizeTarget(input.target);
   if (typeof hostId !== 'string' || !/^sha256:[A-Za-z0-9+/]{43}=$/.test(hostId)
-    || !routes || [target, ...routes].some(route => !validReturnTarget(route) || route.pin && 'sha256:' + route.pin !== hostId)
+    || !routes || [target, ...routes].some(route => !validReturnTarget(route) || route.pin && 'sha256:' + route.pin !== hostId || route.relayTarget && route.relayTarget !== hostId)
     || typeof proof?.id !== 'string' || !/^[a-f0-9-]{36}$/.test(proof.id)
     || typeof proof.digest !== 'string' || !/^[a-f0-9]{64}$/.test(proof.digest)) throw new Error('回程连接信息无效');
   return { hostId, proof: { id: proof.id, digest: proof.digest }, target, routes };
@@ -38,7 +38,7 @@ export async function verifyReturnRoute(offer, credential) {
       const { value: admitted } = await remoteJson(route, '/link/api/info', undefined, { agent, token: credential.token, signal, timeout: 2_000 });
       if (admitted.hostId !== hostId || admitted.authorizationId !== credential.deviceId) throw new Error('回程主机或授权身份不一致');
       const routes = normalizeRoutes(admitted.routes);
-      if (routes?.some(candidate => candidate.kind === 'direct' && 'sha256:' + candidate.pin !== hostId)) throw new Error('回程连接路线身份不一致');
+      if (routes?.some(candidate => candidate.kind === 'direct' && 'sha256:' + candidate.pin !== hostId || candidate.relayTarget && candidate.relayTarget !== hostId)) throw new Error('回程连接路线身份不一致');
       return { ...route, routes, pairedEndpointFallback: !route.pin, hostId, token: credential.token, authorizationId: credential.deviceId, capabilities: [...PAIRED_DEVICE_CAPABILITIES], kind: 'computer' };
     } finally { agent.destroy(); }
   };
@@ -47,7 +47,7 @@ export async function verifyReturnRoute(offer, credential) {
     const alternates = AbortSignal.any([signal, AbortSignal.timeout(6_000)]);
     try {
       await selectRoute({ ...target, routes }, { signal: alternates, timeout: 1_500, accept: async candidate => {
-        try { verified = await verify({ url: candidate.url, pin: candidate.pin }, alternates); }
+        try { verified = await verify({ url: candidate.url, pin: candidate.pin, relayTarget: candidate.relayTarget }, alternates); }
         catch { throw Object.assign(new Error('回程路线不可达'), { code: 'ECONNREFUSED' }); }
       } });
     } catch { /* Try the advertised connection address when alternate routes fail. */ }

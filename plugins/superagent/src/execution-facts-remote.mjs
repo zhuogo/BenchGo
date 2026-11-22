@@ -53,7 +53,7 @@ function checkedPage(value, after, through) {
  * facts owns persistence, projections and the dense journal; this adapter owns no history.
  * @returns an awaited disposer that aborts streams and withdraws the Remote contribution.
  */
-export async function installExecutionFactsRemote({ ctx, facts }) {
+export async function installExecutionFactsRemote({ ctx, facts, subscribeIdentity }) {
   // A missing required registry must fail installation instead of leaving a pending plugin.
   if (!ctx.get('typert')) throw new Error('Execution facts Remote requires the typert service');
   const stopped = new AbortController();
@@ -95,7 +95,7 @@ export async function installExecutionFactsRemote({ ctx, facts }) {
       owner(this.ctx, 'stream');
       const signal = AbortSignal.any([callerSignal, stopped.signal]);
       signal.throwIfAborted();
-      let dirty = true, wake, released = false;
+      let dirty = true, identityChanged = false, wake, released = false;
       const touch = () => {
         dirty = true;
         const pending = wake;
@@ -104,10 +104,12 @@ export async function installExecutionFactsRemote({ ctx, facts }) {
       };
       // Subscription precedes the asynchronous baseline; notifications occupy one bit.
       const unsubscribe = facts.subscribe(touch);
+      const unsubscribeIdentity = subscribeIdentity?.(() => { identityChanged = true; touch(); });
       const release = () => {
         if (released) return;
         released = true;
         unsubscribe();
+        unsubscribeIdentity?.();
       };
       const aborted = () => { release(); touch(); };
       signal.addEventListener('abort', aborted, { once: true });
@@ -118,6 +120,10 @@ export async function installExecutionFactsRemote({ ctx, facts }) {
         yield { type: 'snapshot', snapshot };
         while (!signal.aborted) {
           dirty = false;
+          if (identityChanged) {
+            identityChanged = false;
+            yield { type: 'changes', cursor, entries: [], hasMore: false, identityChanged: true };
+          }
           const through = facts.currentCursor();
           if (!cursorSchema.safeParse(through).success || through < cursor) {
             throw invalid('Execution facts cursor regressed; reopen the snapshot');

@@ -23,12 +23,18 @@ function safeReasoning(value) {
   const efforts = value.efforts.filter(item => cleanId(item?.id)).map(item => ({ id: item.id, name: cleanId(item.name) ? item.name : item.id, ...(cleanId(item.description) ? { description: item.description } : {}) }));
   return efforts.length ? { efforts, ...(efforts.some(item => item.id === value.defaultEffort) ? { defaultEffort: value.defaultEffort } : {}) } : undefined;
 }
-export function createPickerCatalog({ commander, installer, providers, routeService, llm, isHarnessAvailable = () => true, cacheMs = 5000 } = {}) {
-  let installCache, installAt = 0, installationJob, catalogJob;
+export function createPickerCatalog({ commander, installer, providers, routeService, llm, isHarnessAvailable = () => true, cacheMs = 5000, modelCacheMs = 30_000 } = {}) {
+  let installCache, installAt = 0, installationJob, catalogJob, modelSnapshot;
   const installations = async () => {
     if (installCache && Date.now() - installAt < cacheMs) return installCache;
     // Model selection needs executable availability, not CLI versions or package-manager provenance.
-    if (!installationJob) installationJob = Promise.resolve(installer?.list?.({ includeDetails: false }) ?? []).then(rows => { installCache = rows; installAt = Date.now(); return rows; }).finally(() => { installationJob = undefined; });
+    if (!installationJob) {
+      const job = Promise.resolve(installer?.list?.({ includeDetails: false }) ?? []).then(rows => {
+        if (installationJob === job) { installCache = rows; installAt = Date.now(); }
+        return rows;
+      }).finally(() => { if (installationJob === job) installationJob = undefined; });
+      installationJob = job;
+    }
     return installationJob;
   };
   const capability = tool => { const value = (routeService ?? commander?.routeService)?.supports?.(tool); return tool === 'deepseek' ? { supported: true } : value === true ? { supported: true } : value && typeof value === 'object' ? value : { supported: false }; };
@@ -70,7 +76,7 @@ export function createPickerCatalog({ commander, installer, providers, routeServ
       let rows, accountModels;
       try {
         const [models, account, overrides] = await Promise.all([
-          providerModels(provider.id), source.managedRouterGo ? providers.routerGoProtocolModels() : undefined,
+          providerModels(provider.id), source.managedRouterGo ? providers.routerGoProtocolModels(provider.id) : undefined,
           source.managedRouterGo ? undefined : providers.modelCapabilities?.(provider.id),
         ]);
         const byId = new Map(overrides?.map(({ modelId, capabilities }) => [modelId, capabilities]));
@@ -109,19 +115,42 @@ export function createPickerCatalog({ commander, installer, providers, routeServ
     routes.sort((a, b) => a.tool.localeCompare(b.tool) || a.providerId.localeCompare(b.providerId) || a.nativeModelId.localeCompare(b.nativeModelId));
     return { tools, providers: visibleProviders, routes };
   };
-  // The official catalog asks every native adapter concurrently. Share only
-  // in-flight work; the next read still sees current provider settings.
-  const list = () => {
+  // Official selection asks native adapters to list models again, even for a
+  // known route. Reuse route metadata when the underlying inputs are unchanged.
+  const read = (reuse = false) => {
+    const available = isHarnessAvailable();
+    if (catalogJob?.available !== available) catalogJob = undefined;
+    if (reuse && !catalogJob && modelSnapshot?.available === available && Date.now() < modelSnapshot.expires) return Promise.resolve(modelSnapshot.value);
     if (!catalogJob) {
-      const job = build().finally(() => { if (catalogJob === job) catalogJob = undefined; });
-      catalogJob = job;
+      const operation = { available };
+      operation.promise = build().then(value => {
+        if (catalogJob === operation) {
+          modelSnapshot = value.providers.some(provider => provider.unavailableReason)
+            ? undefined : { available, value, expires: Date.now() + modelCacheMs };
+        }
+        return value;
+      }).catch(error => {
+        if (catalogJob === operation) modelSnapshot = undefined;
+        throw error;
+      }).finally(() => { if (catalogJob === operation) catalogJob = undefined; });
+      catalogJob = operation;
     }
-    return catalogJob.then(value => structuredClone(value));
+    const active = catalogJob;
+    return active.promise.then(value => {
+      if (active.available !== isHarnessAvailable() || active.invalidated) return read(reuse);
+      return value;
+    });
   };
   return {
-    list, decodeModelId: decodeRouteModelId, invalidate() { installCache = undefined; catalogJob = undefined; },
-    async models(tool) {
-      const catalog = await list();
+    list: async () => structuredClone(await read()),
+    decodeModelId: decodeRouteModelId,
+    invalidate({ installations = false } = {}) {
+      if (installations) { installCache = undefined; installationJob = undefined; }
+      if (catalogJob) catalogJob.invalidated = true;
+      catalogJob = modelSnapshot = undefined;
+    },
+    async models(tool, { fresh = false } = {}) {
+      const catalog = await read(!fresh);
       return catalog.routes.filter(row => row.tool === tool).map(row => ({ provider: 'commander-' + tool, id: row.modelId, name: row.name, inputModalities: ['text'], providerId: row.providerId, providerName: row.providerName, nativeModelId: row.nativeModelId, ...(row.context ? { context: structuredClone(row.context) } : {}), ...(row.reasoning ? { reasoning: structuredClone(row.reasoning) } : {}) }));
     },
   };

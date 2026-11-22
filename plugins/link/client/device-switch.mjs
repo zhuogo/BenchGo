@@ -1,5 +1,23 @@
 /** Sidebar device switcher state. Local drafts stay on the host page. */
 const labelOf = value => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 100) : '';
+const defaultKey = 'benchgo:default-workbench';
+
+export function defaultWorkbench(host = globalThis) {
+  try { return host.localStorage.getItem(defaultKey) || null; } catch { return null; }
+}
+
+export function saveDefaultWorkbench(device, host = globalThis) {
+  try {
+    if (device.kind === 'local') host.localStorage.removeItem(defaultKey);
+    else host.localStorage.setItem(defaultKey, device.hostId || device.id);
+    return true;
+  } catch { return false; }
+}
+
+export function defaultWorkbenchDevice(devices, identity) {
+  if (!identity) return undefined;
+  return devices.find(device => device.id === identity) ?? devices.find(device => device.hostId === identity);
+}
 
 export function deviceSwitchItems(devices) {
   const rows = Array.isArray(devices) ? devices.filter(item => item && typeof item.id === 'string' && item.id && labelOf(item.name)) : [];
@@ -26,19 +44,20 @@ export function connectDeviceSwitch({ host = globalThis, onChange = () => {}, on
     } catch { return; }
     origin = event.origin;
     desktopSidebar = event.data.desktopSidebar === true;
+    if (desktopSidebar) host.document?.documentElement?.setAttribute('data-benchgo-device-parent', origin);
     onChange({ devices: deviceSwitchItems(event.data.devices), activeId: event.data.activeId, busy: event.data.busy, error: event.data.error, desktopSidebar });
   };
   host.addEventListener('message', receive); ready();
   return {
     select(deviceId) { if (origin) parent.postMessage({ type: 'benchgo:device-switch:select', deviceId }, origin); },
     sidebarState(collapsed) { if (origin && desktopSidebar && typeof collapsed === 'boolean') parent.postMessage({ type: 'benchgo:sidebar:state', collapsed }, origin); },
-    dispose() { host.removeEventListener('message', receive); },
+    dispose() { host.removeEventListener('message', receive); if (desktopSidebar) host.document?.documentElement?.removeAttribute('data-benchgo-device-parent'); },
   };
 }
 
 /** Only the mounted active frame can ask its owner to select a saved device. */
 export function deviceSwitchFrameMessage(event, frames) {
-  if (!['benchgo:device-switch:ready', 'benchgo:device-switch:select', 'benchgo:sidebar:state'].includes(event.data?.type)) return null;
+  if (!['benchgo:device-switch:ready', 'benchgo:device-switch:select', 'benchgo:device-switch:resource', 'benchgo:resource:ready', 'benchgo:resource:opened', 'benchgo:sidebar:state'].includes(event.data?.type)) return null;
   const frame = frames.find(item => item.window === event.source && new URL(item.url).origin === event.origin);
   return frame ? { id: frame.id, type: event.data.type, deviceId: event.data.deviceId, ...(event.data.type === 'benchgo:sidebar:state' ? { collapsed: event.data.collapsed } : {}) } : null;
 }

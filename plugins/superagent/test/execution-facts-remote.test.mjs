@@ -3,10 +3,14 @@ import assert from 'node:assert/strict';
 import { createRequire, registerHooks } from 'node:module';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { createNotificationFactGate } from '../client/notification-sound.mjs';
 import { createActivityStore } from '../client/activity-data.mjs';
+import { createAssistantStore } from '../src/store.mjs';
+import { createAssistantSettingsAdapter } from '../src/settings-adapter.mjs';
 
 // Worktrees may share a built official dependency tree through node_modules.
 const checkout = fileURLToPath(new URL('../../../deepseek-harness/', import.meta.url));
@@ -74,13 +78,13 @@ function factStore() {
   return facts;
 }
 
-async function setup(t, facts = factStore()) {
+async function setup(t, facts = factStore(), subscribeIdentity) {
   const ctx = new Context();
   t.after(() => ctx.fiber.dispose());
   await ctx.plugin(Registry);
   await ctx.plugin(RemoteAccess);
   await ctx.plugin(Gateway);
-  const dispose = await installExecutionFactsRemote({ ctx, facts });
+  const dispose = await installExecutionFactsRemote({ ctx, facts, subscribeIdentity });
   const peer = new Peer(ctx, { principal: { kind: 'owner' } });
   const invoke = (method, request = {}, selectedPeer = peer) => ctx.typertGateway.invoke({
     namespace: 'benchgoExecutionFacts', method, args: { request }, peer: selectedPeer,
@@ -259,7 +263,7 @@ test('the real Client Remote mount calls the same strict unary and stream defini
 async function scopedActivity(t, options = {}) {
   const events = [], notificationSources = [];
   const { mountAssistantActivity } = loadActivity(options.contribution, events, notificationSources);
-  const b = await setup(t), client = new Context();
+  const b = await setup(t, undefined, options.subscribeIdentity), client = new Context();
   t.after(() => client.fiber.dispose());
   await client.plugin(Registry);
   client.provide('connection', { interactions: 'answer',
@@ -273,7 +277,7 @@ async function scopedActivity(t, options = {}) {
   } });
   await client.plugin(clientGateway);
   let scope;
-  const owner = client.plugin({ inject: ['remote'], apply(ctx) { scope = ctx; mountAssistantActivity(ctx, () => {}); } });
+  const owner = client.plugin({ inject: ['remote'], apply(ctx) { scope = ctx; mountAssistantActivity(ctx, () => {}, options.refreshIdentity || (() => {})); } });
   await owner;
   const received = [], failed = [];
   const connect = () => activityEnvironment.connect({ replace: value => received.push(value), update: value => received.push(value), carrierFailed: error => failed.push(error), failed: error => failed.push(error) });
@@ -341,6 +345,34 @@ test('official business stream wakes chat on publication and reconnect, not prog
   const before = b.events.length; control.restart();
   await settle(() => b.events.length === before + 1);
   await control.dispose();
+});
+
+test('saving the first assistant name through settings refreshes identity over the open stream', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'assistant-identity-stream-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  let listeners = 0;
+  const names = [];
+  const b = await scopedActivity(t, {
+    subscribeIdentity(listener) {
+      listeners++;
+      const unsubscribe = store.documents.subscribe(({ name }) => { if (name === 'IDENTITY.md') listener(); });
+      return () => { listeners--; unsubscribe(); };
+    },
+    refreshIdentity: () => { void store.getConfig().then(config => names.push(config.name)); },
+  });
+  const control = b.connect(); control.start();
+  await settle(() => names.length === 1);
+  assert.deepEqual(names, ['']);
+
+  const adapter = createAssistantSettingsAdapter(store);
+  const expected = await adapter.read('superagent');
+  await adapter.apply('superagent', { ops: [{ op: 'set', path: ['name'], value: '小北' }], expected });
+  await settle(() => names.length === 2);
+  assert.deepEqual(names, ['', '小北']);
+  assert.deepEqual(b.received.at(-1), { type: 'changes', cursor: 0, entries: [], hasMore: false, identityChanged: true });
+  await control.dispose();
+  assert.equal(listeners, 0);
 });
 
 test('new public notification capability survives restart without requesting legacy session fallback', async t => {

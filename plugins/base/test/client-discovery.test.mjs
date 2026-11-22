@@ -23,9 +23,10 @@ async function discover(options = patchEntries) {
   // Only Loader's entry/resolution seam is a fixture; discovery, package reads,
   // graph composition and bundle responses all run in the official service.
   const entries = options.map(options => ({
-    options: { ...options }, fiber: {}, disabled: false,
+    options: { ...options }, disabled: false,
     parent: { tree: { ctx } },
   }));
+  for (const entry of entries) entry.fiber = { ctx: { fiber: { entry, parent: ctx } } };
   ctx.provide('loader', {
     entries: () => entries.values(),
     internal: {
@@ -43,8 +44,9 @@ async function discover(options = patchEntries) {
         const entry = entries.find(entry => entry.options.id === id);
         assert(entry, `missing patch entry ${id}`);
         entry.disabled = disabled;
-        entry.fiber = disabled ? undefined : {};
-        ctx.emit('internal/plugin', { entry });
+        const fiber = { entry, parent: ctx, uid: disabled ? null : entry.options.id };
+        entry.fiber = disabled ? undefined : { ctx: { fiber } };
+        ctx.emit('internal/plugin', fiber);
         await Promise.resolve();
       },
       dispose: () => ctx.fiber.dispose(),

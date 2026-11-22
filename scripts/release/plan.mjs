@@ -8,8 +8,11 @@ import { findPreviousRelease, readChannelBaseline, githubJson, sha256, releaseKi
 import { platformDownloadEntries } from './downloads.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const stable = value => typeof value === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
-const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+export const stable = value => typeof value === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
+export const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+export const productPaths = ['plugins', 'scripts', 'packages', 'assets', '.github', 'bin', 'package.json', 'upstream.json', 'deepseek-harness', '.gitmodules'];
+export const versionFiles = { windows: 'package.json', plugin: 'plugins/base/package.json',
+  pluginLock: 'plugins/base/package-lock.json', android: 'plugins/link/mobile/android/app/build.gradle' };
 const ignored = path => /^(?:docs|eval|artifacts|task|概念)\//.test(path) || /(?:^|\/)(?:test|tests)\//.test(path)
   || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || /(?:^|\/)(?:README[^/]*|AGENTS\.md|NOTICE|LICENSE[^/]*)$/i.test(path)
   || /^(?:plugins\/(?:base\/lib|link\/dist)\/|scripts\/(?:desktop\/(?:smoke-windows|packaged-profile-probe|verify-claude-payload)|server\/(?:smoke-linux|verify-local)|verify-android-release)\.mjs$)/.test(path);
@@ -42,12 +45,12 @@ export function classifyChanges(paths) {
 }
 
 export function createReleasePlan({ releaseVersion, sourceSha, previous = null, versions, paths = [], minAppVersion,
-  packageChanged = false, channelBaseline = null, now = new Date().toISOString() }) {
+  packageChanged = false, channelBaseline = null, bumpVersions = false, now = new Date().toISOString() }) {
   if (!stable(releaseVersion) || !/^[a-f0-9]{40}$/.test(sourceSha)) throw new Error('Release requires a stable X.Y.Z version and immutable source SHA');
   for (const key of ['plugin', 'windows', 'android']) if (!stable(versions[key])) throw new Error(`Invalid ${key} component version`);
-  if (!stable(minAppVersion) || compareVersions(minAppVersion, versions.windows) > 0) throw new Error('minAppVersion must not exceed the available Windows version');
   if (!Number.isSafeInteger(versions.androidVersionCode) || versions.androidVersionCode < 1 || versions.androidVersionCode > 2147483647) throw new Error('Invalid Android versionCode');
   const reasons = classifyChanges(paths);
+  const plannedVersions = { ...versions };
   if (packageChanged) for (const component of Object.keys(reasons)) reasons[component].push('package.json build contract');
   if (previous) {
     validateReleaseManifest(previous.manifest);
@@ -59,13 +62,22 @@ export function createReleasePlan({ releaseVersion, sourceSha, previous = null, 
       const compared = compareVersions(versions[component], artifact.version);
       if (compared < 0) throw new Error(`${component} component cannot roll back`);
       if (compared > 0) reasons[component].push('component version increased');
-      if (reasons[component].length && compared === 0) throw new Error(`${component} changed: increment its component version before release`);
+      if (reasons[component].length && compared === 0) {
+        if (!bumpVersions) throw new Error(`${component} changed: increment its component version before release`);
+        const [major, minor, patch] = versions[component].split('.');
+        plannedVersions[component] = `${major}.${minor}.${BigInt(patch) + 1n}`;
+      }
     }
-    if (reasons.android.length && old.android && versions.androidVersionCode <= old.android.versionCode) throw new Error('Android rebuild requires an increased versionCode');
+    if (reasons.android.length && old.android && versions.androidVersionCode <= old.android.versionCode) {
+      if (!bumpVersions || versions.androidVersionCode < old.android.versionCode || old.android.versionCode >= 2147483647) {
+        throw new Error('Android rebuild requires an increased versionCode');
+      }
+      plannedVersions.androidVersionCode = old.android.versionCode + 1;
+    }
   } else for (const component of Object.keys(reasons)) reasons[component].push('first unified release');
+  if (!stable(minAppVersion) || compareVersions(minAppVersion, plannedVersions.windows) > 0) throw new Error('minAppVersion must not exceed the available Windows version');
   // The released CLI and online deployment resolver require platform seeds for the exact plugin version.
   if (previous && reasons.plugin.length) for (const component of ['macos', 'linux']) reasons[component].push('platform seed requires the new plugin version');
-  const plannedVersions = { ...versions };
   for (const [component, targets] of Object.entries(platformTargets)) {
     const downloads = previous?.downloads;
     const catalog = downloads?.sourceSha === previous?.sourceSha && downloads?.releaseVersion === previous?.releaseVersion ? downloads : null;
@@ -84,12 +96,35 @@ export function createReleasePlan({ releaseVersion, sourceSha, previous = null, 
 }
 
 export async function currentVersions() {
-  const app = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
-  const plugin = JSON.parse(await readFile(resolve(root, 'plugins/base/package.json'), 'utf8'));
+  const app = JSON.parse(await readFile(resolve(root, versionFiles.windows), 'utf8'));
+  const plugin = JSON.parse(await readFile(resolve(root, versionFiles.plugin), 'utf8'));
   const upstream = JSON.parse(await readFile(resolve(root, 'upstream.json'), 'utf8'));
-  const gradle = await readFile(resolve(root, 'plugins/link/mobile/android/app/build.gradle'), 'utf8');
+  const gradle = await readFile(resolve(root, versionFiles.android), 'utf8');
   return { plugin: plugin.version, windows: app.version, android: /versionName\s+['"]([^'"]+)['"]/.exec(gradle)?.[1],
     androidVersionCode: Number(/versionCode\s+(\d+)/.exec(gradle)?.[1]), engine: upstream.version };
+}
+
+export async function assertVersionAvailable(version) {
+  const tag = `v${version}`;
+  if (await githubJson(`/git/ref/tags/${tag}`, { missing: true }) || await githubJson(`/releases/tags/${tag}`, { missing: true })) {
+    throw new Error('Unified version tag or release already exists; use a new version, or rerun the failed publication job with its original plan');
+  }
+}
+
+export async function releaseChanges(previous, sourceSha, { workingTree = false } = {}) {
+  const { minAppVersion } = JSON.parse(await readFile(resolve(root, 'scripts/release/config.json'), 'utf8'));
+  if (!previous) return { minAppVersion, paths: [], packageChanged: false };
+  try { git('merge-base', '--is-ancestor', previous.sourceSha, sourceSha); }
+  catch { throw new Error('Previous unified release must be an ancestor of this source; fetch full history and do not publish rollback branches'); }
+  const paths = git('diff', '--name-only', '--no-renames', '-z', previous.sourceSha, ...(workingTree ? [] : [sourceSha])).split('\0').filter(Boolean);
+  if (workingTree) paths.push(...git('ls-files', '--others', '--exclude-standard', '-z', '--', ...productPaths).split('\0').filter(Boolean));
+  let packageChanged = false;
+  if (paths.includes(versionFiles.windows)) {
+    const before = JSON.parse(git('show', `${previous.sourceSha}:${versionFiles.windows}`));
+    const after = JSON.parse(workingTree ? await readFile(resolve(root, versionFiles.windows), 'utf8') : git('show', `${sourceSha}:${versionFiles.windows}`));
+    packageChanged = ['packageManager', 'engines', 'dsh', 'dependencies', 'devDependencies'].some(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+  }
+  return { minAppVersion, paths, packageChanged };
 }
 
 async function main() {
@@ -97,28 +132,15 @@ async function main() {
     'previous-file': { type: 'string' }, 'source-sha': { type: 'string' } } });
   if (!stable(values.version)) throw new Error('Unified release version must use stable X.Y.Z');
   const sourceSha = git('rev-parse', 'HEAD');
-  const dirty = git('status', '--porcelain=v1', '--untracked-files=all', '--', 'plugins', 'scripts', 'packages', 'assets', '.github', 'bin', 'package.json', 'upstream.json', 'deepseek-harness', '.gitmodules');
+  const dirty = git('status', '--porcelain=v1', '--untracked-files=all', '--', ...productPaths);
   if (dirty) throw new Error('Release planning requires committed product source; commit tracked and untracked product changes first (local artifacts/eval/reference are excluded)');
   if (values['source-sha'] && values['source-sha'] !== sourceSha) throw new Error('Checkout does not match requested source SHA');
   if (process.env.GITHUB_SHA && process.env.GITHUB_SHA !== sourceSha) throw new Error('Workflow source differs from checkout');
-  if (!values['previous-file']) {
-    const tag = `v${values.version}`;
-    if (await githubJson(`/git/ref/tags/${tag}`, { missing: true }) || await githubJson(`/releases/tags/${tag}`, { missing: true })) {
-      throw new Error('Unified version tag or release already exists; use a new version, or rerun the failed publication job with its original plan');
-    }
-  }
+  if (!values['previous-file']) await assertVersionAvailable(values.version);
   const previous = values['previous-file'] ? JSON.parse(await readFile(values['previous-file'], 'utf8')) : await findPreviousRelease();
-  if (previous) { try { git('merge-base', '--is-ancestor', previous.sourceSha, sourceSha); } catch { throw new Error('Previous unified release must be an ancestor of this source; fetch full history and do not publish rollback branches'); } }
-  const paths = previous ? git('diff', '--name-only', '--no-renames', '-z', previous.sourceSha, sourceSha).split('\0').filter(Boolean) : [];
-  const config = JSON.parse(await readFile(resolve(root, 'scripts/release/config.json'), 'utf8'));
-  let packageChanged = false;
-  if (previous && paths.includes('package.json')) {
-    const before = JSON.parse(git('show', `${previous.sourceSha}:package.json`));
-    const after = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
-    packageChanged = ['packageManager', 'engines', 'dsh', 'dependencies', 'devDependencies'].some(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
-  }
-  const plan = createReleasePlan({ releaseVersion: values.version, sourceSha, previous, versions: await currentVersions(), paths,
-    minAppVersion: config.minAppVersion, packageChanged, channelBaseline: values['previous-file'] ? null : await readChannelBaseline() });
+  const changes = await releaseChanges(previous, sourceSha);
+  const plan = createReleasePlan({ releaseVersion: values.version, sourceSha, previous, versions: await currentVersions(),
+    ...changes, channelBaseline: values['previous-file'] ? null : await readChannelBaseline() });
   const output = resolve(values.out || 'artifacts/release/release-plan.json');
   await mkdir(dirname(output), { recursive: true });
   await writeFile(output, `${JSON.stringify(plan, null, 2)}\n`);

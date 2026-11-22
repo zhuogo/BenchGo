@@ -54,7 +54,7 @@ async function writeChunk(res, chunk, signal) {
 }
 
 /** Same installed UI and Gateway, admitted exclusively by a paired device. */
-export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCenter } = {}) {
+export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCenter, resourceNavigation } = {}) {
   const peers = new Map();
   const realtime = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
   let closed = false;
@@ -63,8 +63,8 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
     if (!cookie || cookie.length > 128) return;
     const session = store.workbenchSession(digest(cookie));
     if (!session) return;
-    const device = store.state.devices.find(device => device.id === session.id && device.tokenHash === session.tokenHash);
-    if (!device || session.expires <= Date.now()) return;
+    const device = store.principal?.(session.id) ?? store.state.devices.find(row => row.id === session.id);
+    if (device?.tokenHash !== session.tokenHash || session.expires <= Date.now()) return;
     device.lastSeenAt = Date.now();
     return device;
   };
@@ -220,6 +220,10 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
         res.writeHead(200, { ...headers, 'content-type': 'application/json; charset=utf-8' }); res.end('{"apps":[]}'); return;
       }
       if (path.startsWith('api/')) {
+        if (path === 'api/commander-devices' && req.method === 'POST' && resourceNavigation) {
+          const value = await resourceNavigation(await json(req), device, { signal, origin: url.origin });
+          await sendResponse(Response.json(value)); return;
+        }
         if (['api/commander-link', 'api/commander-devices'].some(route => path === route || path.startsWith(route + '/'))) throw fail('请在电脑上管理配对设备', 403);
         if (!['GET', 'HEAD', 'POST'].includes(req.method)) throw fail('不支持的方法', 405);
         const target = new URL('/' + path + url.search, url.origin);
@@ -232,7 +236,7 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
           if (mode === 'streaming') { options.body = Readable.toWeb(req); options.duplex = 'half'; }
           else options.body = await readBody(req, MAX_BODY);
         }
-        if (!store.state.devices.some(row => row.id === device.id && row.tokenHash === device.tokenHash)) throw fail('设备授权已失效', 401);
+        if ((store.principal?.(device.id) ?? store.state.devices.find(row => row.id === device.id))?.tokenHash !== device.tokenHash) throw fail('设备授权已失效', 401);
         await sendResponse(await api.fetch(new Request(target, options), record.peer)); return;
       }
       if (!['GET', 'HEAD'].includes(req.method)) throw fail('不支持的方法', 405);
@@ -252,7 +256,8 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
       let data = await readFile(asset);
       let policy = headers['content-security-policy'];
       if (path === '' || path === 'index.html') {
-        const html = ctx.webServer.renderIndex(data.toString(), record.peer).replace(/<base\b[^>]*>/gi, '').replace(/(["'])\/(plugins|api)\//g, (_, quote, route) => quote + WORKBENCH_PATH + route + '/').replace(/<head(?:\s[^>]*)?>/i, open => open + '<base href="' + WORKBENCH_PATH + '"><script src="' + WORKBENCH_PATH + 'workbench.js"></script>').replace('width=device-width, initial-scale=1', 'width=device-width, initial-scale=1, viewport-fit=cover');
+        const groupNavigation = resourceNavigation && device.groupMember ? '<script>globalThis.__DSH_LINK_GROUP_RESOURCES__=true</script>' : '';
+        const html = ctx.webServer.renderIndex(data.toString(), record.peer).replace(/<base\b[^>]*>/gi, '').replace(/(["'])\/(plugins|api)\//g, (_, quote, route) => quote + WORKBENCH_PATH + route + '/').replace(/<head(?:\s[^>]*)?>/i, open => open + '<base href="' + WORKBENCH_PATH + '">' + groupNavigation + '<script src="' + WORKBENCH_PATH + 'workbench.js"></script>').replace('width=device-width, initial-scale=1', 'width=device-width, initial-scale=1, viewport-fit=cover');
         const hashes = [...html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(match => "'sha256-" + createHash('sha256').update(match[1]).digest('base64') + "'");
         policy = "default-src 'self'; script-src 'self' 'unsafe-eval' " + hashes.join(' ') + "; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; frame-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
         data = Buffer.from(html);

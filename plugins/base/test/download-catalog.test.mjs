@@ -4,7 +4,7 @@ import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fetchReleaseArtifact, fetchUpdateArtifact, fetchVerifiedDownloadCatalog, releaseDownloadUrl } from '../shared/update-feed.mjs';
+import { fetchLatestDownloadCatalog, fetchReleaseArtifact, fetchUpdateArtifact, fetchVerifiedDownloadCatalog, releaseDownloadUrl } from '../shared/update-feed.mjs';
 
 const keys = generateKeyPairSync('ed25519');
 const publicKey = keys.publicKey.export({ type: 'spki', format: 'pem' });
@@ -15,6 +15,19 @@ const signed = value => {
   const bytes = Buffer.from(JSON.stringify(value)), signature = sign(null, bytes, keys.privateKey).toString('base64');
   return url => new Response(url.endsWith('.sig') ? signature : bytes);
 };
+
+test('website download directory requires a valid signature and matching release version', async () => {
+  const value = catalog(), bytes = Buffer.from(JSON.stringify(value));
+  const snapshot = { version: value.releaseVersion, catalog: bytes.toString('base64'), signature: sign(null, bytes, keys.privateKey).toString('base64') };
+  const read = (body = snapshot) => fetchLatestDownloadCatalog({ publicKey, fetcher: (url, options) => {
+    assert.equal(url, 'https://raw.githubusercontent.com/zhuogo/BenchGo/release-metadata/latest.json');
+    assert.equal(options.credentials, 'omit');
+    return Response.json(body);
+  } });
+  assert.deepEqual(await read(), value);
+  await assert.rejects(read({ ...snapshot, version: '1.2.0' }), { code: 'UPDATE_MANIFEST' });
+  await assert.rejects(read({ ...snapshot, catalog: Buffer.from('{}').toString('base64') }), { code: 'UPDATE_SIGNATURE' });
+});
 
 test('fixed download catalogs are verified with the existing key and support explicitly reused immutable component URLs', async () => {
   const value = catalog(), urls = [], fetcher = signed(value);

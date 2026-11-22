@@ -5,6 +5,7 @@ import { isRouterGoAccountReference, routerGoAccountPath, routerGoOrigin, router
 import { ProviderBrandIcon } from './provider-brand-icon.jsx';
 import { UIIcon } from './iconsax.jsx';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
+import { routerGo } from '../shared/builtin-providers.mjs';
 
 const balanceFormat = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false });
 
@@ -19,15 +20,15 @@ async function command(action, input = {}, signal = AbortSignal.timeout(45000)) 
   return body;
 }
 
-export function RouterGoBrand() {
+export function RouterGoBrand({ name = routerGo.name }) {
   return <a href={`${routerGoOrigin}/`} target="_blank" rel="noopener noreferrer" className="cmd-routergo-brand"
     aria-label="访问 RouterGo 官网（新窗口）">
     <ProviderBrandIcon id="routergo" name="RouterGo" size={34} />
-    <span>RouterGo</span><UIIcon name="external" size={14} />
+    <span>{name}</span><UIIcon name="external" size={14} />
   </a>;
 }
 
-export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refreshProviders, writable, ready, onEdit, onSaved, configuredRef, available }) {
+export function RouterGoAccount({ providerId, displayName, renderHeader, renderEditor, editorOpen, refreshProviders, writable, ready, onSaved, configuredRef, available }) {
   const [access, setAccess] = useState(), [pending, setPending] = useState();
   const [busy, setBusy] = useState(''), [notice, setNotice] = useState(), [balanceError, setBalanceError] = useState(false);
   const [readingBalance, setReadingBalance] = useState(false);
@@ -38,6 +39,7 @@ export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refres
   const openEditor = useRef(editorOpen);
   openEditor.current = editorOpen;
   const notify = (text, tone) => setNotice(previous => ({ text, tone, sequence: (previous?.sequence ?? 0) + 1 }));
+  const requestAccount = (action, input, signal) => command(action, { providerId, ...input }, signal);
 
   async function sync(force = false) {
     if (activeSync.current || (!force && (openEditor.current || Date.now() - lastSync.current < 60000))) return;
@@ -46,7 +48,7 @@ export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refres
     lastSync.current = Date.now();
     setSyncing(true);
     try {
-      const answer = await command('sync', { force }, AbortSignal.any([request.signal, AbortSignal.timeout(35000)]));
+      const answer = await requestAccount('sync', { force }, AbortSignal.any([request.signal, AbortSignal.timeout(35000)]));
       if (request.signal.aborted) return;
       if (['synced', 'recent'].includes(answer.state)) {
         const { added, updated, removed } = answer;
@@ -74,7 +76,7 @@ export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refres
     lastBalanceRead.current = Date.now();
     setBalanceError(false); setReadingBalance(true);
     try {
-      const answer = await command('status', {}, AbortSignal.any([request.signal, AbortSignal.timeout(15000)]));
+      const answer = await requestAccount('status', {}, AbortSignal.any([request.signal, AbortSignal.timeout(15000)]));
       if (!request.signal.aborted) setAccess(answer);
     } catch (reason) {
       if (request.signal.aborted) return;
@@ -107,7 +109,7 @@ export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refres
       activeSync.current?.abort();
       activeSync.current = undefined;
     };
-  }, [configuredRef]);
+  }, [configuredRef, providerId]);
 
   async function start() {
     setBusy('start'); setNotice(undefined);
@@ -115,8 +117,8 @@ export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refres
     const popup = desktop ? null : window.open('about:blank', '_blank');
     if (popup) popup.opener = null;
     try {
-      const next = await command('start');
-      if (!alive.current) { popup?.close(); return; }
+      const next = await requestAccount('start', { displayName });
+      if (!alive.current) { popup?.close(); void requestAccount('cancel', { id: next.id }).catch(() => {}); return; }
       setPending(next);
       if (desktop) window.open(next.verificationURL, '_blank', 'noopener,noreferrer');
       else if (popup && !popup.closed) popup.location.replace(next.verificationURL);
@@ -127,7 +129,7 @@ export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refres
   async function save(session, replace) {
     setBusy('save'); setNotice(undefined);
     try {
-      const answer = await command('save', { id: session.id, replace });
+      const answer = await requestAccount('save', { id: session.id, replace });
       if (!alive.current) return;
       setPending(undefined); setAccess(answer); onSaved(); void refresh();
     } catch (reason) {
@@ -144,7 +146,7 @@ export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refres
     let timer;
     async function poll() {
       try {
-        const answer = await command('poll', { id: pending.id }, AbortSignal.any([request.signal, AbortSignal.timeout(15000)]));
+        const answer = await requestAccount('poll', { id: pending.id }, AbortSignal.any([request.signal, AbortSignal.timeout(15000)]));
         if (request.signal.aborted) return;
         if (answer.state === 'pending') timer = setTimeout(poll, answer.retryAfter * 1000);
         else if (answer.state === 'authorized') {
@@ -168,27 +170,22 @@ export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refres
 
   async function cancel() {
     setBusy('cancel'); setNotice(undefined);
-    try { await command('cancel', { id: pending.id }); }
+    try { await requestAccount('cancel', { id: pending.id }); }
     catch (reason) { if (alive.current && reason.status !== 410) notify(reason.message); }
     finally { if (alive.current) { setPending(undefined); setBusy(''); } }
   }
 
   const connected = access?.state === 'connected';
   const accountConfigured = isRouterGoAccountReference(configuredRef);
-  const showLogin = !connected && !readingBalance && !pending && (!available || accountConfigured);
+  const keyAvailable = available && access?.state === 'key-only';
+  const showLogin = !connected && !keyAvailable && !readingBalance && !pending && (!available || accountConfigured);
   const login = showLogin ? <Button variant="secondary" size="sm" className="cmd-routergo-login"
     aria-label="登录 RouterGo" aria-busy={busy === 'start'} disabled={!writable || !ready || !!busy} onClick={() => void start()}>
     <span className="cmd-routergo-login-mark" aria-hidden="true"><UIIcon name="flash" size={18} selected /></span>
     <span>登录</span>
   </Button> : null;
   return <>
-    {renderHeader ? renderHeader(login, connected) : <div className="cmd-routergo-head">
-      <RouterGoBrand />
-      <div className="cmd-routergo-actions">
-        {login}
-        <Button variant="outline" size="sm" disabled={!writable || !ready} onClick={onEdit}><UIIcon name="key" size={14} /><span>使用密钥</span></Button>
-      </div>
-    </div>}
+    {renderHeader(login, connected, !pending && !busy)}
     {connected ? <section className="cmd-routergo-summary" aria-label="RouterGo 账号信息">
       <div className="cmd-routergo-user">
         <span className="cmd-routergo-avatar"><UIIcon name="account" size={17} /></span>
@@ -233,12 +230,30 @@ export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refres
         : <Button variant="outline" size="sm" onClick={() => void refresh()}><UIIcon name="refresh" size={15} />重试读取余额</Button>}
     </div> : null}
     <React.Fragment key={editorVersion}>
-      {renderEditor?.(syncing && connected, dirty => <Button variant="outline" size="sm" className="cmd-model-discover"
-        disabled={dirty || !writable || !ready || !connected || syncing} aria-busy={syncing}
+      {renderEditor?.(syncing, dirty => <Button variant="outline" size="sm" className="cmd-model-discover"
+        disabled={dirty || !writable || !ready || !available || syncing} aria-busy={syncing}
         title={dirty && !syncing ? '请先保存模型修改' : undefined} onClick={() => void sync(true)}>
         {syncing ? '正在同步…' : '同步模型'}
       </Button>)}
     </React.Fragment>
     {notice ? <Toast key={notice.sequence} text={notice.text} tone={notice.tone} icon={<UIIcon name="close" size={16} />} onDone={() => setNotice(undefined)} /> : null}
   </>;
+}
+
+export function RouterGoAdd({ providerId, writable, ready, onSaved, children }) {
+  const [name, setName] = useState(routerGo.name);
+  const [manual, setManual] = useState(false);
+  return manual ? children : <RouterGoAccount providerId={providerId} displayName={name}
+    writable={writable} ready={ready} onSaved={onSaved} renderHeader={(login, _connected, editable) => <>
+      <label className="cmd-provider-search">
+        <input type="text" aria-label="显示名称" placeholder="显示名称" maxLength={128}
+          disabled={!editable} value={name} onChange={event => setName(event.target.value)} />
+      </label>
+      <div className="cmd-routergo-actions">
+        {login}
+        <Button variant="outline" size="sm" disabled={!writable || !ready || !editable} onClick={() => setManual(true)}>
+          <UIIcon name="key" size={14} />使用密钥
+        </Button>
+      </div>
+    </>} />;
 }

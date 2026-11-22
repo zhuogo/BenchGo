@@ -2,7 +2,8 @@ import { workbenchUrl } from './device-state.mjs';
 import { deviceRequest } from './resource-state.mjs';
 
 const creationActions = ['browse', 'project', 'clone'];
-const actions = [...creationActions, 'deleteProject'];
+const actions = [...creationActions, 'deleteProject', 'folder'];
+const requiresIdentity = action => action === 'deleteProject' || action === 'folder';
 let bridgeSequence = 0;
 
 /** Project forms remain in the owner; requests run inside the authorized device frame. */
@@ -68,16 +69,19 @@ export function createProjectBridge({ deviceId, expectedDevice, onEntry, getFram
   };
   window.addEventListener('message', receive);
   return {
-    async supports(action) { await connect(); return !disposed && supported.has(action) && (action !== 'deleteProject' || !!expectedIdentity); },
+    async supports(action) { await connect(); return !disposed && supported.has(action) && (!requiresIdentity(action) || !!expectedIdentity); },
     async api(action, args = {}) {
       if (!actions.includes(action)) throw Error('不支持的项目操作');
-      if (action === 'deleteProject' && !expectedIdentity) throw Error('项目所属设备身份尚未确认，请刷新后重新选择');
+      if (requiresIdentity(action) && !expectedIdentity) throw Error('项目所属设备身份尚未确认，请刷新后重新选择');
       await connect();
       if (disposed) throw closed();
       if (!supported.has(action)) throw Error('目标设备尚不支持此项目操作，请升级该设备的 BenchGo 后重试');
       const requestId = `${prefix}-${++sequence}`;
       return new Promise((resolve, reject) => {
-        const timer = schedule(() => { pending.delete(requestId); reject(Error(action === 'clone' ? '目标设备克隆超时，请检查目标项目后重试' : action === 'deleteProject' ? '删除执行结果尚未确认，请刷新目标项目列表后核验' : '目标设备项目操作超时，请重试')); }, action === 'clone' ? 5 * 60_000 + timeout : timeout);
+        const timeoutMessage = action === 'clone' ? '目标设备克隆超时，请检查目标项目后重试'
+          : action === 'deleteProject' ? '删除执行结果尚未确认，请刷新目标项目列表后核验'
+          : action === 'folder' ? '文件夹操作超时，请刷新目录核对结果' : '目标设备项目操作超时，请重试';
+        const timer = schedule(() => { pending.delete(requestId); reject(Error(timeoutMessage)); }, action === 'clone' ? 5 * 60_000 + timeout : timeout);
         pending.set(requestId, { resolve, reject, timer });
         try {
           const target = getFrame()?.contentWindow;

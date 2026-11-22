@@ -3,7 +3,7 @@ import { executionFactsRemoteContribution } from '../src/execution-facts-contrac
 import { configureAssistantActivity, assistantActivityStore } from './use-activity.jsx';
 import { createNotificationFactGate } from './notification-sound.mjs';
 /** The official Remote owns reconnection; the shared store owns only read projections. */
-export function mountAssistantActivity(ctx, api) {
+export function mountAssistantActivity(ctx, api, refreshIdentity) {
   let active = true;
   let notificationSource;
   const notifySource = supported => {
@@ -34,11 +34,18 @@ export function mountAssistantActivity(ctx, api) {
             });
             const consumer = new RemoteSnapshotStream(stream, {
               name: 'BenchGo execution facts', isSnapshot: frame => frame.type === 'snapshot',
-              replace: frame => { if (disposed || !active) return; notifySource(frame.snapshot.publicChatNotifications === true); sounds.replace(frame.snapshot); sink.replace(frame.snapshot); reconcileChat(); },
+              replace: frame => {
+                if (disposed || !active) return;
+                notifySource(frame.snapshot.publicChatNotifications === true);
+                sounds.replace(frame.snapshot); sink.replace(frame.snapshot);
+                reconcileChat();
+                refreshIdentity();
+              },
               update: frame => {
                 if (disposed || !active) return;
                 sink.update(frame);
                 sounds.update(frame);
+                if (frame.identityChanged) refreshIdentity();
                 if (frame.entries?.some(entry => ['chat', 'delivery', 'result', 'attention'].includes(entry.kind))) reconcileChat();
               },
               failed: error => { sounds.disconnect(); if (!disposed && active) { if (notificationSource === undefined) notifySource(false); sink.failed(error); void release(); } },

@@ -23,7 +23,7 @@ const snapshot = z.object({ cursor, tasks: z.array(jsonObject) }).catchall(z.jso
 const page = z.object({ cursor, entries: z.array(entry), hasMore: z.boolean() }).catchall(z.json());
 const frame = z.union([
   z.strictObject({ type: z.literal('snapshot'), snapshot }),
-  page.extend({ type: z.literal('changes') }),
+  page.extend({ type: z.literal('changes'), identityChanged: z.boolean().optional() }),
 ]);
 
 /** Wire validation shared by the Host adapter and optional Client validation. */

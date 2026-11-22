@@ -57,9 +57,9 @@ async function fixture() {
       }] : []);
     const publish=next=>{state=next;for(const listener of listeners)listener();};
     window.backgroundLoading=()=>publish({...state,status:'loading'});
-    window.routerScenario=mode=>{
+    window.routerScenario=(mode,id='routergo')=>{
       if(mode==='missing') {delete namespace.user.providers.routergo;delete namespace.value.providers.routergo;}
-      window.invalidCredential=mode==='invalid'?'routergo':undefined;
+      window.invalidCredential=mode==='invalid'?id:undefined;
       publish({...state,status:'ready',rows:rows()});
     };
     window.storeAccount=()=>{
@@ -297,7 +297,7 @@ test('provider settings render four states and retain protocol choices through d
       const bounds = await Promise.all([add.getByRole('heading').boundingBox(), closeAdd.boundingBox()]);
       assert(bounds[0].y < bounds[1].y + bounds[1].height && bounds[1].y < bounds[0].y + bounds[0].height);
       const templates = page.getByRole('group', { name: '厂商模板' });
-      assert.equal(await templates.getByRole('button').count(), 22);
+      assert.equal(await templates.getByRole('button').count(), 23);
       for (const [name, brand] of [
         ['New API', 'new-api'], ['Sub2API', 'sub2api'], ['讯飞星火', 'spark'], ['百度千帆', 'qianfan'],
         ['月之暗面 Kimi', 'kimi'], ['OpenAI', 'openai'], ['Anthropic', 'anthropic'], ['OpenCode', 'opencode'],
@@ -308,7 +308,8 @@ test('provider settings render four states and retain protocol choices through d
         assert(await image.evaluate(async node => { await node.decode(); return node.naturalWidth > 0; }));
       }
       assert.equal(await page.getByRole('group', { name: '其他接入方式' }).count(), 0);
-      for (const name of ['RouterGo', 'Kimi Coding', '小米 Token 套餐']) {
+      assert.equal(await templates.getByRole('button', { name: 'RouterGo', exact: true }).count(), 1);
+      for (const name of ['Kimi Coding', '小米 Token 套餐']) {
         assert.equal(await templates.getByRole('button', { name, exact: true }).count(), 0);
       }
       assert.equal(await templates.getByRole('button', { name: '自定义供应商', exact: true }).count(), 1);
@@ -814,6 +815,10 @@ test('RouterGo shows account identity and compact balance, and allows manual cre
       await page.goto('http://localhost/');
       await page.evaluate(dark => { document.body.toggleAttribute('data-ds-dark-theme', dark); window.setScenario('empty'); }, dark);
       const card = page.getByRole('listitem').filter({ hasText: 'RouterGo' });
+      await page.evaluate(() => {
+        window.seedProvider('routergo', { api: 'openai-responses', baseURL: 'https://routergo.cn/api/v1', models: [{ id: 'opaque/router:model' }] });
+        window.routerScenario('invalid');
+      });
       const login = card.getByRole('button', { name: '登录 RouterGo' });
       await login.waitFor();
       const brand = card.getByRole('link', { name: '访问 RouterGo 官网（新窗口）' });
@@ -827,15 +832,10 @@ test('RouterGo shows account identity and compact balance, and allows manual cre
       assert.equal(await login.textContent(), '登录');
       assert.equal(await login.locator('.cmd-routergo-login-mark .cmd-ui-icon.is-selected').count(), 1);
       assert.equal(await login.evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(96, 97, 102)');
-      const manual = card.getByRole('button', { name: '使用密钥' });
-      const [brandBox, loginBox, manualBox] = await Promise.all([brand.boundingBox(), login.boundingBox(), manual.boundingBox()]);
-      const keyIconBox = await manual.locator('.cmd-ui-icon').boundingBox();
-      assert.equal(keyIconBox.y + keyIconBox.height / 2, manualBox.y + manualBox.height / 2);
-      assert.equal(await page.getByText('登录 RouterGo 或配置供应商 API 密钥。', { exact: true }).count(), 0);
-      assert(brandBox.x + brandBox.width < loginBox.x && loginBox.x + loginBox.width < manualBox.x);
-      assert.equal(loginBox.y, manualBox.y);
+      const [brandBox, loginBox] = await Promise.all([brand.boundingBox(), login.boundingBox()]);
+      assert(brandBox.x + brandBox.width <= loginBox.x || brandBox.y + brandBox.height <= loginBox.y);
       if (screenshots) await page.screenshot({ path: join(screenshots, `routergo-empty-${width}.png`) });
-      assert(Math.abs(brandBox.y + brandBox.height / 2 - loginBox.y - loginBox.height / 2) <= 1, JSON.stringify({ brandBox, loginBox, manualBox }));
+      if (width > 1000) assert(Math.abs(brandBox.y + brandBox.height / 2 - loginBox.y - loginBox.height / 2) <= 1, JSON.stringify({ brandBox, loginBox }));
       await login.hover();
       const mark = login.locator('.cmd-routergo-login-mark');
       const markBox = await mark.boundingBox();
@@ -864,10 +864,12 @@ test('RouterGo shows account identity and compact balance, and allows manual cre
       await page.mouse.move(1, 1);
       await page.mouse.up();
       await page.emulateMedia({ reducedMotion: 'no-preference' });
-      await manual.click();
+      await page.getByRole('button', { name: '添加模型提供商' }).click();
+      await page.getByRole('group', { name: '厂商模板' }).getByRole('button', { name: 'RouterGo', exact: true }).click();
+      await page.getByRole('button', { name: '使用密钥' }).click();
       await page.getByRole('textbox', { name: 'API 密钥', exact: true }).waitFor();
       await page.getByRole('button',{name:'关闭添加供应商'}).click();
-      await page.evaluate(() => window.setScenario('data'));
+      await page.evaluate(() => window.routerScenario('configured'));
       await card.getByRole('button', { name: /^编辑 RouterGo/ }).waitFor();
       assert.equal(await login.count(), 0);
       assert.equal(await brand.locator('img').evaluate(image => getComputedStyle(image).filter), 'none');
@@ -937,7 +939,7 @@ test('RouterGo shows account identity and compact balance, and allows manual cre
       await summary.getByText('22.50', { exact: true }).waitFor();
       assert.equal(await summary.getByRole('button', { name: '同步模型' }).count(), 0);
       const edit = card.getByRole('button', { name: /^编辑 RouterGo/ });
-      assert.equal((await edit.textContent()).trim(), '模型');
+      assert.equal((await edit.textContent()).trim(), '设置与模型');
       await edit.click();
       const sync = card.locator('.cmd-model-catalog-tools').getByRole('button', { name: '同步模型' });
       await sync.click();
@@ -946,19 +948,23 @@ test('RouterGo shows account identity and compact balance, and allows manual cre
       await sync.click();
       await page.getByRole('alert').getByText('新增 1、更新 2、移除 3').waitFor();
       assert.equal(await brand.locator('img').evaluate(image => getComputedStyle(image).filter), 'none');
-      assert.deepEqual(actions.filter(input => input.action === 'save'), [{ action: 'save', id: 'local-id', replace: true }, { action: 'save', id: 'local-id', replace: true }]);
+      assert.deepEqual(actions.filter(input => input.action === 'save'), [{ action: 'save', providerId: 'routergo', id: 'local-id', replace: true }, { action: 'save', providerId: 'routergo', id: 'local-id', replace: true }]);
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       if (screenshots) await page.screenshot({ path: join(screenshots, `routergo-connected-${width}.png`) });
       await card.getByRole('button', { name: '模型选项 1', exact: true }).waitFor();
-      for (const name of ['API 密钥', 'API 地址', '显示名称']) {
+      for (const name of ['API 密钥', 'API 地址']) {
         assert.equal(await card.getByRole('textbox', { name, exact: true }).count(), 0);
       }
+      const displayName = card.getByRole('textbox', { name: '显示名称', exact: true });
+      assert.equal(await displayName.inputValue(), 'RouterGo');
       assert.equal(await card.getByRole('button', { name: '高级连接设置' }).count(), 0);
       assert.equal(await card.getByRole('button', { name: '改用 API 密钥' }).count(), 0);
       await edit.click();
       await card.getByRole('button', { name: /^删除 RouterGo/ }).click();
       await page.getByRole('dialog').getByRole('button', { name: /^删除 RouterGo/ }).last().click();
-      await card.getByRole('button', { name: '使用密钥' }).click();
+      await page.getByRole('button', { name: '添加模型提供商' }).click();
+      await page.getByRole('group', { name: '厂商模板' }).getByRole('button', { name: 'RouterGo', exact: true }).click();
+      await page.getByRole('button', { name: '使用密钥' }).click();
       await page.getByRole('textbox', { name: 'API 密钥', exact: true }).waitFor();
       await context.close();
     }
@@ -991,7 +997,9 @@ test('RouterGo manual credentials can batch-add from an empty model list and rec
     await page.goto('http://localhost/');
     await page.evaluate(ids => { window.fixtureModels = ids.map(id => ({ id, name: id, contextWindow: 24000, inputModalities: ['text'] })); window.routerScenario('missing'); }, ids);
     const router = page.getByRole('listitem').filter({ hasText: 'RouterGo' });
-    await router.getByRole('button', { name: '使用密钥' }).click();
+    await page.getByRole('button', { name: '添加模型提供商' }).click();
+    await page.getByRole('group', { name: '厂商模板' }).getByRole('button', { name: 'RouterGo', exact: true }).click();
+    await page.getByRole('button', { name: '使用密钥' }).click();
     await page.getByRole('textbox', { name: 'API 密钥', exact: true }).fill('manual-example');
     await page.getByRole('button', { name: '同步模型' }).click();
     const picker = page.getByRole('region', { name: '选择模型' });
@@ -1100,7 +1108,7 @@ test('RouterGo manual credentials can batch-add from an empty model list and rec
       await page.screenshot({ path: join(process.env.BENCHGO_PROVIDER_SCREENSHOTS, 'model-catalog-grid-1440.png') });
     }
     await router.getByRole('button', { name: /^编辑 RouterGo/ }).click();
-    await page.evaluate(() => window.routerScenario('invalid'));
+    await page.evaluate(() => window.routerScenario('invalid', Object.keys(window.savedProviders())[0]));
     assert.equal(await router.locator('img').evaluate(image => getComputedStyle(image).filter), 'none');
     assert.equal(await router.getByRole('button', { name: '登录 RouterGo' }).isEnabled(), true);
     await router.getByRole('button', { name: /^编辑 RouterGo/ }).click();

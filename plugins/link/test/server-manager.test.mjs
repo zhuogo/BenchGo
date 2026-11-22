@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { createServer, connect as tcpConnect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import ssh2 from 'ssh2';
 import { createServer as createHttpsServer } from 'node:https';
 import { loadIdentity } from '../src/transport/tls.mjs';
@@ -150,6 +152,48 @@ test('server logs redact credentials, bearer, URL and private JSON fields', () =
   for (const value of ['abc-123', 'hidden', 'paired', 'json-secret', 'pass"', 'private-key-value']) assert(!text.includes(value), value);
 });
 
+test('saved SSH password survives a host restart and network disconnect', async t => {
+  const { openDeviceRegistry } = await import('../src/devices/registry.mjs');
+  const localProvider = new URL('../../../deepseek-harness/packages/credentials/credentials-local/', import.meta.url);
+  const require = createRequire(new URL('package.json', localProvider));
+  const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
+  const { LocalCredentialProvider } = await import(new URL('lib/index.js', localProvider));
+  const f = await fixture(t);
+  const openCredentials = async () => {
+    const ctx = new Context();
+    const fiber = ctx.plugin(LocalCredentialProvider, { path: join(f.directory, '.credentials.yaml'), dshHome: f.directory, watch: false });
+    t.after(() => fiber.dispose());
+    await fiber;
+    return { credentials: ctx.get('credentials'), close: () => fiber.dispose() };
+  };
+  const first = await openCredentials();
+  const registry = await openDeviceRegistry(f.directory);
+  const { fingerprint } = await f.manager.probe(f.input);
+  const id = 'saved-ssh';
+  await registry.upsert({ id, name: '服务器', kind: 'ssh', token: 'paired', ssh: { ...f.input, fingerprint, remotePort: 4430 } });
+  const manager = createServerManager({ directory: f.directory, credentials: first.credentials });
+  t.after(() => manager.close());
+  const job = await manager.reconnect({ id, password: 'secret' });
+  assert.equal((await completed(manager, job.jobId)).state, 'done');
+  const invalid = await manager.reconnect({ id, password: 'incorrect' });
+  assert.equal((await completed(manager, invalid.jobId)).state, 'error');
+  assert.doesNotMatch(await readFile(join(f.directory, 'connections.json'), 'utf8'), /"password"|incorrect|secret/);
+  await manager.close();
+  await first.close();
+
+  const second = await openCredentials();
+  const restored = createServerManager({ directory: f.directory, credentials: second.credentials });
+  t.after(() => restored.close());
+  await restored.openTerminal(id);
+  f.drop();
+  for (let i = 0; i < 100 && restored.state(id).sshStatus === 'connected'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  await restored.openTerminal(id);
+  assert.equal(restored.state(id).sshStatus, 'connected');
+  await restored.disconnect(id);
+  assert.deepEqual(await second.credentials.listRecords(), []);
+  assert.doesNotMatch(await readFile(join(f.directory, '.credentials.yaml'), 'utf8'), /secret/);
+});
+
 test('existing Link server binds in place, restores SSH through an agent, and separates command and terminal from workbench', async t => {
   const hostKey = ssh2.utils.parseKey(key);
   const agentServer = createServer(socket => {
@@ -186,11 +230,11 @@ test('existing Link server binds in place, restores SSH through an agent, and se
   const registry = await import('../src/devices/registry.mjs').then(({ openDeviceRegistry }) => openDeviceRegistry(f.directory));
   const manager = createServerManager({ directory: f.directory, registry, resourceFetcher: async () => assert.fail('existing instance used deployment resources') });
   t.after(() => manager.close());
-  let workbenchOnline = true;
+  let workbenchOnline = true, workbenchToken = 'paired';
   const https = createHttpsServer({ key: identity.key, cert: identity.cert }, (req, res) => {
     if (!workbenchOnline) { res.writeHead(503); res.end('{"error":"offline"}'); return; }
     if (req.url === '/link/api/workbench') {
-      assert.equal(req.headers.authorization, 'Bearer paired');
+      assert.equal(req.headers.authorization, 'Bearer ' + workbenchToken);
       res.writeHead(200, { 'set-cookie': 'dsh_link_workbench=test' }); res.end('{"url":"/link/workbench/"}');
     } else { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html>workbench</html>'); }
   });
@@ -206,11 +250,21 @@ test('existing Link server binds in place, restores SSH through an agent, and se
   assert.equal(registry.get('paired-id').url, 'https://relay.example');
   const first = await manager.sshTarget({ deviceId: 'paired-id' });
   await manager.close();
-  const restored = createServerManager({ directory: f.directory });
+  const localId = 'sha256:' + Buffer.alloc(32, 7).toString('base64');
+  const groupRows = [{ id: localId, name: '本机', routes: [] }, { id: hostId, name: '组内服务器', routes: [] }];
+  const groupedRegistry = await import('../src/devices/registry.mjs').then(({ openDeviceRegistry }) => openDeviceRegistry(f.directory, {
+    group: { localId, enabled: () => true, members: () => groupRows, member: id => groupRows.find(row => row.id === id), token: () => 'group-workbench' },
+  }));
+  const restored = createServerManager({ directory: f.directory, registry: groupedRegistry });
   t.after(() => restored.close());
   await restored.ready;
   assert.equal(restored.state('paired-id').sshStatus, 'disconnected');
   assert.equal(await restored.agentAvailable(), true);
+  workbenchToken = 'group-workbench';
+  const tunnel = await restored.workbenchTarget('paired-id');
+  assert.equal(tunnel.authorizationId, localId);
+  assert.equal(tunnel.name, '组内服务器');
+  await verifyServerWorkbench(tunnel);
   workbenchOnline = false;
   const terminal = await restored.openTerminal('paired-id');
   restored.writeTerminal({ deviceId: 'paired-id', id: terminal.id, data: 'terminal input' });

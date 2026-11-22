@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,23 +26,72 @@ test('model picker fits the composer, renders four states and refreshes changed 
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
     import input from './deepseek-harness/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css';
     import permission from './deepseek-harness/packages/client/ui-permission-presets/src/client/PermissionSelect.module.css';
-    const components={},events={},cleanups=[];
-    const ctx={effect:fn=>cleanups.push(fn()),on:(event,fn)=>events[event]=fn,remote:{$on:(event,fn)=>events[event]=fn},slots:{inject:(_slot,fn)=>fn(),register:(entry,Component)=>components[entry.name]=Component}};
+    const components={},entries={},events={},cleanups=[];
+    const ctx={
+      effect:fn=>cleanups.push(fn()),on:(event,fn)=>events[event]=fn,remote:{$on:(event,fn)=>events[event]=fn},
+      modelDirectories:{directoryFor:()=>({})},
+      sessions:{subagentAddress:()=>undefined,binding:()=>({session:{projections:{faceOf:key=>key==='modelSelection'?selectionProjection:undefined}}})},
+      slots:{inject:(_slot,fn)=>fn(),register:(entry,Component)=>{entries[entry.name]=entry;components[entry.name]=Component}},
+    };
     installIconSprite(ctx);mountModelPicker(ctx);moduleSource.update({base:true,harness:true});
     const groups=[{id:'Provider:Exact',name:'精确供应商',models:[{id:'Exact:Model/01',name:'测试模型',reasoning:{defaultEffort:'high',efforts:[{id:'off',name:'关闭'},{id:'low',name:'低'},{id:'high',name:'高'}]}}]}];
     const Picker=components['conversation.input.model'],Banner=components['conversation.input.dock'];
-    window.selections=[];window.directoryReads=0;window.newSessions=0;window.invalidate=()=>events['settings/document-updated']();
-    function App(){const [directory,setDirectory]=useState({status:'ready',groups,failures:[],current:{provider:'Provider:Exact',model:'Exact:Model/01'}}),[visible,setVisible]=useState(true),[bound,setBound]=useState(false);
+    const projectionListeners=new Set();
+    let projected;
+    const selectionProjection={
+      getSnapshot:()=>projected,
+      subscribe:listener=>{projectionListeners.add(listener);return()=>projectionListeners.delete(listener)},
+    };
+    const publishSelection=value=>{
+      projected={next:value};
+      for(const listener of projectionListeners) listener();
+    };
+    window.selections=[];window.directoryLoads=0;window.newSessions=0;
+    window.invalidate=()=>events['settings/document-updated']('llm-deepseek');
+    function App(){const [directory,setDirectory]=useState({status:'ready',groups,failures:[],current:{provider:'Provider:Exact',model:'Exact:Model/01'}}),[bound,setBound]=useState(false);
       const [locked,setLocked]=useState(false);
       window.bind=value=>setBound(value);
       window.setLayoutModel=(name,lock)=>flushSync(()=>{
         setLocked(lock);
         setDirectory(current=>({...current,groups:[{...groups[0],models:[{...groups[0].models[0],name}]}]}));
       });
-      window.empty=()=>setDirectory({status:'ready',groups:[],failures:[],current:null});
-      window.showPicker=value=>flushSync(()=>setVisible(value));
-      window.replaceModel=()=>flushSync(()=>setDirectory(current=>({...current,groups:[{...current.groups[0],models:[{...current.groups[0].models[0],id:'Exact/Model:02'}]}],current:{...current.current,model:'Exact/Model:02'}})));
-      const props={sessionId:bound?'bound':'fresh',available:true,useDirectory:()=>{window.directoryReads++;return directory},load:async()=>directory,binding:async()=>bound?{bound:true,id:'native',provider:'codex',route:{providerId:'Provider:Exact',model:'Exact:Model/01'}}:{bound:false},startNewSession:async()=>{window.newSessions++},select:async value=>{window.selections.push(value);if(window.failSelection){window.failSelection=false;return {ok:false,error:{message:'测试保存失败'}}}setDirectory(current=>({...current,current:value}));return {ok:true};},openSettingsSection(){}};
+      window.empty=()=>{publishSelection(null);setDirectory({status:'ready',groups:[],failures:[],current:null})};
+      window.addModel=()=>flushSync(()=>setDirectory(current=>({...current,groups:current.groups.map(group=>({...group,models:[...group.models,{...group.models[0],id:'Exact/Model:02',name:'另一模型'}]}))})));
+      window.expandEfforts=()=>setDirectory(current=>({...current,groups:current.groups.map(group=>({...group,models:group.models.map(model=>({...model,reasoning:{defaultEffort:'high',efforts:[
+        {id:'off',name:'关闭'},{id:'minimal',name:'极低'},{id:'low',name:'低'},{id:'medium',name:'中'},{id:'high',name:'高'},
+        {id:'xhigh',name:'极高'},{id:'max',name:'最高'},{id:'vendor-special',name:'自定义强度'}
+      ]}}))}))}));
+      window.refreshWithEffort=reasoningEffort=>setDirectory(current=>({
+        ...current,status:'loading',current:{...current.current,reasoningEffort}
+      }));
+      window.removeMax=()=>setDirectory(current=>({...current,status:'ready',groups:current.groups.map(group=>({
+        ...group,models:group.models.map(model=>({...model,reasoning:{defaultEffort:'low',efforts:model.reasoning.efforts.filter(effort=>effort.id!=='max')}})),
+      }))}));
+      const props={
+        sessionId:bound?'bound':'fresh',available:true,useDirectory:()=>directory,
+        selectionProjection:entries['conversation.input.model'].inject(bound?'bound':'fresh').selectionProjection,
+        load:async()=>{window.directoryLoads++;return directory},
+        binding:async()=>bound?{bound:true,id:'native',provider:'codex',route:{providerId:'Provider:Exact',model:'Exact:Model/01'}}:{bound:false},
+        startNewSession:async()=>{window.newSessions++},
+        select:async value=>{
+          window.selections.push(value);
+          if(window.holdSelection) await new Promise(resolve=>{window.releaseSelection=resolve});
+          if(window.failSelection){window.failSelection=false;return {ok:false,error:{message:'测试保存失败'}}}
+          events['settings/document-updated']('agent-default-model');
+          if(window.holdSelection) {
+            window.holdSelection=false;
+            setDirectory(current=>({...current,status:'loading'}));
+            window.projectSelection=()=>{
+              publishSelection(value);
+              setDirectory(current=>({...current,status:'ready',current:value}));
+            };
+          } else {
+            publishSelection(value);
+            setDirectory(current=>({...current,current:value}));
+          }
+          return {ok:true};
+        },openSettingsSection(){}
+      };
       return <><style>{tokens}{hostCss}{voiceCss}{mobileCss}</style><main>
         <div className={input.card} data-composer-card>
           <textarea className={input.input} aria-label="消息草稿" placeholder="输入消息" />
@@ -56,7 +105,7 @@ test('model picker fits the composer, renders four states and refreshes changed 
               </button></div>
             </div>
             <div className={input.trailing}>
-              <div className={input.standardControls}>{visible&&<Picker {...props} locked={locked}/>}</div>
+              <div className={input.standardControls}><Picker {...props} locked={locked}/></div>
               <div className={input.activity}><div className="voice-activity">
                 {[['听写','mic'],['朗读','volume'],['通话','mobile']].map(([label,icon])=><button key={label} className="voice-icon-button" aria-label={label} data-available="true"><UIIcon name={icon} size={16} /></button>)}
               </div></div>
@@ -180,70 +229,88 @@ test('model picker fits the composer, renders four states and refreshes changed 
     await page.keyboard.press('Escape'); await page.locator('.cmd-model-trigger').click();
     await page.waitForFunction(() => document.querySelector('.cmd-model-popup')?.getAttribute('aria-busy') === 'false');
     assert.equal(requests, 1, 'reopening reuses the successful catalog'); await shot('data');
-    const cdp=await page.context().newCDPSession(page);await cdp.send('LayerTree.enable');await cdp.send('Performance.enable');
-    await page.waitForTimeout(300);
-    let paints=0;const painted=()=>paints++;cdp.on('LayerTree.layerPainted',painted);
-    const idleStart=Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(item=>[item.name,item.value]));
-    await page.waitForTimeout(700);
-    const idleEnd=Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(item=>[item.name,item.value]));
-    const idlePaints=paints;cdp.off('LayerTree.layerPainted',painted);
-    await page.evaluate(()=>{window.directoryReads=0;window.effortGeometryReads=0;const read=Element.prototype.getBoundingClientRect;Element.prototype.getBoundingClientRect=function(){if(this.matches('.cmd-model-effort-track,.cmd-model-effort-rail'))window.effortGeometryReads++;return read.call(this)}});
-    const track=page.getByRole('slider'),rect=await track.boundingBox(),y=rect.y+rect.height/2;
-    await page.mouse.move(rect.x+16,y);await page.mouse.down();await page.mouse.move(rect.x+rect.width-16,y,{steps:30});
-    assert.equal(await page.evaluate(()=>window.selections.length),0,'drag previews never submit intermediate protocol values');
-    await page.mouse.up();
-    assert.equal(await track.getAttribute('aria-valuenow'),'2');
-    const drag=await page.evaluate(()=>({directoryReads:window.directoryReads,geometryReads:window.effortGeometryReads}));
-    if(process.env.BENCHGO_MODEL_PICKER_PROBE){await writeFile(process.env.BENCHGO_MODEL_PICKER_PROBE,JSON.stringify({idlePaints,idleTaskMs:(idleEnd.TaskDuration-idleStart.TaskDuration)*1000,...drag},null,2))}
-    else {assert(drag.directoryReads<=2,'drag preview stays out of the model directory render: '+JSON.stringify(drag));assert(drag.geometryReads<=3,'drag geometry is captured once: '+JSON.stringify(drag));}
+    const effort = page.getByRole('radiogroup', { name: '推理强度' });
+    const low = effort.getByRole('radio', { name: '低', exact: true });
+    const high = effort.getByRole('radio', { name: '高', exact: true });
+    const off = effort.getByRole('radio', { name: '关闭', exact: true });
+    assert.equal(await high.getAttribute('aria-checked'), 'true');
+    assert.equal(await off.locator('.cmd-model-effort-icon svg').first().isVisible(), true);
+    assert.equal(await low.locator('[data-filled]').count(), 2);
+    assert.equal(await high.locator('[data-filled]').count(), 4);
+    assert.equal(await high.evaluate(element => getComputedStyle(element).fontSize), '13px');
+    assert((await effort.boundingBox()).height <= 36, 'ordinary three-level control stays compact');
+    assert.equal(await page.evaluate(() => window.directoryLoads), 0, 'reopening does not reload the official directory');
     gate = new Promise(resolve => { release = resolve; }); fail = true;
     await page.evaluate(() => window.invalidate());
     await page.getByText('正在更新模型目录…', { exact: true }).waitFor();
     assert.equal(await dialog.getByRole('button', { name: /精确供应商 1 个模型/ }).isDisabled(), true);
-    assert.equal(await dialog.getByRole('slider').getAttribute('aria-disabled'), 'true');
+    assert.equal(await effort.getAttribute('aria-disabled'), 'true');
     await shot('refreshing'); release();
     await page.getByRole('alert').filter({ hasText: '目录服务暂时不可用' }).waitFor(); await shot('error');
     fail = false;
     await page.getByRole('button', { name: '重试', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.cmd-model-popup')?.getAttribute('aria-busy') === 'false');
     assert.equal(requests, 3, 'one failed refresh and one explicit retry');
-    await page.getByRole('button', { name: /精确供应商 1 个模型/ }).click();
-    await page.getByRole('menuitemradio', { name: /测试模型/ }).click();
-    assert.deepEqual(await page.evaluate(() => window.selections), [{ provider: 'Provider:Exact', model: 'Exact:Model/01', reasoningEffort: 'high' }]);
+    await page.evaluate(() => { window.addModel(); window.holdSelection = true; });
+    await page.getByRole('button', { name: /精确供应商 2 个模型/ }).click();
+    await page.getByRole('menuitemradio', { name: /另一模型/ }).click();
+    await page.waitForFunction(() => typeof window.releaseSelection === 'function');
+    assert.match(await trigger.innerText(), /另一模型/, 'model preview updates before the save returns');
+    assert.deepEqual(await page.evaluate(() => window.selections), [{ provider: 'Provider:Exact', model: 'Exact/Model:02', reasoningEffort: 'high' }]);
+    await page.evaluate(() => { window.releaseSelection(); });
+    await dialog.waitFor({ state: 'hidden' });
     await page.locator('.cmd-model-trigger').click();
-    await page.waitForFunction(() => document.querySelector('.cmd-model-popup')?.getAttribute('aria-busy') === 'false');
-    const slider=page.getByRole('slider'),bounds=await slider.boundingBox(),middle=bounds.x+bounds.width/2,center=bounds.y+bounds.height/2;
-    const thumb = page.locator('.cmd-model-effort-thumb');
-    const origin = await thumb.boundingBox();
-    const grip = origin.x + origin.width / 2 - 7;
-    await page.mouse.move(grip, center); await page.mouse.down();
-    await page.mouse.move(grip - 41, center);
-    await page.waitForFunction(x => Math.abs(document.querySelector('.cmd-model-effort-thumb').getBoundingClientRect().x - x) < 1, origin.x - 41);
-    await slider.evaluate(element => element.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 1 })));
+    assert.equal(await dialog.getAttribute('aria-busy'), 'false', 'default persistence did not invalidate the catalog');
+    assert.match(await trigger.innerText(), /另一模型/, 'pending official projection keeps the selected model visible');
+    await page.evaluate(() => window.projectSelection());
+    const start = await high.boundingBox(), end = await low.boundingBox();
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 4 });
     await page.mouse.up();
-    await page.mouse.move(bounds.x+16,center);await page.mouse.down();await page.mouse.move(bounds.x+bounds.width-16,center,{steps:12});
-    assert.equal(await page.evaluate(()=>window.selections.length),1,'preview never saves');
-    await slider.evaluate(element=>{const box=element.getBoundingClientRect();element.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:1,clientX:box.left+16}));element.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:1,clientX:box.left+box.width/2}));});
-    await page.mouse.up();
-    await page.waitForFunction(()=>window.selections.length===2);
-    assert.deepEqual(await page.evaluate(()=>window.selections.at(-1)),{provider:'Provider:Exact',model:'Exact:Model/01',reasoningEffort:'low'},'pointerup final position wins over a pending preview frame');
-    await page.keyboard.press('Escape');await page.locator('.cmd-model-trigger').click();
-    assert.equal(await slider.getAttribute('aria-valuetext'),'低','reopening retains the controlled saved effort');
-    await slider.focus();await page.keyboard.press('Home');
-    await page.waitForFunction(()=>window.selections.at(-1)?.reasoningEffort==='off');
+    assert.equal(await page.evaluate(() => window.selections.length), 1, 'dragging across buttons does not switch effort');
+
+    await page.evaluate(() => {
+      window.holdSelection = true;
+      window.effortAnimations = [];
+      const surface = document.querySelector('.cmd-model-effort-highlight > span');
+      const animate = surface.animate.bind(surface);
+      surface.animate = (...args) => {
+        const animation = animate(...args);
+        window.effortAnimations.push(animation.effect.getTiming().duration);
+        return animation;
+      };
+    });
+    await low.click();
+    assert.equal(await low.getAttribute('aria-checked'), 'true', 'effort changes before the save returns');
+    assert.match(await trigger.innerText(), /另一模型 · 低/);
+    assert.deepEqual(await page.evaluate(() => window.effortAnimations), [220]);
+    assert.equal(await dialog.getAttribute('aria-busy'), 'false');
+    await page.evaluate(() => window.releaseSelection());
+    await page.waitForFunction(() => document.querySelector('.cmd-model-effort-track').getAttribute('aria-disabled') === 'false');
+    assert.equal(await low.getAttribute('aria-checked'), 'true', 'default persistence does not roll back the visible effort');
+    await page.evaluate(() => window.projectSelection());
+    await page.keyboard.press('Escape');
+    await trigger.click();
+    assert.equal(await low.getAttribute('aria-checked'), 'true', 'reopening retains the saved effort');
+
+    await low.focus();
+    await page.keyboard.press('Home');
+    assert.equal(await off.getAttribute('aria-checked'), 'true');
     await page.keyboard.press('End');
-    await page.waitForFunction(()=>window.selections.at(-1)?.reasoningEffort==='high');
-    assert.deepEqual(await page.evaluate(()=>window.selections.slice(-2)),[{provider:'Provider:Exact',model:'Exact:Model/01',reasoningEffort:'off'},{provider:'Provider:Exact',model:'Exact:Model/01',reasoningEffort:'high'}]);
-    await page.evaluate(()=>{window.failSelection=true});await page.keyboard.press('Home');
-    await page.getByRole('alert').filter({hasText:'测试保存失败'}).waitFor();
-    assert.equal(await slider.getAttribute('aria-valuetext'),'高','a failed save rolls back the preview');
-    const savedCount=await page.evaluate(()=>window.selections.length);
-    await page.mouse.move(middle,center);await page.mouse.down();
-    await slider.evaluate(element=>{const id=1;element.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:id}));window.cancelCaptured=element.hasPointerCapture(id)});
-    await page.mouse.up();
-    assert.equal(await page.evaluate(()=>window.cancelCaptured),false,'cancel releases pointer capture');
-    assert.equal(await page.evaluate(()=>window.selections.length),savedCount,'cancel never submits');
-    assert.equal(await slider.getAttribute('aria-valuetext'),'高');
+    assert.equal(await high.getAttribute('aria-checked'), 'true');
+    assert.deepEqual(await page.evaluate(() => window.selections.slice(-3)), [
+      { provider: 'Provider:Exact', model: 'Exact/Model:02', reasoningEffort: 'low' },
+      { provider: 'Provider:Exact', model: 'Exact/Model:02', reasoningEffort: 'off' },
+      { provider: 'Provider:Exact', model: 'Exact/Model:02', reasoningEffort: 'high' },
+    ]);
+    await page.evaluate(() => { window.failSelection = true; });
+    await page.keyboard.press('Home');
+    await page.getByRole('alert').filter({ hasText: '测试保存失败' }).waitFor();
+    assert.equal(await high.getAttribute('aria-checked'), 'true', 'a failed save rolls back the choice');
+    assert.equal(requests, 3, 'switching models and efforts adds no BenchGo catalog requests');
+    assert.equal(await page.evaluate(() => window.directoryLoads), 1, 'only explicit retry loads the official directory');
+    let savedCount = await page.evaluate(() => window.selections.length);
     for(const [name,width,dark,reduced] of [['desktop-dark',1100,true,'no-preference'],['narrow-dark-reduced',390,true,'reduce'],['narrow-light',390,false,'no-preference']]){
       await page.setViewportSize({width,height:800});await page.emulateMedia({reducedMotion:reduced});
       await page.evaluate(dark=>{document.body.toggleAttribute('data-ds-dark-theme',dark);document.body.style.background=dark?'#19191b':'#fff';document.body.style.color=dark?'#ededee':'#202124'},dark);
@@ -251,24 +318,43 @@ test('model picker fits the composer, renders four states and refreshes changed 
         const bounds = document.querySelector('.cmd-model-popup')?.getBoundingClientRect();
         return bounds && bounds.left >= 0 && bounds.right <= innerWidth + 1;
       });
-      const surface=await dialog.boundingBox(),handle=await slider.boundingBox();
+      const surface=await dialog.boundingBox(),handle=await effort.boundingBox();
       assert(surface.x>=0&&surface.x+surface.width<=width+1,'model popup fits '+name);assert(handle.width>100,'effort control remains usable '+name);
       if(dark)assert.notEqual(await page.locator('.cmd-model-provider-card').evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(255, 255, 255)','official dark tokens reach the popup');
+      if (reduced === 'reduce') {
+        await low.click();
+        assert.equal(await low.getAttribute('aria-checked'), 'true');
+        assert.equal(await effort.evaluate(element => element.getAnimations({ subtree: true }).length), 0, 'reduced motion switches instantly');
+        savedCount++;
+      }
       await shot(name);
     }
-    await page.setViewportSize({width:1100,height:800});await page.emulateMedia({reducedMotion:'no-preference'});
-    await page.evaluate(()=>{document.body.removeAttribute('data-ds-dark-theme');document.body.style.background='#fff';document.body.style.color='#202124';window.cancelledFrames=[];const cancel=window.cancelAnimationFrame;window.cancelAnimationFrame=id=>{window.cancelledFrames.push(id);cancel(id)}});
-    const startPendingMove=async action=>{
-      await slider.hover();
-      await page.mouse.down();
-      return slider.evaluate((element,action)=>{element.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:1,clientX:element.getBoundingClientRect().left+16}));const before=window.cancelledFrames.length;window[action](action==='showPicker'?false:undefined);return window.cancelledFrames.length-before},action);
-    };
-    assert.equal(await startPendingMove('showPicker'),1,'unmount cancels the queued drag frame');await page.mouse.up();
-    assert.equal(await page.evaluate(()=>window.selections.length),savedCount,'unmount never submits a preview');
-    await page.evaluate(()=>window.showPicker(true));await page.locator('.cmd-model-trigger').click();
-    await page.waitForFunction(() => document.querySelector('.cmd-model-popup')?.getAttribute('aria-busy') === 'false');
-    assert.equal(await startPendingMove('replaceModel'),1,'changing model identity cancels the queued drag frame');await page.mouse.up();
-    assert.equal(await slider.getAttribute('aria-valuetext'),'高');assert.equal(await page.evaluate(()=>window.selections.length),savedCount);
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.evaluate(() => window.expandEfforts());
+    await effort.getByRole('radio', { name: '自定义强度' }).waitFor();
+    assert.equal(await effort.locator('.cmd-model-effort-icon').count(), 8);
+    assert.equal(await effort.getByRole('radio', { name: '最高' }).locator('[data-filled]').count(), 6);
+    assert(await effort.getByRole('radio').evaluateAll(buttons => buttons.every(button => {
+      const buttonBox = button.getBoundingClientRect();
+      const text = button.querySelector('.cmd-model-effort-label').getBoundingClientRect();
+      const icon = button.querySelector('.cmd-model-effort-icon').getBoundingClientRect();
+      return icon.bottom <= text.top && text.left >= buttonBox.left && text.right <= buttonBox.right;
+    })), 'every level keeps its icon and label within its own segment at 320px');
+    await shot('narrow-dense');
+    await high.click();
+    await effort.getByRole('radio', { name: '高', exact: true, checked: true }).waitFor();
+    await page.evaluate(() => window.refreshWithEffort('low'));
+    assert.equal(await high.getAttribute('aria-checked'), 'true', 'a catalog refresh cannot overwrite the saved high effort');
+    const max = effort.getByRole('radio', { name: '最高', exact: true });
+    await max.click();
+    await effort.getByRole('radio', { name: '最高', exact: true, checked: true }).waitFor();
+    await page.evaluate(() => window.refreshWithEffort('low'));
+    assert.equal(await max.getAttribute('aria-checked'), 'true', 'a catalog refresh cannot overwrite the saved max effort');
+    assert.deepEqual(await page.evaluate(() => window.selections.slice(-2).map(choice => choice.reasoningEffort)), ['high', 'max']);
+    await page.evaluate(() => window.removeMax());
+    await page.getByRole('alert').filter({ hasText: '当前模型不支持已保存的推理档位 max' }).waitFor();
+    assert.equal(await low.getAttribute('aria-checked'), 'false', 'a missing saved effort is not presented as low');
+    savedCount += 2;
     await page.keyboard.press('Escape');
     await page.evaluate(() => window.bind(true));
     await page.locator('.cmd-model-trigger').click();

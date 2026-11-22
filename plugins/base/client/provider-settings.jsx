@@ -6,6 +6,8 @@ import { adaptProviderStore } from './provider-store.mjs';
 import { UIIcon } from './iconsax.jsx';
 import { ProviderBrandIcon } from './provider-brand-icon.jsx';
 import { providerTemplates, templateProviderId } from '../shared/provider-templates.mjs';
+import { routerGo, routerGoConnectionId } from '../shared/builtin-providers.mjs';
+export { isRouterGo } from '../shared/builtin-providers.mjs';
 export { ProviderBrandIcon } from './provider-brand-icon.jsx';
 export { prioritizeRouterGo } from './provider-options.mjs';
 import css from './provider-settings.css';
@@ -38,13 +40,13 @@ export function ProviderAddForm({ selection, protocols, onSelect, onBack, onClos
   const [query, setQuery] = useState('');
   const focusTarget = useRef(null);
   useEffect(() => {
-    if (selection?.type === 'routergo') return;
     focusTarget.current?.focus();
   }, [selection]);
   const term = query.trim().toLowerCase();
   const matches = ({ kind, name, keywords = [] }) => [kind, name, ...keywords].join(' ').toLowerCase().includes(term);
   const templates = providerTemplates.filter(template => protocols.includes(template.protocol) && matches(template));
   const custom = protocols.length > 0 && matches({ kind: 'custom', name: '自定义供应商' });
+  const router = protocols.includes(routerGo.protocol) && matches({ kind: routerGo.id, name: routerGo.name });
   const tile = (kind, name, brand, select) => <button key={kind} type="button" className="cmd-provider-choice" onClick={() => {
     setQuery('');
     onSelect(select());
@@ -72,13 +74,14 @@ export function ProviderAddForm({ selection, protocols, onSelect, onBack, onClos
         <UIIcon name="search" size={16} />
         <input ref={focusTarget} type="search" aria-label="搜索厂商" placeholder="搜索厂商" value={query} onChange={event => setQuery(event.target.value)} />
       </label>
-      {(templates.length > 0 || custom) && <div className="cmd-provider-choices" role="group" aria-label="厂商模板">
+      {(router || templates.length > 0 || custom) && <div className="cmd-provider-choices" role="group" aria-label="厂商模板">
+        {router && tile(routerGo.id, routerGo.name, routerGo.id, () => ({ type: 'routergo', ...routerGo, id: routerGoConnectionId() }))}
         {templates.map(template => tile(template.kind, template.name, template.brand, () => ({
           type: 'template', id: templateProviderId(template.kind), name: template.name, template,
         })))}
         {custom && tile('custom', '自定义供应商', null, () => ({ type: 'custom', id: 'custom', name: '自定义供应商' }))}
       </div>}
-      {!templates.length && !custom && <div className="cmd-provider-no-results" role="status">
+      {!router && !templates.length && !custom && <div className="cmd-provider-no-results" role="status">
         <UIIcon name="search" size={20} />
         <strong>没有匹配的厂商</strong>
         <span>试试厂商名称或平台简称。</span>

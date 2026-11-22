@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
-import { deviceIcon, deviceKind, deviceStatus, jobFinished, sshCredentials, sshInput, sshStatus, workbenchUrl } from '../client/device-state.mjs';
+import { deviceIcon, deviceKind, deviceStatus, jobFinished, sshCredentials, sshInput, workbenchUrl } from '../client/device-state.mjs';
 import { workbenchNavigationMessage } from '../client/device-navigation.mjs';
 import { deviceSwitchFrameMessage } from '../client/device-switch.mjs';
 
@@ -40,7 +40,7 @@ function fixture(component, props = {}) {
   const parent = props.embedded ? { postMessage(data, origin) { this.messages.push({ data, origin }); }, messages: [] } : window;
   const module = { exports: {} };
   const parentOrigin = props.embedded ? 'http://127.0.0.1:17770' : '';
-  runInNewContext(code, { module, exports: module.exports, URL, URLSearchParams, crypto: globalThis.crypto, window, parent, __DSH_DEVICE_PARENT_ORIGIN__: parentOrigin, location: { origin: 'http://127.0.0.1:17770', search: '', hash: props.reuseWorkbench ? '#reuseWorkbench=1' : '' }, document: { activeElement: null, createElement: () => ({ remove() {} }), head: { append() {} } }, setTimeout(fn) { const id = Math.random(); timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), require: id => id === 'react' ? react : id.includes('device-navigation') ? { workbenchNavigationMessage } : id.includes('device-switch') ? { deviceSwitchFrameMessage } : id.includes('device-theme') ? { observeHostTheme() {}, sendWorkbenchTheme() {}, themedWorkbenchUrl: url => url } : id.includes('device-state') ? { deviceIcon, deviceKind, deviceStatus, jobFinished, sshCredentials, sshInput, sshStatus, workbenchUrl, jobFailed: job => ['failed', 'error'].includes(job?.state) } : id.includes('collapsible.jsx') ? { Disclosure() {} } : id.includes('server-terminal.jsx') ? { ServerTerminal() {} } : id.includes('app.jsx') ? { useLinkStyle() {}, LinkSettings() {}, PairingDialog() {} } : {} });
+  runInNewContext(code, { module, exports: module.exports, URL, URLSearchParams, crypto: globalThis.crypto, window, parent, __DSH_DEVICE_PARENT_ORIGIN__: parentOrigin, location: { origin: 'http://127.0.0.1:17770', search: '', hash: props.reuseWorkbench ? '#reuseWorkbench=1' : '' }, document: { activeElement: null, createElement: () => ({ remove() {} }), head: { append() {} } }, setTimeout(fn) { const id = Math.random(); timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), require: id => id === 'react' ? react : id.includes('device-navigation') ? { workbenchNavigationMessage } : id.includes('device-switch') ? { deviceSwitchFrameMessage } : id.includes('device-theme') ? { observeHostTheme() {}, sendWorkbenchTheme() {}, themedWorkbenchUrl: url => url } : id.includes('device-state') ? { deviceIcon, deviceKind, deviceStatus, jobFinished, sshCredentials, sshInput, workbenchUrl, jobFailed: job => ['failed', 'error'].includes(job?.state) } : id.includes('collapsible.jsx') ? { Disclosure() {} } : id.includes('server-terminal.jsx') ? { ServerTerminal() {} } : id.includes('app.jsx') ? { useLinkStyle() {}, LinkSettings() {}, PairingDialog() {} } : {} });
   const frameWindows = new Map();
   const render = () => { dirty = false; cursor = 0; tree = module.exports[component]({ ...props, runtime }); for (const node of nodes(tree)) if (node.type === 'iframe' && node.props.ref) { if (!frameWindows.has(node.props.src)) frameWindows.set(node.props.src, { messages: [], postMessage(data, origin) { this.messages.push({ data, origin }); } }); node.props.ref({ contentWindow: frameWindows.get(node.props.src) }); } for (const effect of effects.splice(0)) effect(); return tree; };
   const settle = async () => { for (let i = 0; i < 10; i++) { if (dirty) render(); await new Promise(resolve => setImmediate(resolve)); } return tree; };
@@ -268,6 +268,24 @@ test('device details keep compact actions and require confirmation before removi
   assert.equal(local.nodes().some(node => node.props.className === 'dc-management dc-actions'), false);
 });
 
+test('group device edits save the shared name to the member identity', async () => {
+  let saved;
+  const view = fixture('ManageDevice', {
+    device: { id: 'registered-server', kind: 'computer', name: '旧名称' },
+    membership: { id: 'member-id' }, canRemoveMember: true, onChanged() {},
+    runtime: { async call(action, input) { saved = { action, ...input }; return { device: { name: input.name } }; } },
+  });
+  await view.settle();
+  await view.nodes().find(node => node.props['aria-label'] === '编辑设备名称').props.onClick();
+  await view.settle();
+  view.nodes().find(node => node.props['aria-label'] === '设备名称').props.onChange({ target: { value: '开发服务器' } });
+  await view.settle();
+  view.nodes().find(node => node.props.className === 'dc-name-form').props.onSubmit({ preventDefault() {} });
+  await view.settle();
+  assert.deepEqual(saved, { action: 'groupRename', deviceId: 'member-id', name: '开发服务器' });
+  assert.match(textOf(view.tree), /开发服务器/);
+});
+
 test('inline name edits cancel, preserve failures and prevent duplicate saves', async () => {
   let fail = true, release, count = 0;
   const view = fixture('ManageDevice', { device: { id: 'desk', kind: 'computer', name: '旧名称' }, onChanged() {}, runtime: { async call() { count++; if (fail) throw Error('保存失败'); await new Promise(resolve => { release = resolve; }); return { device: { name: '新备注' } }; } } });
@@ -300,6 +318,27 @@ test('switching preserves existing iframe when another connection fails', async 
   const failed = view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes('云端'));
   await failed.props.onClick(); await view.settle();
   assert(view.nodes().some(node => node.props.error === 'SSH 隧道未连接')); assert.equal(view.nodes().find(node => node.type === 'iframe').props.src, frame.props.src); assert.equal(view.nodes().find(node => node.type === 'iframe').props.hidden, false);
+});
+
+test('the group directory closes an open workbench when its member is removed elsewhere', async () => {
+  const local = { id: 'local', name: 'B', kind: 'local' };
+  const remote = { id: 'peer-c', name: 'C', kind: 'computer' };
+  let devices = [local, remote];
+  const group = { id: 'group', enabled: true, manageable: true, members: [{ id: remote.id }] };
+  const view = fixture('DeviceCenter', { runtime: { async call(action) {
+    if (action === 'list') return { devices, group, capabilities: {} };
+    if (action === 'select') return { device: remote, url: 'http://127.0.0.1:17771/s/c/' };
+  } } });
+  await view.settle();
+  await view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes('C')).props.onClick();
+  await view.settle();
+  assert(view.nodes().some(node => node.type === 'iframe'));
+
+  devices = [local];
+  await view.tick();
+  assert.equal(view.nodes().some(node => node.type === 'iframe'), false);
+  assert.equal(view.nodes().find(node => node.props.className === 'dc-surface').props.hidden, false);
+  assert.equal(view.nodes().some(node => node.props['aria-label'] === 'C设置'), false);
 });
 
 test('mobile centre keeps fallback until valid navigation is ready and retains frame on return', async () => {
@@ -482,7 +521,7 @@ test('saving a new relay selects its pool and refreshes the visible list', async
   const revision = pool().props.refreshToken;
   pool().props.onAdd(); await view.settle();
   const wizard = view.nodes().find(node => node.type?.name === 'RelayWizard');
-  assert.equal(wizard.props.initialTab, 'connect');
+  assert.equal(wizard.props.canDeploy, true);
   await wizard.props.onChanged(); await view.settle();
   assert.equal(pool().props.active, true);
   assert.equal(pool().props.refreshToken, revision + 1);
@@ -538,6 +577,63 @@ test('clients without hosting retain their remote device list', async () => {
   assert.equal(view.nodes().some(node => typeof node.type === 'function' && node.type.name === 'LinkSettings'), false);
 });
 
+test('opening device addition leaves membership unchanged and group members keep separate settings', async () => {
+  const local = { id: 'local', name: '桌面', kind: 'local' };
+  const member = { id: 'member', name: '服务器', kind: 'computer' };
+  let group = { enabled: false, manageable: false, members: [] };
+  const view = fixture('DeviceCenter', { runtime: { async call(action) {
+    assert.notEqual(action, 'groupEnable');
+    return { group, devices: group.enabled ? [local, member] : [local], capabilities: { hostAdmin: true } };
+  } } });
+  await view.settle();
+  await view.click('添加设备');
+  assert(view.nodes().some(node => node.type?.name === 'AddDevice'));
+  await view.nodes().find(node => node.props.title === '添加设备').props.onClose();
+  await view.settle();
+  assert.equal(group.enabled, false);
+  group = { enabled: true, manageable: true, members: [{ id: 'local-member', local: true }, { id: 'member', local: false }] };
+  await view.nodes().find(node => node.props['aria-label'] === '刷新设备').props.onClick();
+  await view.settle();
+  await view.nodes().find(node => node.props['aria-label'] === '服务器设置').props.onClick();
+  await view.settle();
+  const settings = view.nodes().find(node => node.type?.name === 'ManageDevice');
+  assert.equal(settings.props.membership.id, 'member');
+  assert.equal(settings.props.canRemoveMember, true);
+});
+
+test('removing a group member uses its member identity and the group operation', async () => {
+  let removed;
+  const view = fixture('ManageDevice', {
+    device: { id: 'directory-id', kind: 'computer', name: '服务器' },
+    membership: { id: 'member-id' },
+    canRemoveMember: true,
+    onRemoved: id => { removed = id; },
+  });
+  await view.settle();
+  await view.click('移出设备组');
+  await view.click('确认移除');
+  assert.equal(view.calls.at(-1).action, 'groupRemove');
+  assert.equal(view.calls.at(-1).args.deviceId, 'member-id');
+  assert.equal(removed, 'directory-id');
+});
+
+test('leaving a group from local settings requires confirmation', async () => {
+  let removed;
+  const view = fixture('ManageDevice', {
+    device: { id: 'local', kind: 'local', name: '本机' },
+    membership: { id: 'member-id', local: true },
+    canRemoveMember: true,
+    onRemoved: id => { removed = id; },
+  });
+  await view.settle();
+  await view.click('退出设备组');
+  assert.equal(view.calls.length, 0);
+  await view.click('确认退出');
+  assert.equal(view.calls.at(-1).action, 'groupLeave');
+  assert.equal(view.calls.at(-1).args, undefined);
+  assert.equal(removed, 'local');
+});
+
 test('a phone local device opens its name settings instead of selecting a workbench', async () => {
   const view = fixture('DeviceCenter', { runtime: { isNative: () => true } }); await view.settle();
   const add = view.nodes().find(node => typeof node.type === 'function' && textOf(node) === '添加设备');
@@ -548,7 +644,7 @@ test('a phone local device opens its name settings instead of selecting a workbe
 });
 
 
-test('relay wizard deploys in one step without requiring email or fingerprint confirmation', async () => {
+test('relay wizard verifies the SSH fingerprint and deploys without an email address', async () => {
   const calls = [];
   let connected = false;
   const status = pending => ({ relay: { fingerprint: 'rev', connected: true, nodes: [
@@ -573,6 +669,9 @@ test('relay wizard deploys in one step without requiring email or fingerprint co
   input('公网 IP 或域名').props.onChange({ target: { value: '8.8.8.8' } });
   await view.settle();
   const submit = async () => { view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle(); };
+  await submit();
+  assert.deepEqual(calls.map(item => item.action), ['relayProbe']);
+  assert.match(textOf(view.tree), /请核对服务器的 SSH 指纹/);
   await submit();
   const deployment = calls.find(item => item.action === 'relayDeploy');
   assert.equal(calls[0].action, 'relayProbe'); assert.equal(deployment.args.fingerprint, 'SHA256:relay');
@@ -611,10 +710,10 @@ test('relay deployment exposes webroot and returns to editable fields after fail
   await view.click('部署');
   view.nodes().find(node => node.type === 'input' && node.props.placeholder === '公网 IP 或域名').props.onChange({ target: { value: 'relay.example.com' } });
   view.nodes().find(node => node.props.className === 'dc-relay-advanced').props.onOpenChange(true); await view.settle();
-  view.nodes().find(node => node.props.value === 'standalone').props.onChange({ target: { value: 'webroot' } }); await view.settle();
-  assert(view.nodes().some(node => node.type === 'input' && node.props.placeholder === '/var/www/acme' && node.props.required));
-  view.nodes().find(node => node.props.value === 'webroot').props.onChange({ target: { value: 'standalone' } }); await view.settle();
+  assert(view.nodes().some(node => node.type === 'input' && node.props.placeholder === '/www/wwwroot/relay.example.com'));
+  view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
   view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle(); await view.tick();
+  assert.equal(calls.find(item => item.action === 'relayDeploy').args.challengeMode, 'webroot');
   assert(view.nodes().some(node => node.props.job?.error === 'SSH 认证失败，请检查用户名或密码')); assert.match(textOf(view.tree), /返回/);
   assert.equal(view.nodes().some(node => node.type === 'form'), false);
   await view.click('返回');
@@ -631,7 +730,7 @@ test('adding an existing relay remains available without SSH deployment', async 
   assert.equal(view.nodes().find(node => typeof node.type === 'function' && node.type.name === 'RelayWizard').props.canDeploy, false);
 });
 
-test('adding a relay defaults to connect, tests without saving and appends existing nodes', async () => {
+test('adding an existing relay tests without saving and appends to existing nodes', async () => {
   const calls = []; let changed = 0;
   const view = fixture('RelayWizard', { onChanged() { changed++; }, runtime: { async hostCall(action, input) {
     calls.push({ action, input });
@@ -640,6 +739,7 @@ test('adding a relay defaults to connect, tests without saving and appends exist
     return { relay: {} };
   } } });
   await view.settle();
+  await view.click('连接');
   assert(view.nodes().some(node => node.props.name === 'url'));
   assert.equal(view.nodes().some(node => node.props.placeholder === '公网 IP 或域名'), false);
   view.nodes().find(node => node.props.name === 'url').props.onChange({ target: { value: 'https://second.test' } });

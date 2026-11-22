@@ -31,7 +31,7 @@ test('provider directory projects settings once for all providers and observes t
   const second = await service.list();
   assert.equal(descriptions, 2);
   assert.deepEqual(second.map(row => row.id), ['routergo']);
-  assert.equal(second[0].name, 'RouterGo');
+  assert.equal(second[0].name, 'Updated RouterGo');
   assert.equal(second[0].declared, undefined);
   assert.equal(doc.value.providers.routergo.displayName, 'Updated RouterGo');
   assert.equal(first[0].name, 'RouterGo');
@@ -195,7 +195,7 @@ test('RouterGo protocol directory coalesces discovery and rechecks account crede
     calls++;
     return Response.json({ data: [{ id: 'Exact/ID', capabilities: ['chat', 'responses'] }] });
   });
-  const [first, concurrent] = await Promise.all([service.routerGoProtocolModels(), service.routerGoProtocolModels()]);
+  const [first, concurrent] = await Promise.all([service.routerGoProtocolModels('routergo'), service.routerGoProtocolModels('routergo')]);
   assert.deepEqual(first.get('Exact/ID').capabilities, ['text']);
   assert.deepEqual(first.get('Exact/ID').providerCapabilities, ['chat', 'responses']);
   assert.deepEqual(concurrent, first);
@@ -205,17 +205,17 @@ test('RouterGo protocol directory coalesces discovery and rechecks account crede
     entries: [{ providerId: 'routergo', modelId, capabilities: ['chat', 'responses', 'decision'] }],
   }));
   assert.deepEqual(await service.modelCapabilities('routergo'), [{ modelId, capabilities: ['text', 'decision'] }]);
-  assert.deepEqual((await service.routerGoProtocolModels()).get(modelId).capabilities, ['text', 'decision']);
+  assert.deepEqual((await service.routerGoProtocolModels('routergo')).get(modelId).capabilities, ['text', 'decision']);
   await service.saveModelCapabilities('routergo', modelId, []);
-  const disabled = (await service.routerGoProtocolModels()).get(modelId);
+  const disabled = (await service.routerGoProtocolModels('routergo')).get(modelId);
   assert.deepEqual(disabled.capabilities, []);
   assert.deepEqual(disabled.providerCapabilities, ['chat', 'responses']);
   assert.equal(calls, 1);
   refs.set(ref, 'rotated-test-key');
-  await service.routerGoProtocolModels();
+  await service.routerGoProtocolModels('routergo');
   assert.equal(calls, 2);
   doc.value.providers.routergo.baseURL = 'https://other.example/v1';
-  await assert.rejects(service.routerGoProtocolModels(), /account is not connected/);
+  await assert.rejects(service.routerGoProtocolModels('routergo'), /account is not connected/);
   assert.equal(calls, 2);
 });
 

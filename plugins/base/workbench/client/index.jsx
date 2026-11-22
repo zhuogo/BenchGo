@@ -8,6 +8,7 @@ import { contextFacade } from '../src/boundary.mjs';
 import css from './style.css';
 import { localWorkbenchPage } from './local-surface.mjs';
 import { mountWorkbenchPreviews } from './previews.jsx';
+import { mountProjectFileActions } from './project-files.jsx';
 
 const PANEL = 'benchgo-workbench';
 const localPage = host => localWorkbenchPage(location, host.connection);
@@ -78,6 +79,7 @@ export function mountWorkbenchClient(ctx) {
   const runtime = { sidebar: null, snapshot: () => version, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); } };
   const update = patch => { version = { ...version, ...patch }; listeners.forEach(fn => fn()); };
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL, inject: () => ({ host: ctx, runtime }) }, WorkbenchPage));
+  mountProjectFileActions(ctx);
   if (!localPage(ctx)) return;
   ctx.inject(sidebar.inject, child => {
     const provide = (name, service) => {
