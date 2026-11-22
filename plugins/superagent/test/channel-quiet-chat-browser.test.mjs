@@ -280,8 +280,20 @@ test('Router main and side chats retry the current failed turn once without cons
 
       await patch({ continuation: 16, turnEnd: failure(16, '重试后遇到新的超时') });
       await retry.waitFor();
-      await patch({ continuation: null, turnEnd: { seq: 19, data: { reason: { kind: 'completed' } } } });
+      await patch({
+        continuation: null,
+        turnEnd: { seq: 19, data: { reason: { kind: 'completed' } } },
+        session: { lastAgentError: '重试后遇到新的超时' },
+        history: { lastEndSeq: 16, error: '重试后遇到新的超时', failures: [{ model: { modelId: 'old-model' }, reason: '连接超时' }] },
+      });
       await notice.waitFor({ state: 'hidden' });
+      await patch({ history: { lastEndSeq: 19, error: null, failures: [], messages: [
+        { id: 'human', role: 'user', seq: 7, text: '请检查服务是否正常' },
+        { id: 'final', role: 'assistant', kind: 'final', seq: 18, text: '检查完成，服务运行正常。' },
+      ] } });
+      await page.getByText('检查完成，服务运行正常。', { exact: true }).waitFor();
+      assert.equal(await notice.count(), 0);
+      assert.equal(await page.getByRole('button', { name: '模型连接记录' }).count(), 0);
       await patch({ history: { lastEndSeq: 19, error: '交付状态结算失败' } });
       await notice.getByRole('button', { name: '诊断详情' }).click();
       await notice.getByText('交付状态结算失败', { exact: true }).waitFor();
@@ -291,6 +303,11 @@ test('Router main and side chats retry the current failed turn once without cons
     await page.evaluate(() => window.renderRetry('channel-thread', true));
     await notice.waitFor();
     assert.equal(await retry.count(), 0);
+    await patch({ continuation: null, turnEnd: { seq: 19, data: { reason: { kind: 'completed' } } } });
+    await notice.waitFor({ state: 'hidden' });
+    await patch({ history: { lastEndSeq: 19, error: '渠道交付失败' } });
+    await notice.getByRole('button', { name: '诊断详情' }).click();
+    await notice.getByText('渠道交付失败', { exact: true }).waitFor();
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

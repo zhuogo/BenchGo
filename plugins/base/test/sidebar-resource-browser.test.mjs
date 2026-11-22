@@ -29,6 +29,7 @@ test('cross-device sidebar persists scope and renders device states while retain
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
     installIconSprite({effect:effect=>effect(),on(){}},undefined);
     moduleSource.update({base:true,harness:true,superagent:false,link:true});
+    window.enableAssistant=()=>moduleSource.update({base:true,harness:true,superagent:true,link:true});
     const ids=Array.from({length:40},(_,i)=>'session-'+i);
     const sessions={ids,byId:Object.fromEntries(ids.map((id,i)=>[id,{id,title:'测试对话 '+i,blank:false,updatedAt:40-i}]))};
     const workspaceItems=[{workspaceId:'recent-local',title:'default-workspace',path:'/local/recent',sessionIds:ids,isDefault:true},{workspaceId:'local-project',title:'本机项目',path:'/local/project',sessionIds:[]}];
@@ -68,11 +69,11 @@ test('cross-device sidebar persists scope and renders device states while retain
     nodePaths: [join(root, 'plugins/base/node_modules'), join(root, 'deepseek-harness/apps/web/node_modules')],
     loader: { '.css': 'text', '.module.css': 'local-css', '.svg': 'text' },
     plugins: [{ name: 'sidebar-fixture', setup(build) {
-      build.onLoad({ filter: /benchgo[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => {
+      build.onLoad({ filter: /[\\/]plugins[\\/]base[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => {
         // Mount the real sidebar without loading unrelated application entry points.
-        const keep = ['shared/client/ui/index', 'shared/client/ui/tooltip', 'sidebar-state.mjs', 'resource-navigation.jsx', 'resource-navigation-store.mjs', 'resource-state.mjs', 'resource-creation.jsx', 'session-device-picker.jsx', 'device-launcher.jsx', 'device-switch.jsx', "from 'react'", 'icons.json', 'dsh-client-ui-primitives', 'iconsax.jsx', 'modules.mjs', 'session-info.mjs'];
+        const keep = ['shared/client/ui/index', 'shared/client/ui/tooltip', 'shared/client/ui/confirmation', 'sidebar-state.mjs', 'resource-navigation.jsx', 'resource-navigation-store.mjs', 'resource-state.mjs', 'resource-creation.jsx', 'session-device-picker.jsx', 'device-launcher.jsx', 'device-switch.jsx', "from 'react'", 'icons.json', 'dsh-client-ui-primitives', 'iconsax.jsx', 'modules.mjs', 'session-info.mjs', 'session-status.mjs', 'http-response.mjs'];
         const source = (await readFile(path, 'utf8')).split('\n').filter(line => !line.startsWith('import ') || keep.some(value => line.includes(value))).join('\n');
-        return { loader: 'jsx', resolveDir: dirname(path), contents: source + '\nexport {Projects}; export function setFixtureState(value){update(value);}' };
+        return { loader: 'jsx', resolveDir: dirname(path), contents: source + '\nconst AssistantSidebarEntry = () => null; export {Projects}; export function setFixtureState(value){update(value);}' };
       });
       build.onResolve({ filter: /^@deepseek-ai\/dsh-client-ui-primitives$/ }, () => ({ path: 'primitives', namespace: 'official-source' }));
       build.onLoad({ filter: /.*/, namespace: 'official-source' }, () => ({ loader: 'ts', resolveDir: root, contents: `
@@ -92,8 +93,9 @@ test('cross-device sidebar persists scope and renders device states while retain
     const receiver=(await readFile(join(root,'plugins/link/client/resource-navigation.jsx'),'utf8')).split('export function installResourceReceiver')[1];
     let mode='data',scope={mode:'current',deviceIds:[]},saved=0,queries=0,deviceApiCalls=0,selectCalls=0,failSave=false,holdProject=false,releaseProject,holdResources=false,directoryState='held',releaseDirectory;
     const resourceGates=new Set(),resourceQueries=[];
-    const mutations=new Map(),sessionActions=[];
-    let capabilityMode='data',failSessionAction=false,holdCapabilities=false,releaseCapabilities;
+    const mutations=new Map(),sessionActions=[],workerArchiveActions=[];
+    const worker={taskId:'task-1',title:'关联工单',sessionId:'session-0',runId:'run-1',assignmentId:'assignment-1',fence:1,instructionRevision:1,active:true};
+    let capabilityMode='data',failSessionAction=false,activeArchive=false,holdCapabilities=false,releaseCapabilities;
     let recentCount=1,projectCount=1,projectMode='data';
     let deleteMode='data',changedSelection=false,holdDefault=false;const projectDeletes=[],deletedProjects=new Set();
     let holdSelection=false, failSelection=false, releaseSelection;
@@ -103,6 +105,15 @@ test('cross-device sidebar persists scope and renders device states while retain
     const script=bundle.outputFiles.find(f=>f.path.endsWith('.js')).text;
     await page.route('**/*',async route=>{const url=new URL(route.request().url());
       if(url.pathname==='/sidebar-fixture.js')return route.fulfill({contentType:'text/javascript',body:script});
+      if(url.pathname==='/api/commander/assistant'){
+        const body=route.request().postDataJSON();
+        workerArchiveActions.push(body);
+        if(body.action==='workerArchiveInfo')return route.fulfill({json:{worker}});
+        if(body.action==='archiveWorkerTask'){
+          mutations.set('remote\0session-0',{archived:true});
+          return route.fulfill({json:{archived:true}});
+        }
+      }
       if(url.pathname==='/api/commander-devices'){
         deviceApiCalls++;
         const body=route.request().postDataJSON();
@@ -116,6 +127,7 @@ test('cross-device sidebar persists scope and renders device states while retain
         if(body.action==='sessionAction'){
           sessionActions.push(body);
           if(failSessionAction)return route.fulfill({status:503,json:{error:'所属设备操作失败，请重试'}});
+          if(activeArchive && body.operation==='archive' && !body.stopActivity)return route.fulfill({status:409,json:{error:'此会话仍有活动',code:'workspace/session-active'}});
           const key=body.deviceId+'\0'+body.id,previous=mutations.get(key)||{};
           mutations.set(key,{...previous,...({pin:{pinned:true},unpin:{pinned:false},archive:{archived:true},unarchive:{archived:false},rename:{title:body.title},delete:{deleted:true}}[body.operation])});
           return route.fulfill({json:{accepted:true,id:body.id,operation:body.operation,requestId:body.requestId,refreshRequired:true,...(body.operation==='delete'?{deleted:true}:{})}});
@@ -178,7 +190,7 @@ test('cross-device sidebar persists scope and renders device states while retain
     assert.equal(await page.getByText('设备目录暂不可用，请重试',{exact:true}).count(),0,'startup read failures have no inline error paragraph');
     assert.equal(await page.getByRole('button',{name:'本机项目',exact:true}).isVisible(),true);
     assert.equal(await page.locator('#cmd-recent-section').getByText('测试对话 0',{exact:true}).isVisible(),true);
-    assert.equal(await page.locator('.cmd-resource-group').count(),0);
+    assert.equal(await page.locator('.cmd-resource-group').count(),1,'the local group remains available during device directory failures');
     await page.screenshot({path:join(screenshots,'device-directory-failed-all.png')});
     await page.evaluate(()=>document.body.setAttribute('data-ds-dark-theme',''));await page.setViewportSize({width:500,height:700});
     await page.screenshot({path:join(screenshots,'device-directory-failed-all-dark.png')});
@@ -259,6 +271,26 @@ test('cross-device sidebar persists scope and renders device states while retain
     assert(recentTitles.indexOf('第二设备最近')>recentTitles.indexOf('测试对话 4')&&recentTitles.indexOf('第二设备最近')<recentTitles.indexOf('测试对话 5'),'devices share one activity order');
     assert.equal(recentTitles.length,42,'opaque matching session ids remain separate across devices');
     await page.screenshot({path:join(screenshots,'light-data.png')});
+    const localGroup=page.getByRole('button',{name:'当前主机 当前工作台',exact:true});
+    const remoteGroup=page.getByRole('button',{name:'开发设备 可连接',exact:true});
+    const localContent=page.locator('[id="'+await localGroup.getAttribute('aria-controls')+'"]');
+    assert.equal(await localGroup.getAttribute('aria-expanded'),'true');
+    assert.equal(await localContent.getByRole('button',{name:'本机项目',exact:true}).isVisible(),true);
+    await localGroup.click();
+    assert.equal(await localGroup.getAttribute('aria-expanded'),'false');
+    await localContent.waitFor({state:'hidden'});
+    assert.equal(await remoteGroup.getAttribute('aria-expanded'),'true');
+    assert.equal(await page.getByRole('button',{name:'远端项目',exact:true}).isVisible(),true);
+    assert.equal(await page.locator('#cmd-recent-section .cmd-session').count(),recentTitles.length);
+    await remoteGroup.click();
+    assert.equal(await remoteGroup.getAttribute('aria-expanded'),'false');
+    await localGroup.press('Space');
+    assert.equal(await localGroup.getAttribute('aria-expanded'),'true');
+    assert.equal(await remoteGroup.getAttribute('aria-expanded'),'false');
+    await localGroup.press('Enter');
+    assert.equal(await localGroup.getAttribute('aria-expanded'),'false');
+    await page.screenshot({path:join(screenshots,'device-project-groups-collapsed.png')});
+    await localGroup.press('Enter');await remoteGroup.click();
     // The folder title and its chevron share the same local disclosure behavior.
     // Neither disclosure nor pagination is allowed to open a target or create a chat.
     const remoteProject=page.locator('.cmd-resource-group').filter({has:page.locator('.cmd-resource-group-title').filter({hasText:'开发设备'})}).locator('.cmd-project');
@@ -643,7 +675,13 @@ test('cross-device sidebar persists scope and renders device states while retain
     assert.equal(await page.getByLabel('本机草稿',{exact:true}).inputValue(),'未发送的本机草稿');
     await page.screenshot({path:join(screenshots,'remote-project-deleted.png')});
     await page.evaluate(()=>document.body.setAttribute('data-ds-dark-theme',''));await page.setViewportSize({width:500,height:700});await page.screenshot({path:join(screenshots,'dark-narrow.png')});
-    await page.getByRole('button',{name:'显示范围',exact:true}).click();await page.getByRole('menuitem',{name:'指定设备',exact:true}).click();await page.getByLabel('开发设备',{exact:false}).check();await page.keyboard.press('Escape');assert.deepEqual(scope.deviceIds,['remote']);
+    await page.getByRole('button',{name:'显示范围',exact:true}).click();await page.getByRole('menuitem',{name:'指定设备',exact:true}).click();
+    await page.getByLabel('当前主机',{exact:false}).check();await page.getByLabel('开发设备',{exact:false}).check();await page.keyboard.press('Escape');
+    await localGroup.click();assert.equal(await localGroup.getAttribute('aria-expanded'),'false');
+    await page.getByRole('button',{name:'显示范围',exact:true}).click();await page.getByRole('menuitem',{name:'当前设备（工作台主机）',exact:true}).click();
+    await localGroup.waitFor({state:'detached'});assert.equal(await page.getByRole('button',{name:'本机项目',exact:true}).isVisible(),true);
+    await page.getByRole('button',{name:'显示范围',exact:true}).click();await page.getByRole('menuitem',{name:'指定设备',exact:true}).click();
+    await page.getByLabel('当前主机',{exact:false}).uncheck();await page.keyboard.press('Escape');assert.deepEqual(scope.deviceIds,['remote']);
     await page.reload();await page.addScriptTag({content:bundle.outputFiles.find(f=>f.path.endsWith('.js')).text});await page.locator('#cmd-recent-section').getByText('远端最近',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'对话操作：测试对话 0',exact:true}).count(),0,'selected scope restores without showing local resources');
     failSave=true;await page.getByRole('button',{name:'显示范围',exact:true}).click();await page.getByRole('menuitem',{name:'当前设备（工作台主机）',exact:true}).click();await page.locator('.cmd-resource-save-error').waitFor();assert.equal(scope.mode,'selected');failSave=false;await page.getByRole('button',{name:'重试保存',exact:true}).click();await page.locator('.cmd-resource-save-error').waitFor({state:'detached'});assert.equal(scope.mode,'current');
     // A sidebar first mounted in a hidden tab still discovers and reconnects when shown.
@@ -653,6 +691,42 @@ test('cross-device sidebar persists scope and renders device states while retain
     await page.getByRole('button',{name:'显示范围',exact:true}).waitFor();assert.equal(deviceApiCalls,0);
     await page.evaluate(()=>{window.sidebarHidden=false;document.dispatchEvent(new Event('visibilitychange'));});
     await page.locator('#cmd-recent-section').getByText('远端最近',{exact:true}).waitFor();
+    activeArchive=true;
+    const archiveStart=sessionActions.length;
+    await page.setViewportSize({width:1200,height:850});
+    const archiveRow=page.locator('#cmd-recent-section .cmd-session-row').filter({hasText:'远端最近'});
+    const archiveButton=archiveRow.getByRole('button',{name:'归档对话',exact:true});
+    await archiveButton.click();
+    const archiveDialog=page.getByRole('dialog',{name:'停止并归档？',exact:true});
+    await archiveDialog.waitFor();
+    assert.equal(await archiveDialog.getByRole('button',{name:'取消',exact:true}).evaluate(button=>button===document.activeElement),true);
+    await page.screenshot({path:join(screenshots,'remote-archive-confirm.png')});
+    await page.evaluate(()=>document.body.setAttribute('data-ds-dark-theme',''));
+    await page.setViewportSize({width:390,height:700});
+    await page.screenshot({path:join(screenshots,'remote-archive-confirm-dark-narrow.png')});
+    await archiveDialog.getByRole('button',{name:'取消',exact:true}).click();
+    await archiveButton.waitFor();
+    assert.equal(sessionActions.length,archiveStart+1);
+    assert.equal(sessionActions.at(-1).stopActivity,undefined);
+    await page.setViewportSize({width:1200,height:850});
+    await archiveButton.click();
+    await archiveDialog.getByRole('button',{name:'停止并归档',exact:true}).click();
+    await archiveRow.waitFor({state:'detached'});
+    assert.equal(sessionActions.at(-1).stopActivity,true);
+    assert.notEqual(sessionActions.at(-1).requestId,sessionActions.at(-2).requestId);
+    activeArchive=false;
+    mutations.delete('remote\0session-0');
+    await refresh();
+    await archiveButton.waitFor();
+    await page.evaluate(()=>window.enableAssistant());
+    await page.waitForFunction(()=>!document.querySelector('#cmd-recent-section .cmd-session-row:has(.cmd-resource-device-badge) button[aria-label="归档对话"]')?.disabled);
+    await archiveButton.click();
+    await archiveDialog.getByText(/关联工单/).waitFor();
+    await archiveDialog.getByRole('button',{name:'停止并归档',exact:true}).click();
+    await archiveRow.waitFor({state:'detached'});
+    assert.deepEqual(workerArchiveActions.map(action=>action.action),['workerArchiveInfo','archiveWorkerTask']);
+    assert.equal(workerArchiveActions[0].device.authorizationId,'renewed-pair');
+    assert.deepEqual(workerArchiveActions[1].worker,worker);
     await page.goto('http://127.0.0.1:17991/link/workbench/');
     await page.evaluate(()=>{window.__DSH_LINK_WORKBENCH__=true;window.__DSH_TRANSPORT__={ownsHost:false};});
     deviceApiCalls=0;

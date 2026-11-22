@@ -62,9 +62,16 @@ test('remote delegation creates only an A-owned Task and freezes exact B executi
   await assert.rejects(f.service.delegate({ ...b.input, deviceId: 'other' }, f.exec, f.options), /不同任务/);
 });
 
+test('remote admission without an explicit model uses a model the target device offers', async t => {
+  const f = await fixture(t), b = remoteFixture(f);
+  const task = await f.service.delegate({ ...b.input, executionConfig: undefined }, f.exec, f.options);
+  assert.equal(task.mandate.execution.config.harness, 'official');
+  assert.deepEqual(task.mandate.execution.config.models.map(row => row.modelId), [b.model.modelId]);
+  assert.equal(f.database.assignments(task.id)[0].executor, 'remote');
+});
+
 test('remote admission rejects unavailable catalogs, guessed models and changed device identities without a Task', async t => {
   const f = await fixture(t), b = remoteFixture(f);
-  await assert.rejects(f.service.delegate({ ...b.input, executionConfig: undefined }, f.exec, f.options), { code: 'EXECUTION_CONFIG_REQUIRED' });
   await assert.rejects(f.service.delegate({ ...b.input, executionConfig: { harness: 'official', models: [{ ...b.model, modelId: 'alias' }] } }, f.exec, f.options), { code: 'EXECUTION_MODEL_UNAVAILABLE' });
   await assert.rejects(f.service.delegate({ ...b.input, executionConfig: { harness: 'official', models: [{ ...b.model, params: { temperature: 1 } }] } }, f.exec, f.options), { code: 'EXECUTION_MODEL_UNAVAILABLE' });
   b.catalog.available = false;

@@ -27,26 +27,38 @@ export function RouterGoBrand() {
   </a>;
 }
 
-export function RouterGoAccount({ renderHeader, writable, ready, onEdit, onSaved, configuredRef, available }) {
+export function RouterGoAccount({ renderHeader, renderEditor, editorOpen, refreshProviders, writable, ready, onEdit, onSaved, configuredRef, available }) {
   const [access, setAccess] = useState(), [pending, setPending] = useState();
   const [busy, setBusy] = useState(''), [notice, setNotice] = useState(), [balanceError, setBalanceError] = useState(false);
   const [readingBalance, setReadingBalance] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [editorVersion, setEditorVersion] = useState(0);
   const alive = useRef(false), lastBalanceRead = useRef(0), balanceRequest = useRef();
   const activeSync = useRef(), lastSync = useRef(0);
+  const openEditor = useRef(editorOpen);
+  openEditor.current = editorOpen;
   const notify = (text, tone) => setNotice(previous => ({ text, tone, sequence: (previous?.sequence ?? 0) + 1 }));
 
   async function sync(force = false) {
-    if (activeSync.current || (!force && Date.now() - lastSync.current < 60000)) return;
+    if (activeSync.current || (!force && (openEditor.current || Date.now() - lastSync.current < 60000))) return;
     const request = new AbortController();
     activeSync.current = request;
     lastSync.current = Date.now();
     setSyncing(true);
     try {
       const answer = await command('sync', { force }, AbortSignal.any([request.signal, AbortSignal.timeout(35000)]));
-      if (!request.signal.aborted && force && ['synced', 'recent'].includes(answer.state)) {
+      if (request.signal.aborted) return;
+      if (['synced', 'recent'].includes(answer.state)) {
         const { added, updated, removed } = answer;
-        notify(added || updated || removed ? `新增 ${added}、更新 ${updated}、移除 ${removed}` : '模型目录已是最新', 'success');
+        const changed = added || updated || removed;
+        if (changed && (force || openEditor.current)) {
+          await refreshProviders();
+          if (request.signal.aborted) return;
+          setEditorVersion(version => version + 1);
+        }
+        if (force) notify(changed ? `新增 ${added}、更新 ${updated}、移除 ${removed}` : '模型目录已是最新', 'success');
+      } else if (force) {
+        notify(answer.state === 'busy' ? '正在处理 RouterGo 授权，请稍后同步' : '请先连接 RouterGo 账号');
       }
     } catch (reason) {
       if (!request.signal.aborted && force) notify(reason.message);
@@ -196,9 +208,6 @@ export function RouterGoAccount({ renderHeader, writable, ready, onEdit, onSaved
         </div>
       </Tooltip>
       <div className="cmd-routergo-tools">
-        <Button variant="outline" size="sm" disabled={syncing} onClick={() => void sync(true)}>
-          <UIIcon name="cube" size={15} />{syncing ? '正在同步…' : '同步模型'}
-        </Button>
         <Button asChild variant="secondary" size="sm" className="cmd-routergo-recharge">
           <a href={routerGoRecharge} target="_blank" rel="noopener noreferrer"><UIIcon name="external" size={14} />充值</a>
         </Button>
@@ -223,6 +232,13 @@ export function RouterGoAccount({ renderHeader, writable, ready, onEdit, onSaved
       {readingBalance ? <span className="cmd-routergo-progress-copy" role="status"><UIIcon name="account" size={17} />正在读取 RouterGo 账号…</span>
         : <Button variant="outline" size="sm" onClick={() => void refresh()}><UIIcon name="refresh" size={15} />重试读取余额</Button>}
     </div> : null}
+    <React.Fragment key={editorVersion}>
+      {renderEditor?.(syncing && connected, dirty => <Button variant="outline" size="sm" className="cmd-model-discover"
+        disabled={dirty || !writable || !ready || !connected || syncing} aria-busy={syncing}
+        title={dirty && !syncing ? '请先保存模型修改' : undefined} onClick={() => void sync(true)}>
+        {syncing ? '正在同步…' : '同步模型'}
+      </Button>)}
+    </React.Fragment>
     {notice ? <Toast key={notice.sequence} text={notice.text} tone={notice.tone} icon={<UIIcon name="close" size={16} />} onDone={() => setNotice(undefined)} /> : null}
   </>;
 }

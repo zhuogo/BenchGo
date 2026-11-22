@@ -95,6 +95,21 @@ test('runtime sync validates the Link server artifact before publishing any file
   assert.equal(await readFile(join(f.target, 'lib/link.mjs'), 'utf8'), 'preserve:lib/link.mjs');
 });
 
+for (const mismatch of ['version', 'dependencies']) test(`sync rejects mismatched ${mismatch} before touching the installed release`, async t => {
+  const f = await fixture(t);
+  const patch = join(f.profile, 'cordis.patch.yml');
+  await f.put(patch, '# original profile patch');
+  await f.put(join(f.source, 'package.json'), JSON.stringify({ name: 'benchgo-plugin',
+    version: mismatch === 'version' ? '0.1.0' : '0.1.1',
+    ...(mismatch === 'dependencies' ? { dependencies: { '@deepseek-ai/dsh-agent': '0.2.2-rc.4' } } : {}),
+  }));
+  let writes = 0;
+  await assert.rejects(syncDesktopArtifacts({ ...f, write: async () => { writes++; } }), /不一致/u);
+  assert.equal(writes, 0);
+  assert.equal(await readFile(patch, 'utf8'), '# original profile patch');
+  assert.equal(await readFile(join(f.target, 'lib/client.js'), 'utf8'), 'old:lib/client.js');
+});
+
 test('runtime sync removes obsolete owned code and empty directories while keeping browser resources and other files', async t => {
   const f = await fixture(t);
   for (const file of ['lib/modules/superagent/src/service.mjs', 'shared/value.mjs', 'src/plugin.mjs']) await f.put(join(f.source, file), 'new:' + file);

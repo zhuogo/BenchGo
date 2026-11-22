@@ -56,7 +56,7 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
     yield* next();
   });
   const dispatch = async (input, signal) => {
-    if (!getCommander() && !['pickerCatalog', 'catalog', 'providers', 'models', 'modelProfiles', 'modelCapabilities', 'saveModelCapabilities'].includes(input.action)) throw Object.assign(new Error('Harness 聚合未启用或尚未就绪'), { status: 503, code: 'HARNESS_UNAVAILABLE' });
+    if (!getCommander() && !['pickerCatalog', 'catalog', 'providers', 'models', 'deepSeekModels', 'modelProfiles', 'modelCapabilities', 'saveModelCapabilities'].includes(input.action)) throw Object.assign(new Error('Harness 聚合未启用或尚未就绪'), { status: 503, code: 'HARNESS_UNAVAILABLE' });
     switch (input.action) {
       case 'pickerCatalog': return pickerCatalog.list();
       case 'catalog': return { tools: (await installer.list()).map(tool => {
@@ -68,6 +68,16 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
       case 'saveToolConfig': return { config: await runtimeSettings.save(input.tool, input.config, input.changedFields) };
       case 'providers': return { providers: await providers.list() };
       case 'models': return { models: await providers.models(input.providerId, signal) };
+      case 'deepSeekModels': {
+        const provider = ctx.llm.listConfigurableProviders().find(row => row.settingsNs === 'llm-deepseek' && row.provider === input.providerId);
+        if (!provider) throw Object.assign(Error('DeepSeek 连接不可用'), { status: 404 });
+        try {
+          const rows = await ctx.llm.listModels(provider.provider);
+          return { models: rows.map(({ id, name, inputModalities }) => ({ id, name, inputModalities })) };
+        } catch {
+          throw Object.assign(Error('暂时无法同步 DeepSeek 模型'), { status: 502 });
+        }
+      }
       case 'modelCapabilities': return { overrides: await providers.modelCapabilities(input.providerId) };
       case 'saveModelCapabilities': return providers.saveModelCapabilities(input.providerId, input.modelId, input.capabilities);
       case 'modelProfiles': return fetchPublicModelProfiles(options.fetcher ?? globalThis.fetch, AbortSignal.any([signal, AbortSignal.timeout(15000)]));

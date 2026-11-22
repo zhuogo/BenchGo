@@ -74,6 +74,7 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
   const publicDevice = value => {
     const route = activeRoutes.get(value.id);
     return { id: value.id, name: value.name, kind: value.kind, url: value.kind === 'ssh' ? value.ssh?.host : value.url,
+      hostId: value.hostId ?? null, authorizationId: value.authorizationId ?? null,
       status: value.status || 'unknown', lastError: value.lastError || null, currentPath: route?.kind ?? null,
       ...(route?.kind === 'relay' ? { currentRelayId: route.relayId ?? null, currentRelayUrl: route.url } : {}), ...(value.warning ? { warning: value.warning } : {}), ...(value.pairingNotice ? { pairingNotice: value.pairingNotice } : {}) };
   };

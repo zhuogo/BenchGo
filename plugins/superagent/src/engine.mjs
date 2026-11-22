@@ -41,6 +41,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   const handles = new Map(), pending = new Map(), listeners = new Set(), cooldowns = new Map(), models = new Map(), errors = new Map(), failures = new Map(), sending = new Map();
   const appendRecord = appendChatRecord ?? appendPluginRecord;
   const nativeSubmissions = new Map();
+  const archivingThreads = new Set();
   const activeRoutes = new WeakMap();
   const lifecycle = new AbortController();
   const agentCompaction = new Map();
@@ -233,6 +234,17 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     onSettled: settleTaskReply,
     onChange: emit, now, isStopped: () => stopped,
   });
+  const workspaceRegistry = () => ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry;
+  const sideThreadFor = async sessionId => (await store.getState()).threads.find(item => item.sessionId === sessionId);
+  const stopArchiveActivity = ctx.on('workspace/session-activity', async ({ sessionId }, next) => {
+    const item = await sideThreadFor(sessionId);
+    const other = await next();
+    return item && await inbox.hasPending(item.id) ? [{ kind: 'superagent-inbox' }, ...other] : other;
+  }, { global: true });
+  const stopArchivedInbox = ctx.on('workspace/session-stop', async ({ sessionId }) => {
+    const item = await sideThreadFor(sessionId);
+    if (item) await inbox.cancel(item.id);
+  }, { global: true });
   async function resetMainSession({ allowCurrentSend = false } = {}) {
     assertOpen();
     if (recoveringMain) await recoveringMain;
@@ -269,6 +281,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   }
   async function ensureSession({ threadId = 'main', recovery = false, recoveredEvidence } = {}) {
     if (stopped) throw new Error('总助手已关闭');
+    if (archivingThreads.has(threadId)) throw new Error('旁聊正在归档');
     if (threadId === 'main' && recoveringMain && !recovery) { await recoveringMain; return ensureSession({ threadId }); }
     if (threadId === 'main' && resettingMain) { await resettingMain; return ensureSession({ threadId }); }
     if (handles.has(threadId)) {
@@ -546,17 +559,37 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       threadCreationQueue = operation;
       return operation;
     },
-    async updateThread(threadId, patch) {
+    async updateThread(threadId, patch, { stopActivity = false } = {}) {
       if (threadId === 'main') throw new Error('主聊天不能归档或改为旁聊');
-      await thread(threadId);
-      const running = handles.get(threadId)?.agent.status === 'running';
-      if ((patch.archived || patch.deleted) && (running || await inbox.hasPending(threadId))) throw new Error('请先停止正在运行或排队的旁聊');
+      const record = await thread(threadId);
       if ('models' in patch) throw new Error('旁聊统一使用 SuperAgent 模型设置');
       if (patch.title !== undefined && (typeof patch.title !== 'string' || !patch.title.trim() || patch.title.length > 200)) throw new Error('无效旁聊名称');
       if (patch.archived !== undefined && typeof patch.archived !== 'boolean') throw new Error('无效归档状态');
       if (patch.pinned !== undefined && typeof patch.pinned !== 'boolean') throw new Error('无效置顶状态');
       const allowed = Object.fromEntries(Object.entries(patch).filter(([key]) => ['title', 'archived', 'pinned'].includes(key)));
-      await updateState(state => ({ threads: state.threads.map(item => item.id === threadId ? { ...item, ...allowed } : item) }));
+      const save = () => updateState(state => ({ threads: state.threads.map(item => item.id === threadId ? { ...item, ...allowed } : item) }));
+      if (allowed.archived === undefined) { await save(); return thread(threadId); }
+      const activeError = () => Object.assign(new Error('旁聊仍有活动'), { code: 'workspace/session-active', status: 409 });
+      if (archivingThreads.has(threadId)) throw Object.assign(new Error('旁聊归档正在提交'), { status: 409 });
+      if (stopActivity && allowed.archived) archivingThreads.add(threadId);
+      try {
+        const registry = workspaceRegistry();
+        const agent = handles.get(threadId)?.agent;
+        if (allowed.archived) {
+          if (!stopActivity && !record.archived && (agent?.status === 'running' || await inbox.hasPending(threadId))) throw activeError();
+          try { if (record.sessionId) await registry?.archiveSession?.(record.sessionId, { stopActivity }); }
+          catch (error) { if (error.name === 'WorkspaceActiveSessionError') throw activeError(); throw error; }
+          allowed.pinned = false;
+          await save();
+          if (stopActivity && !registry?.archiveSession) {
+            await inbox.cancel(threadId);
+            agent?.cancel({ kind: 'user' });
+          }
+        } else {
+          if (record.sessionId) await registry?.unarchiveSession?.(record.sessionId);
+          await save();
+        }
+      } finally { archivingThreads.delete(threadId); }
       return thread(threadId);
     },
     async resetMain() {
@@ -598,7 +631,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const operation = (sending.get(threadId) || Promise.resolve()).catch(() => {}).then(async () => {
         assertOpen();
         if (threadId === 'main' && text.trim() === '/clear') return resetMainSession({ allowCurrentSend: true });
-        if ((await thread(threadId)).archived) throw new Error('请先恢复已归档的旁聊');
+        if (archivingThreads.has(threadId) || (await thread(threadId)).archived) throw new Error('请先恢复已归档的旁聊');
         return inbox.enqueue({ threadId, text, requestId, replyContext });
       });
       sending.set(threadId, operation);
@@ -621,7 +654,8 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const status = handles.get(threadId)?.agent.status ?? 'idle';
       const { header, lastEnd, lastEndSeq } = snapshot.index;
       if (status === 'running' && !Object.hasOwn(snapshot, 'activeReply')) snapshot.activeReply = activeChatReply(snapshot.events);
-      return { threadId, sessionId: record.sessionId, ...page, requests, status, running: status === 'running', activeReply: status === 'running' ? snapshot.activeReply : null, lastEndSeq: lastEndSeq ?? null, error: errors.get(threadId) ?? (lastEnd?.kind === 'error' ? lastEnd.error?.message : null), failures: failures.get(threadId) ?? [], model: models.get(threadId) ?? (header ? { providerId: header.provider, modelId: header.model } : null) };
+      const modelFailures = lastEnd?.kind === 'completed' ? [] : failures.get(threadId) ?? [];
+      return { threadId, sessionId: record.sessionId, ...page, requests, status, running: status === 'running', activeReply: status === 'running' ? snapshot.activeReply : null, lastEndSeq: lastEndSeq ?? null, error: errors.get(threadId) ?? (lastEnd?.kind === 'error' ? lastEnd.error?.message : null), failures: modelFailures, model: models.get(threadId) ?? (header ? { providerId: header.provider, modelId: header.model } : null) };
     },
     async compact(threadId = 'main') {
       const agent = await ensureSession({ threadId });
@@ -649,7 +683,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         await disposeTaskReplies();
         await stateQueue.catch(() => {});
         const results = await Promise.allSettled([...handles.values()].map(handle => handle.dispose()));
-        stopAuxiliary(); stopHistory(); stopTiming();
+        stopAuxiliary(); stopHistory(); stopTiming(); stopArchiveActivity(); stopArchivedInbox();
         historyCache.clear(); timings.clear(); received.clear();
         handles.clear(); listeners.clear(); agentCompaction.clear();
         const failed = results.filter(result => result.status === 'rejected');

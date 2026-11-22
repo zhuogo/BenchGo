@@ -11,9 +11,10 @@ import { prepareDesktopRenderer } from './prepare-brand.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const require = createRequire(new URL('../../deepseek-harness/apps/web/package.json', import.meta.url));
 const { chromium } = require('playwright');
+const sharp = createRequire(new URL('../../deepseek-harness/apps/desktop/package.json', import.meta.url))('sharp');
 const executablePath = [process.env.CHROMIUM_EXECUTABLE_PATH, chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(value => value && existsSync(value));
 
-test('prepared startup keeps one brand entrance, local eye expressions, live themes and recoverable navigation', { skip: !executablePath && 'Chromium/Edge is required' }, async t => {
+test('prepared startup animates stage text and keeps the brand, themes and recoverable navigation', { skip: !executablePath && 'Chromium/Edge is required' }, async t => {
   const prepared = await mkdtemp(join(tmpdir(), 'benchgo-startup-browser-'));
   t.after(() => rm(prepared, { recursive: true, force: true }));
   await prepareDesktopRenderer(root, prepared);
@@ -27,32 +28,34 @@ test('prepared startup keeps one brand entrance, local eye expressions, live the
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
     window.startupCalls = 0;
-    window.startupFail = true;
     window.dshWelcome = { skip: async () => {
-      window.startupCalls++;
-      if (window.startupFail) throw Error('fixture navigation failed');
+      if (++window.startupCalls === 1) await new Promise((_resolve, reject) => { window.failStartup = reject; });
     } };
   });
   const snapshot = async name => {
-    if (screenshots) await page.screenshot({ path: join(screenshots, `${name}.png`) });
+    if (screenshots) await page.screenshot({ path: join(screenshots, `${name}.png`), omitBackground: true });
   };
   const surface = () => page.evaluate(() => ({
     root: getComputedStyle(document.documentElement).backgroundColor,
     body: getComputedStyle(document.body).backgroundColor,
     text: getComputedStyle(document.querySelector('h1')).color,
+    status: getComputedStyle(document.querySelector('#startup-status')).color,
     overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight,
   }));
-  const dots = () => page.locator('.startup-loading').evaluate(progress => ({
-    count: progress.children.length,
-    completed: Array.from(progress.children).filter(dot => getComputedStyle(dot, '::after').opacity === '1').length,
-    color: getComputedStyle(progress, '::after').backgroundColor,
-    position: getComputedStyle(progress, '::after').translate,
-  }));
-  const waitForDotAt = position => page.waitForFunction(expected => {
-    const progress = document.querySelector('.startup-loading');
-    return getComputedStyle(progress, '::after').translate === expected;
-  }, position);
+  const status = page.locator('#startup-status');
+  const characters = status.locator('.bg-loading-character');
+  const assertAnimatedStatus = async label => {
+    assert.equal(await status.getAttribute('aria-label'), label);
+    assert.equal(await status.innerText(), label);
+    assert.deepEqual(await characters.evaluateAll(letters => letters.map(letter => {
+      const { animationName, animationDelay, animationDuration } = getComputedStyle(letter);
+      return [letter.textContent, animationName, Number.parseFloat(animationDelay), animationDuration];
+    })), [...label].map((character, index) => [character, 'bg-loading-hit', index * 75 / 1000, '1.6s']));
+  };
   for (const name of ['splash.html', 'welcome.html']) {
+    const splash = name === 'splash.html';
+    const viewport = splash ? { width: 420, height: 300 } : { width: 600, height: 700 };
+    await page.setViewportSize(viewport);
     await page.goto(pathToFileURL(join(prepared, name)).href);
     await page.locator('.startup-mascot [data-part="eyes"]').waitFor();
     const entrance = await page.evaluate(() => {
@@ -82,38 +85,57 @@ test('prepared startup keeps one brand entrance, local eye expressions, live the
     assert.equal(entrance.hasBackgroundPlate, false);
     await snapshot(name + '-entering');
     await page.evaluate(() => document.querySelector('.startup-brand').getAnimations()[0].finish());
-    for (const [theme, background, foreground] of [['light', 'rgb(243, 246, 246)', 'rgb(22, 28, 35)'], ['dark', 'rgb(16, 18, 24)', 'rgb(238, 245, 246)']]) {
+    for (const [theme, background, foreground] of [['light', [243, 246, 246], 'rgb(22, 28, 35)'], ['dark', [16, 18, 24], 'rgb(238, 245, 246)']]) {
       await page.emulateMedia({ colorScheme: theme, reducedMotion: 'no-preference' });
-      await page.waitForFunction(expected => getComputedStyle(document.body).backgroundColor === expected && document.documentElement.scrollHeight <= innerHeight && document.documentElement.scrollWidth <= innerWidth, background);
-      assert.deepEqual(await surface(), { root: background, body: background, text: foreground, overflow: false });
-      await snapshot(name + '-' + theme);
+      const canvas = splash ? 'rgba(0, 0, 0, 0)' : `rgb(${background.join(', ')})`;
+      await page.waitForFunction(expected => getComputedStyle(document.querySelector('h1')).color === expected, foreground);
+      assert.deepEqual(await surface(), { root: canvas, body: canvas, text: foreground, status: foreground, overflow: false });
+      const path = screenshots && join(screenshots, `${name}-${theme}.png`);
+      const screenshot = await page.screenshot({ path, omitBackground: true });
+      const { data, info } = await sharp(screenshot).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      const pixel = (x, y) => {
+        const offset = (y * info.width + x) * 4;
+        return [...data.subarray(offset, offset + 4)];
+      };
+      const outside = splash ? [0, 0, 0, 0] : [...background, 255];
+      const y = viewport.height / 2 + 6;
+      const center = viewport.width / 2;
+      for (const [x, edgeY] of [[0, y], [viewport.width - 1, y], [center, 0], [center, viewport.height - 1]]) {
+        assert.deepEqual(pixel(x, edgeY), outside);
+      }
+      for (const direction of [-1, 1]) {
+        const gridStrength = distance => Math.max(...Array.from({ length: 24 }, (_, index) => {
+          const x = center + direction * (distance + index);
+          return pixel(x, y).reduce((total, channel, i) =>
+            total + (splash && i < 3 ? 0 : Math.abs(channel - outside[i])), 0);
+        }));
+        assert(gridStrength(90) > gridStrength(150) && gridStrength(150) > 0, 'grid fades as it approaches the edge');
+        assert.deepEqual(pixel(center + direction * 90, y), outside, 'background is visible between lines');
+      }
     }
-    if (name === 'splash.html') {
-      const status = page.locator('#startup-status');
+    await assertAnimatedStatus(splash ? '正在准备插件…' : '正在打开工作台…');
+    const labelBox = await status.boundingBox();
+    assert(Math.abs(labelBox.x + labelBox.width / 2 - viewport.width / 2) < 1);
+    if (splash) {
       const wait = page.locator('#startup-wait');
       const advance = (stage, label) => page.evaluate(detail => {
         window.dispatchEvent(new CustomEvent('benchgo-startup-stage', { detail }));
       }, { stage, label });
-      assert.equal(await status.innerText(), '正在准备插件…');
-      assert.deepEqual(await dots(), { count: 6, completed: 0, color: 'rgb(241, 132, 116)', position: '0px' });
       assert.equal(await wait.innerText(), '');
       await page.clock.fastForward(20_000);
       assert.equal(await status.innerText(), '正在准备插件…');
       assert.equal(await wait.innerText(), '这一步耗时较长，请稍候');
       await advance('host-starting', '正在启动服务…');
-      await waitForDotAt('32px');
-      assert.deepEqual(await dots(), { count: 6, completed: 2, color: 'rgb(241, 132, 116)', position: '32px' });
+      await assertAnimatedStatus('正在启动服务…');
       assert.equal(await wait.innerText(), '');
       await page.clock.fastForward(20_000);
       assert.equal(await status.innerText(), '正在启动服务…');
       assert.equal(await wait.innerText(), '这一步耗时较长，请稍候');
       await snapshot('splash-host');
       await advance('host-ready', '正在连接工作台…');
-      await waitForDotAt('48px');
-      assert.deepEqual(await dots(), { count: 6, completed: 3, color: 'rgb(241, 132, 116)', position: '48px' });
+      await assertAnimatedStatus('正在连接工作台…');
       await page.emulateMedia({ colorScheme: 'light' });
-      assert.equal((await dots()).color, 'rgb(196, 78, 62)');
-      await snapshot('splash-progress-light');
+      await snapshot('splash-stage-light');
       assert.equal(await wait.innerText(), '');
     }
     const eyeScale = await page.evaluate(() => {
@@ -141,19 +163,23 @@ test('prepared startup keeps one brand entrance, local eye expressions, live the
       opacity: getComputedStyle(document.querySelector('.startup-brand')).opacity,
       transform: getComputedStyle(document.querySelector('[data-part="eyes"]')).transform,
     })), { animations: 0, opacity: '1', transform: 'none' });
+    assert.equal(await characters.first().evaluate(el => getComputedStyle(el).opacity), '1');
     await snapshot(name + '-reduced');
     if (name === 'welcome.html') {
-      await page.getByRole('button', { name: '重试' }).waitFor();
-      assert.equal(await page.locator('#startup-status').innerText(), '工作台未能打开，请重试');
-      assert.equal(await page.locator('.startup-loading').isVisible(), false);
+      await page.clock.fastForward(50);
+      await page.evaluate(() => window.failStartup(new Error('fixture navigation failed')));
+      const retry = page.getByRole('button', { name: '重试' });
+      await retry.waitFor();
+      assert.equal(await status.innerText(), '工作台未能打开，请重试');
+      assert.equal(await characters.count(), 0);
       await snapshot('welcome-error');
-      await page.evaluate(() => { window.startupFail = false; });
-      await page.getByRole('button', { name: '重试' }).click();
-      await page.getByRole('button', { name: '重试' }).waitFor({ state: 'hidden' });
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await page.keyboard.press('Tab');
+      assert(await retry.evaluate(button => button.matches(':focus-visible')));
+      await page.keyboard.press('Enter');
+      await retry.waitFor({ state: 'hidden' });
       assert.equal(await page.evaluate(() => window.startupCalls), 2);
-      assert.equal(await page.locator('#startup-status').innerText(), '正在打开工作台…');
-      assert.equal((await dots()).completed, 5);
-      assert.equal((await dots()).position, '80px');
+      await assertAnimatedStatus('正在打开工作台…');
       await snapshot('welcome-ready');
     }
     await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });

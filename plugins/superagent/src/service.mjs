@@ -64,6 +64,8 @@ import { profileDocuments } from './profile-documents.mjs';
 import { createRouterTools } from './router-tools.mjs';
 import { createAssistantDispatch } from './assistant-dispatch.mjs';
 import { createDeviceTools } from './device-tools.mjs';
+import { readDeviceCenter, readRemoteExecutionCatalog, selectRemoteExecution } from './execution-catalog.mjs';
+import { createWorkerArchive } from './worker-archive.mjs';
 
 /** Channel uploads require a concrete, saved HTTP/SSE ASR protocol. */
 export async function channelVoiceAvailability(voice, providers) {
@@ -98,7 +100,7 @@ export async function mountAssistant(ctx, commander, providers) {
   let channelCredentials;
   let database, goals, reviewWorker, deliveryWorker, engine, watchdogRetryTimer, disposal, feishu, feishuStream, channels, assessmentRunner, assessmentTimer, orchestrationRuntime, scheduleBridge, routerWatchdog;
   let notificationQueue = Promise.resolve(), skillProvider, unsubscribeSkills, unsubscribeLearning, scheduleLifecycle, externalActionStore, unregisterExternalActions, channelSessions;
-  let disposeFactsRemote, executionSummaries, disposeWatchdogRoute, cleanupContinuations, executionSessionTitles;
+  let disposeFactsRemote, executionSummaries, disposeWatchdogRoute, cleanupContinuations, executionSessionTitles, workerArchive;
   let settings;
   const unregisterSettings = [];
   const projectSchedules = async () => {
@@ -112,7 +114,7 @@ export async function mountAssistant(ctx, commander, providers) {
       () => feishuStream?.stop(),
     ],
     // Thunks isolate synchronous throws as well as rejected async disposers.
-    stop: [() => executionSessionTitles?.dispose(), () => executionSummaries?.dispose(), () => channels?.dispose(), () => scheduleBridge?.stop(),
+    stop: [() => workerArchive?.dispose(), () => executionSessionTitles?.dispose(), () => executionSummaries?.dispose(), () => channels?.dispose(), () => scheduleBridge?.stop(),
       () => orchestrationRuntime?.stop(), () => assessmentRunner?.stop(), () => feishuStream?.dispose(),
       () => deliveryWorker?.stop(), () => reviewWorker?.stop(),
       () => routerWatchdog?.stop(), () => engine?.dispose(), () => notificationQueue, () => feishu?.dispose()],
@@ -174,7 +176,7 @@ export async function mountAssistant(ctx, commander, providers) {
   ctx.provide('benchgoExternalActions', createExternalActionHost({ ctx, store: externalActionStore, registry: externalRegistry,
     onApprovalPending: input => engine?.notifyApprovalPending(input) }));
   orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels,
-    maintainTasks: () => cleanupContinuations?.tick(),
+    maintainTasks: () => { void workerArchive?.tick(); return cleanupContinuations?.tick(); },
     notifyExecutionInput: input => engine.notifyExecutionInput(input),
     notifyTaskResult: async notice => {
       const receipt = await engine.notifyTaskResult(notice);
@@ -194,7 +196,9 @@ export async function mountAssistant(ctx, commander, providers) {
     return { status: 'accepted', messageId: event.id };
   } });
   const restartFeishu = () => { void feishuStream.start().catch(() => ctx.logger?.warn?.('飞书长连接启动失败，请检查连接设置')); };
-  assessmentRunner = createAssessmentRunner({ database: store.orchestration, llm: ctx.llm, readPolicy: threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId), authorize: authorizeAssessment, readContext: input => input.source?.channel === 'feishu' ? feishu.readContext(input) : undefined });
+  assessmentRunner = createAssessmentRunner({ database: store.orchestration, llm: ctx.llm, readPolicy: threadId => readAssessmentPolicy(store, ctx.workspaceRegistry, threadId), authorize: authorizeAssessment, readContext: input => input.source?.channel === 'feishu' ? feishu.readContext(input) : undefined,
+      readDevices: signal => readDeviceCenter(ctx, signal),
+      resolveRemoteExecution: async ({ deviceId, projectId, signal }) => selectRemoteExecution(await readRemoteExecutionCatalog(ctx, deviceId, signal), { projectId }) });
   scheduleBridge = createScheduleBridge({ ctx, store, readPolicy: () => readAssessmentPolicy(store, ctx.workspaceRegistry),
     onOccurrence: occurrence => scheduleLifecycle?.occurrence(occurrence) });
   const assessIntake = () => { void assessmentRunner.tick().catch(() => { if (!shutdown.signal.aborted) ctx.logger?.warn?.('SuperAgent 研判未完成，候选保留供重试'); })
@@ -213,6 +217,9 @@ export async function mountAssistant(ctx, commander, providers) {
   executionSessionTitles = createExecutionSessionTitles({ ctx, database: store.orchestration, metadata: database });
   const taskManagement = createTaskManagement({ database, orchestration: store.orchestration, goals,
     onTaskRename: taskId => { void executionSessionTitles.syncTask(taskId); } });
+  workerArchive = createWorkerArchive({ ctx, commander, orchestration: store.orchestration, database, signal: shutdown.signal,
+    wake: () => orchestrationRuntime.tick() });
+  ctx.provide('benchgoWorkerArchive', workerArchive);
   cleanupContinuations = createTaskCleanupContinuation({ database, orchestration: store.orchestration, taskManagement, signal: shutdown.signal,
     onUpdate: update => engine.notifyTaskCleanup(update) });
   const desktopTasks = createDesktopTaskAccess(store.orchestration, taskManagement);
@@ -422,7 +429,7 @@ export async function mountAssistant(ctx, commander, providers) {
   const systemFiles = createAssistantSystemFiles({ directory: store.paths.directory, desktop: () => ctx.get?.('sessionController') });
   const dispatch = createAssistantDispatch({ ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, personalChannelSources, orchestrationRuntime,
     executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state,
-    artifacts, auxiliary, systemFiles, skillProvider });
+    artifacts, auxiliary, systemFiles, skillProvider, workerArchive });
   ctx.effect(() => registerAssistantFetchRoute({ connection: ctx.connection, dispatch }));
   for (const [name, handler] of Object.entries(voiceMedia.handlers)) {
     ctx.effect(() => ctx.connection.fetch.register({ path: `/api/commander/assistant/voice/${name}`, methods: [name === 'worklet' ? 'GET' : 'POST'], requestBody: name === 'worklet' ? 'buffered' : 'streaming', async fetch(request) {

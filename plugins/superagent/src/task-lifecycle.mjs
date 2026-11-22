@@ -8,6 +8,13 @@ export function executionStatusText(value) {
 export const taskStopped = task => task?.executionControl?.stopRequested === true || task?.executionControl?.stopped === true;
 export const taskPaused = task => task?.executionControl?.pauseRequested === true || task?.executionControl?.paused === true;
 export const taskExecutionBlocked = task => task?.status === 'completed' || taskStopped(task) || taskPaused(task);
+export function remoteObservationUncertain(assignment, remote = assignment?.remoteExecution) {
+  return !!remote && !assignment?.remoteStopDetached && !['completed', 'failed', 'cancelled'].includes(remote.phase)
+    && (remote.phase === 'uncertain' || remote.available === false);
+}
+export function assignmentExecutionUncertain(assignment, remote = assignment?.remoteExecution) {
+  return remote ? remoteObservationUncertain(assignment, remote) : assignment?.state === 'uncertain';
+}
 export function assertTaskStatus(status) {
   if (!taskStates.includes(status)) throw new Error('Invalid Task status');
   return status;

@@ -11,6 +11,7 @@ export const VOICE_PROTOCOLS = Object.freeze([
   descriptor('asr', 'stepfun-sse', 'stepfun', '阶跃增量转录（SSE）', true, 'sse'),
   descriptor('tts', 'speech', 'openai', '语音合成（HTTP 音频）', true, 'http'),
   descriptor('tts', 'speech-stream', 'openai', '语音合成（stream 扩展）', true, 'http'),
+  descriptor('tts', 'speech-wav', 'openai', '语音合成（HTTP WAV）', true, 'http'),
   descriptor('tts', 'stepfun-speech-sse', 'stepfun', '阶跃语音合成（SSE）', true, 'sse'),
   descriptor('tts', 'stepfun-speech-websocket', 'stepfun', '阶跃语音合成（WebSocket）', true, 'websocket', true),
 ]);

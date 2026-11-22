@@ -58,6 +58,14 @@ test('failed answer keeps the same request identity on retry and exposes the sys
   assert.equal(h.calls[0][1].requestId, h.calls[1][1].requestId);
 });
 
+test('a superseded Worker question has no answer form even while the Task is active', () => {
+  const h = harness();
+  h.props.attention.state = 'superseded';
+  const rendered = h.render();
+  assert(rendered.some(node => node.children.includes('问题已作废')));
+  assert(!rendered.some(node => node.type === 'form'));
+});
+
 test('an in-flight Worker question remains answerable under its applied Assignment version', () => {
   const h = harness();
   h.props.attention = { ...h.props.attention, origin: 'worker', instructionRevision: undefined, assignmentId: 'old' };

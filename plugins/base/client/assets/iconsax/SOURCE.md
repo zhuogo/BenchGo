@@ -5,10 +5,10 @@ Vendored source: iconsax-react 0.0.8, https://registry.npmjs.org/iconsax-react/-
 Repository: https://github.com/rendinjast/iconsax-react
 License: MIT, Copyright ERFAN KHADIVAR (see LICENSE).
 
-23 selected symbols, Linear and Bold variants, are extracted as SVG assets.
+The selected Linear and Bold SVGs are stored in `catalog.json` and bundled with the client.
 Link controls additionally use Scan (scan), Refresh (refresh), Copy (copy)
 and CloseCircle (close) from the same iconsax-react 0.0.8 release.
-No runtime package dependency or CDN requests. catalog.json is the same asset content used for bundling.
+No runtime package dependency or CDN requests.
 Brand marks for Codex, Claude, Pi and OpenCode are kept distinct from interface icons.
 
 Filter (filter): locally authored slider SVGs matching the existing 24px grid and rounded strokes; not extracted from Iconsax. Used for resource display scope.

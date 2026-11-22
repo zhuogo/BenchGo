@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mountLink } from '../src/index.mjs';
 import { createDeviceProxy } from '../src/devices/proxy.mjs';
-import { connectionAddresses } from '../src/transport/server.mjs';
+import { connectionAddresses, listen, validateConfig } from '../src/transport/server.mjs';
+import { openStore } from '../src/pairing/store.mjs';
+import { loadIdentity } from '../src/transport/tls.mjs';
 import { mountWeb } from '../../base/src/web.mjs';
 
 async function host(t, name, projects, assistant, stored = {}) {
@@ -57,6 +59,12 @@ test('one approval pairs both Link hosts over real TLS and each host can revoke 
   if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
   const a = await host(t, 'A', [{ id: 'a-project', title: 'A project', path: '/a/work', sessionIds: [] }], null, { host: '::' });
   const b = await host(t, 'B', [{ id: 'b-project', title: 'B project', path: '/b/work', sessionIds: [] }], null);
+  for (const peer of [a, b]) {
+    const get = peer.ctx.get;
+    peer.ctx.get = name => name === 'benchgoExecution' ? { dispatch: async (input, access) => ({
+      version: 2, available: true, operation: input.operation, sourceHost: access.verifiedSourceHostId ?? null,
+    }) } : get(name);
+  }
   const invitation = await b.link.admin({ action: 'pairing' });
   const pending = await a.deviceApi({ action: 'pair', uri: invitation.uri });
   assert.deepEqual(await a.deviceApi({ action: 'pairStatus', requestId: pending.requestId }), { status: 'pending' });
@@ -81,8 +89,22 @@ test('one approval pairs both Link hosts over real TLS and each host can revoke 
   const projects = async (source, id) => (await source.link.resources({ deviceId: id, kind: 'projects' })).devices[0];
   assert.deepEqual((await projects(a, forward.device.id)).items.map(project => project.resourceId), ['b-project']);
   assert.deepEqual((await projects(b, back.id)).items.map(project => project.resourceId), ['a-project']);
+  const execution = (source, target, operation = 'catalog') => source.link.callDevice({
+    deviceId: target.id, expectedHostId: target.hostId, expectedAuthorizationId: target.authorizationId,
+    input: { action: 'execution', version: 2, operation, ...(operation === 'submit'
+      ? { executionId: 'execution-' + source.link.status().hostName, identity: { ownerHostId: 'business-host' } } : {}) },
+  });
+  for (const [source, target] of [[a, forward.device], [b, back]]) {
+    const capabilities = (await source.link.resources({ deviceId: target.id, kind: 'capabilities' })).devices[0].items;
+    assert.equal(capabilities.find(item => item.id === 'reverse').available, true);
+    assert.equal((await execution(source, target)).available, true);
+    const submitted = await execution(source, target, 'submit');
+    assert.equal(submitted.operation, 'submit');
+    assert.equal(submitted.sourceHost, source.link.status().hostId);
+  }
   await a.link.admin({ action: 'revoke', id: back.authorizationId });
   assert.equal((await projects(b, back.id)).code, 'UNAUTHORIZED');
+  await assert.rejects(execution(b, back), error => error.statusCode === 401 || error.code === 'UNAUTHORIZED');
   assert.deepEqual((await projects(a, forward.device.id)).items.map(project => project.resourceId), ['b-project']);
   await b.link.admin({ action: 'revoke', id: b.link.status().devices[0].id });
   assert.equal((await projects(a, forward.device.id)).code, 'UNAUTHORIZED');
@@ -103,6 +125,29 @@ test('an unreachable return route leaves a usable one-way pairing without a reve
   assert.equal(b.link.status().devices[0].pairingReturn, 'unreachable');
   assert.equal(a.link.status().devices.length, 0);
   assert.deepEqual((await a.link.resources({ deviceId: result.device.id, kind: 'projects' })).devices[0].items.map(project => project.resourceId), ['b-project']);
+  const capabilities = (await a.link.resources({ deviceId: result.device.id, kind: 'capabilities' })).devices[0].items;
+  assert.equal(capabilities.find(item => item.id === 'reverse').available, false);
+});
+
+test('a legacy peer that ignores the return offer still completes one-way pairing', async t => {
+  const a = await host(t, 'A', [], null, { publicUrl: 'https://pairing-link-test.invalid' });
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-legacy-pairing-'));
+  const store = await openStore(directory), identity = await loadIdentity(directory);
+  const config = validateConfig({ enabled: true, host: '127.0.0.1', port: 0 }, store.state);
+  const server = await listen({ identity, config, webRoot: new URL('../dist/web/', import.meta.url), store,
+    routes: () => [], dispatch: async input => ({ action: input.action }), onError: () => {} });
+  t.after(async () => { await server.close(); await store.flush(); await rm(directory, { recursive: true, force: true }); });
+  const invitation = store.begin();
+  const query = new URLSearchParams({ url: 'https://127.0.0.1:' + server.port, pin: identity.pin, code: invitation.code });
+  const pending = await a.deviceApi({ action: 'pair', uri: 'benchgo://pair?' + query });
+  const [request] = store.pending();
+  assert.equal(request.reciprocal, false);
+  await store.decide(request.id, true);
+  const result = await a.deviceApi({ action: 'pairStatus', requestId: pending.requestId });
+  assert.equal(result.direction, 'remote-unavailable');
+  assert.match(result.device.pairingNotice, /未支持双向配对/);
+  assert.equal(a.link.status().devices.length, 0);
+  assert.deepEqual(await a.link.callDevice({ deviceId: result.device.id, input: { action: 'state' } }), { action: 'state' });
 });
 
 async function sessionHost(t, name) {
@@ -124,6 +169,9 @@ async function sessionHost(t, name) {
     async invoke({ namespace, method, args }) {
       if (method === 'list') return { items: rows };
       calls.push([namespace, method, args.request]);
+      if (method === 'archiveSession' && rows.find(row => row.sessionId === args.request.sessionId)?.running && args.request.stopActivity !== true) {
+        throw Object.assign(new Error('Session is active'), { code: 'workspace/session-active' });
+      }
       if (method === 'rename') { rows[0].projections.values.title = args.request.title; return { title: args.request.title }; }
       const key = ['pinSession', 'unpinSession'].includes(method) ? 'pinnedSessionIds' : 'archivedSessionIds';
       const ids = hostValue.ctx.workspaceRegistry[key] ?? [];
@@ -143,6 +191,30 @@ async function sessionHost(t, name) {
   };
   return { ...hostValue, calls, rows, hidden, nativeRows, ownerApi };
 }
+
+test('a paired user can confirm native stop-and-archive on an ungrouped delegated session', async t => {
+  const a = await sessionHost(t, 'A'), b = await sessionHost(t, 'B');
+  const device = await pair(a, b);
+  const sessionId = 'delegated-session';
+  b.rows.push({ sessionId, running: true, updatedAt: 20 });
+  const get = b.ctx.get;
+  b.ctx.get = name => name === 'benchgoExecution' ? { ownerOfSession: id => id === sessionId ? { executionId: 'delegated-run' } : null } : get(name);
+  const call = input => a.ownerApi({ action: 'sessionAction', deviceId: device.id, expectedHostId: device.hostId, expectedAuthorizationId: device.authorizationId,
+    native: false, id: sessionId, operation: 'archive', ...input, requestId: `sa:${Date.now()}:${input.requestId}` });
+  const refused = await call({ requestId: 'unconfirmed' });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.value.code, 'workspace/session-active');
+  assert.deepEqual(b.ctx.workspaceRegistry.archivedSessionIds ?? [], []);
+  const confirmed = await call({ requestId: 'confirmed', stopActivity: true });
+  assert.equal(confirmed.status, 200);
+  assert.deepEqual(b.ctx.workspaceRegistry.archivedSessionIds, [sessionId]);
+  assert.deepEqual(b.calls, [
+    ['workspace', 'archiveSession', { sessionId }],
+    ['workspace', 'archiveSession', { sessionId, stopActivity: true }],
+  ]);
+  assert.deepEqual(a.calls, []);
+  assert.equal((await call({ requestId: 'delete', operation: 'delete' })).status, 403);
+});
 
 test('owner session actions cross real TLS to only the resource device with durable intent and live authorization', async t => {
   const a = await sessionHost(t, 'A'), b = await sessionHost(t, 'B');
@@ -253,7 +325,7 @@ test('session resources share one project snapshot and remain readable over TLS 
   b.ctx.get = name => name === 'commander' ? { list: () => [
     { id: 'native-default', ownerSessionId: 'commander-web:detached:owner', projectId: 'default', cwd: '/default', provider: 'native-provider', updatedAt: 30 },
     { id: 'native-other', ownerSessionId: 'commander-web:detached:owner', projectId: 'other', cwd: '/other', provider: 'native-provider', updatedAt: 40 },
-  ] } : get(name);
+  ] } : name === 'benchgoExecution' ? { ownerOfSession: id => id === 'worker' ? { promptable: false } : null } : get(name);
   b.ctx.connection.createPeer = () => ({ dispose() {} });
   b.ctx.typertGateway = {
     invoke: async call => {
@@ -265,6 +337,7 @@ test('session resources share one project snapshot and remain readable over TLS 
         { sessionId: 'child', parentSessionId: 'first', updatedAt: 100 },
         { sessionId: 'subagent', origin: 'subagent', updatedAt: 100 },
         { sessionId: 'unregistered', updatedAt: 100 },
+        { sessionId: 'worker', updatedAt: 15 },
       ] };
       assert.equal(call.method, 'modelCatalog');
       if (!catalogAvailable) throw new Error('Catalog unavailable');
@@ -277,8 +350,8 @@ test('session resources share one project snapshot and remain readable over TLS 
   };
   const device = await pair(a, b);
   for (const [kind, expected] of [
-    ['sessions', ['native:native-other', 'native:native-default', 'second', 'first']],
-    ['recent', ['native:native-default', 'first']],
+    ['sessions', ['native:native-other', 'native:native-default', 'second', 'worker', 'first']],
+    ['recent', ['native:native-default', 'worker', 'first']],
   ]) {
     calls.length = 0; projectReads = 0;
     const result = await a.link.resources({ deviceId: device.id, kind });
@@ -292,8 +365,8 @@ test('session resources share one project snapshot and remain readable over TLS 
   const firstPage = (await a.link.resources({ deviceId: device.id, kind: 'sessions', archived: false, limit: 2 })).devices[0];
   const secondPage = (await a.link.resources({ deviceId: device.id, kind: 'sessions', archived: false, limit: 2, offset: 2 })).devices[0];
   assert.deepEqual(firstPage.items.map(row => row.id), ['second', 'native:native-other']);
-  assert.deepEqual(secondPage.items.map(row => row.id), ['native:native-default']);
-  assert.equal(firstPage.items[0].pinned, true); assert.equal(firstPage.total, 3); assert.equal(firstPage.hasMore, true); assert.equal(secondPage.hasMore, false);
+  assert.deepEqual(secondPage.items.map(row => row.id), ['native:native-default', 'worker']);
+  assert.equal(firstPage.items[0].pinned, true); assert.equal(firstPage.total, 4); assert.equal(firstPage.hasMore, true); assert.equal(secondPage.hasMore, false);
   const archive = (await a.link.resources({ deviceId: device.id, kind: 'sessions', archived: true, limit: 1 })).devices[0];
   assert.deepEqual(archive.items.map(row => row.id), ['first']); assert.equal(archive.total, 1); assert.equal(archive.hasMore, false);
   assert.equal(archive.items[0].provider, 'deepseek'); assert.equal(archive.items[0].modelProvider, 'Opaque/LLM'); assert.equal(archive.items[0].model, 'Model@1');
@@ -306,7 +379,7 @@ test('session resources share one project snapshot and remain readable over TLS 
   assert.equal(projectReads, 0);
   const state = await a.link.callDevice({ deviceId: device.id, input: { action: 'state' } });
   assert.deepEqual(state.projects.map(row => row.id), ['default', 'other']);
-  assert.deepEqual(state.sessions.map(row => row.id), ['first', 'second', 'native:native-default', 'native:native-other']);
+  assert.deepEqual(state.sessions.map(row => row.id), ['first', 'second', 'worker', 'native:native-default', 'native:native-other']);
   assert.deepEqual(state.models, [{ provider: 'provider', model: 'model', label: 'Provider · Model' }]);
   assert.deepEqual(await a.link.callDevice({ deviceId: device.id, input: { action: 'models' } }), { models: state.models });
 });

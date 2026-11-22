@@ -88,7 +88,6 @@ for (const confirmed of [true, false]) test(`local external Worker stop ${confir
     submit: async () => ({ turnId: 'turn', status: 'accepted' }),
     events: () => ({ cursor: 0, events: [] }),
     async wait() {
-      assert.throws(() => database.pauseTask(task.id), { code: 'NATIVE_WORKER_CONTROL_UNSUPPORTED' });
       database.cancelTask(task.id);
       return { status: 'running', cursor: 1, updatedAt: new Date().toISOString() };
     },
@@ -98,6 +97,7 @@ for (const confirmed of [true, false]) test(`local external Worker stop ${confir
       if (!confirmed) throw new Error('Native stop has not been confirmed');
       return { status: 'idle', cursor: 2, updatedAt: new Date().toISOString() };
     },
+    async persist() {},
     async disconnect() { disconnects++; },
   };
   const ctx = { agents: { create() { assert.fail('External execution cannot start an official Agent'); } },

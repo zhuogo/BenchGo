@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createAssistantStore } from '../src/store.mjs';
 import { createAssistantEngine } from '../src/engine.mjs';
 import { createScheduleBridge } from '../src/schedule-bridge.mjs';
+import { registerRouterScheduleTools } from '../src/router-schedule-tools.mjs';
 import { createAssessmentRunner } from '../src/assessment-runner.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 import { authorizeAssessment, readAssessmentPolicy } from '../src/assessment-policy.mjs';
@@ -41,6 +42,7 @@ test('official Host Schedule persists a due reminder and enters SuperAgent Eval 
     return { agent };
   } });
   await ctx.plugin((await load('schedule/schedule', '@deepseek-ai/dsh-schedule')).default);
+  await ctx.plugin(await load('schedule/tool-schedule', '@deepseek-ai/dsh-tool-schedule'));
   ctx.provide('sessionQuery', { listSessions: () => ctx.sessionPersistence.list() });
   let requests = 0;
   class Adapter extends LlmAdapter {
@@ -56,11 +58,18 @@ test('official Host Schedule persists a due reminder and enters SuperAgent Eval 
   await ctx.plugin({ inject: ['agents', 'llm', 'sessions', 'sessionQuery', 'sessionProjections', 'tokenMeter', 'agentPresets', 'permissionPresets', 'sandboxPolicy', 'approval'], async apply(scope) {
     bridge = createScheduleBridge({ ctx: scope, store, readPolicy });
     mounted = bridge.available();
-    engine = await createAssistantEngine({ ctx: scope, store, scheduleBridge: bridge, compactionPlugin: (await load('compaction/compaction-basic', '@deepseek-ai/dsh-compaction-basic')).default });
+    engine = await createAssistantEngine({ ctx: scope, store, scheduleBridge: bridge, compactionPlugin: (await load('compaction/compaction-basic', '@deepseek-ai/dsh-compaction-basic')).default,
+      setupTools(router, { agent }) {
+        registerRouterScheduleTools({ schedule: ctx.schedule, ownerAgent: agent, managementScope: async () => true,
+          projectSchedules: async () => {}, register: (name, description, properties, required, execute) => router.tools.register({ name, description,
+            parameters: { type: 'object', properties, required }, output: { schema: { type: 'object' }, render: () => [] }, execute }) });
+      } });
   } });
   assert.equal(mounted, true, 'Schedule must be available from the actual scoped plugin');
   await bridge.start();
   const agent = await engine.ensureSession();
+  assert.ok(ctx.tools.get('schedule_run', agent));
+  assert.ok(ctx.tools.get('schedule_list', agent).parameters.properties.query);
   const record = await ctx.schedule.create({ title: 'Host integration', prompt: '检查一次并交付证据', timing: { kind: 'after', after_seconds: 1 },
     target: { kind: 'session', sessionId: agent.id } }, agent.id);
   let history;
@@ -91,4 +100,30 @@ test('official Host Schedule persists a due reminder and enters SuperAgent Eval 
   await runtime.tick();
   assert.equal(store.orchestration.getTask(task.id).continuationWait, null);
   assert.equal(store.orchestration.assignments(task.id).length, 1);
+
+  const tools = new Map();
+  const caller = { session: { id: 'another-router-session' } };
+  const exec = { agent: caller, signal: new AbortController().signal };
+  let localOwner = false;
+  registerRouterScheduleTools({ schedule: ctx.schedule, ownerAgent: caller,
+    managementScope: async () => localOwner, projectSchedules: async () => {},
+    register: (name, _description, _properties, _required, execute) => tools.set(name, execute) });
+  const call = (name, input) => tools.get(name)(input, exec);
+  const recurring = await ctx.schedule.create({ title: 'FDE 报告', prompt: '整理报告',
+    timing: { kind: 'every', every_seconds: 3600 }, target: { kind: 'session', sessionId: agent.id } }, agent.id);
+  assert.deepEqual((await call('schedule_list', { query: 'FDE' })).items, []);
+  assert.equal((await call('schedule_delete', { id: recurring.id })).code, 'schedule_not_found');
+  localOwner = true;
+  assert.deepEqual((await call('schedule_list', { query: 'fde' })).items.map(row => row.id), [recurring.id]);
+  assert.equal((await call('schedule_view', { id: recurring.id })).target.sessionId, agent.id);
+  const paused = await call('schedule_update', { id: recurring.id, active: false, expectedUpdatedAt: recurring.updatedAt ?? null });
+  assert.equal(paused.status, 'paused');
+  assert.equal((await call('schedule_delete', { id: recurring.id, expectedUpdatedAt: recurring.updatedAt ?? null })).code, 'schedule_conflict');
+  assert.equal((await call('schedule_update', { id: recurring.id, active: true })).status, 'active');
+  assert.equal((await call('schedule_history', { id: record.id })).records.length, 1);
+  const armed = await ctx.schedule.view({ id: recurring.id });
+  assert.equal((await call('schedule_run', { id: recurring.id })).scheduledAt, armed.scheduledAt);
+  assert.equal((await call('schedule_history', { id: recurring.id })).records.length, 1);
+  assert.equal((await call('schedule_delete', { id: recurring.id })).deleted, true);
+  assert.equal((await ctx.schedule.view({ id: recurring.id })).code, 'schedule_not_found');
 });

@@ -1,7 +1,7 @@
 import { isManagedRouterGo, modelProtocol } from './provider-access.mjs';
 import { createModelCapabilitySettings } from './model-capability-settings.mjs';
 import { builtinProvider, routerGo } from '../shared/builtin-providers.mjs';
-import { normalizeModelCapabilities, structuredCapabilities } from '../shared/model-capabilities.mjs';
+import { isModelCapability, normalizeModelCapabilities, structuredCapabilities } from '../shared/model-capabilities.mjs';
 
 const LIMIT = 4 * 1024 * 1024;
 const forbidden = new Set(['__proto__', 'constructor', 'prototype']);
@@ -39,7 +39,7 @@ function modelEntry(model, publicProfile, override, secret) {
   const inputModalities = preferPublic(publicProfile?.input_modalities, model.input_modalities ?? architecture.input_modalities ?? architecture.input);
   const outputModalities = preferPublic(publicProfile?.output_modalities, model.output_modalities ?? architecture.output_modalities ?? architecture.output);
   const thinkingLevels = preferPublic(publicProfile?.thinking_levels, model.thinking_levels);
-  const declared = names(structuredCapabilities(model, inputModalities, outputModalities), secret);
+  const declared = names(structuredCapabilities(model, inputModalities, outputModalities), secret).filter(isModelCapability).slice(0, 32);
   const capabilities = override ?? normalizeModelCapabilities(declared);
   const mediaConstraints = model.media_constraints && typeof model.media_constraints === 'object' && !Array.isArray(model.media_constraints)
     ? constraintValue(model.media_constraints, secret) : undefined;
@@ -124,9 +124,9 @@ export async function discoverRouterGoModels(apiKey, signal) {
   return models;
 }
 
-export function createModelProviders(ctx) {
+export function createModelProviders(ctx, { directory = ctx.get?.('benchgo')?.directory } = {}) {
   const entries = () => ctx.llm.listConfigurableProviders();
-  const overrides = createModelCapabilitySettings(ctx.get?.('benchgo')?.directory);
+  const overrides = createModelCapabilitySettings(directory);
   let routerGoModels;
   const requireProvider = id => {
     const row = entries().find(entry => entry.provider === id);
@@ -213,15 +213,28 @@ export function createModelProviders(ctx) {
     },
     async models(id, signal) {
       const config = await service.describeRoute(id);
+      const configuredModels = profile(requireProvider(id)).models;
+      const configured = !config.managedRouterGo && Array.isArray(configuredModels) ? configuredModels : [];
+      const catalog = discover(config, signal).catch(error => {
+        if (!configured.length) throw error;
+        signal?.throwIfAborted();
+        return [];
+      });
       const [rows, labels, publicRows] = await Promise.all([
-        discover(config, signal),
+        catalog,
         overrides.list(id),
-        id === routerGo.id && config.baseURL === routerGo.baseURL ? routerGoProfiles() : undefined,
+        (id === routerGo.id && config.baseURL === routerGo.baseURL) || configured.length > 0
+          ? routerGoProfiles() : undefined,
       ]);
       signal?.throwIfAborted();
       const current = await service.describeRoute(id).catch(() => null);
       if (!current || ['baseURL', 'protocol', 'credentialRef', 'apiKey'].some(key => current[key] !== config[key])) throw new ProviderError('Provider changed; refresh the model list again', 409);
-      return catalogModels(rows, publicRows, new Map(labels.map(row => [row.modelId, row.capabilities])), config.apiKey);
+      const listed = new Set(rows.map(row => row?.id));
+      const manual = configured.filter(row => row && !listed.has(row.id)).map(row => ({
+        id: row.id, name: row.name, input_modalities: row.input ?? row.inputModalities,
+        context_length: row.contextWindow, max_output_tokens: row.maxTokens,
+      }));
+      return catalogModels([...rows, ...manual], publicRows, new Map(labels.map(row => [row.modelId, row.capabilities])), config.apiKey);
     },
     async modelCapabilities(id) {
       requireProvider(id);

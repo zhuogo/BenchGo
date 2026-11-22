@@ -143,10 +143,10 @@ test('directory or resource failure retains local facts and explicit unknown cov
 
 test('all-device inventory retains owner boundaries and rejects conflicting local selectors', async t => {
   const f = await fixture(t);
-  await assert.rejects(f.run({}, { id: 'worker' }), { code: 'HISTORY_SCOPE_DENIED' });
+  await assert.rejects(f.run({}, { id: 'worker' }), { code: 'DEVICE_CATALOG_SCOPE_DENIED' });
   await assert.rejects(f.run({ scope: 'local', deviceId: 'server' }), /不能同时指定设备/);
   f.state.mainSessionId = 'other';
-  await assert.rejects(f.run(), { code: 'HISTORY_SCOPE_DENIED' });
+  await assert.rejects(f.run(), { code: 'DEVICE_CATALOG_SCOPE_DENIED' });
   assert.equal((await f.run({ scope: 'local' })).scope, 'local');
   assert.deepEqual(f.calls, []);
 });
@@ -162,7 +162,7 @@ test('remote catalogs retain owning device, pagination and partial failures with
   await f.run({ deviceId: 'server', offset: 1, limit: 1 });
   assert.equal(f.calls[1].deviceId, 'server');
   assert.equal(f.calls[1].offset, 1);
-  await assert.rejects(f.run({ deviceId: 'server' }, { id: 'worker' }), { code: 'HISTORY_SCOPE_DENIED' });
+  await assert.rejects(f.run({ deviceId: 'server' }, { id: 'worker' }), { code: 'DEVICE_CATALOG_SCOPE_DENIED' });
   f.state.mainSessionId = 'other';
-  await assert.rejects(f.run({ deviceId: 'server' }), { code: 'HISTORY_SCOPE_DENIED' });
+  await assert.rejects(f.run({ deviceId: 'server' }), { code: 'DEVICE_CATALOG_SCOPE_DENIED' });
 });

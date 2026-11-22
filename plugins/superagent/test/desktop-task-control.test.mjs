@@ -13,17 +13,17 @@ function fixture(t) {
   const ownerAgent = { id: 'owner', status: 'running', session: { header: {}, snapshotEvents: () => events } };
   const ctx = { agents: { get: () => ownerAgent, currentInitiator: () => ownerAgent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } };
   const initial = recordDesktopTrigger(database, { sessionId: 'owner', message: { id: 'initial', source: { kind: 'user' }, content: [{ type: 'text', text: '调查网站' }] } }).trigger;
-  function task(source = { channel: 'desktop', sessionId: 'owner', threadId: 'main' }) {
+  function task(source = { channel: 'desktop', sessionId: 'owner', threadId: 'main' }, { subscribed = true } = {}) {
     const row = database.createTask({ threadId: initial.threadId, target: '调查网站', mandate: { source, actorId: 'desktop-owner' } });
-    database.subscribe(row.id, initial.threadId, { cursorTriggerId: initial.id });
+    if (subscribed) database.subscribe(row.id, initial.threadId, { cursorTriggerId: initial.id });
     return row;
   }
   const service = createDesktopTaskControl({ ctx, database });
   return { database, events, ctx, ownerAgent, task, control: (id, operation = 'supplement', options = {}) => service.control({ id, operation }, { agent: ownerAgent }, { ownerAgent, ...options }) };
 }
 
-test('supplement selects one task, retains original text and mandate, and deduplicates', t => {
-  const f = fixture(t), a = f.task(), b = f.task();
+for (const subscribed of [true, false]) test(`supplement selects one task with subscribed=${subscribed}, preserves the input and deduplicates`, t => {
+  const f = fixture(t), a = f.task(undefined, { subscribed }), b = f.task(undefined, { subscribed });
   const result = f.control(a.id);
   assert.equal(result.taskId, a.id);
   assert.equal(f.control(a.id).duplicate, true);
@@ -34,6 +34,7 @@ test('supplement selects one task, retains original text and mandate, and dedupl
   assert.equal(f.database.pendingSubscriptionMessages(b.id).length, 0);
   assert.deepEqual(f.database.getTask(a.id).mandate, a.mandate);
   assert.throws(() => f.control(b.id), /already belongs/);
+  assert.equal(f.database.subscriptions({ taskId: b.id }).length, Number(subscribed));
 });
 
 test('after model session clear a trusted logical owner can supplement the old task without changing its mandate', t => {

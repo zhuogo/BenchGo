@@ -17,7 +17,7 @@ const request = (extra = {}) => ({ action: 'execution', version: 2, operation: '
   identity: { ownerHostId: 'owner-A', taskId: 'task-A', assignmentId: 'assignment-A', runId: 'run-A', fence: 1 },
   config: { harness: 'official', models: [{ providerId: 'exact-provider', modelId: 'opaque-model/1', params: { temperature: 0.3 } }] },
   text: 'Inspect the assigned workspace', requirements: { instructionRevision: 1, target: 'Inspect', acceptance: 'Evidence', mandate: { instruction: 'Inspect only', toolScope: ['read', 'ask_user_question'] } }, ...extra });
-const waitFor = async predicate => { for (let i = 0; i < 100; i++) { const value = predicate(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 5)); } throw new Error('Timed out waiting for execution boundary'); };
+const waitFor = async predicate => { for (let i = 0; i < 100; i++) { const value = await predicate(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 5)); } throw new Error('Timed out waiting for execution boundary'); };
 async function temp(t) { const directory = await mkdtemp(join(tmpdir(), 'benchgo-execution-')); return directory; }
 
 test('execution journal binds authenticated subjects, immutable commands, session identity and fences', async t => {
@@ -84,6 +84,55 @@ async function running(t, fixtureValue = fixture()) {
   return { directory, service, input, access, call, accepted, execution: fixtureValue.instances[0], fixture: fixtureValue };
 }
 
+test('official public Worker progress persists between cursor reads and before the result', async t => {
+  const { fixture, call, input, execution, accepted } = await running(t);
+  const get = options => call({ operation: 'get', executionId: input.executionId, ...options });
+  const message = (text, extra = {}) => ({ message: { role: 'assistant', source: { kind: 'model' },
+    content: [{ type: 'text', text }, { type: 'reasoning', text: 'PRIVATE REASONING' }] }, ...extra });
+  assert.match(execution.contexts.get('benchgo-worker-progress'), /进展：/);
+  execution.append('turn/start', {});
+  await execution.step();
+  execution.append('assistant/message', message('其他正文不可发布\n进展：开始检查项目，token=secretvalue'));
+  execution.append('assistant/message', message('进展：工具子调用内的文本', { parentCallId: 'call' }));
+  execution.append('tool/call', { name: 'read', callId: 'call', args: { path: 'PRIVATE TOOL INPUT' } });
+  const child = { id: 'child', header: { origin: 'subagent', parentSession: input.sessionId } };
+  const info = { id: child.id, parentSessionId: input.sessionId, runId: 'activation' };
+  fixture.publish('subagent/start', info);
+  fixture.publish('session/event', { ...child, header: { origin: 'fork', parentSession: input.sessionId } }, { seq: 1, type: 'assistant/message', data: message('进展：无关会话') });
+  fixture.publish('session/event', child, { seq: 2, type: 'assistant/message', time: new Date().toISOString(), data: message('进展：核对项目配置') });
+  const first = await get({ after: accepted.cursor });
+  const progress = first.events.find(event => event.kind === 'execution.progress');
+  assert.equal(progress.data.worker.id, input.sessionId);
+  assert.equal(progress.data.worker.activity, '开始检查项目，token=[秘密已隐藏]');
+  assert.equal(progress.data.worker.activitySource, 'report');
+  assert.equal(progress.data.children[0].activity, '核对项目配置');
+  assert.doesNotMatch(JSON.stringify(progress), /PRIVATE|secretvalue|无关会话|其他正文|子调用/);
+  assert.deepEqual((await get({ after: first.cursor })).events, []);
+  fixture.publish('subagent/end', { ...info, runId: 'old-activation', stopReason: 'error' });
+  assert.deepEqual((await get({ after: first.cursor })).events, []);
+  fixture.publish('subagent/end', { ...info, stopReason: 'completed' });
+  execution.append('assistant/message', message('进展：已定位项目配置入口'));
+  await execution.finish();
+  const final = await waitFor(async () => { const value = await get({ after: first.cursor }); return value.execution.phase === 'completed' && value; });
+  const last = final.events.findLast(event => event.kind === 'execution.progress');
+  assert(last.seq < final.events.find(event => event.kind === 'result').seq);
+  assert(last.data.worker.history.some(entry => entry.activity === '已定位项目配置入口'));
+  assert.equal(last.data.children[0].status, 'completed');
+  assert.deepEqual((await get({ after: final.cursor })).events, []);
+});
+
+test('first-step tool activation failure is reported as failed rather than uncertain', async t => {
+  const { call, input, execution } = await running(t);
+  execution.append('turn/end', { reason: { kind: 'error', error: { code: 'TOOL_ACTIVATION_FAILED' } } });
+  await execution.listeners.get('agent/status')[0]({ status: 'idle' }, () => {});
+  const state = await waitFor(async () => {
+    const { execution } = await call({ operation: 'get', executionId: input.executionId });
+    return execution.phase === 'failed' && execution;
+  });
+  assert.equal(state.error.code, 'TOOL_ACTIVATION_FAILED');
+  assert.equal(state.appliedInstructionRevision, 0);
+});
+
 test('verified same-source pairing can dispatch a new task while commands and receipts remain principal scoped', async t => {
   const { service, input, call } = await running(t);
   const dispatch = (deviceId, value, sourceId) => service.dispatch({ action: 'execution', version: 2, ...value }, {
@@ -121,7 +170,9 @@ function nativeFixture() {
     async advancedConfig() { return { contextWindow: 2048 }; },
     async prepareExecution(input) {
       prepared.push(input);
-      sessions.set(input.sessionId, { id: input.sessionId, executionId: input.executionId, status: 'idle', turnId: null, events: [] });
+      const prior = sessions.get(input.sessionId);
+      sessions.set(input.sessionId, { id: input.sessionId, nativeId: 'original-native-session', executionId: input.executionId,
+        status: 'idle', turnId: prior?.turnId ?? null, events: prior?.events ?? [] });
       return this.snapshot(input.sessionId);
     },
     executionSession(id) { return [...sessions.values()].find(session => session.executionId === id); },
@@ -145,6 +196,7 @@ function nativeFixture() {
     session.events.push({ seq: session.events.length + 1, turnId: session.turnId, type, data, time: new Date().toISOString() });
   }
   return { commander, prepared, submitted,
+    stream(id, entries) { for (const [kind, data] of entries) event(id, kind, data); },
     finish(id) { event(id, 'text.delta', { text: 'Done on B' }); event(id, 'turn.completed', { status: 'completed' }); sessions.get(id).status = 'idle'; },
     ask(id) { return handlers.get(id)({ kind: 'question', nativeRequestId: 'native-request', details: { questions: [{ id: 'native-q', question: 'Which file?' }] } }); },
     setStopBarrier(value) { terminal = value; },
@@ -163,8 +215,85 @@ async function runNative(t, harness) {
   return { native, f, input, call, service };
 }
 
+test('external progress coalesces adjacent text while preserving ordered cursor pages', async t => {
+  const { native, input, call } = await runNative(t, 'codex');
+  native.stream(input.sessionId, [
+    ['text.delta', { text: 'first ' }], ['text.delta', { text: 'chunk ' }],
+    ['tool.started', { id: 'test-tool' }],
+    ['text.delta', { text: 'second ' }], ['text.delta', { text: 'chunk ' }],
+  ]);
+  native.finish(input.sessionId);
+  const get = options => call({ operation: 'get', executionId: input.executionId, ...options });
+  for (let i = 0; i < 100 && (await get()).execution.phase !== 'completed'; i++) await delay(5);
+  const snapshot = await get();
+  assert.equal(snapshot.execution.phase, 'completed');
+  const progress = snapshot.events.filter(row => row.kind === 'progress');
+  assert.deepEqual(progress.map(row => row.data.text), ['first chunk ', 'second chunk Done on B']);
+  const page = await get({ after: progress[0].seq, limit: 1 });
+  assert.deepEqual(page.events, [progress[1]]);
+  assert.equal(page.cursor, progress[0].seq + 1);
+  assert.equal(page.hasMore, true);
+  assert(snapshot.events.find(row => row.kind === 'result').seq > progress[1].seq);
+});
+
+test('native public progress sends only complete marked lines and approved facts', async t => {
+  const { native, input, call } = await runNative(t, 'codex');
+  const get = options => call({ operation: 'get', executionId: input.executionId, ...options });
+  assert.match(native.submitted[0].prompt, /进展：/);
+  native.stream(input.sessionId, [
+    ['item', { phase: 'item/started', item: { type: 'commandExecution', command: 'PRIVATE COMMAND' } }],
+    ['text.delta', { itemId: 'message', text: 'PRIVATE FREE TEXT\n~~~\n进展：代码围栏中的文字\n~~~\n进' }],
+    ['text.delta', { itemId: 'message', text: '展：开始检查 token=' }],
+    ['tool.output', { text: '进展：原始工具结果' }],
+  ]);
+  const first = await waitFor(async () => { const value = await get(); return value.events.some(row => row.kind === 'execution.progress') && value; });
+  assert.equal(first.events.find(row => row.kind === 'execution.progress').data.worker.activity, '正在执行命令');
+  native.stream(input.sessionId, [['text.delta', { itemId: 'message', text: 'supersecret\n' }]]);
+  const next = await waitFor(async () => { const value = await get({ after: first.cursor }); return value.events.some(row => row.kind === 'execution.progress') && value; });
+  const progress = next.events.find(event => event.kind === 'execution.progress');
+  assert.equal(progress.data.worker.activity, '开始检查 token=[秘密已隐藏]');
+  assert.doesNotMatch(JSON.stringify(progress), /PRIVATE|supersecret|代码围栏|原始工具结果/);
+  native.stream(input.sessionId, [['text.delta', { itemId: 'message', text: '进展：已完成配置核对' }],
+    ['item', { phase: 'item/completed', item: { type: 'agentMessage' } }]]);
+  native.finish(input.sessionId);
+  const final = await waitFor(async () => { const value = await get({ after: next.cursor }); return value.execution.phase === 'completed' && value; });
+  const complete = final.events.findLast(event => event.kind === 'execution.progress');
+  assert.equal(complete.data.worker.activity, '已完成配置核对');
+  assert(complete.seq < final.events.find(event => event.kind === 'result').seq);
+});
+
+test('native pause supersedes its open question and accepts new context on the original session', async t => {
+  const { native, input, call } = await runNative(t, 'codex');
+  const pending = native.ask(input.sessionId).catch(() => null);
+  const get = () => call({ operation: 'get', executionId: input.executionId });
+  const waiting = await get();
+  const question = waiting.events.find(row => row.kind === 'question').data;
+  const control = control => call({ operation: 'control', executionId: input.executionId, requestId: randomUUID(), control });
+  await control('pause');
+  for (let i = 0; i < 100 && (await get()).execution.phase !== 'paused'; i++) await delay(5);
+  assert.equal((await get()).execution.phase, 'paused');
+  assert.equal((await get()).events.find(row => row.kind === 'question.superseded').data.questionId, question.questionId);
+  await pending;
+  const context = { operation: 'input', executionId: input.executionId, requestId: randomUUID(), kind: 'context',
+    instructionRevision: 1, text: 'Use the newly supplied reference' };
+  assert.equal((await call(context)).receipt.state, 'received');
+  await control('resume');
+  await waitFor(() => native.submitted.length === 2);
+  assert.equal(native.submitted[1].id, input.sessionId);
+  assert.match(native.submitted[1].prompt, /newly supplied reference/);
+  for (let i = 0; i < 100 && (await call(context)).receipt.state !== 'applied'; i++) await delay(5);
+  assert.equal((await call(context)).receipt.state, 'applied');
+  await assert.rejects(call({ ...context, requestId: randomUUID(), kind: 'answer', questionId: question.questionId,
+    answers: [{ id: 'native-q', selected: [], custom: 'stale' }] }), { code: 'EXECUTION_QUESTION_EXPIRED' });
+  native.finish(input.sessionId);
+  for (let i = 0; i < 100 && (await get()).execution.phase !== 'completed'; i++) await delay(5);
+  assert.equal((await get()).execution.phase, 'completed');
+});
+
 test('B runs a frozen external API binding, returns native questions, and deduplicates A submission', async t => {
   const { native, f, input, call, service } = await runNative(t, 'codex');
+  assert.match(native.submitted[0].prompt, /bound working directory.*routing already handled by the owner.*cross-device access, transfer or comparison/);
+  assert.ok(native.submitted[0].prompt.includes(JSON.stringify(input.requirements.mandate)));
   assert.deepEqual((await call({ operation: 'catalog' })).models.map(row => row.harness), ['official', 'codex', 'claude']);
   assert.equal(native.prepared[0].route.providerId, 'b-responses');
   assert.deepEqual(native.prepared[0].route.advancedConfig, { contextWindow: 2048 });
@@ -195,7 +324,6 @@ test('B accepts Claude cancellation before stop and acknowledges only actual nat
   const get = () => call({ operation: 'get', executionId: input.executionId });
   const command = { operation: 'control', executionId: input.executionId, requestId: randomUUID() };
   try {
-    await assert.rejects(call({ ...command, control: 'pause' }), { code: 'NATIVE_WORKER_CONTROL_UNSUPPORTED' });
     await assert.rejects(call({ ...command, version: 1, control: 'cancel' }), { code: 'UNSUPPORTED_EXECUTION_PROTOCOL' });
     const accepted = await call({ ...command, control: 'cancel' });
     assert.equal(accepted.receipt.accepted, true);
@@ -204,6 +332,49 @@ test('B accepts Claude cancellation before stop and acknowledges only actual nat
   for (let i = 0; i < 100 && (await get()).execution.phase !== 'stopped'; i++) await delay(5);
   assert.equal((await get()).execution.phase, 'stopped');
   assert.equal(native.commander.snapshot(input.sessionId).status, 'closed');
+});
+
+for (const harness of ['codex', 'claude']) test(`B pauses and resumes the original ${harness} session`, async t => {
+  const { native, input, call } = await runNative(t, harness);
+  const get = () => call({ operation: 'get', executionId: input.executionId });
+  const control = (control, requestId = randomUUID()) => call({ operation: 'control', executionId: input.executionId, requestId, control });
+  await control('pause');
+  await waitFor(async () => (await get()).execution.phase === 'paused');
+  assert.equal(native.commander.snapshot(input.sessionId).status, 'closed');
+  assert.equal((await get()).execution.evidence.completion.kind, 'interrupted');
+  const resumeId = randomUUID();
+  await control('resume', resumeId);
+  await control('resume', resumeId);
+  await waitFor(() => native.submitted.length === 2);
+  assert.deepEqual(native.submitted.map(row => row.id), [input.sessionId, input.sessionId]);
+  assert.equal(native.submitted[1].requestId, resumeId);
+  native.finish(input.sessionId);
+  await waitFor(async () => (await get()).execution.phase === 'completed');
+  assert.equal((await get()).execution.evidence.summary, 'Done on B');
+});
+
+test('B applies context and a revision in the same paused native session', async t => {
+  const { native, input, call } = await runNative(t, 'claude');
+  const get = () => call({ operation: 'get', executionId: input.executionId });
+  const control = control => call({ operation: 'control', executionId: input.executionId, requestId: randomUUID(), control });
+  await control('pause');
+  await waitFor(async () => (await get()).execution.phase === 'paused');
+  const command = (kind, fields) => ({ operation: 'input', executionId: input.executionId, requestId: randomUUID(), kind, ...fields });
+  const revise = command('revision', { instructionRevision: 2, text: 'Revised target',
+    requirements: { ...input.requirements, instructionRevision: 2, target: 'Revised target' } });
+  const context = command('context', { instructionRevision: 2, text: 'Parent supplement' });
+  assert.equal((await call(revise)).receipt.state, 'received');
+  assert.equal((await call(context)).receipt.state, 'received');
+  assert.equal(native.submitted.length, 1);
+  await control('resume');
+  await waitFor(async () => (await get()).execution.appliedInstructionRevision === 2);
+  assert.equal((await call(revise)).receipt.state, 'applied');
+  assert.equal((await call(context)).receipt.state, 'applied');
+  assert.equal(native.submitted[1].id, input.sessionId);
+  assert.match(native.submitted[1].prompt, /Revised target/);
+  assert.match(native.submitted[1].prompt, /Parent supplement/);
+  native.finish(input.sessionId);
+  await waitFor(async () => (await get()).execution.phase === 'completed');
 });
 
 test('B recovers the completed native binding after restart without resubmitting', async t => {
@@ -231,6 +402,9 @@ test('official execution works without SuperAgent, freezes exact config, and req
   assert.equal(accepted.execution.sessionId, input.sessionId); assert.equal(accepted.receipt.state, 'received');
   assert.equal((await call({ operation: 'catalog' })).models[0].modelId, 'opaque-model/1');
   await execution.step();
+  const prompt = execution.contexts.get('benchgo-remote-execution')();
+  assert.match(prompt, /bound working directory.*routing already handled by the owner.*cross-device access, transfer or comparison/);
+  assert.ok(prompt.includes(JSON.stringify(input.requirements.mandate)));
   assert.deepEqual(f.modelCalls[0], { provider: 'exact-provider', model: 'opaque-model/1' });
   assert.deepEqual(await execution.requestModel(), { provider: 'exact-provider', model: 'opaque-model/1', temperature: 0.3, tools: [] });
   assert.equal((await execution.tool('read')).kind, 'allow'); assert.equal((await execution.tool('write')).kind, 'deny');
@@ -275,19 +449,34 @@ test('target Worker preference reads current settings and preserves options in t
   await waitFor(() => f.instances[0].disposed);
 });
 
-test('revisions and context have durable received/applied receipts and reject native bypass', async t => {
+test('official step assembly keeps extension context, owner receipts and the direct input boundary', async t => {
   const { call, input, execution } = await running(t);
-  await execution.step();
+  const injected = ['time-context', 'tmux-context'];
+  execution.listeners.get('agent/pre-step').push(async (_payload, next) => {
+    const decision = await next();
+    if (decision.kind !== 'enter') return decision;
+    return { ...decision, messages: [...decision.messages, ...injected.map(kind => ({ id: randomUUID(), source: { kind, form: 'snapshot' } }))] };
+  });
+  const first = await execution.step();
+  assert.equal(first.kind, 'enter');
+  assert.deepEqual(first.messages.slice(-2).map(message => message.source.kind), injected);
+  assert.equal((await call(input)).receipt.state, 'applied');
+  const context = { operation: 'input', executionId: input.executionId, requestId: randomUUID(), kind: 'context', instructionRevision: 1, text: 'Earlier authorized context' };
+  assert.equal((await call(context)).receipt.state, 'received');
+  assert.deepEqual(execution.steering, execution.pending.map(message => message.id));
+  assert.deepEqual((await execution.step()).messages.slice(-2).map(message => message.source.kind), injected);
+  assert.equal((await call(context)).receipt.state, 'applied');
   const revisionInput = { operation: 'input', executionId: input.executionId, requestId: randomUUID(), kind: 'revision', instructionRevision: 2,
     text: 'Revised', requirements: { instructionRevision: 2, target: 'Revised', mandate: { instruction: 'Revised only', toolScope: ['read'] } } };
   const received = await call(revisionInput); assert.equal(received.receipt.state, 'received'); assert.equal(received.execution.appliedInstructionRevision, 1);
-  const context = { operation: 'input', executionId: input.executionId, requestId: randomUUID(), kind: 'context', instructionRevision: 1, text: 'Earlier authorized context' };
-  assert.equal((await call(context)).receipt.state, 'received');
-  await execution.step();
-  assert.equal((await call(revisionInput)).receipt.instructionRevision, 2); assert.equal((await call(context)).receipt.instructionRevision, 2);
-  execution.pending.push({ id: 'not-authorized', source: { kind: 'user' } });
+  assert.equal(execution.steering.at(-1), execution.pending.at(-1).id);
+  assert.deepEqual((await execution.step()).messages.slice(-2).map(message => message.source.kind), injected);
+  const applied = await call(revisionInput); assert.equal(applied.receipt.state, 'applied'); assert.equal(applied.receipt.instructionRevision, 2);
+  execution.agent.followup({ id: 'not-authorized', source: { kind: 'user' } });
   await assert.rejects(execution.step(), { code: 'EXECUTION_INPUT_REQUIRES_OWNER' }); execution.pending.pop();
   await execution.finish();
+  await waitFor(() => execution.disposed);
+  assert.equal((await call({ operation: 'get', executionId: input.executionId })).execution.phase, 'completed');
 });
 
 test('questions route through owner answers by real ids and superseded questions release revision boundary', async t => {
@@ -324,16 +513,72 @@ test('pause resumes only original verified session and cancellation confirms dis
   assert.equal((await call({ operation: 'get', executionId: input.executionId })).execution.phase, 'stopped');
 });
 
-test('restart inspects official evidence without replaying uncertain submission and preserves read-only ownership', async t => {
+test('an accepted stop settles an exited execution while its session cannot be verified again', async t => {
+  const f = fixture(), { execution, input, call } = await running(t, f);
+  const error = { code: 'TOOL_ACTIVATION_FAILED', message: 'Tool availability lookup failed' };
+  execution.append('turn/start', { turn: 1 }); await execution.step(); execution.append('request/header', {});
+  execution.append('assistant/message', { message: { content: [{ type: 'tool-call', id: 'unsettled', name: 'write' }] } });
+  execution.append('turn/end', { reason: { kind: 'error', error } });
+  execution.listeners.get('agent/error')[0]({ error });
+  await waitFor(() => execution.disposed);
+  assert.equal((await call({ operation: 'get', executionId: input.executionId })).execution.phase, 'uncertain');
+  f.services.agents.get = id => id === input.sessionId ? execution.agent : undefined;
+  f.services.sessionPersistence.open = async () => { throw new Error('Session writer is busy'); };
+  const stopped = await call({ operation: 'control', executionId: input.executionId, requestId: randomUUID(), control: 'cancel' });
+  assert.equal(stopped.execution.phase, 'stopped');
+  assert.equal(f.instances.length, 1);
+});
+
+test('a recorded stop converges on later reads only after the execution released its writer', async t => {
+  for (const released of [true, false]) await t.test(released ? 'writer released' : 'writer not released', async t => {
+    const f = fixture(), directory = await temp(t), db = openRemoteExecutionStore(directory), input = request();
+    const row = db.tx(() => db.create(principal.deviceId, input, { directory, workingDirectory: directory }));
+    Object.assign(row, { phase: 'uncertain', sessionOwned: true, submittedAt: new Date().toISOString(), cancelRequested: true,
+      ...(released ? { writerReleasedAt: new Date().toISOString() } : {}) });
+    db.save(row); db.close();
+    const service = await createRemoteExecutionService({ ctx: f.ctx, directory });
+    t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
+    const observed = await service.dispatch({ action: 'execution', version: 2, operation: 'get', executionId: input.executionId }, { principal });
+    assert.equal(observed.execution.phase, released ? 'stopped' : 'uncertain');
+    assert.equal(f.instances.length, 0);
+  });
+});
+
+for (const scenario of ['missing', 'request', 'settled', 'unsettled']) test(`restart checks ${scenario} evidence without replaying and preserves read-only ownership`, async t => {
   const f = fixture(), directory = await temp(t), db = openRemoteExecutionStore(directory), input = request();
   const row = db.tx(() => db.create(principal.deviceId, input, { directory, workingDirectory: directory }));
   row.phase = 'running'; row.sessionOwned = true; row.submittedAt = new Date().toISOString(); db.save(row); db.close();
+  if (scenario !== 'missing') {
+    const events = [{ seq: 1, type: 'request/header', data: {} }];
+    if (scenario !== 'request') events.push({ seq: 2, type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'effect', name: 'write' }] } } });
+    if (scenario === 'settled') events.push({ seq: 3, type: 'tool/result', data: { message: { toolCallId: 'effect' } } });
+    f.logs.set(input.sessionId, events);
+  }
   const service = await createRemoteExecutionService({ ctx: f.ctx, directory }); t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
   const observed = await service.dispatch({ action: 'execution', version: 2, operation: 'get', executionId: input.executionId }, { principal });
-  assert.equal(observed.execution.phase, 'uncertain'); assert.equal(f.instances.length, 0);
+  const failed = scenario === 'request' || scenario === 'settled';
+  assert.equal(observed.execution.phase, failed ? 'failed' : 'uncertain'); assert.equal(f.instances.length, 0);
+  if (failed) assert.equal(observed.execution.error.code, 'EXECUTION_INTERRUPTED');
   assert.equal(service.ownerOfSession(input.sessionId).taskId, input.identity.taskId);
   await assert.rejects(service.dispatch({ ...input, text: 'Changed command' }, { principal }), { code: 'EXECUTION_COMMAND_CONFLICT' });
   await assert.rejects(service.dispatch({ action: 'execution', version: 2, operation: 'get', executionId: input.executionId }, { principal: { kind: 'device', deviceId: 'other' } }), { code: 'EXECUTION_NOT_FOUND' });
+});
+
+for (const scenario of ['settled', 'unsettled', 'missing']) test(`a live model error checks ${scenario} evidence before reporting failure`, async t => {
+  const { call, input, execution } = await running(t);
+  execution.append('turn/start', { turn: 1 });
+  await execution.step();
+  if (scenario !== 'missing') {
+    execution.append('request/header', {});
+    execution.append('assistant/message', { message: { content: [{ type: 'tool-call', id: 'effect', name: 'write' }] } });
+    if (scenario === 'settled') execution.append('tool/result', { message: { toolCallId: 'effect' } });
+  }
+  execution.listeners.get('agent/error')[0]({ error: Object.assign(new Error('Model connection ended'), { code: 'MODEL_CONNECTION_LOST' }) });
+  await waitFor(() => execution.disposed);
+  const { execution: peer, events } = await call({ operation: 'get', executionId: input.executionId });
+  assert.equal(peer.phase, scenario === 'settled' ? 'failed' : 'uncertain');
+  assert.equal(peer.error.code, 'MODEL_CONNECTION_LOST');
+  assert.equal(events.some(event => event.kind === 'result'), false);
 });
 
 test('an idle or interrupted transcript is never reported as successful completion', () => {
@@ -413,7 +658,7 @@ test('existing official session collisions never acquire execution ownership or 
   f.services.agents.create = realCreate;
 });
 
-test('crash before publication records uncertainty and cancellation stops only an unpublished unsubmitted record', async t => {
+test('crash before publication fails an unsubmitted record with its reason and keeps a submitted one unverified', async t => {
   const f = fixture(), directory = await temp(t), db = openRemoteExecutionStore(directory), input = request();
   db.tx(() => db.create(principal.deviceId, input, { directory, workingDirectory: directory }));
   const unknown = request({ identity: { ...input.identity, taskId: 'unknown-submission' } });
@@ -428,10 +673,10 @@ test('crash before publication records uncertainty and cancellation stops only a
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
   const call = value => service.dispatch({ action: 'execution', version: 2, ...value }, { principal });
   const observed = await call({ operation: 'get', executionId: input.executionId });
-  assert.equal(observed.execution.phase, 'uncertain'); assert.match(observed.execution.reason, /归属尚未发布/);
+  assert.equal(observed.execution.phase, 'failed'); assert.equal(observed.execution.error.code, 'EXECUTION_NEVER_STARTED');
+  assert.equal(observed.execution.executionEffects.effectsVerified, true);
+  assert.equal(observed.events.some(event => event.kind === 'execution.phase' && event.data.phase === 'failed'), true);
   assert.equal(service.ownerOfSession(input.sessionId), null);
-  const stopped = await call({ operation: 'control', executionId: input.executionId, requestId: randomUUID(), control: 'cancel' });
-  assert.equal(stopped.execution.phase, 'stopped');
   const stillUnknown = await call({ operation: 'control', executionId: unknown.executionId, requestId: randomUUID(), control: 'cancel' });
   assert.equal(stillUnknown.execution.phase, 'uncertain');
   assert.equal(service.ownerOfSession(unknown.sessionId), null); assert.equal(persistenceOpens, 0); assert.equal(f.instances.length, 0);

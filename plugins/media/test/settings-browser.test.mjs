@@ -31,7 +31,7 @@ async function fixture({ inShell = false, showGeneration = false } = {}) {
       window.scenario=scenario;window.saved=[];window.loads=0;
       let state={config:['loading','error'].includes(scenario)?null:{dictation:true,readAloud:true,call:true,
         asr:{providerId:'Cloud/@01',model:'ASR/@01',configured:true,apiType:scenario==='legacy'?'auto':scenario==='unconfigured'?'':'openai',protocol:scenario==='legacy'?'auto':scenario==='unconfigured'?'':'transcriptions-sse'},
-        tts:{providerId:'Cloud/@01',model:'TTS/@01',configured:true,apiType:'openai',protocol:'speech-stream',stream:true,voice:'original-voice',speed:1.2},
+        tts:scenario==='routergo-empty'?{}:scenario==='routergo'?{providerId:'routergo',model:'qwen3-tts-flash',configured:true,apiType:'',protocol:'',stream:true,voice:'Chelsie',speed:1.2}:{providerId:'Cloud/@01',model:'TTS/@01',configured:true,apiType:'openai',protocol:'speech-stream',stream:true,voice:'original-voice',speed:1.2},
         conversation:scenario==='empty'?{}:{providerId:'Cloud/@01',model:'Exact Model:01',configured:true},
         listening:{enabled:false,endpoint:scenario==='empty'?'':'https://example.test/v1/decision',model:'',wakeSource:'custom',wakeWord:scenario==='empty'?'':'小舟',apiKeyConfigured:scenario!=='empty',superagentAvailable:scenario!=='empty',superagentName:scenario==='empty'?'':'小蓝',configured:scenario!=='empty'}},error:scenario==='error'?'语音配置暂不可用':''};
       if(scenario==='saved')state.config=window.voiceSnapshot;
@@ -46,10 +46,10 @@ async function fixture({ inShell = false, showGeneration = false } = {}) {
         const renderSlot = (name, props, filter) => {
           if (name === 'settings.header') return '设置';
           if (name === 'settings.close') return '关闭设置';
-          if (name === 'settings.section' && filter.only === section) return active;
           return filter?.fallback ?? null;
         };
-        return <><style>{mobileCss}</style><main><h1>BenchGo</h1><SettingsRoot wide t={key=>key} renderSlot={renderSlot} reconnect={()=>{}}
+        const renderFactorySlot = (name, props) => name === 'settings.section.view' && props.id === section ? active : null;
+        return <><style>{mobileCss}</style><main><h1>BenchGo</h1><SettingsRoot wide t={key=>key} renderSlot={renderSlot} renderFactorySlot={renderFactorySlot} reconnect={()=>{}}
           useStore={read=>read({open:true,activeId:section})} actions={{close(){},openSection,select:openSection}}
           useSections={read=>read([{id:'general',label:'通用设置'},{id:'models',label:'模型'},{id:'media',label:'媒体'},{id:'harness-tools',label:'Harness 工具'}])}
           useConnectionState={read=>read('connected')} useOnboardingSteps={read=>read([])}
@@ -355,6 +355,93 @@ test('matching uses the current mode, supports cancellation and requires usable 
     await page.getByRole('button', { name: '保存设置', exact: true }).click(); await page.getByText('已保存', { exact: true }).waitFor();
     await page.getByText('已保存 · 增量转录（SSE）', { exact: true }).waitFor();
     assert.equal(await page.getByRole('textbox', { name: 'API Key', exact: true }).inputValue(), '');
+  } finally { await browser.close(); }
+});
+
+test('RouterGo WAV matching preserves the draft and shows supplier speed after reload', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  const screenshots = process.env.BENCHGO_ROUTERGO_WAV_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    const html = await fixture({ inShell: true });
+    const page = await browser.newPage({ reducedMotion: 'reduce' });
+    page.setDefaultTimeout(6000);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    let state, started, resume;
+    const requests = [];
+    const label = '语音合成（HTTP WAV）';
+    const reason = '供应商未返回完整的 24 kHz 单声道 PCM16 WAV 音频。';
+    await page.route('**/*', async route => {
+      const url = route.request().url();
+      if (url === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
+      if (url.endsWith('/api/commander/tooling')) return route.fulfill({ json: {
+        providers: [{ id: 'routergo', name: 'RouterGo', configured: true }], models: [{ id: 'qwen3-tts-flash', name: 'Qwen3 TTS Flash', kinds: ['tts'] }],
+      } });
+      if (!url.endsWith('/api/voice')) return route.abort();
+      requests.push(route.request().postDataJSON());
+      if (state === 'pending') await new Promise(resolve => { resume = resolve; started(); });
+      const result = state === 'failure'
+        ? { status: 'unsupported', message: '没有符合当前用途的协议，请检查接口类型和模型。', attempts: [{ protocol: 'speech-wav', status: 'unsupported', message: reason }] }
+        : { status: 'supported', apiType: 'openai', protocol: 'speech-wav', attempts: [{ protocol: 'speech-wav', status: 'supported', firstOutputMs: 61 }] };
+      await route.fulfill({ json: { result } }).catch(() => {});
+    });
+    await page.goto('http://localhost/');
+    const show = async scenario => {
+      await page.evaluate(scenario => window.renderSettings(scenario), scenario);
+      await page.getByRole('tab', { name: '朗读', exact: true }).click();
+    };
+    const match = page.getByRole('button', { name: '自动匹配', exact: true });
+    const capture = (name, width, dark) => screenshots && page.screenshot({ path: join(screenshots, `${name}-${width}-${dark ? 'dark' : 'light'}.png`), fullPage: true });
+    for (const [width, dark] of [[1440, false], [390, true]]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.evaluate(dark => { document.documentElement.dataset.dark = dark; document.body.toggleAttribute('data-ds-dark-theme', dark); }, dark);
+      await show('routergo-empty');
+      await page.getByText('待匹配协议', { exact: true }).waitFor();
+      assert(await match.isDisabled());
+      await capture('empty', width, dark);
+
+      await show('routergo');
+      const voice = page.getByRole('textbox', { name: '音色', exact: true });
+      assert.equal(await voice.inputValue(), 'Chelsie');
+      state = 'pending';
+      const received = new Promise(resolve => { started = resolve; });
+      await match.click();
+      await page.getByText('正在匹配协议…', { exact: true }).waitFor();
+      await received;
+      assert(await match.isDisabled());
+      await capture('loading', width, dark);
+      await page.getByRole('button', { name: '取消检测', exact: true }).click();
+      await page.getByText('待匹配协议', { exact: true }).waitFor();
+      resume();
+
+      state = 'failure';
+      await match.click();
+      await page.getByText('没有符合当前用途的协议，请检查接口类型和模型。', { exact: true }).waitFor();
+      await page.getByRole('button', { name: '高级设置', exact: true }).click();
+      await page.locator('.voice-protocol-attempts').getByText(reason, { exact: false }).waitFor();
+      assert.equal(await voice.inputValue(), 'Chelsie');
+      assert(await page.getByRole('slider', { name: '语速', exact: true }).isVisible());
+      await capture('error', width, dark);
+
+      state = 'success';
+      await match.click();
+      await page.getByText(`已匹配 · ${label} · 待保存`, { exact: true }).waitFor();
+      assert.equal(requests.at(-1).config.model, 'qwen3-tts-flash');
+      assert.equal(requests.at(-1).config.voice, 'Chelsie');
+      await page.getByText('使用供应商默认语速', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('slider', { name: '语速', exact: true }).count(), 0);
+      await page.getByRole('button', { name: '保存设置', exact: true }).click();
+      await page.getByText('已保存', { exact: true }).waitFor();
+      assert.deepEqual(await page.evaluate(() => window.saved), [{ tts: { apiType: 'openai', protocol: 'speech-wav' } }]);
+      await show('saved');
+      await page.getByText(`已选择 · ${label}`, { exact: true }).waitFor();
+      await page.getByText('使用供应商默认语速', { exact: true }).waitFor();
+      assert.equal(await voice.inputValue(), 'Chelsie');
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await capture('data', width, dark);
+    }
+    assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
 

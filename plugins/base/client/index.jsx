@@ -1,4 +1,5 @@
 import { Button } from '../../shared/client/ui/index.jsx';
+import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
 import { sessionStatusSource } from './session-status.mjs';
 import { Tooltip as SharedTooltip } from '../../shared/client/ui/tooltip.jsx';
 import { readJsonResponse } from './http-response.mjs';
@@ -28,7 +29,7 @@ import { UpdateLauncher, mountUpdatesStyle } from './updates.jsx';
 import { mountBrand } from '../../link/client/brand.jsx';
 import { DeviceLauncher } from '../../link/client/device-launcher.jsx';
 import { DeviceSwitch } from '../../link/client/device-switch.jsx';
-import { useResourceNavigation, ResourceScope, RemoteProjects, ResourceDeviceState, ResourceStage, remoteRecentRows, installResourceReceiver } from '../../link/client/resource-navigation.jsx';
+import { useResourceNavigation, ResourceScope, RemoteProjects, ResourceDeviceState, ResourceProjectGroup, ResourceStage, remoteRecentRows, installResourceReceiver } from '../../link/client/resource-navigation.jsx';
 import { resourceKey, sortResourceRecents, sessionActionAccess } from '../../link/client/resource-state.mjs';
 import { installResourceOpener } from '../../link/client/resource-navigation-store.mjs';
 import { mountDiagnosticsSettings } from './diagnostics-settings.jsx';
@@ -62,6 +63,12 @@ async function api(action, args = {}, signal) {
     const res = await fetch(new URL('api/commander', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...args }), signal });
     return await readJsonResponse(res, new URL('api/commander', document.baseURI));
   } finally { done(); }
+}
+async function workerArchiveRequest(action, args) {
+  const url = new URL('api/commander/assistant', document.baseURI);
+  const response = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action, ...args }), signal: AbortSignal.timeout(15000) });
+  return readJsonResponse(response, url);
 }
 let stateSignature, stateRequest = 0, readOwnershipIds;
 async function refresh(signal) {
@@ -225,6 +232,7 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
   const isPrivate = id => privateIds.has(id) || (modules.superagent && id && harness.byId[id] && (!d.loaded || (d.ownershipVerifiedIds && !verifiedIds.has(id))));
   const projectsLoaded = workspaces.phase === 'ready' || workspaceProjects.length > 0 || d.loaded;
   const [actionSession, setActionSession] = useState(null), [confirmDelete, setConfirmDelete] = useState(null), [confirmProjectDelete, setConfirmProjectDelete] = useState(null), [confirmClearArchive, setConfirmClearArchive] = useState(false);
+  const [confirmArchive, archiveConfirmation] = useConfirmation();
   const [projectDeleteAccess, setProjectDeleteAccess] = useState(null);
   const actionAnchor = useRef(null);
   // Collapsing hides the list instead of unmounting it, so expanding neither
@@ -245,6 +253,7 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
   const [renameTarget, setRenameTarget] = useState(null);
   const [filter, setFilter] = useState(''), [searching, setSearching] = useState(false), [showArchived, setShowArchived] = useState(false), [archivedThreadCount, setArchivedThreadCount] = useState(0);
   const [expanded, setExpanded] = useState({});
+  const [localProjectsExpanded, setLocalProjectsExpanded] = useState(true);
   const navigation = useResourceNavigation(modules.link, showArchived);
   // The open workspace outlives navigation rows: disclosure, filtering and
   // background list reads must never dispose its document, draft or connection.
@@ -343,12 +352,62 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
     const available=!s.native || !['pin','unpin','rename','fork'].includes(operation);
     return {available,reason:available?'':'此原生会话不支持该操作'};
   };
+  const archiveSession = async (s, stopActivity = false) => {
+    const operation = showArchived ? 'unarchive' : 'archive';
+    const options = stopActivity ? { stopActivity: true } : {};
+    if (s.remote) return navigation.sessionAction(s, operation, undefined, options);
+    const nativeSession = d.sessions.find(row => row.id === (s.native ? s.id : s.nativeId));
+    if (operation === 'archive' && !stopActivity && liveStates.has(nativeSession?.status)) {
+      throw Object.assign(new Error('此会话仍有原生执行活动'), { code: 'workspace/session-active' });
+    }
+    if (!s.native) {
+      if (showArchived) await host.uiWorkspace.unarchiveSession(s.id);
+      else await host.uiWorkspace.archiveSession(s.id, options);
+    }
+    if (s.native || s.nativeId) await api('archive', { id: s.native ? s.id : s.nativeId, archived: !showArchived, ...options });
+  };
+  const archiveWorker = async s => {
+    if (showArchived || !modules.superagent || window.__DSH_LINK_WORKBENCH__) return false;
+    const id = s.resourceId ?? s.id;
+    const sessionId = s.remote && s.native ? id.slice('native:'.length) : id;
+    const device = s.remote ? { deviceId: s.deviceId, hostId: s.device.hostId, authorizationId: s.device.authorizationId } : undefined;
+    const { worker } = await workerArchiveRequest('workerArchiveInfo', { sessionId, device }).catch(error => {
+      if (error.status === 404 || error.serverCode === 'OWNER_REQUIRED') return {};
+      throw error;
+    });
+    if (!worker) return false;
+    const label = worker.active ? '停止并归档' : '归档';
+    setActionSession(null);
+    const accepted = await confirmArchive({ title: label + '？', confirmLabel: label,
+      description: '将归档此会话和工单「' + (worker.title || '未命名工单') + '」。' +
+        (worker.active ? '正在进行的活动将停止。' : '') + '历史记录和已有成果会保留。' });
+    if (!accepted) return true;
+    const result = await workerArchiveRequest('archiveWorkerTask', { taskId: worker.taskId, worker, requestId: crypto.randomUUID() });
+    if (!result.archived) throw new Error('关联工单的归档尚未确认，请刷新后核验');
+    if (s.remote) navigation.retry(); else await refresh();
+    return true;
+  };
   const operate = async (s, action) => {
     if (!s || busy) return;
     setBusy(true); setError('');
     try {
-      if (s.remote) {
-        await navigation.sessionAction(s, action === 'archive' ? (showArchived ? 'unarchive' : 'archive') : action);
+      if (action === 'archive') {
+        if (await archiveWorker(s)) return;
+        try {
+          await archiveSession(s);
+        } catch (error) {
+          if (showArchived || ![error.code, error.serverCode, error.rpcError?.code].includes('workspace/session-active')) throw error;
+          setActionSession(null);
+          const accepted = await confirmArchive({
+            title: '停止并归档？',
+            description: '确认后会归档「' + (s.title || '此对话') + '」并停止正在进行的活动。历史记录和已有成果会保留。',
+            confirmLabel: '停止并归档',
+          });
+          if (!accepted) return;
+          await archiveSession(s, true);
+        }
+      } else if (s.remote) {
+        await navigation.sessionAction(s, action);
         if (action === 'delete') {
           setConfirmDelete(null);
           if (remoteTarget?.device.id === s.deviceId && remoteTarget.resource.kind === 'sessions' && remoteTarget.resource.resourceId === (s.resourceId ?? s.id)) setRemoteTarget(null);
@@ -358,12 +417,6 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
         if (s.native || s.nativeId) await api('delete', { id: s.native ? s.id : s.nativeId });
         if (isSidebarSessionSelected(s, activeHarnessId)) newSession(s.projectId);
         setConfirmDelete(null);
-      } else {
-        if (s.native) await api('archive', { id: s.id, archived: !showArchived });
-        else {
-          await (showArchived ? host.workspaces.unarchiveSession(s.id) : host.workspaces.archiveSession(s.id));
-          if (s.nativeId) await api('archive', { id: s.nativeId, archived: !showArchived });
-        }
       }
       setActionSession(null); if (!s.remote) await refresh();
     } catch (e) { setError((s.remote ? s.device.name+'：' : '')+e.message); } finally { setBusy(false); }
@@ -429,6 +482,15 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
     {!showArchived && <Tooltip label="对话操作" delayMs={450} portal><button type="button" className="cmd-session-more" aria-label={'对话操作：' + title} aria-expanded={!!sameAction} aria-haspopup="menu" onClick={event => { actionAnchor.current = event.currentTarget; setActionSession(sameAction ? null : s); setCopyStatus(''); setError(''); }}><UIIcon name="more" size={16} /></button></Tooltip>}
   </div>;
   };
+  const localProjects = navigation.showLocal && <>
+    {!projectsLoaded && <p className="cmd-sidebar-empty">正在读取项目…</p>}
+    {projects.filter(p => !showArchived || rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))).map(p => {
+      const activity = workspaceActivity(p, live);
+      return <div className="cmd-project" key={p.id}><ProjectHeader title={p.title} expanded={!!expanded[p.id]} activity={activity} onToggle={() => { setExpanded(v => ({ ...v, [p.id]: !v[p.id] })); }} onNew={!showArchived ? () => newLocalSession(p.id) : undefined} newLabel={`在 ${p.title} 新聊天`} onDelete={!showArchived && !p.isDefault ? () => setConfirmProjectDelete(p) : undefined} deleteLabel={`删除项目 ${p.title}`}/>{(showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || (p.path && s.cwd === p.path)).map(row)}{!rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path)) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
+    })}
+    {projectsLoaded && !(showArchived ? projects.some(p => rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))) : projects.length) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档项目' : '暂无项目'}</p>}
+  </>;
+  const currentDevice = navigation.devices.find(device => device.id === navigation.activeId);
   return <section className={`cmd-projects ${wide ? '' : 'cmd-narrow'}`} aria-label="项目与对话">
     <nav className="cmd-sidebar-nav" aria-label="快捷工具栏">
       {modules.link && <DeviceLauncher />}
@@ -448,14 +510,11 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
 
     <ErrorLine message={d.error || error || sidebarCapabilityWarning(d.capabilities)} />
     <div id="cmd-project-section" className="cmd-section-body" data-open={sections.projects} inert={!sections.projects ? '' : undefined}><div className="cmd-section-inner">
-    {navigation.showLocal && modules.link && navigation.scope.mode !== 'current' && <div className="cmd-resource-group-title"><UIIcon name="computer" size={13}/><span>{navigation.devices.find(d=>d.id===navigation.activeId)?.name || '当前设备'}</span><small>当前工作台</small></div>}
     {navigation.scope.mode==='selected'&&!navigation.selected.length&&<p className="cmd-sidebar-empty">请选择设备</p>}
-    {navigation.showLocal && !projectsLoaded && <p className="cmd-sidebar-empty">正在读取项目…</p>}
-    {(navigation.showLocal ? projects : []).filter(p => !showArchived || rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))).map(p => {
-      const activity = workspaceActivity(p, live);
-      return <div className="cmd-project" key={p.id}><ProjectHeader title={p.title} expanded={!!expanded[p.id]} activity={activity} onToggle={() => { setExpanded(v => ({ ...v, [p.id]: !v[p.id] })); }} onNew={!showArchived ? () => newLocalSession(p.id) : undefined} newLabel={`在 ${p.title} 新聊天`} onDelete={!showArchived && !p.isDefault ? () => setConfirmProjectDelete(p) : undefined} deleteLabel={`删除项目 ${p.title}`}/>{(showArchived || expanded[p.id]) && <div className="cmd-project-children">{rows.filter(s => s.projectId === p.id || (p.path && s.cwd === p.path)).map(row)}{!rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path)) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档对话' : '还没有对话'}</p>}</div>}</div>;
-    })}
-    {navigation.showLocal && projectsLoaded && !(showArchived ? projects.some(p => rows.some(s => s.projectId === p.id || (p.path && s.cwd === p.path))) : projects.length) && <p className="cmd-sidebar-empty">{showArchived ? '暂无归档项目' : '暂无项目'}</p>}
+    {localProjects && (modules.link && navigation.scope.mode !== 'current' ? <ResourceProjectGroup
+      name={currentDevice?.name || '当前设备'} status="当前工作台" expanded={localProjectsExpanded}
+      onToggle={() => setLocalProjectsExpanded(value => !value)}
+    >{localProjects}</ResourceProjectGroup> : localProjects)}
     <RemoteProjects navigation={navigation} filter={filter} onOpen={openRemote} onDelete={project => { setError(''); setProjectDeleteAccess(null); setConfirmProjectDelete(project); }} archived={showArchived} onToggle={() => setActionSession(null)} renderSession={row} renderHeader={props => <ProjectHeader {...props}/>}/>
     </div></div>
     <div className="cmd-section-title cmd-recent-title"><button type="button" className="cmd-section-toggle" aria-expanded={sections.recent} aria-controls="cmd-recent-section" onClick={() => toggleSection('recent')}><span className="cmd-section-label">{showArchived ? '已归档最近' : '最近'}{!showArchived && recentActivity && <Activity status={recentActivity} />}</span><UIIcon name="chevronDown" size={12} /></button>{!showArchived && <Hint label="新聊天"><button type="button" className="cmd-recent-new-chat" aria-label="最近新聊天" onClick={() => void newLocalSession()}><UIIcon name="plus" size={16} /></button></Hint>}</div>
@@ -501,6 +560,7 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
         <ErrorLine message={error} />
       </>}
     </Menu>
+    {archiveConfirmation}
     <SessionRenameDialog target={renameTarget} host={host} onClose={() => setRenameTarget(null)} onRenameRemote={(target,title)=>navigation.sessionAction(target,'rename',title)} onRenamed={() => renameTarget?.remote ? undefined : refresh()} />
     {confirmProjectDelete?.remote && projectDeleteDevice && <RemoteProjectConnection key={projectDeleteKey} device={projectDeleteDevice} onReady={bridge => setProjectDeleteAccess({ key: projectDeleteKey, bridge })} onError={cause => { setProjectDeleteAccess(null); setError(cause.message); }} />}
     <Modal open={!!confirmProjectDelete} onClose={() => { if (!busy) setConfirmProjectDelete(null); }} title="删除这个项目？" closeLabel="关闭" description={(confirmProjectDelete?.remote ? confirmProjectDelete.device.name + ' · ' + (confirmProjectDelete.title || confirmProjectDelete.path) + '。' : '') + '项目会从侧栏移除，项目文件夹和其中的文件不会被删除。'} footer={<><Button variant="ghost" disabled={busy} onClick={() => setConfirmProjectDelete(null)}>取消</Button><Button variant="destructive" disabled={busy || !projectDeleteReady} onClick={() => void deleteProject(confirmProjectDelete)}>{busy ? "删除中…" : "删除项目"}</Button></>}><ErrorLine message={error} /></Modal>

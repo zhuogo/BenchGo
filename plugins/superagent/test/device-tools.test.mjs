@@ -41,10 +41,25 @@ test('execution catalog binds the saved target identity and preserves opaque con
   const result = selectRemoteExecution(catalog, { executionConfig: { harness: 'official', models: [{ ...f.model, params: { temperature: 0.5, maxTokens: 4096 } }] } });
   assert.equal(result.execution.authorizationId, 'paired-A');
   assert.equal(result.model.modelId, 'opaque:M');
+  const automatic = selectRemoteExecution(catalog, {});
+  assert.equal(automatic.model.modelId, 'opaque:M', 'no explicit model: the target device own catalog decides');
+  assert.equal(automatic.execution.config.harness, 'official');
   assert.throws(() => selectRemoteExecution(catalog, { executionConfig: { harness: 'official', models: [f.model, f.model] } }), { code: 'EXECUTION_CONFIG_REQUIRED' });
   f.catalog.hostId = 'sha256:other';
   await assert.rejects(readRemoteExecutionCatalog(f.ctx, 'B'), { code: 'EXECUTION_CATALOG_UNAVAILABLE' });
   await assert.rejects(readRemoteExecutionCatalog(f.ctx, 'local'), /明确目标设备/);
+});
+
+test('catalog reports an older peer version without adding a dispatch gate', async () => {
+  const f = fixture();
+  f.catalog.pluginVersion = '0.0.1';
+  const catalog = await readRemoteExecutionCatalog(f.ctx, 'B');
+  assert.match(catalog.versionWarning, /0\.0\.1 低于本机/);
+  assert.equal(selectRemoteExecution(catalog, {}).versionWarning, catalog.versionWarning);
+  f.catalog.pluginVersion = '99.0.0';
+  assert.equal((await readRemoteExecutionCatalog(f.ctx, 'B')).versionWarning, undefined);
+  delete f.catalog.pluginVersion;
+  assert.match((await readRemoteExecutionCatalog(f.ctx, 'B')).versionWarning, /未报告可识别/);
 });
 
 test('Router exposes one task admission and exact-device execution catalog through standard tools', async () => {
@@ -62,5 +77,21 @@ test('Router exposes one task admission and exact-device execution catalog throu
   assert.deepEqual(await delegate.execute(input, f.exec), { id: 'A-task' });
   assert.deepEqual(accepted[0][0], input);
   assert.equal(accepted[0][2].ownerAgent, f.ownerAgent);
-  await assert.rejects(registered.get('assistant_devices').execute({ deviceId: 'B' }, { agent: {} }), { code: 'HISTORY_SCOPE_DENIED' });
+  await assert.rejects(registered.get('assistant_devices').execute({ deviceId: 'B' }, { agent: {} }), { code: 'DEVICE_CATALOG_SCOPE_DENIED' });
+});
+
+test('a mounted channel Router can read the device catalog without getting desktop history access', async () => {
+  const f = fixture(), registered = new Map();
+  const thread = { id: 'telegram-chat', sourceKey: 'telegram:chat', source: { channel: 'telegram' }, sessionId: f.ownerAgent.id };
+  createRouterTools({ ctx: f.ctx, shutdown: new AbortController(), deviceTools: f.service,
+    store: { getState: async () => ({ threads: [thread] }) },
+  })({ tools: { register(tool) { registered.set(tool.name, tool); return () => {}; } }, systemPrompt: { section() {}, context() {} } }, { agent: f.ownerAgent, threadId: thread.id });
+  assert.equal((await registered.get('assistant_devices').execute({}, f.exec)).devices[0].id, 'B');
+  assert.equal((await registered.get('assistant_devices').execute({ deviceId: 'B' }, f.exec)).hostId, 'sha256:B');
+  const projects = await registered.get('assistant_projects').execute({ deviceId: 'B' }, f.exec);
+  assert.equal(projects.input.kind, 'projects');
+  assert.equal(projects.input.deviceId, 'B');
+  await assert.rejects(registered.get('assistant_device_manage').execute({ operation: 'remove', deviceId: 'B' }, f.exec), { code: 'HISTORY_SCOPE_DENIED' });
+  thread.archived = true;
+  await assert.rejects(registered.get('assistant_devices').execute({}, f.exec), { code: 'DEVICE_CATALOG_SCOPE_DENIED' });
 });

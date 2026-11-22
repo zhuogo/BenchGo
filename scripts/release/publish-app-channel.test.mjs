@@ -27,7 +27,7 @@ function fixture(t) {
   const installer = Buffer.from('MZ-verified-native-installer');
   const app = { version: '1.0.0', url: 'https://github.com/zhuogo/BenchGo/releases/download/v1.0.0/benchgo-1.0.0-win-x64-setup.exe', size: installer.length, sha256: sha256(installer) };
   const manifest = (version, sha) => ({ schemaVersion: 1, version, releaseVersion: version, sourceSha: sha,
-    engine: { min: '0.2.2-rc.1', max: '0.2.2-rc.1' }, plugin: { version, url: `https://github.com/zhuogo/BenchGo/releases/download/v${version}/benchgo-${version}-plugin.tar.gz`, size: 10, sha256: 'c'.repeat(64) }, app: { ...app } });
+    engine: { min: '0.2.2-rc.5', max: '0.2.2-rc.5' }, plugin: { version, url: `https://github.com/zhuogo/BenchGo/releases/download/v${version}/benchgo-${version}-plugin.tar.gz`, size: 10, sha256: 'c'.repeat(64) }, app: { ...app } });
   const seal = (release, value) => {
     const raw = json(value);
     setAsset(release, 'benchgo-update.json', raw);

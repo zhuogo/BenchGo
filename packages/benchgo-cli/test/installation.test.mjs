@@ -93,11 +93,11 @@ async function installationFixture(t, { nested = false } = {}) {
   const home = await temporary(t), runtime = join(home, 'official'), profile = join(home, 'profiles/desktop');
   for (const name of ['@deepseek-ai/dsh', '@deepseek-ai/dsh-app-boot', '@deepseek-ai/dsh-official-bundles']) {
     const root = join(runtime, 'node_modules', ...(nested && name !== '@deepseek-ai/dsh' ? ['@deepseek-ai/dsh/node_modules'] : []), name); await mkdir(root, { recursive: true });
-    await writeFile(join(root, 'package.json'), JSON.stringify({ name, version: '0.2.2-rc.1' }));
+    await writeFile(join(root, 'package.json'), JSON.stringify({ name, version: '0.2.2-rc.5' }));
   }
   await mkdir(profile, { recursive: true });
   await writeFile(join(profile, 'package.json'), JSON.stringify({ dsh: { profile: { bundles: [] }, plusInstall: { schemaVersion: 1, version: '0.1.3' } } }));
-  const installation = await registerWorkbenchInstallation({ home, installation: { kind: 'web', runtime, profile, node: process.execPath, engineVersion: '0.2.2-rc.1' } });
+  const installation = await registerWorkbenchInstallation({ home, installation: { kind: 'web', runtime, profile, node: process.execPath, engineVersion: '0.2.2-rc.5' } });
   return { home, installation };
 }
 
@@ -105,8 +105,8 @@ test('same-version update and repeated install reuse registration without fetchi
   const { home, installation } = await installationFixture(t);
   const before = await readFile(join(home, 'profiles/desktop/package.json'), 'utf8');
   let checks = 0;
-  const dependencies = { metadata: { schemaVersion: 1, pluginVersion: '0.1.2', releaseVersion: '0.1.2', engineVersion: '0.2.2-rc.1' },
-    releaseLoader: async () => { checks++; return { version: '0.1.3', engine: { min: '0.2.2-rc.1', max: '0.2.2-rc.1' } }; },
+  const dependencies = { metadata: { schemaVersion: 1, pluginVersion: '0.1.2', releaseVersion: '0.1.2', engineVersion: '0.2.2-rc.5' },
+    releaseLoader: async () => { checks++; return { version: '0.1.3', engine: { min: '0.2.2-rc.5', max: '0.2.2-rc.5' } }; },
     payloadLoader: async () => { throw new Error('must not download'); },
     startHost: async record => ({ installation: record, pid: 42, url: 'http://127.0.0.1:1234/?token=fixture' }) };
   const installed = await installWorkbench({ home }, dependencies);
@@ -132,7 +132,7 @@ test('npm global dsh with nested official dependencies is reused through its rea
 test('incompatible signed update stops before resource acquisition', async t => {
   const { home } = await installationFixture(t);
   await assert.rejects(() => installWorkbench({ home, update: true }, {
-    metadata: { engineVersion: '0.2.2-rc.1' }, releaseLoader: async () => ({ version: '0.1.4', engine: { min: '0.3.0' } }),
+    metadata: { engineVersion: '0.2.2-rc.5' }, releaseLoader: async () => ({ version: '0.1.4', engine: { min: '0.3.0' } }),
     payloadLoader: async () => { throw new Error('must not download'); },
   }), /新版引擎/);
 });
@@ -154,13 +154,13 @@ test('payload cache is repaired against archive bytes even if a forged receipt a
   const payloadFile = join(outer, 'server-seed.tar.gz');
   await tar.c({ cwd: seed, file: payloadFile, gzip: true }, ['release.json', 'node_modules']);
   const sha = bytes => createHash('sha256').update(bytes).digest('hex');
-  await writeFile(join(outer, 'manifest.json'), JSON.stringify({ pluginVersion: '0.1.3', harnessVersion: '0.2.2-rc.1', sha256: sha(await readFile(payloadFile)) }));
+  await writeFile(join(outer, 'manifest.json'), JSON.stringify({ pluginVersion: '0.1.3', harnessVersion: '0.2.2-rc.5', sha256: sha(await readFile(payloadFile)) }));
   const archive = join(root, 'linux.tar.gz');
   await tar.c({ cwd: outer, file: archive, gzip: true }, ['manifest.json', 'server-seed.tar.gz']);
   const bytes = await readFile(archive), digest = sha(bytes);
   const cache = join(root, 'home/.benchgo/workbench/cache'); let fetched = 0;
   const options = { cache, platform: 'linux', arch: 'x64', source: 'github',
-    metadata: { releaseVersion: '0.1.3', pluginVersion: '0.1.3', engineVersion: '0.2.2-rc.1' },
+    metadata: { releaseVersion: '0.1.3', pluginVersion: '0.1.3', engineVersion: '0.2.2-rc.5' },
     catalogLoader: async () => ({ catalog: { files: [{ target: 'linux-server', version: '0.1.3', sha256: digest, size: bytes.length,
       url: 'https://github.com/zhuogo/BenchGo/releases/download/v0.1.3/benchgo-0.1.3-linux-server.tar.gz' }] } }),
     fetcher: async () => { fetched++; return new Response(bytes, { headers: { 'content-length': String(bytes.length) } }); } };
@@ -249,5 +249,5 @@ test('unified benchgo command has one package owner', async () => {
   const cli = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const plugin = JSON.parse(await readFile(new URL('../../../plugins/base/package.json', import.meta.url), 'utf8'));
   assert.deepEqual(cli.bin, { benchgo: './bin/benchgo.mjs' });
-  assert.deepEqual(plugin.bin, { commander: 'src/cli.mjs' });
+  assert.equal(plugin.bin, undefined);
 });

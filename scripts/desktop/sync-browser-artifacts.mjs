@@ -1,6 +1,7 @@
 import { lstat, readFile, readdir, realpath, rmdir, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { assertReleaseVersion, getInstallState, releaseBundleName } from '../../plugins/base/shared/plugin-install.mjs';
 import { writeArtifact } from '../../plugins/base/scripts/write-artifact.mjs';
 
@@ -59,7 +60,12 @@ export async function syncDesktopArtifacts({ root, profile = desktopProfile(), w
   const source = await realpath(join(root, 'plugins', 'base'));
   if (source === target || inside(source, target) || inside(target, source)) throw new Error('源码与桌面插件目录重叠，未同步');
   const sourcePackage = await json(join(source, 'package.json'));
-  if (sourcePackage.name !== 'benchgo-plugin') throw new Error('源码插件包名无效，未同步');
+  if (sourcePackage.name !== plugin.name || sourcePackage.version !== plugin.version)
+    throw new Error(`插件版本不一致（来源 ${sourcePackage.version}，桌面 ${plugin.version}），未同步`);
+  for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta']) {
+    if (!isDeepStrictEqual(sourcePackage[field] ?? {}, plugin[field] ?? {}))
+      throw new Error(`插件依赖声明不一致（${field}），未同步`);
+  }
   const plan = [], published = new Set(), obsolete = [];
   const visit = async (name, destination = target) => {
     const from = join(source, name), to = join(destination, name);

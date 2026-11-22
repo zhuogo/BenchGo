@@ -117,6 +117,7 @@
                   "id": { "type": "string", "maxLength": 256 },
                   "native": { "type": "boolean" },
                   "operation": { "enum": ["pin", "unpin", "archive", "unarchive", "rename", "delete", "fork"] },
+                  "stopActivity": { "type": "boolean", "description": "用户确认停止活动并归档后为 true，仅适用于 archive。" },
                   "requestId": { "type": "string", "maxLength": 200 },
                   "title": { "type": "string", "maxLength": 200 },
                   "deviceIds": { "type": "array", "maxItems": 33, "items": { "type": "string" } },
@@ -343,8 +344,8 @@
       "RemoteExecutionRequest": {
         "type": "object", "required": ["action", "version", "operation"],
         "properties": {
-          "action": { "const": "execution" }, "version": { "const": 1 },
-          "operation": { "enum": ["catalog", "submit", "get", "input", "control", "ack"] },
+          "action": { "const": "execution" }, "version": { "const": 2 },
+          "operation": { "enum": ["catalog", "submit", "get", "input", "control", "ack", "archive", "archives"] },
           "requestId": { "type": "string", "maxLength": 512 }, "executionId": { "type": "string", "maxLength": 512 }, "sessionId": { "type": "string", "maxLength": 512 },
           "identity": { "type": "object", "required": ["ownerHostId", "taskId", "assignmentId", "runId", "fence"], "properties": { "ownerHostId": { "type": "string" }, "taskId": { "type": "string" }, "assignmentId": { "type": "string" }, "runId": { "type": "string" }, "fence": { "type": "integer", "minimum": 1 } } },
           "config": { "type": "object", "required": ["harness", "models"], "properties": { "harness": { "const": "official" }, "models": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "object", "required": ["providerId", "modelId"], "properties": { "providerId": { "type": "string" }, "modelId": { "type": "string" }, "params": { "type": "object" } } } } } },
@@ -352,7 +353,7 @@
           "kind": { "enum": ["revision", "context", "answer"] }, "instructionRevision": { "type": "integer", "minimum": 1 }, "questionId": { "type": "string" }, "answers": { "type": "array", "items": { "type": "object" } },
           "control": { "enum": ["pause", "resume", "cancel"] }, "after": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 200 }, "through": { "type": "integer", "minimum": 0 }
         },
-        "description": "submit由业务宿主预生成executionId/sessionId，携带完整identity、要求版本和冻结授权/模型；目标以认证principal一对一绑定ownerHostId，重复requestId只取原回执，改变命令主体冲突，after/limit不属于幂等意图。input初始received不代表应用；官方pre-step后的instruction.applied包含requestId/kind/实际instructionRevision。answer按当前questionId及逐题真实id回传。get按连续事件seq分页；result须含真实官方turn/end完成原因及transcript证据；ack仅确认已持久接收的事件水位，不重跑Worker。"
+        "description": "submit由业务宿主预生成executionId/sessionId，携带完整identity、要求版本和冻结授权/模型；目标以认证principal一对一绑定ownerHostId，重复requestId只取原回执，改变命令主体冲突。input初始received不代表应用；官方pre-step后的instruction.applied包含requestId/kind/实际instructionRevision。answer按当前questionId及逐题真实id回传。get按连续事件seq分页；result须含真实官方turn/end完成原因及transcript证据；ack确认已持久接收的事件水位。archive携带requestId、executionId、sessionId、identity和instructionRevision，持久归档后发出停止请求。archives按配对授权与归档游标after补读记录，每页最多100条。"
       },
       "DeviceRequest": {
         "type": "object",

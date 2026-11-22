@@ -136,12 +136,13 @@ export function createSessionAdapter(ctx, { deletedIds = async () => [] } = {}) 
     for (const row of result.items) {
       if (privateIds.has(row.sessionId) || dismissed.has(row.sessionId) || row.parentSessionId || row.origin === 'subagent') continue;
       const project = projectBySession.get(row.sessionId);
-      if (project) {
+      const ungrouped = !project && !!ctx.get?.('benchgoExecution')?.ownerOfSession?.(row.sessionId);
+      if (project || ungrouped) {
         const native = nativeOwners.get(row.sessionId), selection = row.projections?.values?.modelSelection?.next;
         const provider = native?.provider ?? 'deepseek', model = native ? native.model : selection?.model;
         const modelProvider = native ? undefined : selection?.provider;
         const status = waiting.has(row.sessionId) || native?.status === 'waiting' ? 'waiting' : row.running || native?.status === 'running' ? 'running' : native?.status === 'completed' ? 'idle' : native?.status ?? row.status;
-        sessions.push({ id: row.sessionId, projectId: project.id, title: row.projections?.values?.title?.title || row.projections?.values?.title || '新会话', running: row.running, updatedAt: row.updatedAt,
+        sessions.push({ id: row.sessionId, ...(project ? { projectId: project.id } : { ungrouped: true }), title: row.projections?.values?.title?.title || row.projections?.values?.title || '新会话', running: row.running, updatedAt: row.updatedAt,
           provider, ...(model === undefined ? {} : { model }), ...(modelProvider === undefined ? {} : { modelProvider }), ...(status === undefined ? {} : { status }),
           ...(archived.has(row.sessionId) ? { archived: true } : {}), ...(pinned.has(row.sessionId) ? { pinned: true } : {}) });
       }
@@ -272,17 +273,18 @@ export function createSessionAdapter(ctx, { deletedIds = async () => [] } = {}) 
     if (allowed.includes('archive') && typeof ctx.connection.createSharedFetchHandler === 'function' && ctx.get?.('benchgo')) allowed.push('delete');
     return allowed;
   };
-  const managementScope = (id, device, prior, allowDeleted = false) => withPeer(device, async record => {
+  const managementScope = (id, device, prior, allowDeleted = false, archive = false) => withPeer(device, async record => {
     string(id, 'session id', 256);
     const project = projectOf(id) ?? (allowDeleted && prior && projects().find(row => row.id === prior.projectId && row.path === prior.path));
-    if (!project || prior && (project.id !== prior.projectId || project.path !== prior.path)) throw Object.assign(new Error('会话所属项目已不可用'), { code: 'NOT_FOUND', status: 404 });
-    const scope = { projectId: project.id, path: project.path };
+    const execution = !project && archive && ctx.get?.('benchgoExecution')?.ownerOfSession?.(id);
+    const scope = project ? { projectId: project.id, path: project.path } : execution && { executionId: execution.executionId };
+    if (!scope || prior && (scope.projectId !== prior.projectId || scope.path !== prior.path || scope.executionId !== prior.executionId)) throw Object.assign(new Error('会话所属项目已不可用'), { code: 'NOT_FOUND', status: 404 });
     const result = await invoke(record, 'session', 'list', { _request: {} });
     const row = result.items.find(row => row.sessionId === id);
     const dismissed = !allowDeleted && (await deletedIds()).includes(id);
     const hidden = new Set(await ctx.get?.('assistant')?.sidebarPrivateSessionIds?.() || []);
     if ((!row && !allowDeleted) || row?.parentSessionId || row?.origin === 'subagent' || dismissed || hidden.has(id)) throw Object.assign(new Error('会话不可用'), { code: 'NOT_FOUND', status: 404 });
-    if (!projects().some(current => current.id === scope.projectId && current.path === scope.path && (allowDeleted || current.sessionIds.includes(id)))) throw Object.assign(new Error('会话所属项目已变化'), { code: 'NOT_FOUND', status: 404 });
+    if (project && !projects().some(current => current.id === scope.projectId && current.path === scope.path && (allowDeleted || current.sessionIds.includes(id)))) throw Object.assign(new Error('会话所属项目已变化'), { code: 'NOT_FOUND', status: 404 });
     return scope;
   });
   const manage = (input, device, guard) => withPeer(device, async record => {
@@ -290,10 +292,24 @@ export function createSessionAdapter(ctx, { deletedIds = async () => [] } = {}) 
     await guard();
     guard.authorize();
     if (method) {
+      const options = input.stopActivity ? { stopActivity: true } : {};
+      const commander = ctx.get?.('commander');
+      const owner = commander?.list().filter(row => row.ownerSessionId === input.id && (!row.parentId || row.harnessAdopted)).sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt))[0];
+      if (input.operation === 'archive' && !input.stopActivity && owner && ['running', 'waiting', 'connecting'].includes(owner.status)) {
+        throw Object.assign(new Error('此会话仍有原生执行活动'), { code: 'workspace/session-active' });
+      }
       guard.mutation();
-      await invoke(record, 'workspace', method, { request: { sessionId: input.id } });
-      const owner = ctx.get?.('commander')?.list().filter(row => row.ownerSessionId === input.id && (!row.parentId || row.harnessAdopted)).sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt))[0];
-      if (owner && ['archive', 'unarchive'].includes(input.operation)) { await guard(); guard.authorize(); await ctx.get('commander').archive(owner.id, input.operation === 'archive'); }
+      await invoke(record, 'workspace', method, { request: { sessionId: input.id, ...options } });
+      if (owner && ['archive', 'unarchive'].includes(input.operation)) {
+        await guard();
+        guard.authorize();
+        try {
+          await commander.archive(owner.id, input.operation === 'archive', options);
+        } catch (error) {
+          if (error.code !== 'workspace/session-active') throw error;
+          throw Object.assign(new Error('官方会话已归档，关联执行仍需核实'), { cause: error });
+        }
+      }
       return {};
     }
     if (input.operation === 'rename') { guard.mutation(); return { title: (await invoke(record, 'session', 'rename', { request: { sessionId: input.id, title: input.title } })).title }; }

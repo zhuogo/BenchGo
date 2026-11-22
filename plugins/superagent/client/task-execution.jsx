@@ -30,7 +30,8 @@ function ExecutionMark({ status, active, label }) {
 export function TaskExecution({ execution, executionSession, taskStatus, executionControl, stale = false, sessionAvailable = false, outcome }) {
   const titleId = useId();
   const remote = execution?.remote || (executionSession?.remote ? executionSession : null);
-  const remoteObserved = typeof remote?.observed === 'boolean' ? remote.observed : remote?.available === true && !!remote.observedAt;
+  const remoteObserved = execution?.phase === 'finished' || !execution?.uncertainty
+    && (typeof remote?.observed === 'boolean' ? remote.observed : remote?.available === true && !!remote.observedAt);
   const recentOnly = stale || execution?.observed === false || (remote && !remoteObserved) || (taskStatus && taskStatus !== 'running');
   const inactive = recentOnly || ['preparing', 'waiting', 'unknown', 'finished'].includes(execution?.phase)
     || ['pauseRequested', 'paused', 'stopRequested', 'stopped'].some(key => executionControl?.[key]);

@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -63,6 +63,8 @@ export async function prepareDesktopRenderer(root, output) {
   const artwork = startupArtwork(await readFile(join(root, 'assets/brand/benchgo-mark.svg'), 'utf8'));
   const reference = /<img class="startup-mascot" src="\.\.\/\.\.\/\.\.\/assets\/brand\/benchgo-mark\.svg"[^>]*>/g;
   await cp(source, output, { recursive: true });
+  await rm(join(output, 'startup-progress.css'), { force: true });
+  await copyFile(join(root, 'plugins/shared/client/ui/loading.css'), join(output, 'loading.css'));
   for (const name of ['welcome.html', 'splash.html']) {
     const html = await readFile(join(source, name), 'utf8');
     if ([...html.matchAll(reference)].length !== 1) throw new Error(`BenchGo startup artwork reference changed: ${name}`);

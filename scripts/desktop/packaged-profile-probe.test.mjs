@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { apply, assertPackagedUpdateEngine, inspectPackagedProfile, packagedModules } from './packaged-profile-probe.mjs';
 
 test('packaged mounted updater must identify the installed engine pinned by release compatibility', () => {
-  const engine = '0.2.2-rc.1';
+  const engine = '0.2.2-rc.5';
   assert.equal(assertPackagedUpdateEngine({ current: { engine } }, engine, engine), engine);
   assert.throws(() => assertPackagedUpdateEngine({ current: {} }, engine, engine), /installed runtime engine/);
   assert.throws(() => assertPackagedUpdateEngine({ current: { engine: '0.2.1' } }, engine, engine), /installed runtime engine/);

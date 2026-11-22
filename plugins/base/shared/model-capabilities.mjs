@@ -14,9 +14,10 @@ export const modelCapabilityLabels = Object.freeze({
 });
 
 const textCapabilities = new Set(['text', 'chat', 'responses', 'anthropic-messages']);
+export const isModelCapability = value => typeof value === 'string' && value.length <= 96 && /^[a-z][a-z0-9_-]*$/u.test(value);
 
 export function normalizeModelCapabilities(capabilities = []) {
-  return [...new Set(capabilities.map(capability => textCapabilities.has(capability) ? 'text' : capability))];
+  return [...new Set(capabilities.filter(isModelCapability).map(capability => textCapabilities.has(capability) ? 'text' : capability))];
 }
 
 export function hasTextCapability(capabilities = []) {
@@ -42,7 +43,7 @@ const taskCapabilities = new Map([
 ]);
 
 export function structuredCapabilities(model, inputs, outputs) {
-  if (Array.isArray(model.capabilities)) return [...new Set(model.capabilities)];
+  if (Array.isArray(model.capabilities)) return [...new Set(model.capabilities.map(task => taskCapabilities.get(task) ?? task).filter(isModelCapability))];
   const tags = model.capabilities && typeof model.capabilities === 'object'
     ? Object.keys(model.capabilities).filter(key => model.capabilities[key] === true)
     : [];

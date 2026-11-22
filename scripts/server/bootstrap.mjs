@@ -8,12 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
 const source = process.argv[2] ?? 'mirror', operation = process.argv[3] ?? 'connect';
-if (!['mirror', 'github'].includes(source) || !['connect', 'update'].includes(operation)) throw new Error('无效的服务器安装参数');
 const assets = dirname(fileURLToPath(import.meta.url));
-const manifest = JSON.parse(await readFile(join(assets, 'manifest.json'), 'utf8'));
-if (manifest.schemaVersion !== 1 || !/^[0-9a-f]{64}$/.test(manifest.sha256) || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(manifest.harnessVersion) || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(manifest.pluginVersion)) throw new Error('服务器安装清单无效');
 const archive = join(assets, 'server-seed.tar.gz');
-if (createHash('sha256').update(await readFile(archive)).digest('hex') !== manifest.sha256) throw new Error('服务器插件包校验失败');
 const base = join(homedir(), '.local/share/benchgo/server');
 const stateFile = join(base, 'installation.json'), ownerFile = join(base, 'owner.json');
 const registry = source === 'mirror' ? 'https://registry.npmmirror.com' : 'https://registry.npmjs.org';
@@ -34,67 +30,80 @@ async function run(command, args, options = {}) {
 }
 async function atomic(path, value) { const tmp = path + '.' + randomUUID() + '.tmp'; await writeFile(tmp, value, { mode: 0o600 }); await rename(tmp, path); }
 async function freePort() { const server = createServer(); await new Promise((r, j) => { server.once('error', j); server.listen(0, '127.0.0.1', r); }); const port = server.address().port; await new Promise(r => server.close(r)); return port; }
-await mkdir(base, { recursive: true, mode: 0o700 });
-let installed; try { installed = JSON.parse(await readFile(stateFile, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-const lock = join(base, 'install.lock');
-try { await mkdir(lock, { mode: 0o700 }); } catch (e) { if (e.code === 'EEXIST') throw new Error('已有服务器安装正在进行，请稍后重试'); throw e; }
-try {
-  if (!installed || operation === 'update') {
-    if (installed && installed.harnessVersion !== manifest.harnessVersion) throw new Error('此包需要升级服务器引擎，请由维护者处理，现有数据已保留');
-    const runtime = join(base, 'runtimes', manifest.harnessVersion);
-    if (!(await present(join(runtime, 'node_modules/@deepseek-ai/dsh/package.json')))) {
-      process.stderr.write('安装固定版本 Harness…\n');
-      await mkdir(runtime, { recursive: true, mode: 0o700 });
-      await atomic(join(runtime, 'package.json'), JSON.stringify({ private: true, dependencies: {
-        '@deepseek-ai/dsh': manifest.harnessVersion,
-        '@deepseek-ai/dsh-atomic-write': manifest.harnessVersion,
-        '@deepseek-ai/dsh-llm': manifest.harnessVersion
-      } }));
-      await run('npm', ['install', '--prefix', runtime, '--omit=dev', '--no-audit', '--no-fund', '--registry', registry]);
-    }
-    const incoming = join(base, '.seed-' + randomUUID()); await mkdir(incoming, { mode: 0o700 });
-    try {
-      await run('tar', ['-xzf', archive, '-C', incoming, '--no-same-owner', '--no-same-permissions']);
-      const helper = await import(pathToFileURL(join(incoming, 'node_modules/benchgo-plugin/shared/plugin-install.mjs')).href);
-      const profile = join(base, 'home/profiles/web');
-      if (!(await present(join(profile, 'package.json')))) {
-        const boot = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js')).href);
-        const { PROFILE_TEMPLATES } = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-official-bundles/lib/index.js')).href);
-        boot.initProfile(profile, PROFILE_TEMPLATES.web.bundles);
+if (import.meta.main) await install();
+
+async function install() {
+  if (!['mirror', 'github'].includes(source) || !['connect', 'update'].includes(operation)) throw new Error('无效的服务器安装参数');
+  const manifest = JSON.parse(await readFile(join(assets, 'manifest.json'), 'utf8'));
+  if (manifest.schemaVersion !== 1 || !/^[0-9a-f]{64}$/.test(manifest.sha256) || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(manifest.harnessVersion) || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(manifest.pluginVersion)) throw new Error('服务器安装清单无效');
+  if (createHash('sha256').update(await readFile(archive)).digest('hex') !== manifest.sha256) throw new Error('服务器插件包校验失败');
+  await mkdir(base, { recursive: true, mode: 0o700 });
+  let installed; try { installed = JSON.parse(await readFile(stateFile, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  const lock = join(base, 'install.lock');
+  try { await mkdir(lock, { mode: 0o700 }); } catch (e) { if (e.code === 'EEXIST') throw new Error('已有服务器安装正在进行，请稍后重试'); throw e; }
+  try {
+    if (!installed || operation === 'update') {
+      if (installed && installed.harnessVersion !== manifest.harnessVersion) throw new Error('此包需要升级服务器引擎，请由维护者处理，现有数据已保留');
+      const runtime = join(base, 'runtimes', manifest.harnessVersion);
+      if (!(await present(join(runtime, 'node_modules/@deepseek-ai/dsh/package.json')))) {
+        process.stderr.write('安装固定版本 Harness…\n');
+        await mkdir(runtime, { recursive: true, mode: 0o700 });
+        await atomic(join(runtime, 'package.json'), JSON.stringify({ private: true, dependencies: {
+          '@deepseek-ai/dsh': manifest.harnessVersion,
+          '@deepseek-ai/dsh-atomic-write': manifest.harnessVersion,
+          '@deepseek-ai/dsh-llm': manifest.harnessVersion
+        } }));
+        await run('npm', ['install', '--prefix', runtime, '--omit=dev', '--no-audit', '--no-fund', '--registry', registry]);
       }
-      const release = await helper.prepareRelease({ directory: incoming, root: join(profile, '.benchgo/releases'), version: manifest.pluginVersion, runtime });
-      const dataDir = installed?.dataDir ?? join(base, 'data');
-      const webPort = installed?.webPort ?? await freePort(), port = installed?.port ?? await initializeServerLink(join(dataDir, 'link'));
-      if (!installed) await atomic(join(profile, 'cordis.patch.yml'), ['- id: commander', '  config:', '    dataDir: ' + JSON.stringify(dataDir), '- id: commander-link', '  config:', '    directory: ' + JSON.stringify(join(dataDir, 'link')), '- id: session-telemetry-otel', '  disabled: true', ''].join('\n'));
-      if (installed) {
-        const active = await authorize(installed, false);
-        const state = await linkJson(installed, '/link/api/rpc', { action: 'state' }, active.token);
-        await ownerAdmin(installed, { action: 'revoke', id: active.deviceId });
-        if (state.sessions?.some(session => session.running)) throw new Error('服务器有任务运行中，请结束后再升级');
-      }
-      await helper.activateRelease({ profile, runtime, release, enabled: true, appVersion: null, migrateLegacy: true });
-      installed = { schemaVersion: 1, harnessVersion: manifest.harnessVersion, pluginVersion: manifest.pluginVersion, runtime, profile, dataDir, webPort, port };
-      await atomic(stateFile, JSON.stringify(installed));
-      const launcher = '(' + launchServer.toString() + ')(' + [process.execPath, runtime, ownerFile, base, webPort].map(value => JSON.stringify(value)).join(',') + ');';
-      await atomic(join(base, 'start.mjs'), launcher);
-      const units = join(homedir(), '.config/systemd/user'); await mkdir(units, { recursive: true, mode: 0o700 });
-      const quote = value => JSON.stringify(String(value)).replaceAll('%', '%%');
-      // The launcher forwards graceful signals; mixed avoids also signalling its child directly.
-      const unit = ['[Unit]', 'Description=BenchGo server', 'After=network-online.target', '', '[Service]', 'Type=simple', 'KillMode=mixed', 'UMask=0077', 'WorkingDirectory=' + base, 'ExecStart=' + quote(process.execPath) + ' ' + quote(join(base, 'start.mjs')), 'Environment=' + quote('PATH=' + process.env.PATH), 'Restart=on-failure', 'RestartSec=3', '', '[Install]', 'WantedBy=default.target', ''].join('\n');
-      await atomic(join(units, 'benchgo.service'), unit);
-      await run('systemctl', ['--user', 'daemon-reload']); await run('systemctl', ['--user', 'enable', 'benchgo.service']);
-      await rm(ownerFile, { force: true }); await run('systemctl', ['--user', 'restart', 'benchgo.service']);
-    } finally { await rm(incoming, { recursive: true, force: true }); }
-  } else { process.stderr.write('复用已安装的 BenchGo…\n'); await run('systemctl', ['--user', 'start', 'benchgo.service']); }
-  if (operation === 'update') {
-    let ready = false;
-    for (let i = 0; i < 100; i++) { try { const status = await ownerAdmin(installed, { action: 'status' }); if (status.enabled && status.port === installed.port && status.host === '127.0.0.1') { ready = true; break; } } catch {} await wait(500); }
-    if (!ready) throw new Error('服务器升级后未正常就绪，请查看服务日志');
+      const incoming = join(base, '.seed-' + randomUUID()); await mkdir(incoming, { mode: 0o700 });
+      try {
+        await run('tar', ['-xzf', archive, '-C', incoming, '--no-same-owner', '--no-same-permissions']);
+        const helper = await import(pathToFileURL(join(incoming, 'node_modules/benchgo-plugin/shared/plugin-install.mjs')).href);
+        const profile = join(base, 'home/profiles/web');
+        if (!(await present(join(profile, 'package.json')))) {
+          const boot = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js')).href);
+          const { PROFILE_TEMPLATES } = await import(pathToFileURL(join(runtime, 'node_modules/@deepseek-ai/dsh-official-bundles/lib/index.js')).href);
+          boot.initProfile(profile, PROFILE_TEMPLATES.web.bundles);
+        }
+        const release = await helper.prepareRelease({ directory: incoming, root: join(profile, '.benchgo/releases'), version: manifest.pluginVersion, runtime });
+        const dataDir = installed?.dataDir ?? join(base, 'data');
+        const webPort = installed?.webPort ?? await freePort(), port = installed?.port ?? await initializeServerLink(join(dataDir, 'link'));
+        if (!installed) await atomic(join(profile, 'cordis.patch.yml'), ['- id: commander', '  config:', '    dataDir: ' + JSON.stringify(dataDir), '- id: commander-link', '  config:', '    directory: ' + JSON.stringify(join(dataDir, 'link')), '- id: session-telemetry-otel', '  disabled: true', ''].join('\n'));
+        if (installed) {
+          const active = await authorize(installed, false);
+          const state = await linkJson(installed, '/link/api/rpc', { action: 'state' }, active.token);
+          await ownerAdmin(installed, { action: 'revoke', id: active.deviceId });
+          if (state.sessions?.some(session => session.running)) throw new Error('服务器有任务运行中，请结束后再升级');
+        }
+        await helper.activateRelease({ profile, runtime, release, enabled: true, appVersion: null, migrateLegacy: true });
+        installed = { schemaVersion: 1, harnessVersion: manifest.harnessVersion, pluginVersion: manifest.pluginVersion, runtime, profile, dataDir, webPort, port };
+        await atomic(stateFile, JSON.stringify(installed));
+        const launcher = '(' + launchServer.toString() + ')(' + [process.execPath, runtime, ownerFile, base, webPort].map(value => JSON.stringify(value)).join(',') + ');';
+        await atomic(join(base, 'start.mjs'), launcher);
+        const units = join(homedir(), '.config/systemd/user'); await mkdir(units, { recursive: true, mode: 0o700 });
+        const quote = value => JSON.stringify(String(value)).replaceAll('%', '%%');
+        // The launcher forwards graceful signals; mixed avoids also signalling its child directly.
+        const unit = ['[Unit]', 'Description=BenchGo server', 'After=network-online.target', '', '[Service]', 'Type=simple', 'KillMode=mixed', 'UMask=0077', 'WorkingDirectory=' + base, 'ExecStart=' + quote(process.execPath) + ' ' + quote(join(base, 'start.mjs')), 'Environment=' + quote('PATH=' + process.env.PATH), 'Restart=on-failure', 'RestartSec=3', '', '[Install]', 'WantedBy=default.target', ''].join('\n');
+        await atomic(join(units, 'benchgo.service'), unit);
+        await run('systemctl', ['--user', 'daemon-reload']); await run('systemctl', ['--user', 'enable', 'benchgo.service']);
+        await rm(ownerFile, { force: true }); await run('systemctl', ['--user', 'restart', 'benchgo.service']);
+      } finally { await rm(incoming, { recursive: true, force: true }); }
+    } else { process.stderr.write('复用已安装的 BenchGo…\n'); await run('systemctl', ['--user', 'start', 'benchgo.service']); }
+    if (operation === 'update') await waitForUpdatedService(installed.port, () => ownerAdmin(installed, { action: 'status' }));
+    const result = operation === 'update' ? { port: installed.port, pin: createHash('sha256').update(new X509Certificate(JSON.parse(await readFile(join(installed.dataDir, 'link/tls.json'), 'utf8')).cert).publicKey.export({ type: 'spki', format: 'der' })).digest('base64') } : await authorize(installed, true);
+    const linger = await run('loginctl', ['show-user', String(process.getuid()), '--property=Linger', '--value']).catch(() => 'unknown');
+    process.stdout.write(JSON.stringify({ ...result, version: installed.pluginVersion, persistent: linger.trim() === 'yes', ...(linger.trim() !== 'yes' ? { warning: '系统尚未启用用户常驻服务，退出所有 SSH 会话后服务可能停止；维护者可执行 loginctl enable-linger 用户名' } : {}) }) + '\n');
+  } finally { await rm(lock, { recursive: true, force: true }); }
+}
+
+export async function waitForUpdatedService(port, readStatus, pause = wait) {
+  for (let attempt = 0; attempt < 360; attempt++) {
+    const status = await readStatus().catch(() => null);
+    if (status?.enabled && status.port === port && status.host === '127.0.0.1') return;
+    await pause(500);
   }
-  const result = operation === 'update' ? { port: installed.port, pin: createHash('sha256').update(new X509Certificate(JSON.parse(await readFile(join(installed.dataDir, 'link/tls.json'), 'utf8')).cert).publicKey.export({ type: 'spki', format: 'der' })).digest('base64') } : await authorize(installed, true);
-  const linger = await run('loginctl', ['show-user', String(process.getuid()), '--property=Linger', '--value']).catch(() => 'unknown');
-  process.stdout.write(JSON.stringify({ ...result, version: installed.pluginVersion, persistent: linger.trim() === 'yes', ...(linger.trim() !== 'yes' ? { warning: '系统尚未启用用户常驻服务，退出所有 SSH 会话后服务可能停止；维护者可执行 loginctl enable-linger 用户名' } : {}) }) + '\n');
-} finally { await rm(lock, { recursive: true, force: true }); }
+  throw new Error('服务器升级后未正常就绪，服务可能仍在启动，请查看服务日志');
+}
 /** Seed the persistent transport before its first start; never rewrite an existing device store. */
 async function initializeServerLink(directory) {
   await mkdir(directory, { recursive: true, mode: 0o700 });

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 const fail = (message, code, status = 400) => Object.assign(new Error(message), { code, status });
 const operations = new Set(['pin', 'unpin', 'archive', 'unarchive', 'rename', 'delete', 'fork']);
+const activeArchiveCode = 'workspace/session-active';
 const required = (value, label, limit = 200) => {
   if (typeof value !== 'string' || !value.trim() || value.length > limit) throw fail(`${label}无效`, 'INVALID_SESSION_ACTION');
   return value;
@@ -45,11 +46,13 @@ export function createSessionActions({ store, official, native, authorize, now =
     if (!operations.has(input.operation)) throw fail('不支持的会话操作', 'UNSUPPORTED', 422);
     const title = input.operation === 'rename' ? required(input.title, '会话名称', 200) : undefined;
     if (input.operation !== 'rename' && input.title !== undefined) throw fail('此操作不接受会话名称', 'INVALID_SESSION_ACTION');
-    const fingerprint = createHash('sha256').update(JSON.stringify([id, input.native, input.operation, title ?? null])).digest('hex');
+    if (input.stopActivity !== undefined && (input.operation !== 'archive' || typeof input.stopActivity !== 'boolean')) throw fail('停止活动只适用于会话归档', 'INVALID_SESSION_ACTION');
+    const fingerprint = createHash('sha256').update(JSON.stringify([id, input.native, input.operation, title ?? null, ...(input.stopActivity === true ? [true] : [])])).digest('hex');
     const key = JSON.stringify([device.id, requestId]), adapter = adapterOf(input);
     let receipt = receipts.find(row => row.deviceId === device.id && row.requestId === requestId);
     if (receipt && receipt.fingerprint !== fingerprint) throw fail('请求 ID 已用于其他会话操作', 'SESSION_ACTION_CONFLICT', 409);
-    const scope = await adapter.managementScope(id, device, receipt?.scope, input.operation === 'delete' && !!receipt);
+    const archive = ['archive', 'unarchive'].includes(input.operation);
+    const scope = await adapter.managementScope(id, device, receipt?.scope, input.operation === 'delete' && !!receipt, archive);
     authorize(device);
     if (receipt) {
       if (pending.has(key)) return pending.get(key);
@@ -62,7 +65,7 @@ export function createSessionActions({ store, official, native, authorize, now =
     receipt = receipts.find(row => row.deviceId === device.id && row.requestId === requestId);
     if (receipt) {
       if (receipt.fingerprint !== fingerprint) throw fail('请求 ID 已用于其他会话操作', 'SESSION_ACTION_CONFLICT', 409);
-      await adapter.managementScope(id, device, receipt.scope, input.operation === 'delete');
+      await adapter.managementScope(id, device, receipt.scope, input.operation === 'delete', archive);
       authorize(device);
       if (pending.has(key)) return pending.get(key);
       if (receipt.state === 'done') return { ...receipt.result };
@@ -78,20 +81,24 @@ export function createSessionActions({ store, official, native, authorize, now =
     receipt = { deviceId: device.id, requestId, fingerprint, scope, issuedAt, state: 'applying', createdAt: at };
     receipts.push(receipt);
     let applied = false;
-    const guard = async () => { authorize(device); await adapter.managementScope(id, device, scope, input.operation === 'delete'); authorize(device); };
+    const guard = async () => { authorize(device); await adapter.managementScope(id, device, scope, input.operation === 'delete', archive); authorize(device); };
     guard.authorize = () => authorize(device);
     guard.mutation = () => { applied = true; };
     const promise = (async () => {
       try {
         await store.persist();
         await guard();
-        const value = await adapter.manage({ id, operation: input.operation, ...(title === undefined ? {} : { title }) }, device, guard);
+        const value = await adapter.manage({ id, operation: input.operation, title, stopActivity: input.stopActivity === true }, device, guard);
         applied = true;
         receipt.result = { accepted: true, id, operation: input.operation, requestId, refreshRequired: true, ...value };
         receipt.state = 'done';
         await store.persist();
         return { ...receipt.result };
       } catch (error) {
+        if (input.operation === 'archive' && error.code === activeArchiveCode) {
+          applied = false;
+          error = fail('此会话仍有活动，请确认停止并归档', activeArchiveCode, 409);
+        }
         if (applied) error = fail(`操作结果待核实（${error.message}），请刷新所属设备确认，勿重复提交`, 'SESSION_ACTION_UNCERTAIN', 409);
         receipt.state = applied ? 'unknown' : 'failed';
         receipt.error = { message: error.message, code: error.code || 'SESSION_ACTION_FAILED', status: error.status ?? 400 };

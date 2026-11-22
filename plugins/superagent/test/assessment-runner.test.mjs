@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createAssessmentRunner } from '../src/assessment-runner.mjs';
 import { ingestChannelEvent } from '../src/intake.mjs';
+import { authorizeAssessment } from '../src/assessment-policy.mjs';
 
 test('runner assesses pending intake and promotes the same source only after an authorized Decision', async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
@@ -34,6 +35,93 @@ test('runner assesses pending intake and promotes the same source only after an 
   const [task] = database.listTasks();
   assert.equal(task.mandate.triggerId, triggerId);
   assert.equal(task.acceptance, '');
+});
+
+const remoteRequest = async database => ingestChannelEvent(database, { sourceKey: 'remote-source', channel: 'telegram', threadId: 'thread',
+  source: { channel: 'telegram', sourceType: 'direct', connectionId: 'telegram', conversationId: 'chat', chatId: 'chat' },
+  actor: { id: 'owner', kind: 'human' }, text: 'Run the nightly check on the server',
+}, { version: 'p', ownerIds: ['owner'], threadIds: ['chat'] });
+const remoteDecision = candidates => [{ candidateId: candidates[0].candidateId, outcome: 'accept', target: 'Run the nightly check', reason: 'Explicit request for the server', deviceId: 'B', projectId: 'project-b' }];
+
+test('an accepted channel request for another device freezes that device execution into the Task', async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  const accepted = await remoteRequest(database);
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-auth', protocolVersion: 2, config: { harness: 'official', models: [{ providerId: 'p', modelId: 'm' }] } };
+  const project = { deviceId: 'B', hostId: 'B-host', id: 'project-b', path: '/srv/b' };
+  const seen = [];
+  const runner = createAssessmentRunner({ database, readPolicy: async () => ({ version: 'p', model: {} }),
+    authorize: async ({ trigger }) => ({ allowed: true, mandate: { actorId: 'owner', source: trigger.source } }),
+    readDevices: async () => [{ deviceId: 'B', name: 'Server', online: true, projects: [{ id: 'project-b', title: 'B' }] }],
+    resolveRemoteExecution: async input => { seen.push({ deviceId: input.deviceId, projectId: input.projectId }); return { execution, project }; },
+    assess: async ({ candidates, devices }) => { assert.deepEqual(devices.map(row => row.deviceId), ['B']); return remoteDecision(candidates); } });
+  await runner.tick(); await runner.stop();
+  const [task] = database.listTasks();
+  assert.deepEqual(seen, [{ deviceId: 'B', projectId: 'project-b' }]);
+  assert.deepEqual(task.mandate.execution, execution);
+  assert.deepEqual(task.mandate.project, project);
+  assert.equal(task.mandate.source.channel, 'telegram');
+  assert.equal(task.mandate.triggerId, accepted.intakeEvent.id);
+});
+
+test('a device that cannot take the work is reported to the requester and creates no Task', async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  await remoteRequest(database);
+  let committed;
+  const intercepted = new Proxy(database, { get(target, key) { return key === 'decide' ? (_id, decision) => { committed = decision; } : target[key]; } });
+  const asked = [];
+  const runner = createAssessmentRunner({ database: intercepted, readPolicy: async () => ({ version: 'p', model: {} }),
+    authorize: async ({ trigger, decision }) => { asked.push(decision.outcome); return { allowed: true, mandate: { actorId: 'owner', source: trigger.source } }; },
+    readDevices: async () => { throw new Error('directory unavailable'); },
+    resolveRemoteExecution: async () => { throw Object.assign(new Error('device offline'), { code: 'OFFLINE' }); },
+    assess: async ({ candidates, devices }) => { assert.deepEqual(devices, [], 'an unreadable device center never blocks assessment'); return remoteDecision(candidates); } });
+  await runner.tick(); await runner.stop();
+  assert.equal(committed.outcome, 'answer');
+  assert.match(committed.reply.text, /device offline/);
+  assert.equal(committed.task, undefined);
+  assert.deepEqual(asked, ['accept', 'answer'], 'the reply itself is authorized by the source policy');
+});
+
+test('channel revisions and adjustments retain the frozen remote project, model and execution identity', async t => {
+  const database = createAssistantOrchestrationStore({ filename: ':memory:' });
+  t.after(() => database.close());
+  const source = { channel: 'feishu', sourceType: 'direct', connectionId: 'feishu', conversationId: 'chat', chatId: 'chat', appId: 'app' };
+  const actor = { id: 'owner', kind: 'human' };
+  const policy = { version: 'p', model: { providerId: 'local', modelId: 'router' }, projects: [],
+    connection: { enabled: true, appId: 'app', ownerOpenIds: ['owner'], chatIds: ['chat'] } };
+  const model = { providerId: 'remote-p', modelId: 'remote-m' };
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-auth', protocolVersion: 2,
+    config: { harness: 'official', models: [model] } };
+  const project = { deviceId: 'B', hostId: 'B-host', id: 'remote-only', path: '/srv/project' };
+  const initial = database.ingest({ dedupeKey: 'initial', thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } },
+    source, actor, content: 'Initial remote work', policyVersion: 'p' }).trigger;
+  let proposal;
+  const runner = createAssessmentRunner({ database, readPolicy: async () => policy, authorize: authorizeAssessment,
+    assess: async ({ candidates }) => [{ candidateId: candidates[0].candidateId, ...proposal }] });
+  t.after(() => runner.stop());
+  for (const operation of ['revise', 'adjustment']) {
+    const existing = database.createTask({ id: operation, threadId: initial.threadId, target: 'Initial remote work',
+      status: operation === 'adjustment' ? 'completed' : 'running',
+      mandate: { actorId: actor.id, actorKind: actor.kind, source, admission: 'platform-request',
+        controlledActions: 'require-current-policy-and-harness-approval', execution, project } });
+    proposal = { outcome: operation, taskId: existing.id, expectedInstructionRevision: 1, target: 'Updated requirement',
+      acceptance: 'Report evidence', reason: 'Explicit request in the source channel' };
+    database.ingest({ dedupeKey: operation, thread: { id: 'thread', source: { type: 'feishu', id: 'chat' } },
+      source: { ...source, messageId: operation }, actor, content: 'Update remote work',
+      gate: { allowed: true, strength: 'explicit' }, policyVersion: 'p' });
+    await runner.tick();
+    const changed = operation === 'revise' ? database.getTask(existing.id)
+      : database.listTasks().find(row => row.adjustmentOfTaskId === existing.id);
+    assert.equal(changed.target, proposal.target);
+    assert.deepEqual(changed.mandate.project, project);
+    assert.deepEqual(changed.mandate.execution, execution);
+    if (operation === 'adjustment') {
+      const [assignment] = database.assignments(changed.id);
+      assert.equal(assignment.executor, 'remote');
+      assert.deepEqual(assignment.model, model);
+    }
+  }
 });
 
 test('runner persists stop attention as attachment with the original requested outcome', async t => {

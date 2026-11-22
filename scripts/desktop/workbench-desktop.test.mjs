@@ -13,7 +13,7 @@ async function fixture(t) {
   const paths = shared.workbenchPaths({ home });
   const put = async (file, value) => { await mkdir(join(file, '..'), { recursive: true }); await writeFile(file, typeof value === 'string' ? value : JSON.stringify(value)); };
   await put(join(resources, 'app.asar', 'package.json'), { name: 'benchgo-desktop', version: '0.1.3' });
-  for (const name of ['dsh', 'dsh-app-boot', 'dsh-official-bundles']) await put(join(runtime, 'node_modules', '@deepseek-ai', name, 'package.json'), { name: `@deepseek-ai/${name}`, version: '0.2.2-rc.1' });
+  for (const name of ['dsh', 'dsh-app-boot', 'dsh-official-bundles']) await put(join(runtime, 'node_modules', '@deepseek-ai', name, 'package.json'), { name: `@deepseek-ai/${name}`, version: '0.2.2-rc.5' });
   await put(join(paths.profile, 'package.json'), { private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] }, plusInstall: { version: '0.1.3' } } });
   await put(join(paths.profile, 'cordis.patch.yml'), '# user configuration\n');
   return { root, home, resources, runtime, paths, put };
@@ -22,7 +22,7 @@ async function fixture(t) {
 test('desktop and CLI use the identical profile and preserve the installation identity through handoff', async t => {
   const f = await fixture(t), events = [];
   const old = await shared.registerWorkbenchInstallation({ home: f.home, installation: {
-    kind: 'web', runtime: f.runtime, profile: f.paths.profile, engineVersion: '0.2.2-rc.1', node: process.execPath,
+    kind: 'web', runtime: f.runtime, profile: f.paths.profile, engineVersion: '0.2.2-rc.5', node: process.execPath,
   } });
   let webRunning = true;
   const api = { ...shared,
@@ -54,7 +54,7 @@ test('desktop and CLI use the identical profile and preserve the installation id
 test('busy Web handoff fails before acquiring Desktop ownership or enrolling', async t => {
   const f = await fixture(t);
   await shared.registerWorkbenchInstallation({ home: f.home, installation: {
-    kind: 'web', runtime: f.runtime, profile: f.paths.profile, engineVersion: '0.2.2-rc.1', node: process.execPath,
+    kind: 'web', runtime: f.runtime, profile: f.paths.profile, engineVersion: '0.2.2-rc.5', node: process.execPath,
   } });
   let enrolled = false, acquired = false;
   await assert.rejects(beginDesktopWorkbench({ ...f, initialize: async () => { enrolled = true; } }, { ...shared,
@@ -111,7 +111,7 @@ test('runtime validation rejects a second profile and incompatible engine before
 
 test('unchanged Desktop startup keeps its installation record and checks runtime packages on the next startup', async t => {
   const f = await fixture(t);
-  const engine = '0.2.2-rc.1';
+  const engine = '0.2.2-rc.5';
   const host = '@deepseek-ai/dsh-desktop-host';
   const hostManifest = join(f.runtime, 'node_modules', host, 'package.json');
   await f.put(hostManifest, { name: host, version: engine });

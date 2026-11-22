@@ -1,4 +1,4 @@
-import { executionStatusText } from '../src/task-lifecycle.mjs';
+import { assignmentExecutionUncertain, executionStatusText } from '../src/task-lifecycle.mjs';
 
 export const terminalTaskStates = new Set(['completed']);
 export const taskLabels = Object.freeze({ running: '进行', waiting: '等待', completed: '完成' });
@@ -73,7 +73,7 @@ export function taskWaiting(task) {
   if (status !== 'waiting') return null;
   const control = task.executionControl || {};
   const executionNotice = taskExecutionNotice(task);
-  const uncertain = !!executionNotice || safetyWait || snapshot.assignment?.state === 'uncertain';
+  const uncertain = !!executionNotice || safetyWait || assignmentExecutionUncertain(snapshot.assignment);
   const failed = continuationWait?.code === 'EXECUTION_FAILED' || result?.outcome === 'failed';
   const failureReason = failed ? [shortTaskText(continuationWait?.reason, 100),
     shortTaskText(continuationWait?.resumeConditions, 100), '调整要求后继续。'].filter(Boolean).join('；') : '';

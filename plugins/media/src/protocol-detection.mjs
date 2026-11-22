@@ -5,6 +5,7 @@ import { executeAsr, requestSpeech } from './protocols/registry.mjs';
 import { protocolDescriptor, protocolOptions } from '../shared/protocol-catalog.mjs';
 import { validateWav } from './media.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
+import { routerGo } from '../../base/shared/builtin-providers.mjs';
 
 // Windows System.Speech, PCM16 mono 16kHz: “Hello. This is a voice connection test.”
 // A fixed synthetic phrase never uploads the user's microphone recording during discovery.
@@ -34,7 +35,9 @@ function abortable(promise, signal) {
 export function protocolCandidates(kind, config, requirement = 'any', explicit = false) {
   if (explicit) return config.protocol && config.protocol !== 'auto' ? [config.protocol] : [];
   const selectedType = config.apiType && config.apiType !== 'auto' ? config.apiType : apiType(config);
+  const routerGoRoute = kind === 'tts' && config.baseURL.replace(/\/+$/u, '') === routerGo.baseURL;
   return protocolOptions(kind, selectedType).filter(item => item.id && item.id !== 'auto'
+    && (item.id !== 'speech-wav' || routerGoRoute)
     && (requirement !== 'streaming' || item.streaming)
     && (requirement !== 'http' || item.transport !== 'websocket')).sort((left, right) => capabilityRank(kind, left) - capabilityRank(kind, right)
       || Number(right.apiType === selectedType) - Number(left.apiType === selectedType)).map(item => item.id);
@@ -91,13 +94,18 @@ export async function probeRealtimeAsr(runtime, config, wav, signal, onOutput = 
   } finally { runtime.close(id); await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
 }
 
+const modelUnavailableMessage = '供应商报告所选模型或语音能力暂不可用。';
+
 function failure(error) {
   const status = error?.upstreamStatus || Number(/(?:http_|handshake_)(\d{3})/u.exec(error?.code || '')?.[1]);
   if ([401, 403].includes(status) || ['invalid_api_key', 'authentication_error', 'permission_denied'].includes(error?.code)) return { status: 'inconclusive', message: '认证失败，请检查供应商密钥与权限。', stop: true };
   if (status === 429 || ['rate_limit_exceeded', 'insufficient_quota'].includes(error?.code)) return { status: 'inconclusive', message: '供应商限流，请稍后重试。', stop: true };
+  if (error?.code === 'model_unavailable') return { status: 'inconclusive', message: modelUnavailableMessage, modelUnavailable: true };
   if (['asr_no_speech', 'no_speech', 'no_speech_found'].includes(error?.code)) return { status: 'inconclusive', message: '测试音频未识别到语音，无法据此判断协议。', stop: true };
+  if (error?.code === 'tts_wav_format') return { status: 'unsupported', message: '供应商未返回完整的 24 kHz 单声道 PCM16 WAV 音频。' };
   if ([404, 405, 415].includes(status) || ['asr_stream_unavailable', 'asr_session_required', 'tts_pcm_format', 'tts_audio_empty', 'tts_audio_invalid', 'tts_audio_limit'].includes(error?.code)) return { status: 'unsupported', message: '当前接口不支持该请求或响应格式。' };
   if ([400, 422].includes(status)) return { status: 'inconclusive', message: '供应商拒绝测试参数；请检查模型与音色，尚不能确定协议不兼容。' };
+  if (status >= 500 && status < 600) return { status: 'inconclusive', message: `供应商暂时无法完成请求（HTTP ${status}）。` };
   if (error?.name === 'AbortError' || error?.name === 'TimeoutError') return { status: 'inconclusive', message: '检测超时，请检查网络或手动选择协议。' };
   return { status: 'inconclusive', message: '连接或响应校验失败，请检查服务地址和模型。' };
 }
@@ -108,7 +116,7 @@ export class ProtocolDetection {
   }
   cancelPending() { for (const item of this.pending.values()) item.controller.abort(); this.pending.clear(); }
   clear() { this.cancelPending(); }
-  async probe(kind, config, protocol, signal) {
+  async probe(kind, config, protocol, signal, { omitSpeed = false } = {}) {
     const descriptor = protocolDescriptor(kind, protocol);
     if (!descriptor || !protocol || protocol === 'auto') throw new VoiceError('Unknown voice protocol', 409);
     const selected = { ...config, protocol }, started = this.now(); let firstOutputMs = null;
@@ -124,7 +132,7 @@ export class ProtocolDetection {
       if (!result.text?.trim()) throw new VoiceError('No test transcription', 502, 'asr_no_speech');
       output(); message = '测试语音已识别，响应格式有效。';
     } else {
-      const upstream = await requestSpeech(this.fetcher, selected, PROBE_TEXT, signal);
+      const upstream = await requestSpeech(this.fetcher, selected, PROBE_TEXT, signal, { omitSpeed });
       const type = upstream.headers.get('content-type') || '';
       const rate = upstream.headers.get('x-voice-sample-rate') || /(?:rate|samplerate|sample_rate)\s*=\s*"?(\d+)/iu.exec(type)?.[1];
       const channels = upstream.headers.get('x-voice-channels') || /channels\s*=\s*"?(\d+)/iu.exec(type)?.[1];
@@ -183,7 +191,7 @@ export class ProtocolDetection {
   }
   async run(kind, config, { requirement, explicit, signal }) {
     const attempts = [], candidates = protocolCandidates(kind, config, requirement, explicit);
-    let stopped = false;
+    let stopped = false, modelUnavailable = false;
     for (const protocol of candidates) {
       if (stopped) { attempts.push({ protocol, status: 'not-tested', message: '前项认证、限流或输入校验失败，已停止后续请求。' }); continue; }
       signal.throwIfAborted(); const timeout = AbortSignal.timeout(ATTEMPT_TIMEOUT), attemptSignal = AbortSignal.any([signal, timeout]);
@@ -193,10 +201,11 @@ export class ProtocolDetection {
       }
       const started = this.now();
       try {
-        const measured = await abortable(this.probe(kind, config, protocol, attemptSignal), attemptSignal);
+        const measured = await abortable(this.probe(kind, config, protocol, attemptSignal, { omitSpeed: !explicit }), attemptSignal);
         signal.throwIfAborted(); attempts.push({ protocol, status: 'supported', ...measured });
       } catch (error) {
         signal.throwIfAborted(); const result = failure(attemptSignal.aborted ? attemptSignal.reason : error);
+        modelUnavailable ||= !!result.modelUnavailable;
         attempts.push({ protocol, status: result.status, message: result.message, completionMs: Math.max(0, Math.round(this.now() - started)) }); stopped = !!result.stop;
       }
     }
@@ -211,6 +220,7 @@ export class ProtocolDetection {
         message: explicit ? '当前协议验证通过。' : kind === 'tts' ? '已比较可用协议，优先参考本次音频供给连续性，再比较起播时间；请保存所选协议。' : '已比较可用协议，按用途能力与本次首输出时间匹配；请保存所选协议。' };
     }
     const inconclusive = attempts.some(attempt => attempt.status === 'inconclusive');
+    if (modelUnavailable) return { status: 'inconclusive', protocol: '', apiType: '', attempts, message: modelUnavailableMessage };
     return { status: inconclusive ? 'inconclusive' : 'unsupported', protocol: '', apiType: '', attempts, message: inconclusive ? '暂时无法匹配，请检查配置后重试或手动选择。' : '没有符合当前用途的协议，请检查接口类型和模型。' };
   }
 }

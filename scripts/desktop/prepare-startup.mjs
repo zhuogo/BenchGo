@@ -1,6 +1,32 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/** Apply BenchGo's native presentation while preserving the official welcome lifecycle. */
+export function welcomePresentationPlugin(welcomePath) {
+  const target = resolve(welcomePath);
+  const helper = fileURLToPath(new URL('./startup-window.mjs', import.meta.url));
+  const anchor = 'const window = new BrowserWindow(options);';
+  let transformed = 0;
+  return {
+    name: 'benchgo-welcome-presentation',
+    buildStart() { transformed = 0; },
+    transform(source, id) {
+      if (resolve(id) !== target) return null;
+      if (source.split(anchor).length !== 2) throw new Error('Official welcome window changed: expected one window constructor');
+      transformed++;
+      const code = source.replace(anchor,
+        'const window = createWelcomeWindow({ BrowserWindow, nativeTheme, platform: process.platform, options });');
+      return {
+        code: `import { nativeTheme } from 'electron';\nimport { createWelcomeWindow } from ${JSON.stringify(helper)};\n${code}`,
+        map: null,
+      };
+    },
+    generateBundle() {
+      if (transformed !== 1) throw new Error(`Official welcome window changed: expected one welcome entry, got ${transformed}`);
+    },
+  };
+}
+
 /** Compile startup presentation into the staged entry without modifying upstream files. */
 export function startupWindowPlugin(mainPath) {
   const target = resolve(mainPath);
@@ -13,7 +39,7 @@ export function startupWindowPlugin(mainPath) {
       if (resolve(id) !== target) return null;
       let code = source.replaceAll('\r\n', '\n');
       for (const [before, after] of [
-        ['async function main() {', "async function main() {\n    benchgoStartupTiming = createStartupTiming(app.getPath('logs'));\n    closeBenchgoStartup = await openStartupWindow({ app, BrowserWindow, nativeImage, nativeTheme, page: join(app.getAppPath(), 'renderer', 'splash.html'), iconPath: join(process.resourcesPath, 'icon.png'), onVisible: () => benchgoStartupStage('splash-visible') });\n    benchgoWorkbench = await ensureBenchgoPlugin(process.resourcesPath);\n    app.once('will-quit', () => { void benchgoWorkbench.dispose().catch(error => console.error('BenchGo workbench ownership cleanup failed', error)); });\n    benchgoStartupStage('enrollment-ready');"],
+        ['async function main() {', "async function main() {\n    benchgoStartupTiming = createStartupTiming(app.getPath('logs'));\n    closeBenchgoStartup = await openStartupWindow({ app, BrowserWindow, nativeImage, page: join(app.getAppPath(), 'renderer', 'splash.html'), iconPath: join(process.resourcesPath, 'icon.png'), onVisible: () => benchgoStartupStage('splash-visible') });\n    benchgoWorkbench = await ensureBenchgoPlugin(process.resourcesPath);\n    app.once('will-quit', () => { void benchgoWorkbench.dispose().catch(error => console.error('BenchGo workbench ownership cleanup failed', error)); });\n    benchgoStartupStage('enrollment-ready');"],
         ['function reportFatal(error, source) {', "function reportFatal(error, source) {\n    closeBenchgoStartup?.();\n    benchgoStartupTiming?.finish('failed');"],
         ['const ready = await host.start();\n                const cookie = ready.authenticationCookie;', "benchgoStartupStage('host-starting');\n                const ready = await host.start();\n                benchgoStartupStage('host-ready');\n                const cookie = ready.authenticationCookie;\n                await benchgoWorkbench.publishReady({ url: ready.url, inspect: () => host.inspectQuit() });"],
         ['welcomeBackend = connectDesktopWelcome(ready.url, cookie);', "welcomeBackend = connectDesktopWelcome(ready.url, cookie);\n                benchgoStartupStage('host-connected');"],

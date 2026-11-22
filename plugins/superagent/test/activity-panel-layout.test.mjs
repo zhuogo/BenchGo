@@ -387,6 +387,10 @@ test('activity board renders honest states, keyboard navigation and responsive t
     assert(await focusable.last().evaluate(node=>node===document.activeElement),'narrow overlay traps Shift+Tab');
     await tab('任务').click();
     const activeHeading=panel.locator('.ba-board-section-head');
+    assert.deepEqual(await activeHeading.evaluate(node=>{
+      const style=getComputedStyle(node);
+      return [style.paddingInlineStart,style.paddingInlineEnd];
+    }),['12px','12px']);
     await activeHeading.click();
     assert.equal(await activeHeading.getAttribute('aria-expanded'),'false');
     await page.keyboard.press('Tab');

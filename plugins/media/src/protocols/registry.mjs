@@ -8,11 +8,11 @@ export { speechRequest } from './openai/tts.mjs';
 export { VOICE_API_TYPES, VOICE_PROTOCOLS, ASR_PROTOCOL_OPTIONS, TTS_PROTOCOL_OPTIONS, protocolOptions, protocolDescriptor, protocolApiType } from '../../shared/protocol-catalog.mjs';
 
 const asr = Object.freeze({ transcriptions: openaiTranscribe, 'transcriptions-sse': openaiTranscribe, 'stepfun-sse': stepfunTranscribe });
-const tts = Object.freeze({ speech: openaiSpeech, 'speech-stream': openaiSpeech, 'stepfun-speech-sse': stepfunSseSpeech, 'stepfun-speech-websocket': stepfunWebsocketSpeech });
-export function requestSpeech(fetcher, config, text, signal) {
+const tts = Object.freeze({ speech: openaiSpeech, 'speech-stream': openaiSpeech, 'speech-wav': openaiSpeech, 'stepfun-speech-sse': stepfunSseSpeech, 'stepfun-speech-websocket': stepfunWebsocketSpeech });
+export function requestSpeech(fetcher, config, text, signal, options) {
   const protocol = config.protocol || 'speech', adapter = Object.hasOwn(tts, protocol) ? tts[protocol] : undefined;
   if (!adapter) throw new VoiceError('Unknown TTS protocol');
-  return adapter(fetcher, config, text, signal);
+  return adapter(fetcher, config, text, signal, options);
 }
 export async function executeAsr(fetcher, config, bytes, signal, partial = () => {}) {
   const protocol = config.protocol || 'transcriptions';

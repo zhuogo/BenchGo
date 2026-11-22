@@ -40,14 +40,15 @@ async function fixture() {
     const namespaces=()=>new Map([['llm-pi-ai',namespace], ...(official ? [[official.ns,official]] : [])]);
     const listeners = new Set(); let state;
     const getPath=(value,path)=>path.reduce((at,key)=>at?.[key],value);
-    const protocols=['openai-completions','openai-responses','anthropic-messages'];
+    const protocols=['openai-completions','openai-responses','anthropic-messages','google-generative-ai'];
     const schema={getPath,hasPath:(value,path)=>getPath(value,path)!==undefined,rehydrate:value=>value,
-      nodeAtPath:(_root,path)=>path.at(-1)==='api'?{type:'union',list:protocols.map(value=>({value}))}:{meta:{}},validate:()=>undefined,
+      nodeAtPath:(root,path)=>path.at(-1)==='api'?{type:'union',list:protocols.map(value=>({value}))}:getPath(root?.dict,path)??{meta:{}},validate:()=>undefined,
       setPath(value,path,next){const copy=structuredClone(value);let at=copy;for(const key of path.slice(0,-1))at=at[key]??={};at[path.at(-1)]=next;return copy;},
       deletePath(value,path){const copy=structuredClone(value);let at=copy;for(const key of path.slice(0,-1))at=at[key];delete at[path.at(-1)];return copy;}};
-    const rows=()=>[...new Set(['stepfun',...Object.keys(namespace.value.providers)])].map(id=>({entry:{provider:id,
-      displayName:namespace.value.providers[id]?.displayName??({routergo:'RouterGo',stepfun:'StepFun'})[id]??id,
-      settingsNs:'llm-pi-ai',settingsPath:['providers',id],active:true,declared:id!=='stepfun'},
+    const officialPresets={stepfun:'StepFun',openai:'OpenAI',anthropic:'Anthropic','kimi-coding':'Kimi Coding','xiaomi-token-plan-cn':'小米 Token 套餐'};
+    const rows=()=>[...new Set([...Object.keys(officialPresets),...Object.keys(namespace.value.providers)])].map(id=>({entry:{provider:id,
+      displayName:namespace.value.providers[id]?.displayName??officialPresets[id]??(id==='routergo'?'RouterGo':id),
+      settingsNs:'llm-pi-ai',settingsPath:['providers',id],active:true,declared:!Object.hasOwn(officialPresets,id)},
       configured:!!namespace.value.providers[id],removable:true,apiKeyEnv:namespace.value.providers[id]?.apiKeyEnv,
       credential:{configured:window.invalidCredential !== id,writable:true,source:'file'}})).concat(official ? [{
         entry:{provider:'deepseek-official',displayName:'DeepSeek',settingsNs:official.ns,settingsPath:[],active:true},
@@ -70,8 +71,8 @@ async function fixture() {
     };
     window.setScenario=mode=>publish({status:mode==='loading'?'loading':mode==='error'?'error':'ready',error:mode==='error'?'供应商目录暂不可用':null,writable:true,
       rows:mode==='empty'?rows().map(row=>({...row,configured:false})):mode==='data'?rows():[],namespaces:namespaces()});
-    window.officialScenario = source => {
-      official={ns:'llm-deepseek',user:{apiKeyEnv:'SHARED_DEEPSEEK',models:[{id:'opaque/deepseek:model'}]},base:{},schema:{},revision:3};
+    window.officialScenario = (source, models = [{id:'opaque/deepseek:model'}]) => {
+      official={ns:'llm-deepseek',user:{apiKeyEnv:'SHARED_DEEPSEEK',models},base:{},schema:{},revision:3};
       official.value=structuredClone(official.user);
       keys.clear();
       if(source)keys.set('SHARED_DEEPSEEK',source);
@@ -79,8 +80,22 @@ async function fixture() {
     };
     window.getOfficial=()=>({apiKeyEnv:official.value.apiKeyEnv,models:official.user.models,keys:[...keys.keys()]});
     window.loads=0; window.writes=[]; window.discoveries=[];
+    window.savedProviders = () => structuredClone(namespace.user.providers);
+    window.seedProvider = (id, provider) => {
+      namespace.user.providers[id] = provider;
+      namespace.value = structuredClone(namespace.user);
+      window.setScenario('data');
+    };
     const controller={store:{getSnapshot:()=>state},async load(){window.loads++;publish({...state,status:'loading'});await new Promise(resolve=>setTimeout(resolve,80));publish({...state,status:'ready',rows:rows(),namespaces:namespaces()});}};
-    const operations={async writeSettings(ns,ops,revision){if(ns===official?.ns){window.writes.push({ns,ops,revision});for(const op of ops){if(op.op==='set')official.user=schema.setPath(official.user,op.path,op.value);}official.value=structuredClone(official.user);official.revision++;return{kind:'written',view:official};}window.writes.push({ns,ops});for(const op of ops){if(op.op==='set')namespace.user=schema.setPath(namespace.user,op.path,op.value);else if(op.op==='unset')namespace.user=schema.deletePath(namespace.user,op.path);}namespace.value=structuredClone(namespace.user);namespace.revision++;return{kind:'written',view:namespace};},async storeCredential(ref){keys.set(ref,'file');},async removeCredential(ref){keys.delete(ref);},async discoverModels(ns,options){window.discoveries.push({ns,options});return{kind:'found',models:window.fixtureModels??[]};}};
+    const operations={async writeSettings(ns,ops,revision){if(ns===official?.ns){window.writes.push({ns,ops,revision});for(const op of ops){if(op.op==='set')official.user=schema.setPath(official.user,op.path,op.value);}official.value=structuredClone(official.user);official.revision++;return{kind:'written',view:official};}window.writes.push({ns,ops});for(const op of ops){if(op.op==='set')namespace.user=schema.setPath(namespace.user,op.path,op.value);else if(op.op==='unset')namespace.user=schema.deletePath(namespace.user,op.path);}namespace.value=structuredClone(namespace.user);namespace.revision++;return{kind:'written',view:namespace};},async storeCredential(ref){
+      if (window.failCredentialOnce) { window.failCredentialOnce = false; window.setScenario('data'); return '凭据暂时无法写入'; }
+      keys.set(ref,'file');
+    },async removeCredential(ref){keys.delete(ref);},async discoverModels(ns,options){
+      window.discoveries.push({ns,options});
+      await window.discoveryGate;
+      if (window.discoveryFailure) throw Error(window.discoveryFailure);
+      return {kind:'found',models:window.fixtureModels??[]};
+    }};
     const useSnapshot=selector=>selector(React.useSyncExternalStore(fn=>{listeners.add(fn);return()=>listeners.delete(fn);},()=>state));
     window.setScenario('loading');
     function App() {
@@ -89,10 +104,12 @@ async function fixture() {
       const renderSlot = (name, props, filter) => {
         if (name === 'settings.header') return '设置';
         if (name === 'settings.close') return '关闭设置';
-        if (name === 'settings.section' && filter.only === 'models') return <ModelsSection controller={controller} useSnapshot={useSnapshot} operations={operations} schema={schema} t={key=>zh[key]??key} renderSlot={()=>null}/>;
         return filter?.fallback ?? null;
       };
-      return <><style>{tokens}{base}{hostCss}{mobileCss}</style><main><h1>BenchGo</h1><SettingsRoot wide t={key=>key} renderSlot={renderSlot} reconnect={()=>{}}
+      const renderFactorySlot = (name, props) => name === 'settings.section.view' && props.id === 'models'
+        ? <ModelsSection controller={controller} useSnapshot={useSnapshot} operations={operations} schema={schema} t={key=>zh[key]??key} renderSlot={()=>null}/>
+        : null;
+      return <><style>{tokens}{base}{hostCss}{mobileCss}</style><main><h1>BenchGo</h1><SettingsRoot wide t={key=>key} renderSlot={renderSlot} renderFactorySlot={renderFactorySlot} reconnect={()=>{}}
         useStore={read=>read({open:true,activeId})} actions={{select,close(){}}} useSections={read=>read(rows)}
         useConnectionState={read=>read('connected')} useOnboardingSteps={read=>read([])}
         useSessions={read=>read({phase:'ready',byId:{main:{retainedBy:{mainView:1},blank:false}}})} useShortcuts={read=>read([])}/></main></>;
@@ -111,7 +128,99 @@ async function fixture() {
     </style></head><body><div id="root"></div><script>${script.replaceAll('</script','<\\/script')}</script></body></html>`;
 }
 
-test('DeepSeek official can be removed and re-added without altering the shared credential or stored models', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+test('DashScope template adds two independent connections and preserves models on reload', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 }, hasTouch: true });
+    page.setDefaultTimeout(6000);
+    await page.route('**/*', route => route.request().url() === 'http://localhost/'
+      ? route.fulfill({ contentType: 'text/html', body: html })
+      : route.fulfill({ json: {} }));
+    await page.goto('http://localhost/');
+    await page.evaluate(() => {
+      window.fixtureModels = ['qwen-flash', 'other/model:Exactly'].map(id => ({ id, name: id }));
+      window.setScenario('data');
+    });
+    const add = page.getByRole('button', { name: '添加模型提供商' });
+    const search = page.getByRole('searchbox', { name: '搜索厂商' });
+    const baseUrl = page.getByRole('textbox', { name: 'API 地址', exact: true });
+    const name = page.getByRole('textbox', { name: '显示名称', exact: true });
+    const workspace = 'https://ws-example.cn-beijing.maas.aliyuncs.com';
+    const cases = [
+      { name: '百炼 · 团队', address: workspace, expected: workspace + '/compatible-mode/v1', key: 'example-team-key' },
+      { name: '百炼 · 备用', address: 'https://fixture.example/custom/v1', expected: 'https://fixture.example/custom/v1', key: 'example-backup-key' },
+    ];
+    for (const [index, connection] of cases.entries()) {
+      await add.click();
+      await search.fill('no-vendor-match');
+      await page.getByRole('status').getByText('没有匹配的厂商').waitFor();
+      await search.fill('DashScope');
+      await page.getByRole('button', { name: '阿里云百炼', exact: true }).click();
+      await name.fill(connection.name);
+      await baseUrl.fill(connection.address);
+      const key = page.getByLabel('API 密钥', { exact: true });
+      const discover = page.getByRole('button', { name: '同步模型' });
+      assert.equal(await key.getAttribute('required'), '');
+      assert.equal(await discover.isEnabled(), false);
+      await key.fill(connection.key);
+      assert.equal(await baseUrl.inputValue(), connection.expected);
+      await discover.click();
+      const picker = page.getByRole('region', { name: '选择模型' });
+      const qwen = picker.getByRole('checkbox', { name: 'qwen-flash', exact: true });
+      assert.equal(await qwen.isChecked(), false);
+      assert.equal(await page.getByRole('dialog').count(), 1);
+      assert.equal(await page.getByRole('searchbox', { name: '搜索模型目录' }).count(), 1);
+      await page.getByRole('searchbox', { name: '搜索模型目录' }).click();
+      await qwen.check();
+      await picker.getByRole('button', { name: '更新列表' }).click();
+      await picker.waitFor({ state: 'detached' });
+      assert.equal(await discover.evaluate(button => document.activeElement === button), true);
+      const searchModel = page.getByRole('searchbox', { name: '搜索模型目录' });
+      assert((await searchModel.boundingBox()).width >= 80);
+      if (process.env.BENCHGO_PROVIDER_SCREENSHOTS && index === 0) {
+        await mkdir(process.env.BENCHGO_PROVIDER_SCREENSHOTS, { recursive: true });
+        await name.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: join(process.env.BENCHGO_PROVIDER_SCREENSHOTS, 'dashscope-form-390.png') });
+      }
+      const create = page.getByRole('button', { name: '创建提供商' });
+      if (index === 0) {
+        await page.evaluate(() => { window.failCredentialOnce = true; });
+        await create.click();
+        await page.getByRole('alert').getByText('凭据暂时无法写入').waitFor();
+        assert.equal(await page.evaluate(() => window.writes.length), 1);
+      }
+      await create.click();
+      await page.getByRole('listitem').filter({ hasText: connection.name }).waitFor();
+    }
+    const { providers, discoveries } = await page.evaluate(() => ({ providers: window.savedProviders(), discoveries: window.discoveries }));
+    assert.deepEqual(discoveries.map(({ options }) => options), cases.map(row => ({
+      baseURL: row.expected, api: 'openai-completions', apiKey: row.key,
+    })));
+    const connections = Object.entries(providers).filter(([id]) => id.startsWith('benchgo-dashscope-'));
+    assert.equal(connections.length, 2);
+    assert.equal(new Set(connections.map(([, provider]) => provider.apiKeyEnv)).size, 2);
+    for (const [index, [id, provider]] of connections.entries()) {
+      assert.match(id, /^benchgo-dashscope-[0-9a-f]{32}$/u);
+      assert.equal(provider.baseURL, cases[index].expected);
+      assert.deepEqual(provider.models.map(model => model.id), ['qwen-flash']);
+    }
+    await page.evaluate(() => window.remount());
+    const primary = page.getByRole('listitem').filter({ hasText: cases[0].name });
+    await primary.getByRole('button', { name: /^编辑 百炼 · 团队/ }).click();
+    assert.equal((await primary.getByRole('button', { name: 'API 协议', exact: true }).innerText()).trim(), 'OpenAI Chat Completions');
+    assert.equal(await primary.getByRole('button', { name: '高级连接设置', exact: true }).count(), 0);
+    await primary.getByRole('textbox', { name: '显示名称', exact: true }).fill('百炼 · 工作');
+    const editedAddress = 'https://ws-edited.cn-beijing.maas.aliyuncs.com';
+    await primary.getByRole('textbox', { name: 'API 地址', exact: true }).fill(editedAddress);
+    await primary.getByRole('button', { name: '保存', exact: true }).click();
+    await page.getByRole('listitem').filter({ hasText: '百炼 · 工作' }).waitFor();
+    assert.equal(await page.evaluate(id => window.savedProviders()[id].baseURL, connections[0][0]), editedAddress + '/compatible-mode/v1');
+    assert.deepEqual(await page.evaluate(id => window.savedProviders()[id], connections[1][0]), connections[1][1]);
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  } finally { await browser.close(); }
+});
+
+test('DeepSeek official connections can be removed without altering the shared credential or stored models', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
   const html = await fixture(), browser = await chromium.launch({ executablePath, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
@@ -137,13 +246,8 @@ test('DeepSeek official can be removed and re-added without altering the shared 
         ns: 'llm-deepseek', revision: 3, ops: [{ op: 'set', path: ['apiKeyEnv'], value: disconnected.apiKeyEnv }],
       });
       await page.getByRole('button', { name: '添加模型提供商', exact: true }).click();
-      const providerPicker = page.getByRole('button', { name: '提供商', exact: false }).filter({ hasNotText: '添加模型提供商' });
-      await providerPicker.click();
-      await page.getByRole('dialog', { name: '提供商', exact: true }).getByRole('button', { name: 'DeepSeek', exact: true }).click();
-      await page.getByRole('textbox', { name: 'API 密钥', exact: true }).fill('fixture-deepseek-key');
-      await page.getByRole('button', { name: '保存', exact: true }).click();
-      await remove.waitFor();
-      assert.deepEqual((await page.evaluate(() => window.getOfficial())).keys, [...disconnected.keys, disconnected.apiKeyEnv]);
+      assert.equal(await page.getByRole('group', { name: '厂商模板' }).getByRole('button', { name: 'DeepSeek', exact: true }).count(), 0);
+      await page.getByRole('button', { name: '关闭添加供应商' }).click();
     }
   } finally { await browser.close(); }
 });
@@ -175,7 +279,7 @@ test('provider settings render four states and retain protocol choices through d
           assert.equal(layout.justify,'center');assert.equal(layout.align,'center');assert(layout.height>=240);
           await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await loading.locator('.bg-loading-character').first().evaluate(node=>getComputedStyle(node).animationName),'none');await page.emulateMedia({reducedMotion:'no-preference'});
         } else if(scenario==='error') {await page.getByText('供应商目录暂不可用',{exact:false}).waitFor();assert.equal(await page.getByRole('button',{name:'重试'}).count(),1);}
-        else if(scenario==='empty')assert.equal(await page.getByRole('button',{name:'添加模型提供商'}).count(),1);
+        else if(scenario==='empty')await page.getByRole('button',{name:'添加模型提供商'}).waitFor();
         else await page.getByText('RouterGo',{exact:true}).waitFor();
         if(screenshots)await page.screenshot({path:join(screenshots,`${scenario}-${width}-${dark?'dark':'light'}.png`),fullPage:true});
       }
@@ -188,33 +292,45 @@ test('provider settings render four states and retain protocol choices through d
       assert.equal(await page.locator('#commander-official-models-style').count(),1);
       assert.equal(await page.getByRole('dialog').getByRole('heading').first().evaluate(node=>getComputedStyle(node).marginTop),'0px');
       await page.getByRole('button',{name:'添加模型提供商'}).click();
-      await page.getByRole('textbox',{name:'API 密钥',exact:true}).fill('fixture-value');
-      await page.getByRole('button',{name:'保存',exact:true}).click();
-      await page.getByRole('listitem').filter({hasText:'StepFun'}).waitFor();
-      await page.waitForFunction(()=>window.loads===1);
-      assert.equal(await page.evaluate(()=>window.writes[0].ns),'llm-pi-ai');
-      assert.equal(await page.evaluate(()=>window.writes[0].ops[0].path[1]),'stepfun');
+      const add = page.locator('.cmd-provider-add-heading');
+      const closeAdd = add.getByRole('button', { name: '关闭添加供应商' });
+      const bounds = await Promise.all([add.getByRole('heading').boundingBox(), closeAdd.boundingBox()]);
+      assert(bounds[0].y < bounds[1].y + bounds[1].height && bounds[1].y < bounds[0].y + bounds[0].height);
+      const templates = page.getByRole('group', { name: '厂商模板' });
+      assert.equal(await templates.getByRole('button').count(), 22);
+      for (const [name, brand] of [
+        ['New API', 'new-api'], ['Sub2API', 'sub2api'], ['讯飞星火', 'spark'], ['百度千帆', 'qianfan'],
+        ['月之暗面 Kimi', 'kimi'], ['OpenAI', 'openai'], ['Anthropic', 'anthropic'], ['OpenCode', 'opencode'],
+        ['Google Gemini', 'google'], ['Meta', 'meta'], ['NVIDIA', 'nvidia'], ['Hugging Face', 'huggingface'],
+        ['Mistral', 'mistral'], ['智谱 Z.ai', 'zhipu'],
+      ]) {
+        const image = templates.getByRole('button', { name, exact: true }).locator(`[data-provider-brand="${brand}"] img`);
+        assert(await image.evaluate(async node => { await node.decode(); return node.naturalWidth > 0; }));
+      }
+      assert.equal(await page.getByRole('group', { name: '其他接入方式' }).count(), 0);
+      for (const name of ['RouterGo', 'Kimi Coding', '小米 Token 套餐']) {
+        assert.equal(await templates.getByRole('button', { name, exact: true }).count(), 0);
+      }
+      assert.equal(await templates.getByRole('button', { name: '自定义供应商', exact: true }).count(), 1);
+      if(screenshots) await page.screenshot({path:join(screenshots,'provider-templates-'+width+'-'+dark+'.png')});
+      await closeAdd.click();
       assert.equal(await page.locator('#commander-official-models-style').count(),1);
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
       const router = page.getByRole('listitem').filter({hasText:'RouterGo'});
-      const stepfun = page.getByRole('listitem').filter({hasText:'StepFun'});
-      const [first, second] = await Promise.all([router.boundingBox(),stepfun.boundingBox()]);
-      assert(second.y > first.y);
-      if(width > 1000) assert(first.width > second.width);
+      const first = await router.boundingBox();
       if(screenshots) await page.screenshot({path:join(screenshots,`providers-${width}-${dark?'dark':'light'}.png`)});
       await router.getByRole('button',{name:/^编辑 RouterGo/}).click();
       if(width > 1000) assert.equal((await router.boundingBox()).width, first.width);
       const endpoint=router.getByRole('textbox',{name:'API 地址',exact:true});
       const protocol=router.getByRole('button',{name:'API 协议',exact:true});
       const protocolMenu=page.getByRole('listbox',{name:'API 协议'});
-      const advanced=router.getByRole('button',{name:'高级连接设置',exact:true});
       assert(await router.getByRole('textbox',{name:'API 密钥',exact:true}).isVisible());
       assert.equal(await endpoint.inputValue(),'https://router.example/v1');
-      assert.equal(await protocol.count(),0);
-      await advanced.click();
+      assert(await protocol.isVisible());
+      assert.equal(await router.getByRole('button', {name:'高级连接设置',exact:true}).count(),0);
       assert.equal((await protocol.innerText()).trim(),'OpenAI Chat Completions');
       assert.equal(await router.getByText('自定义设置',{exact:true}).count(),0);
-      assert.equal(await router.locator('select').count(),0);
+      assert.equal(await router.locator('select[aria-label="API 协议"]').count(),0);
       if(screenshots) await page.screenshot({path:join(screenshots,`editor-${width}-${dark?'dark':'light'}.png`)});
       await protocol.scrollIntoViewIfNeeded();
       await protocol.press('ArrowDown');
@@ -230,24 +346,60 @@ test('provider settings render four states and retain protocol choices through d
       await page.keyboard.press('Enter');
       assert.equal((await protocol.innerText()).trim(),'OpenAI 响应');
       await endpoint.fill('https://edited.example/v1');
-      const modelActions = router.locator('.cmd-model-list-actions');
-      assert.deepEqual((await modelActions.getByRole('button').allTextContents()).map(value=>value.trim()), ['保存', '获取模型']);
-      assert.equal(await modelActions.getByRole('button', { name: '获取模型' }).locator('svg').count(), 0);
-      assert.equal(await modelActions.getByRole('button', { name: '获取模型' }).evaluate(node => getComputedStyle(node).borderRadius),
-        await modelActions.getByRole('button', { name: '保存' }).evaluate(node => getComputedStyle(node).borderRadius));
-      await modelActions.getByRole('button',{name:'获取模型'}).click();
+      const modelActions = router.locator('.cmd-model-catalog-tools .cmd-model-list-actions');
+      const save = router.getByRole('button', { name: '保存', exact: true });
+      assert.deepEqual((await modelActions.getByRole('button').allTextContents()).map(value=>value.trim()), ['同步模型', '']);
+      const optimize = modelActions.getByRole('button', { name: '上下文窗口优化' });
+      const computedPaint = node => ({ background: getComputedStyle(node).backgroundColor, shadow: getComputedStyle(node).boxShadow });
+      assert.deepEqual(await optimize.evaluate(computedPaint), { background: 'rgba(0, 0, 0, 0)', shadow: 'none' });
+      const [saveBox, discoverBox, optimizeBox] = await Promise.all([
+        save.boundingBox(),
+        modelActions.getByRole('button', { name: '同步模型' }).boundingBox(), optimize.boundingBox(),
+      ]);
+      assert.equal(optimizeBox.height, discoverBox.height);
+      assert.equal(optimizeBox.height, saveBox.height);
+      assert.equal(optimizeBox.y, discoverBox.y);
+      assert(optimizeBox.y >= saveBox.y + saveBox.height);
+      await optimize.hover();
+      const hoverPaint = await optimize.evaluate(computedPaint);
+      assert.equal(hoverPaint.background, 'rgba(0, 0, 0, 0)');
+      assert.notEqual(hoverPaint.shadow, 'none');
+      if (screenshots) await page.screenshot({path:join(screenshots,`context-trigger-${width}-${dark?'dark':'light'}.png`),animations:'disabled'});
+      assert.equal(await modelActions.getByRole('button', { name: '同步模型' }).locator('svg').count(), 0);
+      assert.equal(await modelActions.getByRole('button', { name: '同步模型' }).evaluate(node => getComputedStyle(node).borderRadius),
+        await save.evaluate(node => getComputedStyle(node).borderRadius));
+      await modelActions.getByRole('button',{name:'同步模型'}).click();
       assert.deepEqual(await page.evaluate(()=>window.discoveries.at(-1)),{ns:'llm-pi-ai',options:{provider:'routergo',baseURL:'https://edited.example/v1',api:'openai-responses'}});
+      await router.getByText('该提供商没有列出任何模型，请手动添加。', { exact: true }).waitFor();
+      await page.evaluate(() => {
+        window.discoveryFailure = '目录暂不可用';
+        window.discoveryGate = new Promise(resolve => { window.finishDiscovery = resolve; });
+      });
+      await modelActions.getByRole('button', { name: '同步模型' }).click();
+      assert(await modelActions.getByRole('button', { name: '正在同步…' }).isDisabled());
+      await page.evaluate(() => window.finishDiscovery());
+      await router.getByRole('alert').getByText('目录暂不可用').waitFor();
+      await page.evaluate(() => {
+        window.discoveryFailure = undefined;
+        window.fixtureModels = [{ id: 'opaque/New:Model' }];
+      });
+      await modelActions.getByRole('button', { name: '同步模型' }).click();
+      const candidates = router.getByRole('region', { name: '选择模型' });
+      await candidates.getByRole('checkbox', { name: 'opaque/New:Model' }).waitFor();
+      assert.equal(await page.getByRole('dialog').count(), 1);
+      await candidates.getByRole('button', { name: '取消' }).click();
+      await candidates.waitFor({ state: 'detached' });
+      await page.evaluate(() => { window.fixtureModels = undefined; });
       await router.getByRole('button',{name:'保存',exact:true}).click();
       await endpoint.waitFor({state:'detached'});
-      await page.waitForFunction(()=>window.loads===2);
-      assert.deepEqual(await page.evaluate(()=>window.writes[1]),{ns:'llm-pi-ai',ops:[
+      await page.waitForFunction(()=>window.loads===1);
+      assert.deepEqual(await page.evaluate(()=>window.writes[0]),{ns:'llm-pi-ai',ops:[
         {op:'set',path:['providers','routergo','api'],value:'openai-responses'},
         {op:'set',path:['providers','routergo','baseURL'],value:'https://edited.example/v1'},
         {op:'set',path:['providers','routergo','models'],value:[{id:'opaque/router:model',input:['text','image']}]},
       ]});
       await router.getByRole('button',{name:/^编辑 RouterGo/}).click();
       assert.equal(await endpoint.inputValue(),'https://edited.example/v1');
-      await advanced.click();
       assert.equal((await protocol.innerText()).trim(),'OpenAI 响应');
       await router.getByRole('button',{name:'模型选项 1',exact:true}).click();
       assert.equal(await router.getByRole('textbox',{name:'模型 ID 1',exact:true}).inputValue(),'opaque/router:model');
@@ -285,12 +437,10 @@ test('provider settings render four states and retain protocol choices through d
       await router.getByRole('button',{name:/^编辑 RouterGo/}).click();
 
       await page.getByRole('button',{name:'添加模型提供商'}).click();
-      await page.getByRole('button',{name:'提供商',exact:true}).click();
       await page.getByRole('button',{name:'自定义供应商',exact:true}).click();
       const createProtocol=page.getByRole('button',{name:'API 协议',exact:true});
-      assert.equal(await page.locator('select').count(),0);
-      assert.equal(await createProtocol.count(),0);
-      await page.getByRole('button',{name:'高级连接设置',exact:true}).click();
+      assert.equal(await page.locator('select[aria-label="API 协议"]').count(),0);
+      assert.equal(await page.getByRole('button',{name:'高级连接设置',exact:true}).count(),0);
       assert.equal((await createProtocol.innerText()).trim(),'OpenAI 响应');
       await createProtocol.click();
       await protocolMenu.getByRole('option',{name:'Anthropic Messages'}).click();
@@ -298,12 +448,11 @@ test('provider settings render four states and retain protocol choices through d
       await page.getByRole('textbox',{name:'API 地址',exact:true}).fill('https://fixture.example');
       await page.getByRole('button',{name:'添加模型',exact:true}).click();
       await page.getByRole('textbox',{name:'模型 ID 1',exact:true}).fill('opaque/gateway:model');
-      await page.getByRole('button',{name:'获取模型'}).click();
+      await page.getByRole('button',{name:'同步模型'}).click();
       assert.deepEqual(await page.evaluate(()=>window.discoveries.at(-1)),{ns:'llm-pi-ai',options:{baseURL:'https://fixture.example',api:'anthropic-messages'}});
       await page.getByRole('button',{name:'创建提供商'}).click();
       const created=page.getByRole('listitem').filter({hasText:'fixture-gateway'});
       await created.getByRole('button',{name:/^编辑 fixture-gateway/}).click();
-      await created.getByRole('button',{name:'高级连接设置',exact:true}).click();
       assert.equal((await created.getByRole('button',{name:'API 协议'}).innerText()).trim(),'Anthropic Messages');
       await created.getByRole('button',{name:'模型选项 1',exact:true}).click();
       assert.equal(await created.getByRole('textbox',{name:'模型 ID 1',exact:true}).inputValue(),'opaque/gateway:model');
@@ -389,6 +538,234 @@ test('model capability settings render directory states and persist one exact mo
     assert.equal(await mask.getAttribute('aria-pressed'), 'false');
     assert.equal(await generation.getAttribute('aria-pressed'), 'false');
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  } finally {
+    await browser.close();
+  }
+});
+
+test('DashScope vision and speech settings use the exact model IDs and save independently of model discovery', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const html = await fixture();
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    page.setDefaultTimeout(6000);
+    const providerId = 'benchgo-dashscope-test';
+    const vision = 'qwen3.8-flash', asr = 'qwen-audio-3.0-asr-flash', tts = 'qwen3-tts-flash';
+    const overrides = new Map();
+    let releaseDirectory;
+    const directory = new Promise(resolve => { releaseDirectory = resolve; });
+    await page.route('http://localhost/', route => route.fulfill({ contentType: 'text/html', body: html }));
+    await page.route('**/api/commander/tooling', async route => {
+      const input = route.request().postDataJSON();
+      if (input.action === 'modelProfiles') return route.fulfill({ json: { success: true, data: [
+        { model_id: vision, input_modalities: ['text', 'image', 'video'], output_modalities: ['text'] },
+      ] } });
+      assert.equal(input.providerId, providerId);
+      if (input.action === 'models') { await directory; return route.fulfill({ json: { models: [] } }); }
+      if (input.action === 'modelCapabilities') return route.fulfill({ json: {
+        overrides: [...overrides].map(([modelId, capabilities]) => ({ modelId, capabilities })),
+      } });
+      assert.equal(input.action, 'saveModelCapabilities');
+      overrides.set(input.modelId, input.capabilities);
+      return route.fulfill({ json: { modelId: input.modelId, capabilities: input.capabilities } });
+    });
+    await page.goto('http://localhost/');
+    await page.evaluate(({ providerId, vision, asr, tts }) => window.seedProvider(providerId, {
+      displayName: '阿里云百炼', api: 'openai-completions', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: [{ id: vision, input: ['text', 'image'] }, { id: asr }, { id: tts }],
+    }), { providerId, vision, asr, tts });
+    const edit = page.getByRole('button', { name: /^编辑 阿里云百炼/ });
+    const option = number => page.getByRole('button', { name: `模型选项 ${number}`, exact: true });
+    await edit.click();
+    await option(1).click();
+    const image = page.getByRole('group', { name: '输入类型 1' }).getByRole('checkbox', { name: '图片' });
+    await image.waitFor();
+    assert(await image.isChecked());
+    await option(1).click();
+    for (const [number, id, label, capability] of [[2, asr, '语音识别', 'asr'], [3, tts, '语音合成', 'tts']]) {
+      await option(number).click();
+      const tag = page.getByRole('button', { name: label, exact: true });
+      await tag.click();
+      await page.locator('.cmd-model-capabilities[aria-busy=false]').waitFor();
+      assert.equal(await tag.getAttribute('aria-pressed'), 'true');
+      assert.deepEqual(overrides.get(id), [capability]);
+      await option(number).click();
+    }
+    releaseDirectory();
+    await edit.click();
+    await edit.click();
+    await option(3).click();
+    await page.getByRole('button', { name: '语音合成', exact: true, pressed: true }).waitFor();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('editing one model collapses the previous model without losing its draft', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const html = await fixture();
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    for (const width of [390, 1440]) {
+      const page = await browser.newPage({ viewport: { width, height: 800 } });
+      page.setDefaultTimeout(6000);
+      await page.route('**/*', route => route.request().url() === 'http://localhost/'
+        ? route.fulfill({ contentType: 'text/html', body: html })
+        : route.fulfill({ json: { success: true, data: [], models: [], overrides: [] } }));
+      await page.goto('http://localhost/');
+      await page.evaluate(dark => {
+        document.body.toggleAttribute('data-ds-dark-theme', dark);
+        const models = [{ id: 'First/Model' }, { id: 'Second/Model' }];
+        window.officialScenario('file', models);
+        window.seedProvider('benchgo-dashscope-test', {
+          displayName: '阿里云百炼', api: 'openai-completions', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models,
+        });
+      }, width === 390);
+      for (const name of ['阿里云百炼', 'DeepSeek']) {
+        const card = page.getByRole('listitem').filter({ hasText: name });
+        const edit = card.getByRole('button', { name: new RegExp('^编辑 ' + name) });
+        const option = position => card.getByRole('button', { name: `模型选项 ${position}`, exact: true });
+        const id = position => card.getByRole('textbox', { name: `模型 ID ${position}`, exact: true });
+        await edit.click();
+        await option(1).click();
+        await id(1).fill('First/Edited');
+        await option(2).press('Enter');
+        assert.equal(await option(1).getAttribute('aria-expanded'), 'false');
+        assert.equal(await option(2).getAttribute('aria-expanded'), 'true');
+        assert.equal(await id(1).count(), 0);
+        assert.equal(await id(2).inputValue(), 'Second/Model');
+        assert(await option(2).evaluate(node => node === document.activeElement));
+        if (name === '阿里云百炼' && process.env.BENCHGO_PROVIDER_SCREENSHOTS) {
+          await mkdir(process.env.BENCHGO_PROVIDER_SCREENSHOTS, { recursive: true });
+          await page.screenshot({ path: join(process.env.BENCHGO_PROVIDER_SCREENSHOTS, `single-model-${width}.png`), animations: 'disabled' });
+        }
+        await option(1).click();
+        assert.equal(await id(1).inputValue(), 'First/Edited');
+        assert.equal(await id(2).count(), 0);
+        await card.getByRole('button', { name: '添加模型', exact: true }).click();
+        assert.equal(await id(1).count(), 0);
+        assert.equal(await id(3).inputValue(), '');
+        await option(2).click();
+        assert.equal(await id(3).count(), 0);
+        await option(3).click();
+        assert.equal(await id(3).inputValue(), '');
+        await card.getByRole('button', { name: '删除模型 3' }).click();
+        assert.equal(await card.locator('.cmd-model-row-summary[aria-expanded="true"]').count(), 0);
+        await edit.click();
+      }
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('DeepSeek native sync preserves configured models and saves only new exact IDs', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const html = await fixture();
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    page.setDefaultTimeout(6000);
+    const existing = { id: 'opaque/current:V1', name: '本地名称', contextWindow: 400000 };
+    const added = { id: 'opaque/New:V2', name: '新模型', inputModalities: ['text', 'image'] };
+    let models;
+    await page.route('http://localhost/', route => route.fulfill({ contentType: 'text/html', body: html }));
+    await page.route('**/api/commander/tooling', route => {
+      const request = route.request().postDataJSON();
+      if (request.action === 'deepSeekModels') {
+        assert.deepEqual(request, { action: 'deepSeekModels', providerId: 'deepseek-official' });
+        return models ? route.fulfill({ json: { models } }) : route.fulfill({ status: 502, json: {} });
+      }
+      return route.fulfill({ json: { success: true, data: [], overrides: [] } });
+    });
+    await page.goto('http://localhost/');
+    await page.evaluate(model => window.officialScenario('file', [model]), existing);
+    const card = page.getByRole('listitem').filter({ hasText: 'DeepSeek' });
+    const edit = card.getByRole('button', { name: /^编辑 DeepSeek/ });
+    await edit.click();
+    const actions = card.locator('.cmd-model-catalog-tools');
+    const sync = actions.getByRole('button', { name: '同步模型' });
+    assert(await actions.getByRole('button', { name: '上下文窗口优化' }).isVisible());
+    await sync.click();
+    await actions.getByRole('alert').getByText('暂时无法同步 DeepSeek 模型，请重试').waitFor();
+    models = [];
+    await sync.click();
+    await actions.getByRole('status').getByText('未找到可同步的模型').waitFor();
+    models = [{ id: existing.id, name: '上游名称' }, added, added];
+    await sync.click();
+    await actions.getByRole('status').getByText('已添加 1 个模型，请保存').waitFor();
+    assert.equal(await page.evaluate(() => window.writes.length), 0);
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await card.getByRole('button', { name: '保存', exact: true }).click();
+    await page.waitForFunction(() => window.loads === 1);
+    assert.deepEqual((await page.evaluate(() => window.getOfficial())).models, [existing, added]);
+    await edit.click();
+    await sync.click();
+    await actions.getByRole('status').getByText('模型目录已是最新').waitFor();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('model directory applies only the suggested context window without a retry editor', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+  const html = await fixture();
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    for (const [width, dark] of [[390, false], [390, true], [1440, false], [1440, true]]) {
+      const page = await browser.newPage({ viewport: { width, height: 800 } });
+      page.setDefaultTimeout(6000);
+      const model = { id: 'qwen3.8-flash', contextWindow: 1000000, maxTokens: 131072, input: ['text', 'image'] };
+      let directoryAvailable = false;
+      await page.route('http://localhost/', route => route.fulfill({ contentType: 'text/html', body: html }));
+      await page.route('**/api/commander/tooling', async route => {
+        const { action } = route.request().postDataJSON();
+        if (action === 'modelProfiles') return directoryAvailable
+          ? route.fulfill({ json: { success: true, data: [{ model_id: model.id, context: model.contextWindow, max_output: model.maxTokens }] } })
+          : route.fulfill({ status: 503 });
+        return route.fulfill({ json: { models: [], overrides: [] } });
+      });
+      await page.goto('http://localhost/');
+      await page.evaluate(dark => { document.body.toggleAttribute('data-ds-dark-theme', dark); window.setScenario('empty'); }, dark);
+      const operations = page.getByRole('button', { name: '模型运维设置' });
+      assert.equal(await operations.count(), 0);
+      await page.evaluate(model => window.seedProvider('benchgo-dashscope-example', {
+        displayName: '阿里云百炼', api: 'openai-completions', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: [model],
+      }), model);
+      const provider = page.getByRole('listitem').filter({ hasText: '阿里云百炼' });
+      await provider.getByRole('button', { name: /^编辑 阿里云百炼/ }).click();
+      assert.equal(await provider.getByText('重试策略', { exact: true }).count(), 0);
+      assert.equal(await operations.count(), 0);
+      if (process.env.BENCHGO_PROVIDER_SCREENSHOTS) {
+        await mkdir(process.env.BENCHGO_PROVIDER_SCREENSHOTS, { recursive: true });
+      }
+
+      const optimize = provider.getByRole('button', { name: '上下文窗口优化' });
+      if (!await optimize.isVisible()) await provider.getByRole('button', { name: /^编辑 阿里云百炼/ }).click();
+      await optimize.click();
+      const context = page.getByRole('dialog', { name: '上下文窗口优化' });
+      await context.getByRole('alert').getByText('暂时无法读取公开模型目录。').waitFor();
+      directoryAvailable = true;
+      await context.getByRole('button', { name: '重试' }).click();
+      await context.getByText('1,000,000 → 500,000', { exact: true }).waitFor();
+      assert.equal(await page.evaluate(() => window.writes.length), 0);
+      if (process.env.BENCHGO_PROVIDER_SCREENSHOTS) {
+        await page.screenshot({ path: join(process.env.BENCHGO_PROVIDER_SCREENSHOTS, `context-optimization-${width}-${dark ? 'dark' : 'light'}.png`), animations: 'disabled' });
+      }
+      for (const button of await context.getByRole('button').all()) {
+        const box = await button.boundingBox();
+        assert(box.x >= 0 && box.x + box.width <= width);
+      }
+      await context.getByRole('button', { name: '应用到草稿' }).click();
+      assert.equal(await page.evaluate(() => window.writes.length), 0);
+      await provider.getByRole('button', { name: '保存', exact: true }).click();
+      await page.waitForFunction(() => window.loads === 1);
+      const saved = await page.evaluate(() => window.savedProviders()['benchgo-dashscope-example']);
+      assert.deepEqual(saved.models, [{ ...model, contextWindow: 500000 }]);
+      await provider.getByRole('button', { name: /^编辑 阿里云百炼/ }).click();
+      await optimize.click();
+      await context.getByRole('status').getByText('当前模型没有可应用的上下文调整。').waitFor();
+      await page.close();
+    }
   } finally {
     await browser.close();
   }
@@ -489,7 +866,7 @@ test('RouterGo shows account identity and compact balance, and allows manual cre
       await page.emulateMedia({ reducedMotion: 'no-preference' });
       await manual.click();
       await page.getByRole('textbox', { name: 'API 密钥', exact: true }).waitFor();
-      await page.locator('.cmd-model-add-close').click();
+      await page.getByRole('button',{name:'关闭添加供应商'}).click();
       await page.evaluate(() => window.setScenario('data'));
       await card.getByRole('button', { name: /^编辑 RouterGo/ }).waitFor();
       assert.equal(await login.count(), 0);
@@ -558,8 +935,11 @@ test('RouterGo shows account identity and compact balance, and allows manual cre
       await page.clock.fastForward(4000);
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
       await summary.getByText('22.50', { exact: true }).waitFor();
-      const sync = summary.getByRole('button', { name: '同步模型' });
-      assert.equal(await sync.locator('.cmd-ui-icon').count(), 1);
+      assert.equal(await summary.getByRole('button', { name: '同步模型' }).count(), 0);
+      const edit = card.getByRole('button', { name: /^编辑 RouterGo/ });
+      assert.equal((await edit.textContent()).trim(), '模型');
+      await edit.click();
+      const sync = card.locator('.cmd-model-catalog-tools').getByRole('button', { name: '同步模型' });
       await sync.click();
       await page.getByRole('alert').getByText('暂时无法同步 RouterGo 模型，已保留现有列表').waitFor();
       syncFails = false;
@@ -569,9 +949,6 @@ test('RouterGo shows account identity and compact balance, and allows manual cre
       assert.deepEqual(actions.filter(input => input.action === 'save'), [{ action: 'save', id: 'local-id', replace: true }, { action: 'save', id: 'local-id', replace: true }]);
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       if (screenshots) await page.screenshot({ path: join(screenshots, `routergo-connected-${width}.png`) });
-      const edit = card.getByRole('button', { name: /^编辑 RouterGo/ });
-      assert.equal((await edit.textContent()).trim(), '模型');
-      await edit.click();
       await card.getByRole('button', { name: '模型选项 1', exact: true }).waitFor();
       for (const name of ['API 密钥', 'API 地址', '显示名称']) {
         assert.equal(await card.getByRole('textbox', { name, exact: true }).count(), 0);
@@ -616,8 +993,8 @@ test('RouterGo manual credentials can batch-add from an empty model list and rec
     const router = page.getByRole('listitem').filter({ hasText: 'RouterGo' });
     await router.getByRole('button', { name: '使用密钥' }).click();
     await page.getByRole('textbox', { name: 'API 密钥', exact: true }).fill('manual-example');
-    await page.getByRole('button', { name: '获取模型' }).click();
-    const picker = page.getByRole('dialog', { name: '选择模型' });
+    await page.getByRole('button', { name: '同步模型' }).click();
+    const picker = page.getByRole('region', { name: '选择模型' });
     for (const id of ids) assert(await picker.getByRole('checkbox', { name: id, exact: true }).isChecked());
     await picker.getByRole('button', { name: '更新列表' }).click();
     await page.getByRole('button', { name: '创建提供商' }).click();
@@ -679,21 +1056,23 @@ test('RouterGo manual credentials can batch-add from an empty model list and rec
     assert.equal(await router.getByRole('textbox', { name: '模型 ID 1' }).inputValue(), ids[0]);
     await options(2).click();
     assert.equal(await router.getByRole('textbox', { name: '模型 ID 2' }).inputValue(), ids[1]);
+    assert.equal(await options(1).getAttribute('aria-expanded'), 'false');
     const name = router.getByRole('textbox', { name: '显示名称 2' });
     await name.fill('Alternate display name');
     await options(2).click();
-    await options(1).click();
     await page.setViewportSize({ width: 1440, height: 800 });
     const [searchBox, actionsBox, catalogBox, vendorBox] = await Promise.all([
-      search.boundingBox(), router.locator('.cmd-model-list-actions').boundingBox(),
+      search.boundingBox(), router.getByRole('button', { name: '保存', exact: true }).boundingBox(),
       router.getByRole('region', { name: '模型目录', exact: true }).boundingBox(), vendorGroup.boundingBox(),
     ]);
     assert(actionsBox.x - (searchBox.x + searchBox.width) <= 8);
     assert(Math.abs(catalogBox.x + catalogBox.width - (actionsBox.x + actionsBox.width)) <= 2);
     assert(vendorBox.y >= searchBox.y + searchBox.height);
-    const discovery = router.getByRole('button', { name: '获取模型', exact: true });
+    const discovery = router.getByRole('button', { name: '同步模型', exact: true });
     assert.equal(await discovery.locator('svg').count(), 0);
-    assert.equal((await discovery.boundingBox()).height, 28);
+    const syncBox = await discovery.boundingBox();
+    assert.equal(syncBox.height, 28);
+    assert(Math.abs(vendorBox.y + vendorBox.height / 2 - syncBox.y - syncBox.height / 2) <= 1);
     const wideFirst = await options(1).boundingBox();
     const wideSecond = await options(2).boundingBox();
     assert.equal(wideFirst.y, wideSecond.y);

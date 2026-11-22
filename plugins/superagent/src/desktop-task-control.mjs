@@ -3,12 +3,11 @@ import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 import { ownsDesktopTask } from './desktop-task-owner.mjs';
 import { isDesktopTaskManagementScope } from './desktop-task-management-authority.mjs';
-import { usesExternalWorker } from './work-role-policy.mjs';
 
 /** Same trusted stop/input path for live control and an already authorized continuation. */
-export function stopDesktopTask(database, taskId, triggerId, inputKey = `trigger:${triggerId}:task:${taskId}`) {
+export function stopDesktopTask(database, taskId, triggerId, inputKey = `trigger:${triggerId}:task:${taskId}`, options) {
   database.recordTaskInput({ taskId, triggerId, kind: 'stop', idempotencyKey: inputKey });
-  const task = database.cancelTask(taskId);
+  const task = database.cancelTask(taskId, options);
   const input = database.applyTaskStopInput(taskId, triggerId);
   return { operation: 'cancel', triggerId, task, input };
 }
@@ -39,7 +38,7 @@ export function createDesktopTaskControl({ ctx, database }) {
         return { operation, taskId: id, attention: answer };
       }
       if (operation === 'supplement' && (task.status === 'completed' || taskStopped(task))) throw new Error('任务已完成或停止；请通过任务修订或关联调整处理新要求');
-      if (operation === 'supplement' && usesExternalWorker(database, task))
+      if (operation === 'supplement' && task.mandate.execution?.config?.harness !== 'official' && task.mandate.execution && task.mandate.execution.nativeContinuation !== true)
         throw Object.assign(new Error('此外部 Harness 暂无可核实的补充应用边界，请在新任务中提交要求'), { code: 'NATIVE_WORKER_INPUT_UNSUPPORTED' });
       if (operation === 'pause' && (task.status === 'completed' || taskStopped(task))) throw new Error('任务已完成或停止，不能暂停');
       const { trigger } = recordDesktopTrigger(database, { sessionId: ownerAgent.id, threadId, message });
@@ -55,12 +54,7 @@ export function createDesktopTaskControl({ ctx, database }) {
       if (operation === 'cancel') {
         return stopDesktopTask(database, id, trigger.id, inputKey);
       }
-      // A model-session reset keeps the logical conversation and the original
-      // mandate. Bind this explicit selection to its new Trigger stream only.
-      if (source.sessionId !== ownerAgent.id && !database.subscriptions({ taskId: id, threadId: trigger.threadId }).length) {
-        database.subscribe(id, trigger.threadId, { beforeTriggerId: trigger.id });
-      }
-      const delivery = database.deliverSubscribedMessage(trigger.id, { taskId: id });
+      const delivery = database.deliverSubscribedMessage(trigger.id, { taskId: id, subscribeIfMissing: true });
       if (!delivery) throw new Error('任务没有活动订阅，补充未送达；请查询任务状态');
       return { operation, taskId: id, ...delivery };
     },

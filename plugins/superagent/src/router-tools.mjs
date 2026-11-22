@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { scheduleTargetSession } from './schedule-bridge.mjs';
+import { registerRouterScheduleTools } from './router-schedule-tools.mjs';
 import { assertRouterMemoryTool } from './memory-tool-policy.mjs';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { taskStates } from './task-lifecycle.mjs';
@@ -21,14 +21,23 @@ export function createRouterTools(runtime) {
   const { ctx, commander, store, database, shutdown, historySearch, readLedger, goals, orchestrationRuntime, settings, projectSchedules, pet, desktopDelegation,
     taskChanges, desktopTasks, taskControl, taskManagement, cleanupContinuations, modelActions, mediaTools = [], capabilities, deviceStatus, auxiliary, deviceTools } = runtime;
   return (scope, { threadId, agent: ownerAgent, toolEnabled = () => true }) => {
-    const historyAccess = async exec => {
+    const activeRouterThread = async exec => {
       const state = await store.getState();
       const thread = threadId === 'main' ? { sessionId: state.mainSessionId } : state.threads.find(row => row.id === threadId);
-      if (exec.agent !== ownerAgent || !thread || thread.sessionId !== ownerAgent.id || thread.archived
-        || thread.sourceKey || thread.source && thread.source.channel !== 'desktop') {
+      if (exec.agent === ownerAgent && thread?.sessionId === ownerAgent.id && !thread.archived) return thread;
+    };
+    const historyAccess = async exec => {
+      const thread = await activeRouterThread(exec);
+      if (!thread || thread.sourceKey || thread.source && thread.source.channel !== 'desktop') {
         throw Object.assign(new Error('历史对话仅供本机主人主聊或手动旁聊读取'), { code: 'HISTORY_SCOPE_DENIED', status: 403 });
       }
       return { signal: AbortSignal.any([shutdown.signal, exec.signal].filter(Boolean)) };
+    };
+    const deviceDirectoryAccess = async exec => {
+      if (!await activeRouterThread(exec)) throw Object.assign(new Error('设备目录仅供当前总助手会话读取'), { code: 'DEVICE_CATALOG_SCOPE_DENIED', status: 403 });
+      const signal = AbortSignal.any([shutdown.signal, exec.signal].filter(Boolean));
+      signal.throwIfAborted();
+      return { signal };
     };
     const ownerInstruction = async exec => {
       const instruction = currentHumanInstruction(ctx, ownerAgent);
@@ -71,15 +80,18 @@ export function createRouterTools(runtime) {
       if (endTurn) exec.concludeTurn?.();
       return endTurn ? { reacted: emoji, turnEnded: true } : { reacted: emoji };
     });
-    register('assistant_execution_manage', 'Resume an interrupted original Worker session when the user explicitly asks to continue. Preserves its existing task and recorded actions; it does not re-run completed work or review finished results. A queued receipt confirms admission only; report another execution attempt or failure only after observing a new execution turn. A completed receipt saves an already finished result and does not run the Worker again. Paused Tasks use assistant_task_control resume. New requirements or dissatisfaction with a completed result use assistant_task_change.', {
-      taskId: string, operation: { type: 'string', enum: ['resume'] },
+    register('assistant_execution_manage', 'Resume an interrupted original Worker session when the user explicitly asks to continue. Preserves its existing task and recorded actions; it does not re-run completed work or review finished results. A queued receipt confirms admission only; report another execution attempt or failure only after observing a new execution turn. A completed receipt saves an already finished result and does not run the Worker again. Paused Tasks use assistant_task_control resume. New requirements or dissatisfaction with a completed result use assistant_task_change. operation abandon applies only to an execution on another device that stays unverified or unreachable, and only when the user explicitly decides to treat it as failed: it re-checks once, sends a best-effort stop, records the failure as the decision of the user and releases the Task so it can be changed or dispatched again. An execution that is observably running is stopped with assistant_task_control instead. operation redispatch applies only to a Task whose execution on another device already ended in failure, and only when the user explicitly asks to run it again: the same Task goes to the same device as a new execution and nothing from the old one is replayed.', {
+      taskId: string, operation: { type: 'string', enum: ['resume', 'abandon', 'redispatch'] },
     }, ['taskId', 'operation'], async ({ taskId, operation }, exec) => {
       if (exec.agent !== ownerAgent) throw new Error('只有当前 Router 可协调恢复');
       const ownerManagement = await managementScope();
       if (!ownerManagement || !currentHumanInstruction(ctx, ownerAgent)) throw new Error('续接需要当前用户的真实指令');
       const task = desktopTasks.read(taskId, ownerManagement);
-      const identity = orchestrationRuntime.state({ taskId: task.id })[0]?.execution?.uncertainty;
-      if (!identity) return { status: 'blocked', reason: '没有需要续接的中断执行；已完成的结果可直接查看' };
+      if (!task) return { status: 'blocked', reason: '任务不存在' };
+      const execution = orchestrationRuntime.state({ taskId: task.id })[0]?.execution;
+      // Re-dispatch addresses an ended execution on another device; the other operations address an unverified one.
+      const identity = operation === 'redispatch' ? (execution?.remote?.phase === 'failed' && execution.phase === 'finished' ? execution : null) : execution?.uncertainty;
+      if (!identity) return { status: 'blocked', reason: operation === 'redispatch' ? '只有已经结束的远端执行可以重新派发' : '没有需要续接的中断执行；已完成的结果可直接查看' };
       return orchestrationRuntime.manageExecution({ taskId, operation, assignmentId: identity.assignmentId,
         fence: identity.fence, instructionRevision: identity.instructionRevision, automatic: false });
     });
@@ -106,10 +118,10 @@ export function createRouterTools(runtime) {
     register('assistant_projects', 'Read current BenchGo project facts directly. By default aggregate the local catalog and ALL saved outgoing devices, independent of sidebar scope; scope=local explicitly reads only local projects, native sessions and exact Harness model IDs. An explicitly named device needs only deviceId or deviceIds through authorized Link queries. Device identities and registered project catalogs are authoritative: a local folder or remembered server note cannot establish or disprove a remote device or project. Never substitute memory for this live inventory. Follow remaining pages; failures are unknown coverage, not empty catalogs. Organize results by device and name coverage gaps (unqueried, offline, unauthorized or unsupported); never present the local list, inbound authorizations or sidebar scope as all projects. isDefault=true identifies Recent (ungrouped sessions), not a named project and not part of the project count; identify Recent only by isDefault=true, never by a default-workspace name or path; preserve raw titles and IDs. Remote paths are never local paths. Read only; listing product state requires no investigation Task.', { scope: { type: 'string', enum: ['all', 'local'] }, deviceId: string, deviceIds: { type: 'array', items: string, maxItems: 32 }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, [], async (args, exec) => {
       if (args.deviceId || args.deviceIds) {
         if (args.scope === 'local') throw new Error('本机范围不能同时指定设备；请只保留一个查询范围');
-        await historyAccess(exec);
-        return deviceTools.resources({ ...args, kind: 'projects', signal: exec.signal });
+        const { signal } = await deviceDirectoryAccess(exec);
+        return deviceTools.resources({ ...args, kind: 'projects', signal });
       }
-      const access = args.scope === 'local' ? null : await historyAccess(exec);
+      const access = args.scope === 'local' ? null : await deviceDirectoryAccess(exec);
       const readLocalProjects = async () => {
         const recent = await readRecentWorkspace(ctx.get?.('benchgo')?.directory ?? commander.store?.directory);
         // WorkspaceRegistry has getter-backed fields; tool outputs must be plain JSON.
@@ -152,7 +164,7 @@ export function createRouterTools(runtime) {
       }))];
       return { scope: 'all', devices, partial: devices.some(row => !row.available), directory: { available: true } };
     });
-    register('assistant_devices', 'Read the saved OUTGOING Link device directory. Supply one exact remote deviceId to read its current execution catalog, including host identity, available Harness/API/model combinations, project IDs and workerPreference when the target has configured a Worker. Directory status alone is not a capability probe. If workerPreference.config is present, the host selects it automatically. Report workerPreference.error or an empty model list to the user. Otherwise choose executionConfig from the target catalog.', { deviceId: string }, [], async (args, exec) => { await historyAccess(exec); return args.deviceId ? deviceTools.executionCatalog(args.deviceId, exec.signal) : deviceTools.devices({ signal: exec.signal }); });
+    register('assistant_devices', 'Read the saved OUTGOING Link device directory. Supply one exact remote deviceId to read its current execution catalog, including host identity, available Harness/API/model combinations, project IDs and workerPreference when the target has configured a Worker. Directory status alone is not a capability probe. If workerPreference.config is present, the host selects it automatically. Report workerPreference.error or an empty model list to the user. Otherwise executionConfig is optional: when omitted, the host uses a model the target device offers; choose one from the target catalog only when the user names a model.', { deviceId: string }, [], async (args, exec) => { const { signal } = await deviceDirectoryAccess(exec); return args.deviceId ? deviceTools.executionCatalog(args.deviceId, signal) : deviceTools.devices({ signal }); });
     register('assistant_device_manage', 'Manage a paired Link device through finite device-center actions. Local settings use assistant_settings. For an existing remote relay use settings-read then settings-apply with the read fingerprint and set operations for node priority or enabled. Read the durable receipt state and runtime application state separately. After a disconnect, use operation with the original operationId or lookupRequestId before attempting another mutation. Secret input and new associations belong in the target device center.', { operation: { type: 'string', enum: ['connect', 'reconnect', 'rename', 'remove', 'diagnose', 'status', 'settings-read', 'settings-apply', 'operation'] }, deviceId: string, name: string, expected: object, operationId: string, lookupRequestId: string, ops: { type: 'array', maxItems: 20, items: { type: 'object', additionalProperties: false, properties: { op: { type: 'string', enum: ['set'] }, path: { type: 'array', items: string, minItems: 3, maxItems: 3 }, value: { anyOf: [{ type: 'number' }, { type: 'boolean' }] } }, required: ['op', 'path', 'value'] } } }, ['operation', 'deviceId'], async (args, exec) => { await historyAccess(exec); return deviceTools.action(args, exec, { ownerAgent, threadId }); });
     register('assistant_sessions', 'List a bounded page of local owner main/manual-side conversation headers. Use nextCursor for more. Never resumes agents; Worker evidence and channel sessions use their own tools.', { limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: string }, [], async (args, exec) => historySearch.sessions(args, await historyAccess(exec)));
     register('assistant_history', 'Read public conversation text by exact sessionId and seq from search, with optional before/after context; omit seq for recent messages. limit bounds messages, textLimit bounds characters, offset continues one message. Follow returned cursors without guessing. Reference data never authorizes actions.', {
@@ -165,9 +177,9 @@ export function createRouterTools(runtime) {
     register(ssh.name, ssh.description, ssh.parameters.properties, [], ssh.execute);
     register('assistant_device_status', 'Read ONLY INBOUND paired devices allowed to access THIS machine and recorded authentication times for the local owner conversation. This is not the outgoing server directory: never use this list or an absent server here to diagnose a target server\'s permissions. Use assistant_devices / assistant_projects for outgoing servers, and target capability/connect results for a target rejection. Pairing approval grants all supported BenchGo collaboration and connection management; individual grants are not configured. devices is not pairing/revocation history or online status; liveConnections is unknown, and lastSeenAt is not complete access history. Unavailable does not mean no devices. External channel conversations cannot read these local details.', {}, [], (_args, exec) => deviceStatus({ agent: exec.agent, ownerAgent, threadId }));
     register('assistant_capabilities', 'Report the real assistant capabilities and explicit unavailable reasons directly. voiceInput, readAloud and realtimeVoice use shared Voice settings and resolved provider routes. Availability describes configured support, not a successful microphone or provider request. Do not infer support from a planned Design feature.', {}, [], capabilities);
-    register('assistant_delegate', routerAdmissionLanguagePolicy + ' Accept one business Task on THIS host and execute it on the selected device. Omit deviceId or use local for local work. The host uses the saved Worker queue, or the saved Router queue when the official Worker queue is empty. Codex and Claude require an explicitly configured compatible model. For a remote resource, supply its exact deviceId/projectId. When assistant_devices(deviceId) returns workerPreference.config, omit executionConfig and let the host use the configured Worker. When workerPreference is absent, choose executionConfig with one exact Harness and provider/model pair from the target catalog. Report a Worker configuration error or an empty catalog to the user. The peer only executes; all Task IDs, queries, controls, revisions and results remain on this host. Never use a remote path as a local project, silently switch devices, or fall back locally. Use conversation context for follow-ups. The host binds the current real user message and request identity; ordinary dispatch needs no extra approval. projectId is optional for daily tasks. For unchanged active work, read assistant_tasks and pass duplicateOfTaskId with unchanged requirements to attach the new input without redispatch. Changed requirements use assistant_task_change. Once accepted, respond naturally about the work and share the result later; acceptance is not completion.', { deviceId: string, projectId: string, executionConfig: { type: 'object', additionalProperties: false, properties: { harness: { type: 'string', enum: ['official', 'codex', 'claude'] }, models: { type: 'array', minItems: 1, maxItems: 1, items: { type: 'object', additionalProperties: false, properties: { providerId: string, modelId: string, params: object }, required: ['providerId', 'modelId'] } } }, required: ['harness', 'models'] }, title: string, text: string, acceptance: string, duplicateOfTaskId: string }, ['text'], (args, exec) => desktopDelegation.delegate(args, exec, { ownerAgent, threadId }));
+    register('assistant_delegate', routerAdmissionLanguagePolicy + ' Accept one business Task on THIS host and execute it on the selected device. Omit deviceId or use local for local work. The host uses the saved Worker queue, or the saved Router queue when the official Worker queue is empty. Codex and Claude require an explicitly configured compatible model. For a remote resource, supply its exact deviceId/projectId. When assistant_devices(deviceId) returns workerPreference.config, omit executionConfig and let the host use the configured Worker. When workerPreference is absent, executionConfig is optional: omit it and the host uses a model the target device offers, or choose one exact Harness and provider/model pair from the target catalog when the user names a model. Report a Worker configuration error or an empty catalog to the user. The peer only executes; all Task IDs, queries, controls, revisions and results remain on this host. Never use a remote path as a local project, silently switch devices, or fall back locally. Use conversation context for follow-ups. The host binds the current real user message and request identity; ordinary dispatch needs no extra approval. projectId is optional for daily tasks. For unchanged active work, read assistant_tasks and pass duplicateOfTaskId with unchanged requirements to attach the new input without redispatch. Changed requirements use assistant_task_change. Once accepted, respond naturally about the work and share the result later; acceptance is not completion.', { deviceId: string, projectId: string, executionConfig: { type: 'object', additionalProperties: false, properties: { harness: { type: 'string', enum: ['official', 'codex', 'claude'] }, models: { type: 'array', minItems: 1, maxItems: 1, items: { type: 'object', additionalProperties: false, properties: { providerId: string, modelId: string, params: object }, required: ['providerId', 'modelId'] } } }, required: ['harness', 'models'] }, title: string, text: string, acceptance: string, duplicateOfTaskId: string }, ['text'], (args, exec) => desktopDelegation.delegate(args, exec, { ownerAgent, threadId }));
     register('assistant_task_control', 'On the current explicit local owner instruction, pause, resume an already paused Task, or cancel one exact Task from any conversation/channel. Preserve the original mandate and source; resume never revives stopped or completed work. supplement and answer remain restricted to Tasks owned by this logical conversation. Select a specific Task and Attention using assistant_tasks; clarify ambiguous references. User requests to pause, including uncertain work, MUST use operation=pause and confirm its saved lifecycle receipt. executionControl.pauseRequested means the pause intent is saved; executionControl.paused confirms the executor acknowledged a safe pause. Both keep the Task waiting. answer requires attentionId and forwards the current original human message unchanged as the answer, never infers consent or expands permission. supplement forwards the original human message unchanged without answering a question or changing the mandate. For scope changes use assistant_task_change. A receipt means durably queued, not consumed. executionControl.stopRequested is not yet executionControl.stopped; both keep the Task waiting.', { id: string, operation: { type: 'string', enum: ['supplement', 'answer', 'pause', 'resume', 'cancel'] }, attentionId: string }, ['id', 'operation'], async (args, exec) => taskControl.control(args, exec, { ownerAgent, threadId, ownerScope: await runtime.engine.taskOwnerScope(threadId), managementScope: await managementScope() }));
-    register('assistant_task_change', 'Revise an active Task or create a linked adjustment Task from completed work on the current user instruction; no extra approval is needed. The host captures the current revision and request identity from the real user input. Active execution applies the complete ordinary revision at the next tool boundary without interrupting the current tool; paused work receives revisions without resuming. adjustment creates a new linked Task; the completed original and its results remain unchanged. Read the actual requirement and acceptance before proposing a change.', { id: string, operation: { type: 'string', enum: ['revise', 'adjustment'] }, reason: string, target: string, acceptance: string, projectId: string }, ['id', 'operation', 'reason'], async (args, exec) => taskChanges.change(args, exec, { ownerAgent, threadId, ownerScope: await runtime.engine.taskOwnerScope(threadId) }));
+    register('assistant_task_change', 'Revise a Task on the current user instruction. When a Task on another device has finished or failed, use revise for new requirements on the same Task: a new execution on the same device uses those requirements and preserves prior results. Use adjustment when the user asks for a separate linked Task. Ordinary revisions need no extra approval. The host captures the current revision and request identity from the real user input. Active execution applies the complete ordinary revision at the next tool boundary without interrupting the current tool; paused work receives revisions without resuming. adjustment creates a new linked Task; the completed original and its results remain unchanged. Read the actual requirement and acceptance before proposing a change.', { id: string, operation: { type: 'string', enum: ['revise', 'adjustment'] }, reason: string, target: string, acceptance: string, projectId: string }, ['id', 'operation', 'reason'], async (args, exec) => taskChanges.change(args, exec, { ownerAgent, threadId, ownerScope: await runtime.engine.taskOwnerScope(threadId) }));
     register('assistant_summarize', 'Summarize bounded source text. Read only; derived text is not original evidence and is not saved as memory.', { text: { type: 'string', minLength: 1, maxLength: 60000 } }, ['text'], (args, exec) => auxiliary.summarize({ ...args, threadId, signal: exec.signal }));
     register('assistant_analyze_image', 'Inspect a raster image from assistant artifacts. file must be a relative artifact name, never a host path or URL. Preserve the image source reference.', { file: string, question: string }, ['file', 'question'], (args, exec) => auxiliary.analyzeImage({ ...args, threadId, signal: exec.signal }));
     register('assistant_pet', 'Read catalog and active draft. For AI appearance design, first call catalog and keep appearanceToken before generation. Preview manifest version 1 with name and avatar ("current" to build on the current draft/appearance, {builtin:"benchgo"} with optional expression/palette/decorations from catalog, or "media/<filename>" from generate_image). Optional expressions, palettes and decorations are ID-to-media-image maps; palettes/decorations reference full visual variants. Optional actions map new IDs to {label,duration,frames,expression?}; duration 120–1800 ms, 2–12 frames with strictly increasing at from 0 to 1 and bounded x/y percent, rotate degrees, scale, opacity. Bindings map idle, acknowledge, focus, waiting or completed to compatible action IDs or none. Send manifest and original appearanceToken in op=preview. Reuse compatible catalog entries. When useful and configured, use assistant_analyze_image to check consistency. Keep the draft available for preview. Legacy preview accepts builtin pet or artifactPath media/<filename> with optional expression. op=express plays an available expression or action once. Apply/restore require explicit user intent, current revision, and the existing approval/Task path. Appearance is separate from identity, permissions and task status.', { op: { type: 'string', enum: ['catalog', 'preview', 'apply', 'restore', 'express'] }, pet: object, artifactPath: string, manifest: object, appearanceToken: string, draftId: string, revision: { type: 'integer' }, default: { type: 'boolean' }, expression: string, action: string }, ['op'], async (args, exec) => {
@@ -256,65 +268,6 @@ export function createRouterTools(runtime) {
       }
       throw new Error('未知目标操作');
     });
-    // Schedule channel (creation side): the official schedule tools are
-    // mounted by preset into ordinary Harness scopes; the assistant scope
-    // never mounted them, so the Router could promise reminders it had no
-    // tool to create. Register the same four tools here, backed by the Host
-    // schedule service and bound to this conversation's own session. Fired
-    // occurrences still return through schedule-bridge as Triggers; timing
-    // and delivery stay with the Host service, nothing is reimplemented.
-    const scheduleService = ctx.get?.('schedule');
-    if (scheduleService && ['create', 'catalog', 'edit'].every(key => typeof scheduleService[key] === 'function')) {
-      const scheduleSessionId = async exec => {
-        const fromExec = exec?.agent?.session?.id;
-        if (typeof fromExec === 'string' && fromExec) return fromExec;
-        const state = await store.getState();
-        if (threadId !== 'main') { const row = (state.threads || []).find(entry => entry.id === threadId); if (row?.sessionId) return row.sessionId; }
-        return state.mainSessionId;
-      };
-      const scheduleGuard = exec => { if (exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可管理定时提醒'); };
-      const selectorKeys = ['after_seconds', 'at', 'every_seconds', 'daily', 'weekly', 'cron'];
-      const selectorProps = {
-        after_seconds: { type: 'number', description: 'Delay in whole seconds from now.' },
-        at: { description: 'Absolute target: an RFC 3339 date-time with offset, or {date, time, time_zone} local time.', anyOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] },
-        every_seconds: { type: 'number', description: 'Fixed-rate interval in whole seconds.' },
-        daily: { type: 'object', additionalProperties: true, description: '{time: "HH:mm:ss", time_zone: "Asia/Shanghai"}: every day at a local time.' },
-        weekly: { type: 'object', additionalProperties: true, description: '{time, time_zone, weekdays: [1..7]}: on the given weekdays at a local time.' },
-        cron: { type: 'object', additionalProperties: true, description: '{expression: "*/15 9-17 * * 1-5", time_zone}: five-field cron.' },
-      };
-      const timingChange = args => args.after_seconds !== undefined ? { kind: 'after', after_seconds: args.after_seconds } : args.at !== undefined ? { kind: 'at', at: args.at } : args.every_seconds !== undefined ? { kind: 'every', every_seconds: args.every_seconds } : args.daily !== undefined ? { kind: 'daily', daily: args.daily } : args.weekly !== undefined ? { kind: 'weekly', weekly: args.weekly } : args.cron !== undefined ? { kind: 'cron', cron: args.cron } : undefined;
-      const registerSchedule = (name, description, properties, required, execute) => { try { register(name, description, properties, required, execute); } catch { /* Host scope already provides this tool. */ } };
-      registerSchedule('schedule_create', 'Create a reminder in the current session that delivers prompt when it becomes due. Supply title, prompt, and exactly one timing parameter: after_seconds, at, every_seconds, daily, weekly, or cron. Use this directly when the user asks to be reminded or to have something done later; do not turn a reminder into an immediate Task and do not merely promise it in text.', { title: string, prompt: string, ...selectorProps }, ['title', 'prompt'], async (args, exec) => {
-        scheduleGuard(exec);
-        const chosen = selectorKeys.filter(key => args[key] !== undefined);
-        if (chosen.length !== 1) throw new Error('schedule_create 需要且仅需一个时间参数：after_seconds、at、every_seconds、daily、weekly 或 cron');
-        if (!String(args.title || '').trim() || !String(args.prompt || '').trim()) throw new Error('schedule_create 需要非空的 title 与 prompt');
-        if (args.after_seconds !== undefined && (!Number.isSafeInteger(args.after_seconds) || args.after_seconds <= 0)) throw new Error('after_seconds 必须是正整数（秒）');
-        const sessionId = await scheduleSessionId(exec);
-        if (!sessionId) throw new Error('当前会话尚未准备就绪，无法创建定时提醒');
-        const entry = await scheduleService.create({ title: args.title, prompt: args.prompt, timing: timingChange(args),
-          target: { kind: 'session', sessionId } }, sessionId, exec.signal);
-        await projectSchedules();
-        return entry;
-      });
-      registerSchedule('schedule_list', 'List the active reminders in the current session.', {}, [], async (_args, exec) => { scheduleGuard(exec); const sessionId = await scheduleSessionId(exec); return sessionId ? (await scheduleService.catalog()).filter(entry => scheduleTargetSession(entry) === sessionId && entry.status === 'active') : []; });
-      registerSchedule('schedule_update', 'Change a reminder in place, keeping its id. Supply a new title, prompt, or at most one timing parameter; omitted fields keep their stored values.', { id: string, title: string, prompt: string, ...selectorProps }, ['id'], async (args, exec) => {
-        scheduleGuard(exec);
-        const sessionId = await scheduleSessionId(exec);
-        if (!sessionId) throw new Error('当前会话尚未准备就绪');
-        if (selectorKeys.filter(key => args[key] !== undefined).length > 1) throw new Error('schedule_update 最多指定一个时间参数');
-        const expected = (await scheduleService.catalog()).find(row => row.id === args.id && scheduleTargetSession(row) === sessionId);
-        if (!expected) return { id: args.id, updated: false, code: 'schedule_not_found' };
-        const change = timingChange(args);
-        return scheduleService.edit({ id: args.id, action: 'update', expectedUpdatedAt: expected.updatedAt ?? null,
-          patch: { ...(change ? { timing: change } : {}), ...(args.title !== undefined ? { title: args.title } : {}), ...(args.prompt !== undefined ? { prompt: args.prompt } : {}) } }, sessionId, exec.signal);
-      });
-      registerSchedule('schedule_delete', 'Delete a reminder in the current session, active or inactive. Deletion does not retract a reminder message that is already queued.', { id: string }, ['id'], async (args, exec) => {
-        scheduleGuard(exec); const sessionId = await scheduleSessionId(exec); if (!sessionId) throw new Error('当前会话尚未准备就绪');
-        const expected = (await scheduleService.catalog()).find(row => row.id === args.id && scheduleTargetSession(row) === sessionId);
-        if (!expected) return { id: args.id, deleted: false, code: 'schedule_not_found' };
-        return scheduleService.edit({ id: args.id, action: 'delete', expectedUpdatedAt: expected.updatedAt ?? null }, sessionId, exec.signal);
-      });
-    }
+    registerRouterScheduleTools({ schedule: ctx.get?.('schedule'), register, ownerAgent, managementScope, projectSchedules });
   };
 }

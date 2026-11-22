@@ -19,6 +19,15 @@ export const executionSessionNavigation = {
   close() { if (selectedExecution) { selectedExecution = null; for (const listener of listeners) listener(); } },
 };
 
+export function openRemoteExecutionFile(execution, path, { line, isCurrent, onReturn } = {}) {
+  if (!execution?.available || execution.remote !== true || execution.nativeWorker || !execution.sessionId)
+    throw new Error('该执行的文件工作区暂不可用');
+  return openRemoteResource({ device: { id: execution.deviceId, hostId: execution.hostId, authorizationId: execution.authorizationId },
+    resource: { kind: 'sessions', resourceId: execution.sessionId,
+      ownerTask: { taskId: execution.taskId, ownerHostId: execution.ownerHostId, executionId: execution.executionId },
+      file: { path, ...(line === undefined ? {} : { line }) } }, onReturn }, { isCurrent });
+}
+
 /** Open the same persisted execution Session in the official workspace. */
 export async function openExecutionSession(ctx, execution) {
   if (!execution?.available || !execution.sessionId) throw new Error('无法定位执行会话');

@@ -122,10 +122,12 @@ export function QuietChat({ home, session, chat, inbox, input, continuation, pro
   const retryError = retryAttempt?.phase === 'failed' && retryAttempt.seq === failureSeq ? retryAttempt.error : '';
   const historyError = typeof history.error === 'string' ? history.error : history.error && (history.error.message || '回复失败');
   const superseded = !home.channel && (session.running || input?.phase === 'sending' || retryAccepted || (lastTurn && !lastEnd));
-  const staleHistory = !home.channel && lastEnd && history.lastEndSeq !== undefined
+  const staleHistory = lastEnd && history.lastEndSeq !== undefined
     && (history.lastEndSeq === null || history.lastEndSeq < lastEnd.seq);
-  const liveFailure = lastReason?.kind === 'error' ? lastReason.error?.message || '回复失败' : session.lastAgentError;
-  const replyFailure = superseded ? '' : home.channel ? historyError : liveFailure || (!staleHistory && historyError);
+  // The session can still carry an error from before a successful automatic retry.
+  const liveFailure = lastReason?.kind === 'error' ? lastReason.error?.message || '回复失败'
+    : lastReason?.kind === 'completed' ? '' : session.lastAgentError;
+  const replyFailure = superseded ? '' : (!home.channel && liveFailure) || (!staleHistory && historyError);
   const failures = superseded || staleHistory ? [] : (history.failures || []);
   const showReplyFailure = !!replyFailure || (!superseded && failureSeq !== null);
   const showRetry = promptAllowed && failureSeq !== null && !superseded;

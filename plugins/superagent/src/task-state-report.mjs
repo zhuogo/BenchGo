@@ -12,13 +12,16 @@ export function taskStateSignal(database, delivery) {
     || taskExecutionBlocked(task) || task.instructionRevision !== payload.instructionRevision
     || task.resultVersion !== payload.resultVersion) return null;
   const state = payload.publication.systemState;
-  const assignment = database.assignments(task.id).find(row => ['uncertain', 'failed'].includes(row.state)
+  const assignments = database.assignments(task.id);
+  const assignment = assignments.find(row => ['uncertain', 'failed'].includes(row.state)
     && row.lastFailure?.code === state.code && row.lastFailure?.stage === state.stage
     && (!payload.assignmentId || row.id === payload.assignmentId && row.fence === payload.fence));
   if (state.state === 'continuation_wait' && !assignment) return null;
+  const failedRemote = assignment?.executor === 'remote' && assignment.state === 'failed';
+  if (failedRemote && assignments.at(-1)?.id !== assignment.id) return null;
   return { eventKey: delivery.uniqueKey, taskId: task.id, title: task.title, status: task.status,
     instructionRevision: task.instructionRevision, resultVersion: task.resultVersion,
-    state: state.state, code: state.code, stage: state.stage,
+    state: state.state, code: state.code, stage: state.stage, ...(failedRemote ? { failedRemote: true } : {}),
     ...(assignment ? { assignmentId: assignment.id, fence: assignment.fence, executionState: assignment.state,
       ...(assignment.firstFailure ? { failure: assignment.firstFailure } : {}) } : {}) };
 }

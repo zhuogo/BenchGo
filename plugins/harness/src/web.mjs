@@ -137,11 +137,12 @@ export async function mountHarnessWeb(ctx, commander, config = {}, dependencies 
     // records owned by Harness too; model-side tools retain their own scope.
     if (action === 'archive' || action === 'delete') {
       const id = text(input.id, 'sessionId', 200);
-      if (commander.snapshot(id).executionId)
+      if (action === 'delete' && commander.snapshot(id).executionId)
         throw Object.assign(new Error('工单的执行记录只读，请返回原工单管理。'), { status: 403, code: 'EXECUTION_INPUT_REQUIRES_OWNER' });
       if (action === 'delete') return commander.remove(id);
       if (input.archived !== undefined && typeof input.archived !== 'boolean') throw new Error('Invalid archived flag');
-      return commander.archive(id, input.archived ?? true);
+      if (input.stopActivity !== undefined && typeof input.stopActivity !== 'boolean') throw new Error('Invalid stopActivity flag');
+      return commander.archive(id, input.archived ?? true, { stopActivity: input.stopActivity === true });
     }
     throw new Error(`Unknown BenchGo action: ${action}`);
   };

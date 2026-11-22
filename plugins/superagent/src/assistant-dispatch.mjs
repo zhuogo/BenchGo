@@ -13,7 +13,7 @@ import { managementOwner } from './management-http.mjs';
 export function createAssistantDispatch(runtime) {
   const { ctx, store, shutdown, historySearch, readLedger, channelCredentials, database, goals, engine, feishu, feishuStream, channels, orchestrationRuntime,
     executionSummaries, projectSchedules, pet, restartFeishu, evaluations, taskChanges, taskManagement, projectTasks, capabilities, management, state, personalChannelSources,
-    artifacts, auxiliary, systemFiles, skillProvider } = runtime;
+    artifacts, auxiliary, systemFiles, skillProvider, workerArchive } = runtime;
   return async function dispatch(input, peer, { signal } = {}) {
     if (shutdown.signal.aborted) throw Object.assign(new Error('SuperAgent 已停用'), { status: 503, code: 'ASSISTANT_UNAVAILABLE' });
     const queryOptions = { signal: AbortSignal.any([shutdown.signal, signal].filter(Boolean)) };
@@ -21,6 +21,18 @@ export function createAssistantDispatch(runtime) {
     const threadId = input.threadId ?? 'main';
     switch (input.action) {
       case 'state': return state();
+      case 'workerArchiveInfo': {
+        managementOwner(peer);
+        return { worker: workerArchive.describe(input.sessionId, input.device) };
+      }
+      case 'taskArchiveInfo': {
+        managementOwner(peer);
+        return { worker: workerArchive.describeTask(input.taskId) };
+      }
+      case 'archiveWorkerTask': {
+        managementOwner(peer);
+        return workerArchive.archiveTask(input);
+      }
       case 'sessionRole': return { role: await readOwnedSessionRole({ store, sessionId: input.sessionId,
         listSessions: () => ctx.sessionQuery.listSessions() }) };
       case 'approvalOrigins': return resolveApprovalOrigins({ store, engine, input, peer,
@@ -195,7 +207,7 @@ export function createAssistantDispatch(runtime) {
       }
       case 'createThread': return engine.createThread({ title: input.title });
       case 'renameThread': return engine.updateThread(threadId, { title: input.title });
-      case 'archiveThread': return engine.updateThread(threadId, { archived: input.archived ?? true });
+      case 'archiveThread': return engine.updateThread(threadId, { archived: input.archived ?? true }, { stopActivity: input.stopActivity === true });
       case 'pinThread': return engine.updateThread(threadId, { pinned: input.pinned ?? true });
       case 'deleteThread': return engine.deleteThread(threadId);
       case 'deleteArchivedThreads': return engine.deleteArchivedThreads();

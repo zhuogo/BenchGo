@@ -18,6 +18,7 @@ export async function readJsonResponse(response, requestUrl) {
     const message = typeof detail === 'string' ? detail.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
     const error = new Error('请求失败' + (message ? '：' + message : '') + '（' + context + '）');
     error.code = 'HTTP_ERROR';
+    error.serverCode = typeof value?.code === 'string' ? value.code : undefined;
     error.status = response.status;
     error.pathname = pathname;
     throw error;

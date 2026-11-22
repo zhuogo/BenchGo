@@ -85,6 +85,50 @@ export function installRemoteExecutionStore({ db, tx, api, ownedAssignment }) {
   migrateRemoteExecutionOwnership({ db, tx });
   return {
     remoteExecution: assignmentId => value(row(assignmentId)),
+    remoteArchiveDevices() {
+      return db.prepare(`SELECT DISTINCT json_extract(payload,'$.deviceId') AS deviceId,
+        json_extract(payload,'$.hostId') AS hostId,json_extract(payload,'$.authorizationId') AS authorizationId,
+        json_extract(payload,'$.protocolVersion') AS protocolVersion FROM sa_remote_execution_state`).all();
+    },
+    detachRemoteStopInTransaction(assignment, now) {
+      const remote = value(row(assignment.id));
+      if (!remote || remote.fence !== assignment.fence) return false;
+      const at = validTime(now);
+      if (!terminal.has(remote.phase)) {
+        const prior = db.prepare("SELECT request_id FROM sa_remote_execution_commands WHERE assignment_id=? AND fence=? AND operation='cancel' ORDER BY rowid DESC LIMIT 1")
+          .get(assignment.id, assignment.fence);
+        if (!prior) {
+          const requestId = digest([remote.executionId, 'cancel', 'stop-and-archive']);
+          const payload = { requestId };
+          db.prepare("INSERT INTO sa_remote_execution_commands VALUES (?,?,?,?,?,?,'pending',NULL,?,?)")
+            .run(requestId, assignment.id, assignment.fence, 'cancel', digest([assignment.id, assignment.fence, 'cancel', payload]), JSON.stringify(payload), at, at);
+        }
+        db.prepare("UPDATE sa_remote_execution_state SET phase='cancelled',next_at=?,updated_at=? WHERE assignment_id=?").run(now, at, assignment.id);
+      }
+      db.prepare("UPDATE sa_runs SET state='cancelled',updated_at=? WHERE id=? AND fence=? AND state NOT IN ('completed','failed','cancelled')")
+        .run(at, remote.runId, assignment.fence);
+      return true;
+    },
+    pendingDetachedRemoteStops({ now, limit }) {
+      return db.prepare(`SELECT c.* FROM sa_remote_execution_commands c
+        JOIN sa_assignments a ON a.id=c.assignment_id AND a.fence=c.fence
+        JOIN sa_remote_execution_state e ON e.assignment_id=a.id AND e.fence=a.fence
+        WHERE c.operation='cancel' AND c.state='pending' AND a.state='cancelled' AND e.phase='cancelled'
+          AND json_extract(a.payload,'$.remoteStopDetached')=1 AND e.next_at<=?
+        ORDER BY e.next_at,c.request_id LIMIT ?`).all(now, limitOf(limit)).map(command);
+    },
+    finishDetachedRemoteStop(entry, { now, nextAt, receipt } = {}) {
+      const at = validTime(now);
+      return tx(() => {
+        const prior = db.prepare("SELECT * FROM sa_remote_execution_commands WHERE request_id=? AND assignment_id=? AND fence=? AND operation='cancel' AND state='pending'")
+          .get(entry.requestId, entry.assignmentId, entry.fence);
+        if (!prior) return;
+        if (receipt) db.prepare("UPDATE sa_remote_execution_commands SET state='receipted',receipt=?,updated_at=? WHERE request_id=?")
+          .run(JSON.stringify(receipt), at, entry.requestId);
+        else db.prepare('UPDATE sa_remote_execution_state SET next_at=?,updated_at=? WHERE assignment_id=? AND fence=?')
+          .run(nextAt, at, entry.assignmentId, entry.fence);
+      });
+    },
     remoteExecutionBySession(sessionId) {
       if (!identity(sessionId)) throw new TypeError('Invalid remote session identity');
       return value(db.prepare("SELECT * FROM sa_remote_execution_state WHERE json_extract(payload,'$.sessionId')=?").get(sessionId));
@@ -118,6 +162,18 @@ export function installRemoteExecutionStore({ db, tx, api, ownedAssignment }) {
         return api.getAssignment(assignmentId);
       });
     },
+    /** Extends the lease its current observer still holds. A lapsed or lost lease is never revived here. */
+    renewRemoteObservation(assignmentId, { owner, fence, leaseMs = 60000, now = Date.now() } = {}) {
+      if (!identity(owner) || !Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new TypeError('Invalid remote observation lease');
+      const at = validTime(now);
+      return tx(() => {
+        owned(assignmentId, owner, fence, now);
+        db.prepare('UPDATE sa_assignments SET lease_until=?,updated_at=? WHERE id=? AND lease_until<?').run(now + leaseMs, at, assignmentId, now + leaseMs);
+        return api.getAssignment(assignmentId);
+      });
+    },
+    /** One observed page is one transaction: the store calls made inside join it and commit or roll back together. */
+    observeRemotePage(apply) { return tx(apply); },
     parkRemoteAssignment(assignmentId, { owner, fence, phase, nextAt, now = Date.now() } = {}) {
       return tx(() => {
         const previous = value(row(assignmentId));
@@ -195,11 +251,15 @@ export function installRemoteExecutionStore({ db, tx, api, ownedAssignment }) {
       return tx(() => {
         const assignment = owned(assignmentId, owner, fence, now), remote = value(row(assignmentId));
         const receipt = command(db.prepare('SELECT * FROM sa_remote_execution_commands WHERE request_id=?').get(requestId));
+        const payload = JSON.parse(assignment.payload);
+        const submitRevision = receipt?.operation === 'submit' && payload.redispatchOfAssignmentId
+          && receipt.payload.requirements?.instructionRevision === instructionRevision;
+        const inputRevision = receipt?.operation === 'input'
+          && receipt.state === 'receipted' && receipt.payload.instructionRevision === instructionRevision
+          && receipt.receipt?.instructionRevision === instructionRevision;
         if (!remote || remote.runId !== runId || remote.executionId !== executionId
           || !receipt || receipt.assignmentId !== assignmentId || receipt.fence !== fence
-          || receipt.operation !== 'input' || receipt.state !== 'receipted'
-          || receipt.payload.instructionRevision !== instructionRevision
-          || receipt.receipt?.instructionRevision !== instructionRevision)
+          || (!submitRevision && !inputRevision))
           throw fail('REMOTE_REVISION_CONFLICT', 'Only the exact version acknowledged by the remote executor may be applied');
         const old = db.prepare('SELECT * FROM sa_task_boundaries WHERE assignment_id=? AND boundary_id=?').get(assignmentId, boundaryId);
         if (old) {
@@ -208,7 +268,7 @@ export function installRemoteExecutionStore({ db, tx, api, ownedAssignment }) {
             throw fail('REMOTE_REVISION_CONFLICT', 'Remote execution boundary already has a different version');
           return prior;
         }
-        const task = api.getTask(assignment.task_id), payload = JSON.parse(assignment.payload);
+        const task = api.getTask(assignment.task_id);
         const saved = db.prepare('SELECT snapshot FROM sa_task_revisions WHERE task_id=? AND revision=?')
           .get(task.id, instructionRevision);
         const source = saved ? JSON.parse(saved.snapshot) : instructionRevision === task.instructionRevision ? task : null;

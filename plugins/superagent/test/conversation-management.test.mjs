@@ -9,7 +9,13 @@ function fixture({ threadId = 'main', risk = false, approvalPolicy = 'ask' } = {
   const state = { mainSessionId: agent.id, threads: [{ id: 'side', sessionId: agent.id }] };
   const calls = [], approvals = [], definitions = new Map(), tokens = new WeakSet();
   let outcome = 'allowed-once', approvalHook;
-  const approval = { overrideOf: () => approvalPolicy, request: async request => { approvals.push(request); await approvalHook?.(); return outcome; } };
+  agent.session.append = (type, data) => { if (type === 'approval/policy') approvalPolicy = data.policy; };
+  const approval = { overrideOf: () => approvalPolicy, request: async request => {
+    if (approvalPolicy === 'never') return 'rejected';
+    approvals.push(request);
+    await approvalHook?.();
+    return outcome;
+  } };
   const ctx = { agents: { get: id => id === agent.id ? agent : null, currentInitiator: () => agent,
     turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) }, get: () => approval };
   const settings = Object.fromEntries(['catalog', 'read', 'prepare', 'commit', 'history', 'rollback'].map(op => [op, async (args, actor) => {
@@ -37,7 +43,7 @@ function fixture({ threadId = 'main', risk = false, approvalPolicy = 'ask' } = {
   registerConversationManagement({ ctx, scope: { get: () => approval }, agent, threadId, store, settings, taskManagement,
     register: (name, description, properties, required, execute) => definitions.set(name, { description, properties, required, execute }) });
   const exec = { agent, callId: 'call', signal: new AbortController().signal };
-  return { events, agent, state, calls, approvals, ctx, store, definitions, exec, preview, taskManagement,
+  return { events, agent, state, calls, approvals, ctx, store, definitions, exec, preview, taskManagement, approval,
     setOutcome: value => { outcome = value; }, onApproval: hook => { approvalHook = hook; },
     settings: (args, execution = exec) => definitions.get('assistant_settings').execute(args, execution),
     manage: (args, execution = exec) => definitions.get('assistant_task_manage').execute(args, execution),
@@ -76,10 +82,20 @@ test('settings safety approval comes from the official service and accepts only 
   }
 });
 
-test('never policy keeps protected settings blocked but permits reversible owner archive and restore', async () => {
-  const settings = fixture({ risk: true, approvalPolicy: 'never' });
-  settings.setOutcome('rejected'); await prepare(settings);
-  await assert.rejects(settings.settings({ op: 'commit', operationId: 'operation' }), { code: 'APPROVAL_POLICY_NEVER' });
+test('protected settings open a single approval under never and recover the session policy', async () => {
+  for (const outcome of ['allowed-once', 'rejected', 'cancelled']) {
+    const f = fixture({ risk: true, approvalPolicy: 'never' });
+    f.setOutcome(outcome);
+    await prepare(f);
+    const submitted = f.settings({ op: 'commit', operationId: 'operation' });
+    if (outcome === 'allowed-once') assert.deepEqual(await submitted, { verified: true });
+    else await assert.rejects(submitted, { code: 'MANAGEMENT_APPROVAL_DENIED' });
+    assert.equal(f.approvals.length, 1);
+    assert.equal(f.approval.overrideOf(), 'never');
+  }
+});
+
+test('never policy permits reversible owner archive and restore', async () => {
   for (const operation of [
     { op: 'commit', previewId: 'preview', ids: ['one'], requestId: 'archive' },
     { op: 'restore', previewId: 'restore-preview', ids: ['one'], requestId: 'restore' },

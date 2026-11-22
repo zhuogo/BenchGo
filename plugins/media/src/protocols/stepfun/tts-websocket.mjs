@@ -10,8 +10,8 @@ export function speechEndpoint(config) {
 }
 
 /** One bounded sentence request; the wire supports incremental text without a second playback pipeline. */
-export async function requestSpeech(_fetcher, config, text, signal, { socket = (url, options) => new WebSocket(url, options), timeoutMs = 90000 } = {}) {
-  const operation = speechOperation(signal, timeoutMs), speed = normalizeTtsSpeed(config.speed);
+export async function requestSpeech(_fetcher, config, text, signal, { socket = (url, options) => new WebSocket(url, options), timeoutMs = 90000, omitSpeed = false } = {}) {
+  const operation = speechOperation(signal, timeoutMs), speed = omitSpeed ? undefined : normalizeTtsSpeed(config.speed);
   if (speed < .5 || speed > 2) throw new VoiceError('阶跃语音协议的语速须为 0.5–2', 400, 'tts_speed_unsupported');
   const ws = socket(speechEndpoint(config).href, { headers: config.apiKey ? { authorization: 'Bearer ' + config.apiKey } : {}, followRedirects: false,
     maxPayload: Math.ceil(SPEECH_BYTES / 3) * 4 + 32768, handshakeTimeout: 10000 });
@@ -38,7 +38,7 @@ export async function requestSpeech(_fetcher, config, text, signal, { socket = (
       if (event.type === 'tts.connection.done') {
         if (session || typeof data.session_id !== 'string' || !data.session_id || data.session_id.length > 512) throw new VoiceError('Invalid TTS session', 502, 'tts_session_invalid');
         session = data.session_id;
-        send('tts.create', { voice_id: config.voice || 'alloy', response_format: 'pcm', sample_rate: 24000, speed_ratio: speed, mode: 'sentence' }); return;
+        send('tts.create', { voice_id: config.voice || 'alloy', response_format: 'pcm', sample_rate: 24000, ...(!omitSpeed && { speed_ratio: speed }), mode: 'sentence' }); return;
       }
       if (!session || data.session_id !== session) throw new VoiceError('TTS session does not match', 502, 'tts_session_invalid');
       if (event.type === 'tts.response.created') {

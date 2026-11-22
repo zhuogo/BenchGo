@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 
-const progressStyle = readFileSync(new URL('./renderer/startup-progress.css', import.meta.url), 'utf8');
+const loadingStyle = readFileSync(new URL('../../plugins/shared/client/ui/loading.css', import.meta.url), 'utf8');
+const renderStatus = readFileSync(new URL('./renderer/loading-status.js', import.meta.url), 'utf8');
 
 /** First-paint presentation for the official, framework-free workbench boot page. */
 export function workbenchLoadingMarkup() {
@@ -23,11 +24,11 @@ body[data-ds-dark-theme] [data-dsh-boot] { color-scheme: dark; }
 [data-dsh-boot] > div > :first-child,
 [data-dsh-boot] [data-dsh-boot-spinner] + div { display: none; }
 [data-dsh-boot] [data-dsh-boot-spinner] {
-  display: grid; justify-items: center; gap: 9px; position: static;
+  position: static; text-align: center;
   width: min(264px, calc(100vw - 48px)); height: auto; min-height: 0;
   padding: 0; border: 0; border-radius: 0; background: transparent;
   animation: none; transform: none;
-  color: var(--dsh-boot-label-primary);
+  color: light-dark(#161c23, #eef5f6);
   font: 600 14px/20px system-ui, sans-serif;
 }
 [data-dsh-boot] [data-dsh-boot-spinner]::after { display: none; }
@@ -35,7 +36,7 @@ body[data-ds-dark-theme] [data-dsh-boot] { color-scheme: dark; }
   --startup-dot-step: round(down, clamp(0, calc((var(--dsh-boot-arc, 72deg) - 72deg) / 36deg), 6), 1);
 }
 `;
-  return `<style data-benchgo-workbench-loading>${css}${progressStyle}</style><script>(${presentWorkbenchLoading.toString()})()</script>`;
+  return `<style data-benchgo-workbench-loading>${css}${loadingStyle}</style><script>(() => {\n${renderStatus}\n(${presentWorkbenchLoading.toString()})()\n})()</script>`;
 }
 
 /** Decorate the official progress node; its ownership, errors and React handoff stay intact. */
@@ -61,15 +62,10 @@ function presentWorkbenchLoading() {
     if (!progress || progress.dataset.benchgoLoading !== undefined) return;
     progress.dataset.benchgoLoading = '';
     progress.setAttribute('role', 'status');
-    progress.setAttribute('aria-label', text);
     progress.setAttribute('aria-live', 'polite');
     progress.setAttribute('aria-atomic', 'true');
     progress.setAttribute('aria-busy', 'true');
-    const dots = document.createElement('span');
-    dots.className = 'startup-loading';
-    dots.setAttribute('aria-hidden', 'true');
-    for (let step = 0; step < 6; step++) dots.append(document.createElement('span'));
-    progress.replaceChildren(text, dots);
+    renderLoadingStatus(progress, text);
   }
   observer.observe(document.documentElement, { childList: true, subtree: true });
   update();

@@ -1,11 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
-import { normalizeModelCapabilities } from '../shared/model-capabilities.mjs';
+import { isModelCapability, normalizeModelCapabilities } from '../shared/model-capabilities.mjs';
 
 const field = value => typeof value === 'string' && value.trim() && value.length <= 512 && !/[\u0000-\u001f]/u.test(value);
-const label = value => field(value) && value.length <= 96 && /^[a-z][a-z0-9_-]*$/u.test(value);
-const tags = value => Array.isArray(value) && value.length <= 32 && value.every(label);
+const tags = value => Array.isArray(value) && value.length <= 32 && value.every(isModelCapability);
 
 export function createModelCapabilitySettings(directory) {
   const path = directory && join(directory, 'model-capabilities.json');
@@ -25,7 +24,8 @@ export function createModelCapabilitySettings(directory) {
       return (await read()).filter(row => row.providerId === providerId).map(({ modelId, capabilities }) => ({ modelId, capabilities }));
     },
     async save(providerId, modelId, capabilities) {
-      if (!path || !field(providerId) || !field(modelId) || (capabilities !== null && !tags(capabilities))) throw Error('模型能力配置无效');
+      if (!path) throw Object.assign(Error('模型能力配置存储尚未就绪'), { status: 503 });
+      if (!field(providerId) || !field(modelId) || (capabilities !== null && !tags(capabilities))) throw Error('模型能力配置无效');
       return withFileLock(path, async () => {
         const entries = (await read()).filter(row => row.providerId !== providerId || row.modelId !== modelId);
         const selected = capabilities === null ? null : normalizeModelCapabilities(capabilities);

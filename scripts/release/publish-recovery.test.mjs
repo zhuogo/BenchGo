@@ -30,7 +30,7 @@ function origin() {
 
 test('previous signed release accepts PEM and public KeyObject; incorrect keys and signatures fail', async t => {
   const pair = keys(), raw = json({ schemaVersion: 1, version: '1.0.0', releaseVersion: '1.0.0', sourceSha: source,
-    engine: { min: '0.2.2-rc.1', max: '0.2.2-rc.1' }, plugin: { version: '1.0.0', url: 'https://github.com/zhuogo/BenchGo/releases/download/v1.0.0/benchgo-1.0.0-plugin.tar.gz', size: 4, sha256: sha256('test') } });
+    engine: { min: '0.2.2-rc.5', max: '0.2.2-rc.5' }, plugin: { version: '1.0.0', url: 'https://github.com/zhuogo/BenchGo/releases/download/v1.0.0/benchgo-1.0.0-plugin.tar.gz', size: 4, sha256: sha256('test') } });
   let signature = Buffer.from(`${sign(null, raw, pair.privateKey).toString('base64')}\n`);
   const release = { assets: [{ id: 1, name: 'benchgo-update.json', size: raw.length }, { id: 2, name: 'benchgo-update.json.sig', size: signature.length }] };
   const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
@@ -102,7 +102,7 @@ async function bundle(t) {
   const root = await mkdtemp(resolve(tmpdir(), 'benchgo-recovery-signed-')); t.after(() => rm(root, { recursive: true, force: true }));
   const pair = keys(), directory = resolve(root, 'ready'), builds = resolve(root, 'builds');
   const plan = { schemaVersion: 1, kind: releaseKind, sourceSha: source, releaseVersion: '1.0.0', tag: 'v1.0.0', minAppVersion: '1.0.0',
-    createdAt: '2026-11-15T00:00:00Z', versions: { plugin: '1.0.0', windows: '1.0.0', android: '1.0.0', androidVersionCode: 1, engine: '0.2.2-rc.1' },
+    createdAt: '2026-11-15T00:00:00Z', versions: { plugin: '1.0.0', windows: '1.0.0', android: '1.0.0', androidVersionCode: 1, engine: '0.2.2-rc.5' },
     builds: { plugin: true, windows: true, android: true }, previous: null };
   const putFiles = async (folder, files) => { await mkdir(folder, { recursive: true }); const inventory = [];
     for (const [name, content] of Object.entries(files)) { const bytes = Buffer.from(content); await writeFile(resolve(folder, name), bytes); inventory.push({ name, size: bytes.length, sha256: sha256(bytes) }); } return inventory; };

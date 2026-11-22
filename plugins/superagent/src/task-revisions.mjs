@@ -1,7 +1,6 @@
-import { taskExecutionBlocked } from './task-lifecycle.mjs';
+import { taskExecutionBlocked, taskPaused, taskStopped } from './task-lifecycle.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { installTaskInputStore } from './task-input-store.mjs';
-import { usesExternalWorker } from './work-role-policy.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const names = value => value.scope?.toolNames ?? value.toolScope;
@@ -56,10 +55,16 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
         const task = api.getTask(taskId);
         if (!task) throw fail('TASK_NOT_FOUND', '任务不存在');
         if (task.instructionRevision !== expectedInstructionRevision) throw Object.assign(fail('INSTRUCTION_REVISION_CONFLICT', '任务要求已变化，请刷新后重试'), { revision: task.instructionRevision });
-        const adjustment = task.status === 'completed' || task.executionControl?.stopped === true;
-        if (!adjustment && usesExternalWorker(api, task))
-          throw fail('NATIVE_WORKER_INPUT_UNSUPPORTED', '此外部 Harness 暂无可核实的修订应用边界，请停止后创建关联调整');
+        const previousAssignment = task.mandate.execution && api.assignments(taskId).at(-1);
+        const previousRemote = previousAssignment && api.remoteExecution(previousAssignment.id);
+        const remoteEnded = previousRemote && ['completed', 'failed'].includes(previousRemote.phase)
+          && ['completed', 'failed'].includes(previousAssignment.state) && !taskStopped(task) && !taskPaused(task) && !task.archived;
+        const adjustment = !(operation === 'revise' && remoteEnded) && (task.status === 'completed' || task.executionControl?.stopped === true);
         if (!adjustment && operation !== 'revise') throw fail('TASK_STATE_CONFLICT', '进行中的任务请修订；关联调整只用于已结束任务');
+        const execution = task.mandate.execution;
+        if (!adjustment && !remoteEnded && previousAssignment?.state !== 'queued'
+          && execution && execution.config.harness !== 'official' && execution.nativeContinuation !== true)
+          throw fail('NATIVE_WORKER_INPUT_UNSUPPORTED', '此外部 Harness 暂无可核实的修订应用边界，请停止后创建关联调整');
         if (task.executionControl?.stopRequested === true) throw fail('TASK_STOPPED', '任务正在停止，不能追加执行要求');
         const trigger = api.getTrigger(triggerId);
         if (!trigger || trigger.actor.kind !== 'human' || trigger.actor.id !== mandate?.actorId
@@ -120,7 +125,7 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
           instructionRevision: revision, authorizationVersion: appliedMandate.authorizationVersion ?? 1,
           snapshot: { ...completeSnapshot, instructionRevision: revision, operation, createdAt: at } });
         db.prepare('INSERT INTO sa_task_revision_requests(request_key,fingerprint,task_id,revision,request_payload) VALUES (?,?,?,?,?)').run(requestKey, fingerprint, taskId, revision, requestPayload ? JSON.stringify(requestPayload) : null);
-        if (task.continuationWait?.code === 'EXECUTION_FAILED' && !taskExecutionBlocked(task)) {
+        if ((operation === 'revise' && remoteEnded) || (task.continuationWait?.code === 'EXECUTION_FAILED' && !taskExecutionBlocked(task))) {
           api.queueFailureContinuationInTransaction(taskId, { expectedResultVersion: task.resultVersion,
             expectedInstructionRevision: revision, triggerId, validateMandate });
         }

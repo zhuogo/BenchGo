@@ -6,6 +6,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { waitForUpdatedService } from './bootstrap.mjs';
+
+test('an update can become ready after the former 50 second cutoff', async () => {
+  let elapsed = 0;
+  let probes = 0;
+  await waitForUpdatedService(12345, async () => {
+    probes++;
+    if (elapsed < 50000) throw new Error('owner endpoint has not started');
+    return { enabled: true, port: elapsed < 51000 ? 9999 : 12345, host: '127.0.0.1' };
+  }, async delay => { elapsed += delay; });
+  assert.equal(elapsed, 51000);
+  assert.equal(probes, 103);
+});
+
+test('the update timeout explains that the service may still be starting', async () => {
+  let elapsed = 0;
+  await assert.rejects(waitForUpdatedService(12345, async () => null, async delay => { elapsed += delay; }),
+    /服务可能仍在启动/);
+  assert.equal(elapsed, 180000);
+});
 
 const script = fileURLToPath(new URL('./bootstrap.sh', import.meta.url));
 const bash = process.platform === 'win32' ? ['C:/Program Files/Git/bin/bash.exe'].find(existsSync) : '/bin/bash';

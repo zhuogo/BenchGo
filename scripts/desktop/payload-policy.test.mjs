@@ -19,7 +19,7 @@ function fixture(t) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const put = (path, value) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)); };
   const plugin = join(root, 'plugin'), metadata = { name: 'benchgo-plugin', version: '0.1.4', benchgo: { releaseVersion: '0.1.5' } };
-  const upstream = { version: '0.2.2-rc.1', commit: 'a'.repeat(40) }, files = ['package.json', 'src/plugin.mjs', 'lib/client.js'];
+  const upstream = { version: '0.2.2-rc.5', commit: 'a'.repeat(40) }, files = ['package.json', 'src/plugin.mjs', 'lib/client.js'];
   for (const file of SERVER_BUILD_INPUTS) put(file, 'build-input');
   put('upstream.json', upstream);
   put('plugin/package.json', metadata); put('plugin/src/plugin.mjs', 'export default {};'); put('plugin/lib/client.js', 'client');

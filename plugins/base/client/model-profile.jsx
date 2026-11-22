@@ -2,13 +2,15 @@ import React from 'react';
 import { applyModelProfile, matchModelProfile } from '../shared/model-profile-match.mjs';
 
 let catalog;
-function loadCatalog() {
+export function loadPublicModelProfiles() {
   // One bounded request shared by a batch; only successful directories are cached.
   catalog ??= fetch(new URL('api/commander/tooling', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'modelProfiles' }), signal: AbortSignal.timeout(3500) })
     .then(async response => { if (!response.ok) throw Error('catalog unavailable'); const body = await response.json(); if (body?.success !== true || !Array.isArray(body.data)) throw Error('invalid catalog'); return body.data; })
-    .catch(() => { catalog = undefined; return []; });
+    .catch(error => { catalog = undefined; throw error; });
   return catalog;
 }
+
+const loadCatalog = () => loadPublicModelProfiles().catch(() => []);
 
 export function usePublicModelProfiles(enabled) {
   const [rows, setRows] = React.useState(undefined);

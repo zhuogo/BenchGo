@@ -26,10 +26,12 @@ export function authorizeAssessment({ policy, candidate, trigger, decision, task
   const config = channel === 'feishu' ? policy.connection : policy.connections?.[channel]?.config;
   if (!config && !isScheduledTrigger(trigger)) return { allowed: false, reason: 'unknown-channel' };
   if (decision.outcome === 'ignore') return { allowed: true, reason: 'read-only-ignore' };
+  // Resolve remote projects in the target's catalog after source admission.
+  const remote = decision.outcome === 'accept' && typeof decision.deviceId === 'string' && !!decision.deviceId && decision.deviceId !== 'local';
   if (isScheduledTrigger(trigger)) {
     if (candidate.gate.strength !== 'explicit' || candidate.gate.evidence?.desktopPolicyVersion !== policy.desktopVersion) return { allowed: false, reason: 'schedule-policy-changed' };
-    const project = decision.projectId === undefined ? undefined : policy.projects?.find(item => item.id === decision.projectId);
-    if (decision.projectId !== undefined && !project) return { allowed: false, reason: 'unknown-project' };
+    const project = remote || decision.projectId === undefined ? undefined : policy.projects?.find(item => item.id === decision.projectId);
+    if (!remote && decision.projectId !== undefined && !project) return { allowed: false, reason: 'unknown-project' };
     if (decision.outcome === 'answer') return { allowed: true, reason: 'scheduled-notification' };
     if (decision.outcome !== 'accept') return { allowed: false, reason: 'schedule-requires-new-task' };
     return { allowed: true, reason: 'owned-harness-schedule', mandate: {
@@ -42,17 +44,22 @@ export function authorizeAssessment({ policy, candidate, trigger, decision, task
   const admission = assessChannelAdmission({ policy, candidate, trigger, decision });
   if (!admission.allowed) return admission;
   if (['answer', 'ask'].includes(decision.outcome)) return admission;
-  const project = decision.projectId === undefined ? undefined : policy.projects?.find(item => item.id === decision.projectId);
-  if (decision.projectId !== undefined && !project) return { allowed: false, reason: 'unknown-project' };
   if (['attach', 'stop', 'revise', 'adjustment'].includes(decision.outcome) && !decision.taskId) return { allowed: false, reason: 'missing-task' };
   if (admission.routerAttention) return admission;
   if (['attach', 'stop', 'revise', 'adjustment'].includes(decision.outcome)
     && (!task || task.mandate?.actorId !== trigger.actor.id || !['channel', 'connectionId', 'conversationId'].every(key => typeof trigger.source[key] === 'string' && !!trigger.source[key] && task.mandate.source?.[key] === trigger.source[key]))) return { allowed: false, reason: 'task-source-ownership-mismatch' };
+  const previous = ['revise', 'adjustment'].includes(decision.outcome) && task?.mandate?.execution ? task.mandate : null;
+  if (previous && decision.projectId !== undefined && decision.projectId !== previous.project?.id)
+    return { allowed: false, reason: 'execution-project-immutable' };
+  const project = remote || previous || decision.projectId === undefined ? undefined : policy.projects?.find(item => item.id === decision.projectId);
+  if (!remote && !previous && decision.projectId !== undefined && !project) return { allowed: false, reason: 'unknown-project' };
   return { allowed: true, reason: admission.reason, mandate: {
     ...admission.mandate,
     actorId: trigger.actor.id, source: trigger.source, instruction: trigger.content,
     controlledActions: 'require-current-policy-and-harness-approval',
     ...(project ? { project: { id: project.id, path: project.path } } : {}),
+    ...(previous ? { execution: previous.execution, ...(previous.project ? { project: previous.project } : {}),
+      ...(previous.scope ? { scope: previous.scope } : {}), ...(previous.toolScope ? { toolScope: previous.toolScope } : {}) } : {}),
   } };
 }
 
@@ -62,16 +69,14 @@ export function validateTaskMandate(mandate, { policy }) {
   const desktop = mandate.source?.channel === 'desktop';
   // A peer never grants business authority or creates a second Task.
   if (mandate.source?.channel === 'link') return false;
-  if (mandate.admission === 'desktop-schedule') return isScheduledTrigger({ actor: { id: mandate.actorId, kind: mandate.actorKind }, source: mandate.source })
-    && mandate.policyVersion === policy.version && mandate.desktopPolicyVersion === policy.desktopVersion
-    && mandate.controlledActions === 'require-current-policy-and-harness-approval'
-    && (!mandate.project || policy.projects?.some(project => project.id === mandate.project.id && project.path === mandate.project.path));
   // Desktop mandates pin the desktop policy version; channel mandates are revalidated
   // against their own adapter's current policy.
-  if (desktop && mandate.policyVersion !== policy.desktopVersion) return false;
+  const scheduled = mandate.admission === 'desktop-schedule';
+  if (desktop && !scheduled && mandate.policyVersion !== policy.desktopVersion) return false;
+  // Remote execution is not tied to the desktop conversation: any source admitted below may use a paired device.
   if (mandate.execution) {
     const { deviceId, hostId, authorizationId, config, protocolVersion } = mandate.execution;
-    if (!desktop || [deviceId, hostId, authorizationId].some(value => typeof value !== 'string' || !value)
+    if ([deviceId, hostId, authorizationId].some(value => typeof value !== 'string' || !value)
       || deviceId === 'local' || protocolVersion !== 2 || !['official', 'codex', 'claude'].includes(config?.harness)
       || !Array.isArray(config.models) || config.models.length !== 1
       || config.models.some(model => typeof model?.providerId !== 'string' || !model.providerId || typeof model?.modelId !== 'string' || !model.modelId)
@@ -80,6 +85,9 @@ export function validateTaskMandate(mandate, { policy }) {
   } else if (mandate.project && (!policy.projects?.some(project => project.id === mandate.project.id && project.path === mandate.project.path)
     || mandate.project.deviceId && mandate.project.deviceId !== 'local')) return false;
   const source = mandate.source;
+  if (scheduled) return isScheduledTrigger({ actor: { id: mandate.actorId, kind: mandate.actorKind }, source })
+    && mandate.policyVersion === policy.version && mandate.desktopPolicyVersion === policy.desktopVersion
+    && mandate.controlledActions === 'require-current-policy-and-harness-approval';
   if (desktop) return typeof mandate.actorId === 'string' && !!mandate.actorId && mandate.admission === 'desktop-approved-delegation'
     && typeof source.sessionId === 'string' && !!source.sessionId && typeof source.messageId === 'string' && !!source.messageId
     && mandate.controlledActions === 'require-current-policy-and-harness-approval';

@@ -203,6 +203,13 @@ test('five real Cordis module lifetimes preserve base routes and follow current 
   assert.equal(await sshAvailable('official-session'), true);
   assert.equal(await sshAvailable('cold-router'), false);
   assert.equal(await sshAvailable('child', { origin: 'subagent', parentSession: 'official-session' }), false);
+  const roleLookup = t.mock.method(oldAssistant, 'readSessionRole', async () => { throw new Error('Role storage unavailable'); });
+  assert.equal(await sshAvailable('ordinary-with-unavailable-role'), false);
+  roleLookup.mock.restore();
+  const executionOwner = t.mock.method(ctx.get('benchgoExecution'), 'ownerOfSession', id => id === 'remote-worker' ? {} : null);
+  assert.equal(await sshAvailable('remote-worker'), false);
+  assert.equal(await sshAvailable('official-session'), true);
+  executionOwner.mock.restore();
   oldCommander.routeService = fixtureRouteService;
   oldCommander.toolInstaller = fixtureInstaller;
   oldCommander.providers.set('codex', { config: {}, constructor: { capabilities: {} }, async connect() { return { nativeId: 'fixture-native', async close() {} }; } });

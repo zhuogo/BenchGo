@@ -37,6 +37,23 @@ test('platform members receive task authority only within enabled Feishu scope',
 import { readAssessmentPolicy, authorizeAssessment, validateTaskMandate } from '../src/assessment-policy.mjs';
 import { channelAdmissionCheck, connectionPolicy } from '../src/channel-policy.mjs';
 
+test('any admitted channel may send work to a device from the owner device center', () => {
+  const config = { enabled: true, appId: 'app', ownerOpenIds: ['owner'], chatIds: ['chat'] };
+  const policy = { version: 'v1', connection: config, projects: [{ id: 'local-project', path: '/local' }] };
+  const source = { sourceType: 'direct', conversationId: 'chat', connectionId: 'feishu', channel: 'feishu', appId: 'app', chatId: 'chat' };
+  const input = { policy, candidate: { gate: { allowed: true, strength: 'explicit' } }, trigger: { actor: { id: 'owner', kind: 'human' }, source, content: 'Run it on the server' } };
+  const remote = authorizeAssessment({ ...input, decision: { outcome: 'accept', deviceId: 'B', projectId: 'only-on-B' } });
+  assert.equal(remote.allowed, true);
+  assert.equal(remote.mandate.project, undefined, 'the remote project is frozen from the device catalog, not the local registry');
+  assert.equal(authorizeAssessment({ ...input, decision: { outcome: 'accept', projectId: 'only-on-B' } }).reason, 'unknown-project');
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-auth', protocolVersion: 2, config: { harness: 'official', models: [{ providerId: 'p', modelId: 'm' }] } };
+  const mandate = { ...remote.mandate, policyVersion: 'v1', execution, project: { deviceId: 'B', hostId: 'B-host', id: 'only-on-B', path: '/srv/b' } };
+  assert.equal(validateTaskMandate(mandate, { policy }), true);
+  assert.equal(validateTaskMandate({ ...mandate, execution: { ...execution, deviceId: 'local' } }, { policy }), false);
+  assert.equal(validateTaskMandate({ ...mandate, project: { ...mandate.project, hostId: 'other' } }, { policy }), false);
+  assert.equal(validateTaskMandate(mandate, { policy: { ...policy, connection: { ...config, enabled: false } } }), false, 'the channel own admission still applies');
+});
+
 test('personal channels require an allowlisted account and an explicit mention in a configured group', () => {
   for (const channel of ['wecom', 'weixin', 'qq', 'telegram']) {
     const config = { enabled: true, ownerIds: ['owner'], chatIds: ['group'], accessMode: 'platform', machineIds: ['robot'] };

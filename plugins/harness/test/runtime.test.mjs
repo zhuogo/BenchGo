@@ -447,13 +447,38 @@ test('archive and remove refuse active turns and remove excludes reconnect durin
 test('archive prevents reconnect and deletion until driver cleanup finishes', async t => {
   const { commander } = await fixture(t);
   const { id } = await commander.create({ route: fixtureRoute(), provider: 'test' });
-  let release;
-  commander.drivers.get(id).close = () => new Promise(resolve => { release = resolve; });
+  const entered = deferred(), release = deferred();
+  commander.drivers.get(id).close = () => { entered.resolve(); return release.promise; };
   const pending = commander.archive(id);
-  await assert.rejects(commander.connect(id), /being archived/);
-  await assert.rejects(commander.remove(id), /being archived/);
-  release();
+  await entered.promise;
+  try {
+    await assert.rejects(commander.connect(id), /being archived/);
+    await assert.rejects(commander.remove(id), /being archived/);
+  } finally { release.resolve(); }
   assert.equal((await pending).archived, true);
+  assert.equal(commander.drivers.has(id), false);
+});
+
+test('confirmed archive is persistent while active driver shutdown is still pending', async t => {
+  const { commander, directory } = await fixture(t);
+  const { id } = await commander.create({ route: fixtureRoute(), provider: 'test' });
+  await commander.submit(id, 'keep this work');
+  await assert.rejects(commander.archive(id), { code: 'workspace/session-active', status: 409 });
+  assert.equal(commander.snapshot(id).archived, false);
+  const artifact = join(directory, 'result.txt');
+  await writeFile(artifact, 'already written');
+  const entered = deferred(), release = deferred();
+  commander.drivers.get(id).close = () => { entered.resolve(); return release.promise; };
+  try {
+    const first = await commander.archive(id, true, { stopActivity: true });
+    await entered.promise;
+    assert.equal(first.archived, true);
+    assert.equal(JSON.parse(await readFile(join(directory, 'sessions.json'), 'utf8')).sessions[0].archived, true);
+    assert.equal(commander.drivers.has(id), true);
+    assert.equal(await readFile(artifact, 'utf8'), 'already written');
+    assert(commander.events(id, 0).events.some(event => event.type === 'input.accepted'));
+  } finally { release.resolve(); }
+  assert.equal((await commander.stopExecution(id)).status, 'closed');
   assert.equal(commander.drivers.has(id), false);
 });
 

@@ -1767,7 +1767,10 @@ test('request failure switches once without replaying input and every new messag
   assert.equal(history.events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user').length, 1);
   assert.equal(history.events.filter(event => event.type === 'assistant/attempt').length, 1);
   assert.deepEqual(history.events.filter(event => event.type === 'turn/end').map(event => event.data.reason.kind), ['error', 'completed']);
-  assert.deepEqual((await f.engine.history()).messages.map(message => message.text), ['Run once', 'Done']);
+  const chat = await f.engine.history();
+  assert.deepEqual(chat.messages.map(message => message.text), ['Run once', 'Done']);
+  assert.equal(chat.error, null);
+  assert.deepEqual(chat.failures, []);
   await f.engine.send({ text: 'During cooldown' });
   await agent.whenIdle();
   assert.equal(f.requests.at(-1).model, 'first');
@@ -2061,6 +2064,9 @@ test('model preparation failures exhaust the complete ordered queue', async t =>
   await (await f.engine.ensureSession()).whenIdle();
   assert.deepEqual(prepared, ['first', 'second', 'third']);
   assert.equal(f.requests.length, 0);
+  const chat = await f.engine.history();
+  assert.match(chat.error, /No adapter/);
+  assert.deepEqual(chat.failures.map(failure => failure.model.modelId), prepared);
 });
 
 test('Router fallback blocks repeated dispatched effects and still permits repeated configuration reads', async t => {
@@ -2380,6 +2386,32 @@ test('live partial text remains private and cancellation stops current turn', as
   assert.equal((await f.engine.history()).running, false);
   assert.equal(f.requests.length, 1);
   assert.equal((await f.engine.requestState()).find(row => row.requestId === 'next-request').status, 'cancelled');
+});
+
+test('confirmed side chat archive cancels the running turn and queued input without a model message', async t => {
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const f = await fixture(t, request => (async function* () {
+    entered();
+    await new Promise(resolve => request.signal.addEventListener('abort', resolve, { once: true }));
+    request.signal.throwIfAborted();
+  })());
+  const item = await f.engine.createThread({ title: 'Archive me' });
+  const agent = await f.engine.ensureSession({ threadId: item.id });
+  await f.engine.updateThread(item.id, { pinned: true });
+  await f.engine.send({ threadId: item.id, text: 'Wait for archive' });
+  await started;
+  try {
+    await f.engine.send({ threadId: item.id, text: 'Queued work', requestId: 'queued-archive' });
+    await assert.rejects(f.engine.updateThread(item.id, { archived: true }), { code: 'workspace/session-active', status: 409 });
+    assert.equal(f.state().threads[0].archived, false);
+    const archived = await f.engine.updateThread(item.id, { archived: true }, { stopActivity: true });
+    assert.equal(archived.archived, true);
+    assert.equal(archived.pinned, false);
+    await agent.whenIdle();
+    assert.equal(f.requests.length, 1);
+    assert.equal((await f.engine.requestState(item.id)).find(row => row.requestId === 'queued-archive').status, 'cancelled');
+  } finally { if (agent.status === 'running') agent.cancel({ kind: 'user' }); }
 });
 
 for (const recover of [false, true]) for (const tamper of [false, true]) test(`explicit pause resumes only verified official state (recover=${recover}, tamper=${tamper})`, async t => {

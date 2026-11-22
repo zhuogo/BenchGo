@@ -133,7 +133,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     if (input.action === 'callDevice') return resources.callDevice(input);
     if (input.action === 'sessionAction') {
       if (typeof input.deviceId !== 'string' || !input.deviceId) throw fail('请选择会话所属设备');
-      return resources.callDevice({ deviceId: input.deviceId, expectedHostId: input.expectedHostId, expectedAuthorizationId: input.expectedAuthorizationId, input: { action: 'sessionAction', id: input.id, native: input.native, operation: input.operation, requestId: input.requestId, ...(input.title === undefined ? {} : { title: input.title }) }, signal: input.signal });
+      return resources.callDevice({ deviceId: input.deviceId, expectedHostId: input.expectedHostId, expectedAuthorizationId: input.expectedAuthorizationId, input: { action: 'sessionAction', id: input.id, native: input.native, operation: input.operation, requestId: input.requestId, ...(input.title === undefined ? {} : { title: input.title }), ...(input.stopActivity === undefined ? {} : { stopActivity: input.stopActivity }) }, signal: input.signal });
     }
     if (input.action === 'devices') return devices();
     if (input.action === 'resourceScope') return { scope: registry.scope() };

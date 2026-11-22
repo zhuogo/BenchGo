@@ -116,7 +116,7 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       if (wake) void Promise.resolve().then(wake).catch(() => {
         ctx.logger?.warn?.('SuperAgent 任务已受理，调度唤醒待定时重试');
       });
-      return task;
+      return remote?.versionWarning ? { ...task, versionWarning: remote.versionWarning } : task;
     })();
     pending.set(requestKey, { fingerprint, instructionFingerprint, promise: run });
     try { return await run; } finally { pending.delete(requestKey); }

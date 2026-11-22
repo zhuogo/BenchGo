@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { prepareDefaultDataDirectory } from './data-directory.mjs';
 import { createModelProviders } from './model-providers.mjs';
+import { mountModelRetryDefaults } from './model-retry-defaults.mjs';
 import { mountTooling } from './tooling.mjs';
 import { mountUsage } from './usage.mjs';
 import { mountUpdates } from './updates.mjs';
@@ -38,6 +39,7 @@ export async function apply(ctx, config = {}) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   ctx.provide('benchgo', { config, directory });
   ctx.inject(['agents', 'llm'], mountLiveReasoning);
+  ctx.inject(['settings'], mountModelRetryDefaults);
   const management = createSettingsManagement({ directory });
   ctx.provide('benchgoSettings', management);
   ctx.effect(() => () => management.close());
@@ -128,7 +130,7 @@ export async function apply(ctx, config = {}) {
     }));
   });
   ctx.inject(['connection', 'settings', 'credentials', 'llm'], async child => {
-    const providers = createModelProviders(child);
+    const providers = createModelProviders(child, { directory });
     mountRouterGoAccount(child, { directory });
     const tooling = await mountTooling(child, undefined, providers, { directory });
     child.provide('benchgoTooling', tooling);

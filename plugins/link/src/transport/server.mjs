@@ -43,12 +43,15 @@ const headers = {
   'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
-async function body(request) {
+// One execution request may carry a million characters (the execution service's own limit); CJK text takes three bytes each.
+// Only an authenticated paired device gets this allowance; pairing and other unauthenticated bodies keep the small default.
+const RPC_BODY_BYTES = 4 * 1024 * 1024;
+async function body(request, limit = 256 * 1024) {
   if (!request.headers['content-type']?.startsWith('application/json')) throw fail('需要 application/json', 415);
   let bytes = 0; const chunks = [];
   for await (const chunk of request) {
     bytes += chunk.length;
-    if (bytes > 256 * 1024) throw fail('请求过大', 413);
+    if (bytes > limit) throw Object.assign(fail('请求过大', 413), { code: 'LINK_REQUEST_TOO_LARGE' });
     chunks.push(chunk);
   }
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -163,7 +166,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
         await body(req);
         return send(res, 200, await workbench.begin(device, res));
       }
-      const input = await body(req);
+      const input = await body(req, RPC_BODY_BYTES);
       if (!active || !store.state.devices.some(d => d.id === device.id)) throw fail('设备授权已失效', 401);
       return send(res, 200, await dispatch(input, device));
     } catch (e) { if (res.headersSent) res.destroy(); else send(res, e.status ?? 400, { error: e.message, code: e.code }); }

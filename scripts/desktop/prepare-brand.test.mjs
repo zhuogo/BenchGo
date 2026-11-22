@@ -38,7 +38,10 @@ test('startup renderer embeds the unchanged transparent master with local animat
   const output = await mkdtemp(join(tmpdir(), 'benchgo-startup-renderer-'));
   t.after(() => rm(output, { recursive: true, force: true }));
   const root = fileURLToPath(new URL('../../', import.meta.url));
+  await writeFile(join(output, 'startup-progress.css'), 'previous build output');
   await prepareDesktopRenderer(root, output);
+  assert.deepEqual(await readFile(join(output, 'loading.css')), await readFile(join(root, 'plugins/shared/client/ui/loading.css')));
+  await assert.rejects(readFile(join(output, 'startup-progress.css')), { code: 'ENOENT' });
   const master = await readFile(join(root, 'assets/brand/benchgo-mark.svg'), 'utf8');
   const artwork = startupArtwork(master);
   assert.equal(artwork.replace(' class="startup-mascot" aria-hidden="true" focusable="false"', ''), master.trim());

@@ -1,4 +1,4 @@
-import React,{useEffect,useRef,useState} from 'react';
+import React,{useEffect,useId,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Menu} from '@deepseek-ai/dsh-client-ui-primitives';
 import {fileAddressFor,resolveWorkspacePath} from '@deepseek-ai/dsh-util-workspace-path';
@@ -129,11 +129,11 @@ export function useResourceNavigation(enabled,showArchived){
   };
   // Current/All include the already mounted local workspace even while device
   // discovery is loading or unavailable. Only an explicit selection may hide it.
-  const sessionAction=async(row,operation,title)=>{
+  const sessionAction=async(row,operation,title,{stopActivity}={})=>{
     const access=sessionActionAccess({remote,pages:pageRef.current},row,operation);
     if(!access.available)throw Error(access.reason);
     const id=row.resourceId??row.id,requestId='sa:'+Date.now()+':'+crypto.randomUUID();
-    const result=await deviceRequest('sessionAction',{deviceId:row.deviceId,expectedHostId:row.device.hostId??null,expectedAuthorizationId:row.device.authorizationId??null,id,native:row.native===true,operation,requestId,...(operation==='rename'?{title}:{})},AbortSignal.timeout(15000));
+    const result=await deviceRequest('sessionAction',{deviceId:row.deviceId,expectedHostId:row.device.hostId??null,expectedAuthorizationId:row.device.authorizationId??null,id,native:row.native===true,operation,requestId,...(operation==='rename'?{title}:{}),...(stopActivity===true?{stopActivity:true}:{})},AbortSignal.timeout(15000));
     if(result.accepted!==true||result.id!==id||result.operation!==operation||result.requestId!==requestId)throw Error('所属设备未确认会话操作，请刷新后核验');
     setRevision(v=>v+1);
     return result;
@@ -149,6 +149,18 @@ function ResourceReadStatus({device,page,onRetry}){
   return <Tooltip label={label+(connecting?'；点击重新连接':'；打开设备中心')}><button type="button" className="cmd-resource-connection" data-resource-state={connecting?'connecting':'unavailable'} aria-label={label} aria-busy={connecting} onClick={connecting?onRetry:()=>document.querySelector('.dsh-device-launcher')?.click()}><UIIcon name={connecting?'refresh':'devices'} size={14}/></button></Tooltip>;
 }
 export function ResourceDeviceState({navigation:n,device,kind,hideEmpty=false}){const page=n.pages[device.id+'\0'+kind];return <><ResourceReadStatus device={device} page={page} onRetry={n.retry}/>{!hideEmpty&&page?.available&&page.items?.length===0&&<p className="cmd-sidebar-empty">{kind==='projects'?'暂无项目':'暂无最近对话'}</p>}{page?.hasMore&&<button type="button" className="cmd-resource-more" disabled={page.loading||page.refreshing||page.available===false} onClick={()=>void n.more(device,kind)}>加载更多 · {device.name}</button>}</>;}
+
+export function ResourceProjectGroup({name,status,available,expanded,onToggle,children}) {
+  const contentId=useId();
+  return <div className="cmd-resource-group">
+    <button type="button" className="cmd-resource-group-title" data-device-available={available} aria-expanded={expanded} aria-controls={contentId} onClick={onToggle}>
+      <UIIcon name="computer" size={13}/><span className="cmd-resource-group-name">{name}</span>{status&&<small>{status}</small>}
+      <UIIcon name="chevronDown" size={12} className="cmd-resource-group-chevron"/>
+    </button>
+    <div id={contentId} hidden={!expanded}>{children}</div>
+  </div>;
+}
+
 export function RemoteProjects({navigation:n,filter,onOpen,onDelete,archived,onToggle,renderSession,renderHeader}) {
   const [expanded,setExpanded]=useState({}),[sessions,setSessions]=useState({});
   const generation=useRef(0),requests=useRef(new Map()),sessionRef=useRef({}),retryTimers=useRef(new Map()),retryAttempts=useRef(new Map()),activeProjects=useRef(new Set());
@@ -199,7 +211,7 @@ export function RemoteProjects({navigation:n,filter,onOpen,onDelete,archived,onT
     return()=>{disposed=true;};
   },[identity,archived,JSON.stringify(expanded),projectVersion,n.revision]);
   const matches=row=>!filter||`${row.title||''} ${row.provider||''} ${row.model||''}`.toLowerCase().includes(filter.toLowerCase());
-  return n.remote.map(device=><div className="cmd-resource-group" key={device.id}><button type="button" className="cmd-resource-group-title" data-device-available={n.pages[device.id+'\0projects']?.available===true} aria-expanded={expanded[device.id]!==false} onClick={()=>setExpanded(v=>({...v,[device.id]:v[device.id]===false}))}><UIIcon name="computer" size={13}/><span>{device.name}</span>{deviceStatus(device)&&<small>{deviceStatus(device)}</small>}</button>{expanded[device.id]!==false&&<><ResourceDeviceState navigation={n} device={device} kind="projects"/>{(n.pages[device.id+'\0projects']?.items||[]).filter(p=>!p.isDefault).map(p=>{
+  return n.remote.map(device=><ResourceProjectGroup key={device.id} name={device.name} status={deviceStatus(device)} available={n.pages[device.id+'\0projects']?.available===true} expanded={expanded[device.id]!==false} onToggle={()=>setExpanded(v=>({...v,[device.id]:v[device.id]===false}))}>{expanded[device.id]!==false&&<><ResourceDeviceState navigation={n} device={device} kind="projects"/>{(n.pages[device.id+'\0projects']?.items||[]).filter(p=>!p.isDefault).map(p=>{
     const key=resourceKey(p),page=sessions[key],open=archived||!!expanded[key],title=p.title||p.name||p.path;
     const rows=sortResourceRecents((page?.items||[]).filter(row=>!!row.archived===archived&&matches(row)));
     return <div className="cmd-project" key={key}>{renderHeader({title,titleTooltip:device.name+' · '+(p.path||title),expanded:open,onToggle:()=>{onToggle?.();setExpanded(v=>({...v,[key]:!v[key]}));},onNew:!archived?()=>onOpen(device,{kind:'projects',resourceId:p.resourceId||p.id,intent:'newSession'}):undefined,newLabel:'在 '+device.name+' 的 '+title+' 新聊天',onDelete:!archived&&onDelete?()=>onDelete({...p,remote:true,device,deviceId:device.id,kind:'projects'}):undefined,deleteLabel:'删除 '+device.name+' 的项目 '+title,deleteDisabled:n.pages[device.id+'\0projects']?.available!==true})}{open&&<div className="cmd-project-children">
@@ -208,7 +220,7 @@ export function RemoteProjects({navigation:n,filter,onOpen,onDelete,archived,onT
       {page?.available&&!rows.length&&<p className="cmd-sidebar-empty">{filter?'没有找到对话':archived?'暂无归档对话':'还没有对话'}</p>}
       {page?.hasMore&&<button type="button" className="cmd-resource-more" disabled={page.refreshing||page.available===false} onClick={()=>void load(device,p,true)}>加载更多对话</button>}
     </div>}</div>;
-  })}</>}</div>);
+  })}</>}</ResourceProjectGroup>);
 }
 /** Keep one flat candidate list; the sidebar sorts local and remote rows together once. */
 export function remoteRecentRows(n,filter,archived){return n.remote.flatMap(device=>(n.pages[device.id+'\0recent']?.items||[]).filter(row=>!!row.archived===archived&&(!filter||`${row.title||''} ${row.provider||''} ${row.model||''}`.toLowerCase().includes(filter.toLowerCase()))).map(row=>({...row,device,deviceId:device.id,remote:true})));}
@@ -238,8 +250,9 @@ export function ResourceStage({ target, onClose, sessionDevices, onSessionDevice
     const controller = new AbortController();
     void deviceRequest('select', { deviceId }, AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])).then(value => {
       if (controller.signal.aborted) return;
-      if ((target.device.hostId || target.device.authorizationId) && (!value.device || value.device.id !== deviceId
-        || value.device.hostId !== target.device.hostId || value.device.authorizationId !== target.device.authorizationId))
+      if (value.device?.id !== deviceId) throw Error('设备连接已更新，请重新打开远端会话');
+      if (target.resource.ownerTask && (value.device.hostId !== target.device.hostId
+        || value.device.authorizationId !== target.device.authorizationId))
         throw Error('目标设备身份或授权已变化，请返回原任务核验');
       const next = new URL(workbenchUrl(value.url, location.origin));
       next.hash = new URLSearchParams({ resourceParentOrigin: location.origin }).toString();

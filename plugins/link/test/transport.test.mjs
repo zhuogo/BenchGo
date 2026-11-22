@@ -98,6 +98,21 @@ test('cross-origin, forged Host, admin RPC, traversal and oversized bodies are b
   assert.equal((await f.call('/link/api/pair', { body: { name: 'x'.repeat(300_000) } })).status, 413);
   assert.equal((await f.call('/link/', { method: 'GET' })).status, 200);
 });
+test('a paired device may send an execution-sized RPC body; larger bodies are refused with a code', async t => {
+  const f = await setup(t), pairing = f.store.begin();
+  const query = (await f.call('/link/api/pair', { body: { code: pairing.code, name: 'Owner' } })).value;
+  await f.store.decide(query.requestId, true);
+  const { token } = (await f.call('/link/api/pair/status', { body: query })).value;
+  // 600 KB of UTF-8: a 50,000-character CJK task carried four times in one submit.
+  const accepted = await f.call('/link/api/rpc', { token, body: { action: 'execution', text: '\u4e2d'.repeat(200_000) } });
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.value.action, 'execution');
+  const refused = await f.call('/link/api/rpc', { token, body: { action: 'execution', text: 'x'.repeat(4 * 1024 * 1024) } });
+  assert.equal(refused.status, 413);
+  assert.equal(refused.value.code, 'LINK_REQUEST_TOO_LARGE');
+  assert.equal((await f.call('/link/api/pair', { body: { name: 'x'.repeat(300_000) } })).status, 413, 'unauthenticated bodies keep the small limit');
+});
+
 test('public URL is strict HTTPS and listener settings validate before mutation', () => {
   const prior = { enabled: false, host: '0.0.0.0', port: 48721, publicUrl: '' };
   for (const publicUrl of ['http://example.com', 'https://user:pass@example.com', 'https://example.com/path', 'https://example.com/?token=x']) assert.throws(() => validateConfig({ publicUrl }, prior));

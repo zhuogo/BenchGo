@@ -9,6 +9,7 @@ import * as reasoning from '../client/model-reasoning-state.mjs';
 import { routerGo } from '../shared/builtin-providers.mjs';
 import { hasTextCapability } from '../shared/model-capabilities.mjs';
 import * as routerGoAccount from '../shared/routergo-account.mjs';
+import * as providerTemplates from '../shared/provider-templates.mjs';
 import * as protocolRules from '../../../deepseek-harness/packages/client/ui-settings-models/src/client/protocol-rules.ts';
 import { TextSearchIndex } from '../../../deepseek-harness/packages/util/text-search/src/index.ts';
 
@@ -44,32 +45,26 @@ test('provider picker adapts official add flow and leaves upstream file unchange
   const path = new URL('ModelsSection.tsx', upstream);
   const original = await readFile(path, 'utf8');
   const { contents } = await transform('ModelsSection.tsx');
-  assert(contents.includes('<ProviderSelect'));
+  assert(contents.includes('<ProviderAddForm'));
   assert(contents.includes('<ProviderBrandIcon id={row.entry.provider}'));
   assert(contents.includes('declared={row.entry.declared === true}'));
-  assert(contents.includes('declared: row.entry.declared === true'));
   assert(!contents.includes('<select\n'));
-  assert(contents.includes('setEditing(targetOf(picked.row)); setAddMode("catalog")'));
-  assert(contents.includes('preset={providerPreset}'));
-  assert(contents.includes('row.entry.provider !== routerGo.id'));
-  assert(contents.includes('填写 API 密钥，获取并选择要使用的模型。'));
-  assert(contents.includes('row.configured || addable.some'));
+  assert.doesNotMatch(contents, /nativeOptions|nativeRows|nativeNamespace/);
+  assert(contents.includes('preset={selection.type === "custom" ? undefined : selection}'));
+  assert(!contents.includes("t('customTag')"));
+  assert(!contents.includes('<ModelOperations'));
   assert(contents.includes('setAddOpen(false)'));
-  assert(contents.includes("setProviderPreset(routerFree ? routerGo : undefined)"));
-  assert(contents.includes("const routerFree = customEnabled && !state.rows.some(row => row.entry.provider === routerGo.id)"));
-  assert(contents.includes("const initial: AddMode = routerFree || !catalogEnabled ? 'custom' : 'catalog'"));
-  assert(contents.includes('setEditing(routerFree || first === undefined ? undefined : targetOf(first.row))'));
   assert(contents.includes('deepSeekProviderRow(row, snapshot.namespaces.get(row.entry.settingsNs))'));
   assert(contents.includes('disconnectDeepSeekProvider(operations, controller, deleteTarget.settingsNs, deleteTarget.settingsRevision)'));
-  assert(!contents.includes('routerAvailable='));
-  assert(!contents.includes('再添加一把密钥'));
-  assert.equal((contents.match(/<ProviderSelect/g) || []).length, 1);
+  assert.doesNotMatch(contents, /setAddMode|SegmentedControl|addModes/);
   assert.equal(await readFile(path, 'utf8'), original);
 });
 
 test('RouterGo owns its identity fields and reuses official credential and settings operations', async () => {
   const { contents } = await transform('CustomProviderCard.tsx');
   for (const field of ['id', 'name', 'baseURL', 'protocol']) assert(contents.includes('props.preset?.' + field));
+  assert(contents.includes('normalizeTemplateBaseURL(template, baseURL.trim())'));
+  assert(contents.includes('required={requiresKey}'));
   assert(contents.includes('operations.storeCredential('));
   assert(contents.includes('operations.writeSettings('));
   assert(!contents.includes('profileRoute'));
@@ -83,7 +78,8 @@ test('official Models CSS remains a scoped module rather than a text export', as
   assert(contents.includes('buttonSpinner'));
   assert(contents.includes('commander-button-spin'));
   assert(contents.includes('export default {'));
-  assert(contents.includes('"addModes":'));
+  assert(contents.includes('"addCard":'));
+  assert.doesNotMatch(contents, /addModes|addPanel/);
 });
 
 test('official Models stylesheet restores on dependency reactivation and supports overlapping owners', async () => {
@@ -148,14 +144,12 @@ async function componentHarness(filename) {
   const module = { exports: {} };
   const { contents } = await transform(filename);
   const code = transformSync(contents, { loader: 'tsx', jsx: 'automatic', format: 'cjs' }).code;
-  const reasoningEfforts = { exports: {} }, retryPolicy = { exports: {} };
-  for (const [file, dependency] of [['ModelReasoningEfforts.tsx', reasoningEfforts], ['RetryPolicyEditor.tsx', retryPolicy]]) {
-    const source = await readFile(new URL(file, upstream), 'utf8');
-    runInNewContext(transformSync(source, { loader: 'tsx', jsx: 'automatic', format: 'cjs' }).code, {
-      module: dependency, exports: dependency.exports,
-      require: id => id === 'react' ? react : id.endsWith('DeepSeekModelsEditor.tsx') ? deepSeekModels : primitives,
-    });
-  }
+  const reasoningEfforts = { exports: {} };
+  const reasoningSource = await readFile(new URL('ModelReasoningEfforts.tsx', upstream), 'utf8');
+  runInNewContext(transformSync(reasoningSource, { loader: 'tsx', jsx: 'automatic', format: 'cjs' }).code, {
+    module: reasoningEfforts, exports: reasoningEfforts.exports,
+    require: id => id === 'react' ? react : id.endsWith('DeepSeekModelsEditor.tsx') ? deepSeekModels : primitives,
+  });
   runInNewContext(code, {
     module, exports: module.exports, structuredClone, URL,
     require: id => {
@@ -172,7 +166,6 @@ async function componentHarness(filename) {
       if (id.endsWith('model-reasoning.jsx')) return { ModelReasoningEditor: 'ModelReasoningEditor' };
       if (id.endsWith('text-search/src/index.ts') || id.endsWith('text-search\\src\\index.ts')) return { TextSearchIndex };
       if (id.endsWith('protocol-rules.ts')) return protocolRules;
-      if (id.endsWith('RetryPolicyEditor.tsx')) return { ...retryPolicy.exports, RetryPolicyEditor: 'RetryPolicyEditor' };
       if (id.endsWith('ModelReasoningEfforts.tsx')) return { ...reasoningEfforts.exports, ModelReasoningEfforts: 'ModelReasoningEfforts' };
       if (id.endsWith('useModelRows.ts')) return { useModelRows(models) {
         const [expanded, setExpanded] = react.useState(new Set());
@@ -182,6 +175,7 @@ async function componentHarness(filename) {
       } };
       if (id.endsWith('provider-settings.jsx')) return { ProviderBrandIcon: 'ProviderBrandIcon', routerGo };
       if (id.endsWith('routergo-account.mjs')) return routerGoAccount;
+      if (id.endsWith('provider-templates.mjs')) return providerTemplates;
       if (id.endsWith('DeepSeekModelsEditor.tsx')) return deepSeekModels;
       if (id.endsWith('apiKey.ts')) return { apiKeyFailure: () => undefined };
       if (id.endsWith('store.ts')) return { deriveKeyRef: () => 'ROUTERGO_API_KEY', protocolChoices: () => ['openai-completions'], reasoningLevelChoices: () => ['off', 'low', 'medium', 'high'] };
@@ -266,7 +260,7 @@ test('discovery selection preserves unlisted models and configured fields', asyn
     operations: { async discoverModels() { return { kind: 'found', models: [{ id: kept.id }, { id: 'vendor/model-v2', name: 'New' }] }; } },
     probe: { settingsNs: 'llm-pi-ai', provider: 'routergo' }, t: key => key };
   let tree = render(props);
-  const fetch = elements(tree).find(node => node.type === 'button' && node.props.children === 'fetchModels');
+  const fetch = elements(tree).find(node => node.type === 'button' && node.props.children === '同步模型');
   assert(fetch);
   fetch.props.onClick();
   await new Promise(resolve => setImmediate(resolve));
@@ -275,8 +269,10 @@ test('discovery selection preserves unlisted models and configured fields', asyn
   assert.deepEqual(checks.map(node => node.props.checked), [true, false]);
   checks[1].props.onChange();
   tree = render(props);
-  const modal = pick(tree, 'Modal');
-  const adopt = elements(modal.props.footer).find(node => node.type === 'Button' && node.props.children === 'fetchAdopt');
+  assert.equal(elements(tree).some(node => node.type === 'Modal'), false);
+  const picker = elements(tree).find(node => node.type === 'section' && node.props['aria-label'] === 'fetchTitle');
+  assert(picker);
+  const adopt = elements(picker).find(node => node.type === 'Button' && node.props.children === 'fetchAdopt');
   assert(adopt);
   adopt.props.onClick();
   assert.deepEqual(plain(models), [kept, unlisted, { id: 'vendor/model-v2', name: 'New' }]);
@@ -405,7 +401,7 @@ test('a retry after credential removal keeps official path operations and does n
     }, t: key => key, readOnly: false, onClose: value => closes.push(value) };
   let tree = render(props);
   pick(tree, 'ApiKeyInput').props.saved.clear();
-  pick(tree, 'RetryPolicyEditor').props.onChange({ ...original.retryPolicy, maxRetries: 4 });
+  assert.equal(pick(tree, 'RetryPolicyEditor'), undefined);
   tree = render(props);
   assert.equal(pick(tree, 'ModelListEditor').props.probeBlocked, 'keyRemovePending');
   pick(tree, 'EditorFooter').props.onSubmit();
@@ -416,7 +412,6 @@ test('a retry after credential removal keeps official path operations and does n
   retry.props.onSubmit();
   await new Promise(resolve => setImmediate(resolve));
   const expected = [1, [
-    { op: 'set', path: ['providers', 'openai', 'retryPolicy', 'maxRetries'], value: 4 },
     { op: 'unset', path: ['providers', 'openai', 'apiKeyEnv'] },
   ]];
   assert.deepEqual(calls, ['ROUTERGO_API_KEY', expected, expected]);

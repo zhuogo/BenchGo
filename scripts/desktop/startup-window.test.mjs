@@ -5,8 +5,8 @@ import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { openStartupWindow, createStartupTiming } from './startup-window.mjs';
-import { startupWindowPlugin, verifyStartupBundle } from './prepare-startup.mjs';
+import { openStartupWindow, createStartupTiming, createWelcomeWindow } from './startup-window.mjs';
+import { startupWindowPlugin, verifyStartupBundle, welcomePresentationPlugin } from './prepare-startup.mjs';
 
 function fixture(fail = false) {
   const app = new EventEmitter();
@@ -24,6 +24,7 @@ function fixture(fail = false) {
       app.emit('browser-window-created', {}, this);
     }
     setBackgroundColor(value) { this.background = value; }
+    setTitleBarOverlay(value) { this.overlay = value; }
     async loadFile(page) { this.page = page; if (fail) throw new Error('missing page'); }
     isDestroyed() { return Boolean(this.destroyed); }
     isVisible() { return Boolean(this.visible); }
@@ -42,11 +43,10 @@ test('splash covers hidden backend startup and disposes only when another window
   assert.equal(splash.isVisible(), true);
   assert.equal(splash.isDestroyed(), false);
   assert.equal(splash.options.icon.path, 'icon.png');
-  assert.equal(splash.options.backgroundColor, '#f3f6f6');
-  env.nativeTheme.shouldUseDarkColors = true; env.nativeTheme.emit('updated');
-  assert.equal(splash.background, '#101218');
-  env.nativeTheme.shouldUseDarkColors = false; env.nativeTheme.emit('updated');
-  assert.equal(splash.background, '#f3f6f6');
+  assert.equal(splash.options.frame, false);
+  assert.equal(splash.options.transparent, true);
+  assert.equal(splash.options.hasShadow, false);
+  assert.equal(splash.options.backgroundColor, undefined);
   assert.equal(splash.options.webPreferences.sandbox, true);
   assert.equal(splash.options.webPreferences.preload, undefined);
   assert.deepEqual(splash.openHandler(), { action: 'deny' });
@@ -62,7 +62,6 @@ test('splash covers hidden backend startup and disposes only when another window
   assert.equal(splash.isDestroyed(), true);
   assert.equal(env.app.quits, undefined);
   assert.equal(env.app.listenerCount('browser-window-created'), 0);
-  assert.equal(env.nativeTheme.listenerCount('updated'), 0);
   assert.equal(main.listenerCount('closed'), 0);
   close();
   close.setStage('host-ready');
@@ -72,14 +71,11 @@ test('splash covers hidden backend startup and disposes only when another window
 test('fatal cleanup and quit dispose the card without an extra quit request', async () => {
   for (const action of ['fatal', 'quit']) {
     const env = fixture();
-    env.nativeTheme.shouldUseDarkColors = true;
     const close = await openStartupWindow(env);
-    assert.equal(env.windows[0].options.backgroundColor, '#101218');
     if (action === 'fatal') close(); else env.app.emit('will-quit');
     assert.equal(env.windows[0].isDestroyed(), true);
     assert.equal(env.app.quits, undefined);
     assert.equal(env.app.listenerCount('will-quit'), 0);
-    assert.equal(env.nativeTheme.listenerCount('updated'), 0);
   }
 });
 
@@ -116,7 +112,33 @@ test('a user close quits; an unavailable splash still allows official startup', 
   await openStartupWindow(failed);
   assert.equal(failed.windows[0].isDestroyed(), true);
   assert.equal(failed.app.quits, undefined);
-  assert.equal(failed.nativeTheme.listenerCount('updated'), 0);
+});
+
+test('welcome removes native decoration and keeps theme-aware system controls', () => {
+  const { nativeTheme, BrowserWindow } = fixture();
+  const webPreferences = { preload: '/preload-welcome.cjs', sandbox: true };
+  const titleBarOverlay = { color: '#00000000', symbolColor: '#0F1115', height: 42 };
+  const trafficLightPosition = { x: 21, y: 21 };
+  const win = createWelcomeWindow({ BrowserWindow, nativeTheme, platform: 'win32',
+    options: { titleBarStyle: 'hidden', titleBarOverlay, backgroundMaterial: 'acrylic', webPreferences } });
+  assert.deepEqual(win.options, { titleBarStyle: 'hidden', titleBarOverlay: { ...titleBarOverlay, symbolColor: '#161c23' },
+    thickFrame: false, accentColor: false, hasShadow: false, backgroundColor: '#f3f6f6', webPreferences });
+  nativeTheme.shouldUseDarkColors = true;
+  nativeTheme.emit('updated');
+  assert.equal(win.background, '#101218');
+  assert.deepEqual(win.overlay, { ...titleBarOverlay, symbolColor: '#eef5f6' });
+
+  const mac = createWelcomeWindow({ BrowserWindow, nativeTheme, platform: 'darwin',
+    options: { titleBarStyle: 'hidden', trafficLightPosition, vibrancy: 'menu', visualEffectState: 'active', webPreferences } });
+  assert.deepEqual(mac.options, { titleBarStyle: 'hidden', trafficLightPosition,
+    hasShadow: false, backgroundColor: '#101218', webPreferences });
+  nativeTheme.shouldUseDarkColors = false;
+  nativeTheme.emit('updated');
+  assert.equal(mac.background, '#f3f6f6');
+  assert.equal(mac.overlay, undefined);
+  win.destroy();
+  mac.destroy();
+  assert.equal(nativeTheme.listenerCount('updated'), 0);
 });
 
 test('compile integration targets one official entry and rejects changed lifecycle anchors', async () => {
@@ -127,11 +149,25 @@ test('compile integration targets one official entry and rejects changed lifecyc
   assert.equal(plugin.transform(source, '/other.js'), null);
   assert.throws(() => plugin.generateBundle(), /got 0/);
   const code = plugin.transform(source, path.pathname).code;
-  assert.match(code, /openStartupWindow\(\{ app, BrowserWindow, nativeImage, nativeTheme,/);
+  assert.match(code, /openStartupWindow\(\{ app, BrowserWindow, nativeImage, page:/);
   assert.ok(code.indexOf('closeBenchgoStartup = await') < code.indexOf('const desktopSettings ='));
   assert.match(code, /function reportFatal\(error, source\) \{\n    closeBenchgoStartup\?\.\(\);/);
   plugin.generateBundle();
   assert.throws(() => plugin.transform(source.replace('async function main()', 'async function changed()'), path.pathname), /Official startup changed/);
+});
+
+test('compile integration decorates only the official welcome window constructor', async () => {
+  const path = new URL('../../deepseek-harness/apps/desktop/lib/types/welcome-window.js', import.meta.url);
+  const source = await readFile(path, 'utf8');
+  const plugin = welcomePresentationPlugin(path.pathname);
+  plugin.buildStart();
+  assert.equal(plugin.transform(source, '/other.js'), null);
+  assert.throws(() => plugin.generateBundle(), /got 0/);
+  const code = plugin.transform(source, path.pathname).code;
+  assert.equal(code.split('const window = createWelcomeWindow({ BrowserWindow, nativeTheme, platform: process.platform, options });')[1],
+    source.split('const window = new BrowserWindow(options);')[1]);
+  plugin.generateBundle();
+  assert.throws(() => plugin.transform(source.replace('new BrowserWindow(options)', 'new BrowserWindow({})'), path.pathname), /Official welcome window changed/);
 });
 
 test('startup executes the packaged enrollment entry and propagates failures before Host startup', async t => {

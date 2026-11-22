@@ -139,20 +139,22 @@ export function installTaskInputStore({ db, tx, api }) {
       if (taskExecutionBlocked(task)) return;
       updatePayload(row, snapshot(task), new Date(now).toISOString());
     },
-    applyTaskRevision(assignmentId, { owner, fence, runId, boundaryId, now = Date.now() }) {
+    applyTaskRevision(assignmentId, { owner, fence, runId, boundaryId, receivedRevision, now = Date.now() }) {
       return tx(() => {
         const row = db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(assignmentId), run = row && api.runs(assignmentId).find(row => row.id === runId);
         if (!row || row.state !== 'claimed' || row.owner !== owner || row.fence !== fence || row.lease_until <= now
           || !run || run.owner !== owner || run.fence !== fence) throw fail('FENCING_CONFLICT', '要求切换不属于当前真实执行');
         const task = api.getTask(row.task_id);
-        if (taskExecutionBlocked(task)) throw fail(taskPaused(task) ? 'TASK_PAUSED' : 'TASK_STOPPED', '任务暂停或停止，输入仅保留不执行');
+        if (receivedRevision === undefined && taskExecutionBlocked(task)) throw fail(taskPaused(task) ? 'TASK_PAUSED' : 'TASK_STOPPED', '任务暂停或停止，输入仅保留不执行');
         if (typeof boundaryId !== 'string' || !boundaryId || boundaryId.length > 1024) throw fail('INVALID_EXECUTION_BOUNDARY', '要求切换缺少工具批次边界');
         const old = db.prepare('SELECT * FROM sa_task_boundaries WHERE assignment_id=? AND boundary_id=?').get(assignmentId, boundaryId);
         if (old) {
           if (old.run_id !== runId) throw fail('RUN_CONFLICT', '工具边界已归属另一执行');
           return JSON.parse(old.snapshot);
         }
-        const at = new Date(now).toISOString(), current = updatePayload(row, snapshot(task), at);
+        if (receivedRevision !== undefined && (!Number.isSafeInteger(receivedRevision) || receivedRevision > task.instructionRevision
+          || receivedRevision < (JSON.parse(row.payload).instructionRevision ?? 1))) throw fail('INVALID_EXECUTION_BOUNDARY', '回执版本不属于当前执行');
+        const at = new Date(now).toISOString(), current = updatePayload(row, snapshot(task, receivedRevision), at);
         const savedRun = db.prepare('SELECT payload FROM sa_runs WHERE id=?').get(runId);
         db.prepare('UPDATE sa_runs SET payload=?,updated_at=? WHERE id=?').run(JSON.stringify({ ...JSON.parse(savedRun.payload), appliedSnapshot: current, instructionRevision: current.instructionRevision, authorizationVersion: current.authorizationVersion }), at, runId);
         db.prepare('INSERT INTO sa_task_boundaries VALUES (?,?,?,?,?)').run(assignmentId, boundaryId, runId, JSON.stringify(current), at);

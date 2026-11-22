@@ -33,7 +33,7 @@ async function fixture() {
       installIconSprite({effect:fn=>fn(),on(){}},undefined);
       mountUpdatesStyle({effect:fn=>fn()});
       const root=createRoot(document.getElementById('root'));let serial=0;
-      const initial=()=>({config:{source:'mirror',mirrorUrl:''},current:{app:'0.1.0',plugin:'0.1.1',engine:'0.2.2-rc.1'},
+      const initial=()=>({config:{source:'mirror',mirrorUrl:''},current:{app:'0.1.0',plugin:'0.1.1',engine:'0.2.2-rc.5'},
         installation:'desktop',phase:'idle',release:{plugin:{version:'0.1.1',available:false,compatible:true},app:{version:'0.1.0',available:false}},
         managed:true,canInstall:false,restartRequired:false,busy:false});
       let mode='current',state=initial(),nativeState={phase:'idle'},nativeListener,finishNativeStatus;window.updateCalls=[];window.desktopOpens=0;window.nativeStatusReads=0;
@@ -165,7 +165,7 @@ test('unified updates render honest states beside the workbench in both themes a
         const details = dialog.getByRole('button', { name: '版本详情', exact: true });
         if (mode !== 'loading') assert.equal(await details.getAttribute('aria-expanded'), 'false', 'component versions start collapsed');
         else assert.equal(await details.count(), 0, 'initial loading does not fabricate component versions');
-        assert.equal(await dialog.getByText('0.2.2-rc.1', { exact: false }).isVisible(), false, 'engine detail stays out of the primary card');
+        assert.equal(await dialog.getByText('0.2.2-rc.5', { exact: false }).isVisible(), false, 'engine detail stays out of the primary card');
         if (mode === 'available' || mode === 'same-release-app') {
           await dialog.getByRole('button', { name: '长按 2 秒更新', exact: true }).waitFor();
           if (mode === 'same-release-app') {
@@ -391,7 +391,7 @@ test('unified update details, source picker and install preserve native keyboard
     await details.click();
     assert.equal(await details.getAttribute('aria-expanded'), 'true');
     const information = page.getByRole('dialog', { name: '版本详情', exact: true });
-    await information.getByText('0.2.2-rc.1', { exact: false }).waitFor();
+    await information.getByText('0.2.2-rc.5', { exact: false }).waitFor();
     await information.getByText('改善任务看板、语音与更新体验。', { exact: true }).waitFor();
     await fits(page, dialog);
     await page.screenshot({ path: join(screenshots, 'light-390-version-details.png') });

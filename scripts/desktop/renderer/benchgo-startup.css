@@ -5,9 +5,8 @@
   --startup-foreground: #161c23;
   --startup-muted: #4f626b;
   --startup-line: #c8d8dd;
-  --startup-grid: #dce6e9;
+  --startup-grid: #668f98;
   --startup-accent: #007a86;
-  --startup-signal: #9a387d;
   --ease-out: cubic-bezier(.23, 1, .32, 1);
   color: var(--startup-foreground);
   background: var(--startup-background);
@@ -20,13 +19,13 @@
     --startup-foreground: #eef5f6;
     --startup-muted: #a8babe;
     --startup-line: #33424c;
-    --startup-grid: #212932;
+    --startup-grid: #7098a2;
     --startup-accent: #77e0db;
-    --startup-signal: #cf80be;
   }
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; background: var(--startup-background); }
+:root.startup-splash, .startup-splash body { background: transparent; }
 .drag-region { position: fixed; inset: 0; -webkit-app-region: drag; }
 main {
   position: relative;
@@ -44,29 +43,16 @@ main {
 .startup-field {
   position: absolute;
   z-index: -1;
-  inset: 0;
-  background:
-    linear-gradient(var(--startup-accent), var(--startup-accent)) 22px 22px / 22px 1px no-repeat,
-    linear-gradient(var(--startup-accent), var(--startup-accent)) 22px 22px / 1px 8px no-repeat,
-    linear-gradient(var(--startup-signal), var(--startup-signal)) calc(100% - 22px) calc(100% - 22px) / 22px 1px no-repeat,
-    linear-gradient(var(--startup-signal), var(--startup-signal)) calc(100% - 22px) calc(100% - 22px) / 1px 8px no-repeat;
-}
-.startup-field::before {
-  content: "";
-  position: absolute;
-  inset: 0;
+  inset: 12px;
+  margin: auto;
+  max-width: 520px;
+  max-height: 420px;
   background:
     linear-gradient(to right, var(--startup-grid) 1px, transparent 1px) center / 24px 24px,
     linear-gradient(to bottom, var(--startup-grid) 1px, transparent 1px) center / 24px 24px;
-  mask-image: linear-gradient(to bottom, #000 0%, transparent 29%, transparent 70%, #000 100%);
-  opacity: .72;
-}
-.startup-field::after {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 50%;
-  width: 1px;
-  background: linear-gradient(var(--startup-line), transparent 16%, transparent 84%, var(--startup-line));
+  mask-image:
+    radial-gradient(ellipse closest-side, #000 0%, rgb(0 0 0 / .8) 32%, rgb(0 0 0 / .24) 70%, transparent 100%);
+  opacity: .4;
 }
 .startup-brand {
   display: grid;
@@ -83,14 +69,14 @@ h1 { margin: 0; font-size: 35px; line-height: 42px; font-weight: 650; letter-spa
 .startup-feedback {
   position: relative;
   display: grid;
-  grid-template-rows: 24px 14px 32px;
+  grid-template-rows: 24px 32px;
   justify-items: center;
   align-items: center;
-  row-gap: 3px;
+  row-gap: 20px;
   width: min(100%, 208px);
 }
 .startup-engine { position: absolute; bottom: calc(100% + 3px); color: var(--startup-muted); font-size: 10px; line-height: 14px; }
-.startup-status { margin: 0; color: var(--startup-muted); font-size: 13px; line-height: 20px; text-align: center; }
+.startup-status { margin: 0; color: var(--startup-foreground); font-size: 13px; line-height: 20px; text-align: center; }
 .startup-wait {
   align-self: start;
   margin: 2px 0 0;
@@ -99,15 +85,12 @@ h1 { margin: 0; font-size: 35px; line-height: 42px; font-weight: 650; letter-spa
   line-height: 16px;
   text-align: center;
 }
-.startup-status[data-phase="enrollment-ready"] + .startup-loading { --startup-dot-step: 1; }
-.startup-status[data-phase="host-starting"] + .startup-loading { --startup-dot-step: 2; }
-.startup-status[data-phase="host-ready"] + .startup-loading { --startup-dot-step: 3; }
-.startup-status[data-phase="host-connected"] + .startup-loading { --startup-dot-step: 4; }
-.startup-status[data-phase="welcome-state-ready"] + .startup-loading,
-#startup-status:has(~ #startup-retry) + .startup-loading { --startup-dot-step: 5; }
-.startup-feedback:has(#startup-retry:not([hidden])) .startup-loading { display: none; }
+.startup-splash :is(h1, .startup-status, .startup-wait) {
+  -webkit-text-stroke: 2px var(--startup-background);
+  paint-order: stroke fill;
+}
 button {
-  grid-row: 3;
+  grid-row: 2;
   pointer-events: auto;
   -webkit-app-region: no-drag;
   min-width: 88px;

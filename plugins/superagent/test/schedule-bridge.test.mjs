@@ -91,6 +91,38 @@ test('legacy receipts without immutable prompts do not reconstruct or replay cha
   assert.equal(f.database.candidates().length, 0);
 });
 
+test('an authenticated Schedule can accept work in a project available only on a paired device', async t => {
+  const f = fixture(t);
+  await f.bridge.ingestMessages({ sessionId: 'main-session', messages: [message()] });
+  const execution = { deviceId: 'B', hostId: 'B-host', authorizationId: 'B-auth', protocolVersion: 2,
+    config: { harness: 'official', models: [{ providerId: 'p', modelId: 'm' }] } };
+  const project = { deviceId: 'B', hostId: 'B-host', id: 'remote-only', path: '/srv/project' };
+  const runner = createAssessmentRunner({ database: f.database, readPolicy: f.readPolicy, authorize: authorizeAssessment,
+    readDevices: async () => [{ deviceId: 'B', name: 'B', online: true, projects: [project] }],
+    resolveRemoteExecution: async input => {
+      assert.equal(input.deviceId, 'B');
+      assert.equal(input.projectId, project.id);
+      return { execution, project };
+    },
+    assess: async ({ candidates, devices }) => {
+      assert.equal(devices[0].projects[0].id, project.id);
+      return [{ candidateId: candidates[0].candidateId, outcome: 'accept', target: '检查远端项目',
+        acceptance: '提供验证记录', reason: 'scheduled request', deviceId: 'B', projectId: project.id }];
+    },
+  });
+  t.after(() => runner.stop());
+  await runner.tick();
+  const [task] = f.database.listTasks();
+  assert.equal(task.mandate.admission, 'desktop-schedule');
+  assert.deepEqual(task.mandate.execution, execution);
+  assert.deepEqual(task.mandate.project, project);
+  const policy = await f.readPolicy();
+  assert.equal(validateTaskMandate(task.mandate, { policy }), true);
+  assert.equal(validateTaskMandate({ ...task.mandate, project: { ...project, hostId: 'wrong-host' } }, { policy }), false);
+  assert.equal(validateTaskMandate({ ...task.mandate, actorKind: 'human' }, { policy }), false);
+  assert.equal(validateTaskMandate({ ...task.mandate, source: { ...task.mandate.source, channel: 'link' } }, { policy }), false);
+});
+
 test('first bridge installation never replays receipts already delivered by the old conversation path', async t => {
   const f = fixture(t);
   f.records[0].deliveredAt = '2025-12-31T00:00:00.000Z';

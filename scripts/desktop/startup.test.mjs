@@ -17,7 +17,7 @@ test('desktop startup keeps the local BenchGo identity and DeepSeek engine attri
   assert.ok(html.includes('<span class="startup-engine">DeepSeek</span>'));
   assert.doesNotMatch(html, /(?:src|href)="https?:/);
   assert.ok(html.includes('class="startup-field" aria-hidden="true"'));
-  assert.ok(html.includes('href="startup-progress.css"'));
+  assert.ok(html.includes('href="loading.css"'));
   assert.ok(css.includes('animation: startup-arrive 240ms'));
   assert.ok(css.includes('[data-part="eyes"]'));
   assert.ok(css.includes('@media (prefers-color-scheme: dark)'));
@@ -47,6 +47,7 @@ function startup(skip) {
   const timers = [];
   vm.runInNewContext(renderer, {
     document: { getElementById: id => id === 'startup-status' ? status : retry },
+    renderLoadingStatus: (element, text = element.textContent) => { element.textContent = text; },
     window: { dshWelcome: { skip }, addEventListener: (name, fn) => handlers.set(name, fn) },
     setTimeout: fn => timers.push(fn),
   });

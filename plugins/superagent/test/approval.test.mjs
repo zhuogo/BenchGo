@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { requestExternalActionApproval } from '../src/approval.mjs';
+import { requestExternalActionApproval, requestSettingsApproval } from '../src/approval.mjs';
 import { createExternalActionStore } from '../src/external-action-store.mjs';
 import { createExternalActionRegistry, createExternalActionService } from '../src/external-actions.mjs';
 import { loadRolePackage } from './role-host-fixture.mjs';
@@ -56,5 +56,18 @@ for (const override of [false, true]) test(`official never policy rejects a busi
   assert.deepEqual(decided.map(event => event.data), [{ id: asked[0].data.id, outcome: 'rejected' }]);
   assert.equal(ctx.approval.overrideOf(session) ?? ctx.approval.config.policy, 'never');
   assert.equal(events.filter(event => event.type === 'approval/policy').length, Number(override));
+  let decide;
+  const answerer = ctx.on('approval/request', request => {
+    assert.equal(request.toolName, 'assistant_settings');
+    return new Promise(resolve => { decide = resolve; });
+  }, { prepend: true });
+  const settings = requestSettingsApproval(ctx.approval, { agent: exec.agent, toolName: 'assistant_settings', callId: 'setting', signal: exec.signal });
+  assert.equal(ctx.approval.overrideOf(session), 'never');
+  await assert.rejects(requestSettingsApproval(ctx.approval, { agent: exec.agent, toolName: 'assistant_settings' }), { code: 'MANAGEMENT_APPROVAL_PENDING' });
+  assert.equal(typeof decide, 'function');
+  decide('allowed-once');
+  assert.equal(await settings, 'allowed-once');
+  assert.deepEqual(session.snapshotEvents().filter(event => event.type === 'approval/decided').map(event => event.data.outcome), ['rejected', 'allowed-once']);
+  answerer();
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
 });

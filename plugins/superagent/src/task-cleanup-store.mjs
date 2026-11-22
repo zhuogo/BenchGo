@@ -17,7 +17,7 @@ const globalScope = scope => {
     throw fail('CLEANUP_SCOPE_DENIED', '任务整理需要明确的全局清单范围');
   return { mode: 'global' };
 };
-const archiveFields = ['archived', 'archivedAt', 'cleanupReceiptId', 'archiveRevision'];
+const archiveFields = ['archived', 'archivedAt', 'cleanupReceiptId', 'archiveRevision', 'archiveStopAccepted'];
 const archiveSlice = value => Object.fromEntries(archiveFields.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
 export const CLEANUP_PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -99,7 +99,7 @@ export function installTaskCleanupStore({ db, transaction, now = Date.now }) {
         if (!row.eligible) {
           excluded.push({ id, title: row.title, status: row.status, code: 'EXECUTION_PENDING',
             reason: row.executionUncertain ? '执行退出尚未确认，请先核实原执行已退出，再重新预览'
-              : '任务仍在执行或等待执行，请先停止并确认执行退出，再重新预览', requiresStopConfirmation: true,
+              : '任务仍在执行或等待执行，请先停止并确认执行退出，再重新预览', requiresStopConfirmation: true, next: { op: 'stop-and-archive', ids: [id], requires: 'explicit-owner-confirmation' },
             ...(includeUnsettled ? { snapshot: row } : {}) });
           continue;
         }
@@ -169,6 +169,22 @@ export function installTaskCleanupStore({ db, transaction, now = Date.now }) {
       return copy(value);
     });
   }
+  function archiveWorkerTask(task, { sessionId, requestId }) {
+    const binding = hash(['worker-archive', task.id, sessionId]);
+    return transaction(() => {
+      const previous = previousRequest(requestId, binding);
+      if (previous) return previous;
+      if (task.archived) return receipt(metadata(task.id).cleanupReceiptId);
+      const before = metadata(task.id), receiptId = randomUUID(), createdAt = new Date(now()).toISOString();
+      const next = { ...before, archived: true, archivedAt: createdAt, cleanupReceiptId: receiptId,
+        archiveRevision: task.instructionRevision, archiveStopAccepted: true, version: (before.version ?? 0) + 1, updatedAt: createdAt };
+      putMetadata(task.id, next);
+      return saveReceipt({ receiptId, requestId, operation: 'archive', scope: { mode: 'global' }, createdAt,
+        confirmedBy: { actorId: 'desktop-owner', source: { sessionId, callId: requestId }, ids: [task.id] },
+        items: [{ id: task.id, status: task.status, instructionRevision: task.instructionRevision, before: archiveSlice(before),
+          after: archiveSlice(next), beforeVersion: before.version ?? 0, afterVersion: next.version }] }, binding);
+    });
+  }
   function restoreCleanup({ previewId, ids, confirmedBy, requestId } = {}) {
     const preview = readPreview(previewId);
     if (preview.type !== 'restore') throw fail('CLEANUP_INPUT_INVALID', '此清单不属于恢复操作');
@@ -225,7 +241,7 @@ export function installTaskCleanupStore({ db, transaction, now = Date.now }) {
       return value;
     });
   }
-  return { previewCleanup, getCleanupPreview: readPreview, commitCleanup, previewRestore, restoreCleanup, createConfirmation,
+  return { previewCleanup, getCleanupPreview: readPreview, commitCleanup, previewRestore, restoreCleanup, createConfirmation, archiveWorkerTask,
     receiptForRequest(requestId) {
       if (!identity(requestId)) throw fail('CLEANUP_INPUT_INVALID', '需要明确清理请求标识');
       const row = db.prepare('SELECT payload FROM task_cleanup_receipts WHERE request_id=?').get(requestId);

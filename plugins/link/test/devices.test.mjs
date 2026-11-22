@@ -190,6 +190,8 @@ test('unreachable workbench selection preserves device identity and returns an a
 });
 test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persistent streams', async t => {
   const directory = await temp(t), identity = await loadIdentity(directory); let authenticated = 0;
+  const hostId = 'sha256:' + identity.pin;
+  let authorizationId = 'paired-sidebar';
   const server = createServer({ key: identity.key, cert: identity.cert }, async (req, res) => {
     if (req.url === '/link/api/info') { assert.equal(req.headers.authorization, 'Bearer private-token'); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"hostName":"Legacy host"}'); return; }
     if (req.url === '/link/api/workbench') { assert.equal(req.headers.authorization, 'Bearer private-token'); authenticated++; res.writeHead(200, { 'set-cookie': 'dsh_link_workbench=private-cookie; HttpOnly; Secure; Path=/link/workbench/' }); res.end(JSON.stringify({ url: '/link/workbench/' })); return; }
@@ -203,7 +205,7 @@ test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persi
   const proxy = await createDeviceProxy(target, { parentOrigin: 'http://127.0.0.1:4444' }); t.after(() => proxy.close());
   const login = await fetch(await proxy.enter(), { redirect: 'manual' }), path = login.headers.get('location');
   const response = await fetch(proxy.origin + path); assert.equal(response.headers.get('set-cookie'), null); assert.match(await response.text(), /href="\/s\/[A-Za-z0-9_-]+\/link\/workbench\//);
-  assert.match(response.headers.get('content-security-policy'), /frame-ancestors http:\/\/127.0.0.1:4444 dsh-app:/);
+  assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'self' http:\/\/127.0.0.1:4444 dsh-app:/);
   const publicProxy = await createDeviceProxy(target, { parentOrigin: 'https://owner.test', publicOrigin: 'https://work.test', publicPrefix: '/p/cloud-route' });
   t.after(() => publicProxy.close());
   const publicEntry = new URL(await publicProxy.enter());
@@ -213,14 +215,27 @@ test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persi
   const publicPage = await fetch(publicProxy.origin + publicLocation.slice('/p/cloud-route'.length));
   assert.match(await publicPage.text(), /href="\/p\/cloud-route\/s\//);
   const centerDirectory = join(directory, 'sidebar-owner'), registry = await openDeviceRegistry(centerDirectory);
-  const saved = await registry.upsert({ ...target, name: '远端电脑' });
+  const saved = await registry.upsert({ ...target, name: '远端电脑', hostId: 'sha256:' + identity.pin, authorizationId: 'paired-sidebar' });
   const center = await createDeviceCenter({ directory: centerDirectory, webRoot: new URL('../dist/web/', import.meta.url), managerFactory: () => null });
   t.after(() => center.close());
   const selected = await center.select(saved.id, 'http://127.0.0.1:8080');
   assert.equal(selected.device.id, saved.id);
+  assert.equal(selected.device.hostId, saved.hostId);
+  assert.equal(selected.device.authorizationId, saved.authorizationId);
   const selectedPage = await fetch(selected.url);
   assert.match(selectedPage.headers.get('content-security-policy'), /frame-ancestors[^;]*http:\/\/127\.0\.0\.1:8080/);
   assert.equal((await selectedPage.text()).includes('private-token'), false);
+  const legacyDirectory = join(directory, 'legacy-sidebar-owner'), legacyRegistry = await openDeviceRegistry(legacyDirectory);
+  const legacy = await legacyRegistry.upsert({ ...target, name: '旧配对记录' });
+  const legacyCenter = await createDeviceCenter({ directory: legacyDirectory, webRoot: new URL('../dist/web/', import.meta.url), managerFactory: () => null });
+  t.after(() => legacyCenter.close());
+  const legacySelected = await legacyCenter.select(legacy.id, 'http://127.0.0.1:8080');
+  assert.equal(legacySelected.device.hostId, hostId);
+  assert.equal(legacySelected.device.authorizationId, authorizationId);
+  const reopened = await openDeviceRegistry(legacyDirectory);
+  assert.equal(reopened.get(legacy.id).authorizationId, authorizationId);
+  authorizationId = 'changed-authorization';
+  await assert.rejects(center.select(saved.id, 'http://127.0.0.1:8080'), { code: 'IDENTITY_CHANGED' });
   assert.equal((await fetch(proxy.origin + '/link/workbench/')).status, 403);
   for (let i = 0; i < 18; i++) { const repeated = await fetch(await proxy.enter(), { redirect: 'manual' }); assert.equal(repeated.headers.get('location'), path); }
   assert.equal((await fetch(proxy.origin + path)).status, 200, 'retained workbench survives repeated host selection');

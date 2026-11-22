@@ -54,7 +54,15 @@ async function fixture() {
           if(window.resourceState==='loading')return;
           if(window.resourceState==='error'){sink.failed(Error('连接暂不可用'));return;}
           sink.replace({cursor:0,tasks:window.resourceState==='empty'?[]:rows});
-        };return {start(){queueMicrotask(snapshot);},restart:snapshot,dispose(){}};}});
+        };
+        window.updateRemoteProgress=()=>{
+          const worker=rows[0].execution.worker;
+          worker.history=[{seq:1,status:worker.status,activitySource:worker.activitySource,activity:worker.activity,time:worker.updatedAt}];
+          worker.activity='已确认远端工作区，开始整理结果';
+          worker.updatedAt='2026-11-15T01:01:00Z';
+          sink.update({cursor:1,entries:[{seq:1,taskId:'done',kind:'remote-execution'}]});
+        };
+        return {start(){queueMicrotask(snapshot);},restart:snapshot,dispose(){}};}});
         const info={activePanelId:'benchgo-assistant'};
         const ctx={layout:{selectPanel:id=>window.calls.push({panel:id}),panelInfo:{getSnapshot:()=>info,subscribe:()=>()=>{}}}};
         root.render(<div className='ba-root'><style>{hostCss}{css}</style><Studio snapshot={{config:{revision:1},memories:[]}} ctx={ctx} refresh={async()=>{}} threadId='main' initialSection={section} SessionProvider={({children})=>children} renderSlot={()=>null}/></div>);
@@ -65,7 +73,7 @@ async function fixture() {
     alias: { react: dirname(webRequire.resolve('react/package.json')), 'react-dom': dirname(webRequire.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-util-workspace-path': join(root, 'deepseek-harness/packages/util/workspace-path/src/index.ts'),
       '@deepseek-ai/dsh-client-ui-primitives': join(root, 'deepseek-harness/packages/client/ui-primitives/src/index.ts'),
-      '@deepseek-ai/dsh-api-gateway/client': join(root, 'deepseek-harness/packages/api/gateway/lib/client.node.js') },
+      '@deepseek-ai/dsh-api-gateway/client': join(root, 'deepseek-harness/packages/api/gateway/src/client/index.ts') },
     plugins: [{ name: 'task-heading-fixture', setup(build) {
       build.onLoad({ filter: /superagent[\\/]client[\\/]index\.jsx$/ }, async ({ path }) => ({ contents: await readFile(path, 'utf8') + '\nexport {Studio,api};', loader: 'jsx' }));
       build.onLoad({ filter: /superagent[\\/]client[\\/]activity-panel\.jsx$/ }, () => ({ contents: 'import React from "react";export const ActivityProvider=({children})=><>{children}</>;export const ActivityPanel=()=>null;export const ActivityTrigger=()=>null;', loader: 'jsx' }));
@@ -125,6 +133,12 @@ test('remote task execution shows its executor and retained observations without
       assert.equal(await detail.getByText(/连接待核实，以下保留上次记录/).count(),state==='remote-stale'?1:0);
       assert.equal(await detail.locator('.ba-execution-mark[data-active="true"]').count(),state==='remote'?1:0);
       assert.equal(await detail.getByRole('button',{name:'查看执行会话',exact:true}).count(),1);
+      if(state==='remote' && width===390 && dark) {
+        await page.evaluate(()=>window.updateRemoteProgress());
+        await detail.getByText('已确认远端工作区，开始整理结果',{exact:true}).waitFor();
+        await detail.locator('[data-history-worker-id]').getByText('正在核验远端工作区',{exact:true}).waitFor();
+        assert.equal(await detail.locator('.ba-execution-mark[data-active="true"]').count(),1);
+      }
       assert(await detail.evaluate(node=>node.scrollWidth<=node.clientWidth));
       if(screenshots)await page.screenshot({path:join(screenshots,`${state}-${width}-${dark?'dark':'light'}.png`),fullPage:true});
       await detail.getByRole('button',{name:'返回列表',exact:true}).click();

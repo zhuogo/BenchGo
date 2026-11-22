@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Context } from '@deepseek-ai/cordis';
 import { createModelProviders } from '../src/model-providers.mjs';
 import { assertProviderToolAccess } from '../src/provider-access.mjs';
 function fixture() {
@@ -125,6 +126,42 @@ test('catalog request cannot commit after credential value or reference changes'
   await assert.rejects(service.models('routergo'), /Provider changed/); assert.deepEqual(doc.value.providers.routergo.models, []);
   globalThis.fetch = async () => { doc.value.providers.routergo.apiKeyEnv = 'OTHER_KEY'; refs.set('OTHER_KEY', 'rotated-fixture-key'); return Response.json({ data: [{ id: 'new-chat' }] }); };
   await assert.rejects(service.models('routergo'), /Provider changed/); assert.deepEqual(doc.value.providers.routergo.models, []);
+});
+
+test('DashScope models outside the chat listing retain public modalities and saved speech labels', async t => {
+  const { ctx, doc } = fixture();
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-dashscope-capabilities-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const providerId = 'benchgo-dashscope-0123456789abcdef0123456789abcdef';
+  const visionId = 'qwen3.8-flash', asrId = 'qwen-audio-3.0-asr-flash', ttsId = 'qwen3-tts-flash';
+  doc.value.providers[providerId] = {
+    baseURL: 'https://ws-test.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', apiKeyEnv: 'ROUTER_KEY',
+    models: [{ id: visionId, input: ['text', 'image'] }, { id: asrId }, { id: ttsId }],
+  };
+  t.mock.method(globalThis, 'fetch', async url => url.endsWith('/api/x/public/models')
+    ? Response.json({ success: true, data: [{ model_id: visionId, input_modalities: ['text', 'image'], output_modalities: ['text'] }] })
+    : Response.json({ data: [{ id: visionId }, { id: asrId, capabilities: ['automatic-speech-recognition', 'BAD LABEL'] }] }));
+  const cordis = new Context();
+  t.after(() => cordis.fiber.dispose());
+  for (const name of ['settings', 'credentials', 'llm']) cordis.provide(name, ctx[name]);
+  let service;
+  await cordis.plugin({ apply(parent) {
+    parent.provide('benchgo', { directory });
+    parent.inject(['settings', 'credentials', 'llm'], child => {
+      assert.equal(child.get('benchgo'), undefined);
+      service = createModelProviders(child, { directory });
+    });
+  } });
+  const [vision, asr] = await service.models(providerId);
+  assert.deepEqual(vision.inputModalities, ['text', 'image']);
+  assert.deepEqual(asr.capabilities, ['asr']);
+  await service.saveModelCapabilities(providerId, asrId, ['asr']);
+  await service.saveModelCapabilities(providerId, ttsId, ['tts']);
+  const loaded = createModelProviders(ctx, { directory });
+  assert.deepEqual((await loaded.models(providerId)).find(model => model.id === ttsId).kinds, ['tts']);
+  assert.deepEqual(await loaded.modelCapabilities(providerId), [
+    { modelId: asrId, capabilities: ['asr'] }, { modelId: ttsId, capabilities: ['tts'] },
+  ]);
 });
 
 test('managed route descriptor reuses official protocol and credential reference only on the server',async()=>{

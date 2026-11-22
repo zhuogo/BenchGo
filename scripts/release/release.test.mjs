@@ -14,7 +14,7 @@ const oldSha = 'a'.repeat(40), newSha = 'b'.repeat(40), hash = 'c'.repeat(64);
 const descriptor = (name, version = '1.0.0') => ({ version, url: `https://github.com/zhuogo/BenchGo/releases/download/v1.0.0/${name}`, sha256: hash, size: 100 });
 function baseline() {
   return { releaseVersion: '1.0.0', tag: 'v1.0.0', sourceSha: oldSha, manifestSha256: hash,
-    manifest: { schemaVersion: 1, version: '1.0.0', releaseVersion: '1.0.0', sourceSha: oldSha, engine: { min: '0.2.2-rc.1', max: '0.2.2-rc.1' },
+    manifest: { schemaVersion: 1, version: '1.0.0', releaseVersion: '1.0.0', sourceSha: oldSha, engine: { min: '0.2.2-rc.5', max: '0.2.2-rc.5' },
       plugin: descriptor('benchgo-1.0.0-plugin.tar.gz'), app: descriptor('benchgo-1.0.0-win-x64-setup.exe'),
       android: { ...descriptor('benchgo-1.0.0-android.apk'), versionCode: 10 } },
     source: { components: Object.fromEntries(['plugin', 'windows', 'android'].map(key => [key, { version: '1.0.0', sourceSha: oldSha, releaseVersion: '1.0.0' }])) },
@@ -24,7 +24,7 @@ function baseline() {
       { target: 'linux-server', ...descriptor('benchgo-1.0.0-linux-server.tar.gz'), kind: 'server', arch: 'x64', systems: ['Ubuntu', 'Debian'] },
     ] } };
 }
-const versions = changes => ({ plugin: '1.0.0', windows: '1.0.0', android: '1.0.0', androidVersionCode: 10, engine: '0.2.2-rc.1', ...changes });
+const versions = changes => ({ plugin: '1.0.0', windows: '1.0.0', android: '1.0.0', androidVersionCode: 10, engine: '0.2.2-rc.5', ...changes });
 const plan = overrides => createReleasePlan({ releaseVersion: '1.1.0', sourceSha: newSha, previous: baseline(), versions: versions(), minAppVersion: '1.0.0', ...overrides });
 
 test('first unified release builds all components; legacy release tags cannot silently supply a baseline', () => {

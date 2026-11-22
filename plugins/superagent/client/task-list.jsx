@@ -7,7 +7,7 @@ import css from './task-list.css';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { normalizeTaskTitle, TASK_TITLE_MAX_CHARS } from '../src/task-title.mjs';
 import { taskLabels } from './task-state.mjs';
-import { activeActivityStates, terminalActivityStates } from './activity-data.mjs';
+import { activeActivityStates } from './activity-data.mjs';
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import { TaskMarkdown } from './task-document.jsx';
 
@@ -63,7 +63,6 @@ export function TaskListRow({ api, kind, row, title: inputTitle, summary, comple
   const checked = kind === 'task' ? row.status === 'completed' : row.taskMeta?.completed || completed;
   const pending = row.taskCanOrganize === false;
   const cleanup = !!(row.cleanup?.id || row.taskMeta?.archived);
-  const archiveDisabled = pending || (kind === 'task' ? row.status !== 'completed' && !row.executionControl?.stopped : !terminalActivityStates.has(row.status));
   const change = async (operation, extra = {}) => {
     if (busy) return;
     setBusy(true); setError('');

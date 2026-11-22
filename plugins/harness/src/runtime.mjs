@@ -32,6 +32,7 @@ export class Commander extends EventEmitter {
     this.submissions = new Map(); this.activeSubmissions = new Set();
     this.removals = new Map();
     this.archiving = new Set();
+    this.disconnecting = new Map();
     this.interruptedTurns = new Map();
     this.executionHandlers = new Map();
     this.preparingExecutions = new Map();
@@ -216,6 +217,12 @@ export class Commander extends EventEmitter {
 
   async stopExecution(id) {
     const session = this.get(id);
+    if (session.archived) {
+      const stopping = this.disconnecting.get(id);
+      if (stopping) return stopping;
+      if (this.drivers.has(id)) return this.disconnect(id);
+      if (session.events.some(event => event.type === 'session.closed' && event.turnId === session.turnId)) return this.snapshot(id);
+    }
     if (this.connecting.has(id)) await this.connecting.get(id);
     if (!session.turnId && session.status === 'idle') return this.snapshot(id);
     if (['running', 'waiting'].includes(session.status)) {
@@ -233,6 +240,7 @@ export class Commander extends EventEmitter {
     this.healthy();
     if (this.removals.has(id)) throw new Error('Session is being deleted');
     if (this.archiving.has(id)) throw new Error('Session is being archived');
+    if (this.disconnecting.has(id)) await this.disconnecting.get(id);
     if (this.connecting.has(id)) return this.connecting.get(id);
     if (this.drivers.has(id)) {
       if (this.get(id).status !== 'failed') return this.snapshot(id);
@@ -364,7 +372,11 @@ export class Commander extends EventEmitter {
     try {
       try { await this.persist(); }
       catch (error) { this.fault = error; session.status = 'failed'; throw error; }
-      try { await this.syncPermission(id); await dispatch(); }
+      try {
+        await this.syncPermission(id);
+        if (session.archived) throw new Error('Session was archived before native dispatch');
+        await dispatch();
+      }
       catch (error) {
         receipt.status = 'uncertain'; session.status = 'failed';
         this.denyPending(id);
@@ -468,27 +480,47 @@ export class Commander extends EventEmitter {
   }
 
   async disconnect(id) {
+    if (this.disconnecting.has(id)) return this.disconnecting.get(id);
+    const pending = this.releaseConnection(id);
+    this.disconnecting.set(id, pending);
+    try { return await pending; } finally { this.disconnecting.delete(id); }
+  }
+
+  async releaseConnection(id) {
     if (this.connecting.has(id)) await this.connecting.get(id).catch(() => {});
-    const session = this.get(id); session.status = 'closed';
+    const session = this.get(id);
+    if (session.status === 'closed' && !this.drivers.has(id) &&
+        session.events.some(event => event.type === 'session.closed' && event.turnId === session.turnId)) return this.snapshot(id);
+    session.status = 'closed';
     this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
     this.delegationBridge?.revoke(id);
     this.executionHandlers.delete(id);
     this.denyPending(id);
-    const driver = this.drivers.get(id); this.drivers.delete(id);
+    const driver = this.drivers.get(id);
     await driver?.close();
+    this.drivers.delete(id);
     this.event(id, 'session.closed', {}); await this.persist();
     return this.snapshot(id);
   }
-  async archive(id, archived = true) {
+  async archive(id, archived = true, { stopActivity = false } = {}) {
     this.healthy();
     if (this.removals.has(id)) throw new Error('Session is being deleted');
-    if (this.archiving.has(id)) throw new Error('Session is being archived');
-    if (archived && (['running', 'waiting', 'connecting'].includes(this.get(id).status) || this.activeSubmissions.has(id) || this.connecting.has(id))) throw new Error('Finish or interrupt the active native session before archiving it');
+    const session = this.get(id);
+    if (this.archiving.has(id)) throw new Error('Session archive is still being saved');
+    if (session.archived === archived) return this.snapshot(id);
+    const active = ['running', 'waiting', 'connecting'].includes(session.status) || this.activeSubmissions.has(id) || this.connecting.has(id);
+    if (archived && active && !stopActivity) throw Object.assign(new Error('Finish or interrupt the active native session before archiving it'), { code: 'workspace/session-active', status: 409 });
     this.archiving.add(id);
     try {
-      if (archived) await this.disconnect(id);
-      this.get(id).archived = archived;
-      await this.persist(); return this.snapshot(id);
+      session.archived = archived;
+      try { await this.persist(); } catch (error) { session.archived = !archived; throw error; }
+      if (archived && active) {
+        const stopping = this.disconnect(id);
+        void stopping.catch(() => {});
+      }
+      this.emit('session/archive', { sessionId: id, archived });
+      if (archived && !active) await this.disconnect(id);
+      return this.snapshot(id);
     } finally { this.archiving.delete(id); }
   }
 
@@ -535,6 +567,7 @@ export class Commander extends EventEmitter {
     this.closing = true;
     await Promise.allSettled([...this.removals.values()]);
     await Promise.allSettled([...this.connecting.values()]);
+    await Promise.allSettled([...this.disconnecting.values()]);
     const results = await Promise.allSettled([...this.drivers.keys()].map(id => this.disconnect(id)));
     await Promise.allSettled([...this.submissions.values()]);
     try { await this.persist(); } finally { clearTimeout(this.flushTimer); await this.store.close(); }

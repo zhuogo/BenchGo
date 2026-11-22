@@ -4,9 +4,9 @@ import { upstreamFailure } from '../shared/upstream.mjs';
 import { audioBytes, pcmResponse, speechError, speechOperation } from '../shared/speech-stream.mjs';
 import { sseEvents } from '../shared/sse.mjs';
 
-export async function requestSpeech(fetcher, config, text, signal) {
+export async function requestSpeech(fetcher, config, text, signal, options) {
   const operation = speechOperation(signal);
-  const body = { ...speechRequest({ ...config, protocol: 'speech' }, text), stream_format: 'sse', sample_rate: 24000 };
+  const body = { ...speechRequest({ ...config, protocol: 'speech' }, text, options), stream_format: 'sse', sample_rate: 24000 };
   if (body.speed < .5 || body.speed > 2) throw new VoiceError('阶跃语音协议的语速须为 0.5–2', 400, 'tts_speed_unsupported');
   if (Array.from(text).length > 1000) throw new VoiceError('阶跃 SSE 语音合成每段文本不能超过 1000 字符', 400, 'tts_text_limit');
   const upstream = await fetcher(config.baseURL + '/audio/speech', { method: 'POST',

@@ -3,17 +3,18 @@
   const retry = document.getElementById('startup-retry');
   let pending = false;
   let entered = false;
+  renderLoadingStatus(status);
   async function enter() {
     if (pending || entered) return;
     pending = true;
     retry.hidden = true;
     retry.disabled = true;
-    status.textContent = '正在打开工作台…';
+    if (status.textContent !== '正在打开工作台…') renderLoadingStatus(status, '正在打开工作台…');
     try {
       await window.dshWelcome.skip();
       entered = true;
     } catch {
-      status.textContent = '工作台未能打开，请重试';
+      renderLoadingStatus(status, '工作台未能打开，请重试', false);
       retry.hidden = false;
     } finally {
       pending = false;

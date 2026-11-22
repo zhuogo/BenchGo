@@ -10,7 +10,7 @@ import { commitWorkerResult } from './result-commit.mjs';
 import { sendSourceDelivery, deliveryLease } from './source-delivery.mjs';
 import { createTaskExecutionProgress } from './task-execution-progress.mjs';
 import { executionSessionProjection, findExecutionSessionOwner } from './execution-session.mjs';
-import { taskExecutionBlocked, taskPaused } from './task-lifecycle.mjs';
+import { remoteObservationUncertain, taskExecutionBlocked, taskPaused } from './task-lifecycle.mjs';
 import { executionUncertainty, executionStopConfirmation } from './execution-uncertainty.mjs';
 import { requestInterruptedContinuation } from './interrupted-continuation.mjs';
 import { createRemoteAssignmentExecutor } from './remote-assignment-executor.mjs';
@@ -298,29 +298,47 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
     if (!assignment) return null;
     const remote = database.remoteExecution(assignment.id);
     const run = database.runs(assignment.id).find(row => row.id === remote?.runId || !remote && row.fence === assignment.fence);
+    const { progress, ...remoteDetails } = remote || {};
     const phase = remote?.phase || 'prepared';
-    const unavailable = remote?.available === false || phase === 'uncertain';
+    const unavailable = remoteObservationUncertain(assignment, remote);
     const terminal = ['completed', 'failed', 'cancelled'].includes(phase);
+    const observed = remote?.observed;
+    const activationFailed = remote?.available === true && observed?.error?.code === 'TOOL_ACTIVATION_FAILED'
+      && (phase === 'failed' || phase === 'uncertain' && observed.appliedInstructionRevision === 0);
+    const activationFailure = '远端首次模型请求前加载工具失败';
     const status = unavailable ? 'unknown' : phase === 'prepared' ? 'waiting' : phase === 'submitted' ? 'running'
       : phase === 'paused' ? 'waiting' : phase;
     const activities = { prepared: '正在准备远端执行', submitted: '远端已受理执行', running: '正在远端执行', waiting: '等待补充信息',
       paused: '远端执行已暂停', completed: '远端执行已结束', failed: '远端执行失败', cancelled: '远端执行已停止', uncertain: '远端执行状态待核实' };
+    if (assignment.remoteStopDetached) {
+      const stop = database.remoteControlCommand(assignment.id);
+      activities.cancelled = stop?.state === 'pending' ? '本机已停止，等待向远端投递停止命令'
+        : stop?.receipt?.phase === 'cancelled' ? '远端执行已停止'
+          : stop?.receipt?.inactive || stop?.receipt?.phase ? '本机已停止，远端执行已结束' : '本机已停止，停止命令已送达远端';
+    }
     const uncertainty = unavailable ? { reasonCode: 'remote-observation-unavailable',
-      reason: '远端执行状态待核实，系统将核对原执行，不会重复派发。', hasCompletedResult: !!run?.evidence?.completion,
+      reason: activationFailed ? activationFailure : '远端执行状态待核实，系统将核对原执行，不会重复派发。', hasCompletedResult: !!run?.evidence?.completion,
       assignmentId: assignment.id, runId: run?.id || null, sessionId: run?.sessionId || null, fence: assignment.fence,
       instructionRevision: task.instructionRevision } : null;
+    const activity = !unavailable && phase === 'running' && progress?.worker.status === 'running' && progress.worker.activity;
+    const children = (progress?.children || []).map(child => unavailable || terminal || phase === 'paused' || phase === 'waiting'
+      ? { ...child, historical: true } : child);
+    const childCounts = { total: children.length, running: 0, completed: 0, failed: 0 };
+    for (const child of children) if (child.status in childCounts && (child.status !== 'running' || !child.historical)) childCounts[child.status]++;
     return { taskId: task.id, assignmentId: assignment.id, runId: run?.id || null, sessionId: run?.sessionId || null,
       fence: assignment.fence, instructionRevision: task.instructionRevision,
       appliedInstructionRevision: remote?.appliedInstructionRevision ?? remote?.observed?.appliedInstructionRevision ?? run?.instructionRevision ?? assignment.instructionRevision,
       phase: unavailable ? 'unknown' : terminal ? 'finished' : phase === 'prepared' ? 'preparing' : ['waiting', 'paused'].includes(phase) ? 'waiting' : 'executing',
-      observed: !!remote?.observedAt, updatedAt: remote?.observedAt || run?.updatedAt || assignment.updatedAt,
-      worker: { id: run?.sessionId || assignment.id, label: '远端 Worker', status,
-        activity: unavailable ? activities.uncertain : activities[phase], activitySource: 'runtime',
-        updatedAt: remote?.observedAt || null, history: [], historyTruncated: false },
-      children: [], childCounts: { total: 0, running: 0, completed: 0, failed: 0 }, milestones: [],
+      observed: !!remote?.observedAt && !unavailable, updatedAt: remote?.observedAt || run?.updatedAt || assignment.updatedAt,
+      worker: { id: run?.sessionId || assignment.id, label: '主 Worker', status,
+        activity: activity || (activationFailed ? activationFailure : unavailable ? activities.uncertain : activities[phase]),
+        activitySource: activity ? progress.worker.activitySource : 'runtime',
+        updatedAt: activity ? progress.worker.updatedAt : remote?.observedAt || null,
+        history: progress?.worker.history || [], historyTruncated: progress?.worker.historyTruncated === true },
+      children, childCounts, milestones: [],
       watermark: { projectionSeq: database.executionFactCursor(), sessionSeq: remote?.cursor ?? null },
       completeness: remote?.available === true && remote?.hasMore !== true ? 'complete' : 'partial',
-      remote: { ...task.mandate.execution, ...remote }, uncertainty };
+      remote: { ...task.mandate.execution, ...remoteDetails }, uncertainty };
   }
   const runtime = {
     tick,
@@ -328,7 +346,12 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       const task = database.getTask(taskId);
       if (!task || task.instructionRevision !== instructionRevision)
         throw Object.assign(new Error('恢复处置的授权或要求已变化'), { code: 'MANDATE_REVOKED' });
-      if (task.mandate?.execution) return remoteExecutor.manageExecution({ taskId, assignmentId, fence, instructionRevision, operation });
+      if (task.mandate?.execution) {
+        const outcome = await remoteExecutor.manageExecution({ taskId, assignmentId, fence, instructionRevision, operation });
+        // A re-dispatch queues new work; the scheduler picks it up now instead of at its next timer.
+        void tick();
+        return outcome;
+      }
       const fact = executionUncertainty(database, task, { now: now() });
       if (!fact || fact.assignmentId !== assignmentId || fact.fence !== fence)
         return { status: 'blocked', reason: '执行身份或核查状态已变化，请重新读取事实' };

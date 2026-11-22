@@ -1,7 +1,7 @@
 import { taskSnapshot, taskWaiting, taskResultSummary, shortTaskText } from './task-state.mjs';
 import { normalizeTaskTitle } from '../src/task-title.mjs';
 import { transientRefreshError } from './refresh-error.mjs';
-import { executionStatusText } from '../src/task-lifecycle.mjs';
+import { assignmentExecutionUncertain, executionStatusText } from '../src/task-lifecycle.mjs';
 
 export const terminalActivityStates = new Set(['completed', 'failed', 'cancelled']);
 // Goal controls retain their own lifecycle; Task activity uses only three states.
@@ -35,7 +35,7 @@ function executionSummary(execution) {
   const children = execution.children || [];
   if (children.length) {
     const returned = children.filter(child => child.status === 'completed').length;
-    const running = children.filter(child => child.status === 'running').length;
+    const running = children.filter(child => child.status === 'running' && !child.historical).length;
     const failed = children.filter(child => child.status === 'failed').length;
     parts.push(`子任务 ${returned}/${children.length} 已返回`);
     if (running) parts.push(`${running} 项执行中`);
@@ -51,16 +51,18 @@ export function activityTask(row, kind) {
   const status = kind === 'goal' ? row.status : taskStatus;
   const waiting = kind === 'task' ? taskWaiting(domain) : null;
   const detail = kind === 'goal' ? undefined : waiting?.reason || taskResultSummary(result) || undefined;
+  const assignmentState = assignment?.state === 'uncertain' && !assignmentExecutionUncertain(assignment)
+    ? ({ prepared: 'queued', waiting: 'waiting', paused: 'waiting' })[assignment.remoteExecution?.phase] || 'claimed' : assignment?.state;
   const phase = kind === 'goal' ? '长期目标'
     : status === 'completed' ? delivery?.state === 'sent' ? '执行完成 · 结果已交付' : '执行完成'
     : waiting ? waiting.reason
     : delivery?.state === 'sent' ? '结果已交付' : delivery ? '结果交付阶段'
     : result ? '结果已保存'
-    : assignment ? `执行阶段 · ${({ claimed: '执行中', queued: '等待执行', waiting: '等待后续', uncertain: '待核实', blocked: '授权已变更' })[assignment.state] || '已记录'}` : '已接收 · 等待分配';
+    : assignment ? `执行阶段 · ${({ claimed: '执行中', queued: '等待执行', waiting: '等待后续', uncertain: '待核实', blocked: '授权已变更' })[assignmentState] || '已记录'}` : '已接收 · 等待分配';
   const progressing = status === 'running';
   const reportedActivity = execution?.observed !== false && execution?.worker?.status === 'running'
     && execution.worker.activitySource === 'report' ? execution.worker.activity : '';
-  const summaryText = progressing
+  const summaryText = progressing && !execution?.uncertainty
     ? shortTaskText(executionStatusText(execution?.worker?.status === 'completed' ? '执行已结束'
       : reportedActivity || execution?.summary?.text || (typeof row.currentSummary === 'string' ? row.currentSummary : row.currentSummary?.text))) : '';
   const progressSummary = progressing ? summaryText || executionSummary(execution) : '';

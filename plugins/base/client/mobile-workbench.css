@@ -157,9 +157,8 @@
   [data-composer-card]:not(.voice-call-composer) [class*="_modes"] > * { min-width: 0; }
   [data-composer-card]:not(.voice-call-composer) [class*="_modes"] button { min-width: 0; max-width: 100%; gap: 2px; padding-inline: 2px; }
   [data-composer-card]:not(.voice-call-composer) [class*="_trailing"] { flex: 1 1 0; min-width: 0; gap: 4px; }
-  [data-composer-card]:not(.voice-call-composer) [class*="_standardControls"] { flex: 1 1 0; min-width: 0; gap: 2px; }
-  [data-composer-card]:not(.voice-call-composer) .cmd-model-trigger { max-width: 100%; flex: 1 1 0; min-width: 0; padding-inline: 4px; gap: 4px; }
-  [data-composer-card]:not(.voice-call-composer) .cmd-model-caption { flex: 1 1 auto; }
+  [data-composer-card]:not(.voice-call-composer) [class*="_standardControls"] { flex: 1 1 0; min-width: 0; justify-content: flex-end; gap: 2px; }
+  [data-composer-card]:not(.voice-call-composer) .cmd-model-trigger { flex-shrink: 1; padding-inline: 4px; gap: 4px; }
   [data-composer-card]:not(.voice-call-composer) [class*="_activity"]:has(.voice-activity:not(.voice-expanded)) { flex: 0 1 auto; min-width: 0; }
   [data-composer-card]:not(.voice-call-composer) .voice-activity:not(.voice-expanded) { gap: 0; flex: 0 1 auto; min-width: 0; }
   [data-composer-card]:not(.voice-call-composer) :is(.voice-inline-error, .voice-inline-note) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -175,6 +174,5 @@
   .cmd-project-dialog .bg-ui-button, .cmd-tool-settings .bg-ui-button { min-height: 44px; }
   .cmd-project-header { padding: 16px 16px 8px; }
   .cmd-project-header h2 { font-size: 18px; }
-  .cmd-provider-card { min-height: 48px; font-size: 14px; }
   .cmd-tool-footer { padding-bottom: env(safe-area-inset-bottom, 0px); }
 }

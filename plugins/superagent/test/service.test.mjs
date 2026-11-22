@@ -229,7 +229,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal((await deviceStatusTool.execute({}, { agent })).code, 'OWNER_REQUIRED');
   ctx.provide('benchgoLink', { status: () => ({ enabled: true, devices: [{ id: 'phone', name: '手机', deviceType: 'mobile', lastSeenAt: 123, tokenHash: 'PRIVATE' }], pending: [] }) });
   const executionTool = ctx.tools.get('assistant_execution_manage', agent);
-  assert.deepEqual(executionTool.parameters.properties.operation.enum, ['resume']);
+  assert.deepEqual(executionTool.parameters.properties.operation.enum, ['resume', 'abandon', 'redispatch']);
   const tasksTool = ctx.tools.get('assistant_tasks', agent);
   assert.ok(tasksTool);
   assert.deepEqual(tasksTool.parameters.properties.archived, { type: 'boolean' });
@@ -278,13 +278,13 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const scheduled = await scheduleTool.execute({ title: '检查提醒', prompt: '按原要求检查', after_seconds: 60 }, scheduleExec);
   assert.equal(scheduled.target.sessionId, agent.id);
   const schedules = await ctx.tools.get('schedule_list', agent).execute({}, scheduleExec);
-  assert.deepEqual(schedules.map(row => row.id), [scheduled.id]);
+  assert.deepEqual(schedules.items.map(row => row.id), [scheduled.id]);
   const createdHistory = await (await call({ action: 'history' })).json();
   assert.equal(createdHistory.notifications.find(row => row.schedule?.id === scheduled.id).schedule.phase, 'created');
   assert.equal((await (await call({ action: 'notificationSync' })).json()).events.filter(row => row.schedule?.id === scheduled.id).length, 1);
   await ctx.tools.get('schedule_update', agent).execute({ id: scheduled.id, title: '新提醒' }, scheduleExec);
   assert.equal(scheduleEntries[0].title, '新提醒');
-  await assert.rejects(scheduleTool.execute({ title: 'forged', prompt: 'forged', after_seconds: 60 }, { agent: { id: 'child' } }), /只有总助手/);
+  await assert.rejects(scheduleTool.execute({ title: 'forged', prompt: 'forged', after_seconds: 60 }, { agent: { id: 'child' } }), /当前总助手会话/);
   assert.equal((await ctx.tools.get('schedule_delete', agent).execute({ id: scheduled.id }, scheduleExec)).deleted, true);
   response = await call({ action: 'send', text: 'hello', requestId: 'mounted-request' }); assert.equal(response.status, 200); await agent.whenIdle();
   assert.match(JSON.stringify(modelRequests.at(-1)), /persistentGoals/);

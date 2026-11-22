@@ -19,7 +19,7 @@ const registrations = factory => {
 const models = registrations(officialModelsUi);
 const shell = registrations(shellUi);
 const scripts = [
-  [models, 'ui-settings-models/src/client/ModelsSection.tsx', '<ProviderSelect'],
+  [models, 'ui-settings-models/src/client/ModelsSection.tsx', '<ProviderAddForm'],
   [models, 'ui-settings-models/src/client/CustomProviderCard.tsx', 'validateModelReasoning'],
   [models, 'ui-settings-models/src/client/ProviderEditor.tsx', '<ProviderBrandIcon'],
   [shell, 'ui-settings-general/src/client/SettingsRoot.tsx', 'harness-tools'],
@@ -27,7 +27,7 @@ const scripts = [
   [shell, 'ui-layout/src/client/AppFrame.tsx', 'data-plus-shell'],
 ];
 const styles = [
-  [models, 'ui-settings-models/src/client/ModelsSection.module.css', 'commander-official-models-style', 'addModes'],
+  [models, 'ui-settings-models/src/client/ModelsSection.module.css', 'commander-official-models-style', 'addCard'],
   [shell, 'ui-layout/src/client/AppFrame.module.css', 'commander-shell-AppFrame.module.css', 'frame'],
   [shell, 'ui-sidebar/src/client/SidebarRoot.module.css', 'commander-shell-SidebarRoot.module.css', 'root'],
   [shell, 'ui-settings-general/src/client/SettingsRoot.module.css', 'commander-shell-SettingsRoot.module.css', 'navIcon'],

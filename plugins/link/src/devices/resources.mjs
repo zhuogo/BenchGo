@@ -49,7 +49,7 @@ export function createDeviceResources({ registry, local, request = remoteJson, r
   };
   const devices = () => {
     const snapshot = registry.list();
-    return { ...snapshot, devices: snapshot.devices.map(row => ({ ...row, direction: row.id === 'local' ? 'local' : 'outbound', observedAt: Date.now(), ...(row.id === 'local' ? {} : { hostId: registry.get(row.id).hostId || null, authorizationId: registry.get(row.id).authorizationId || null }) })) };
+    return { ...snapshot, devices: snapshot.devices.map(row => ({ ...row, direction: row.id === 'local' ? 'local' : 'outbound', observedAt: Date.now() })) };
   };
   const current = (deviceId, connection) => {
     let saved;

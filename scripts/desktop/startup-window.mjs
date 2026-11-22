@@ -11,6 +11,29 @@ const STARTUP_LABELS = {
 };
 const STARTUP_PHASES = Object.keys(STARTUP_LABELS);
 
+/** Keep the official welcome controls over the same theme color as the renderer. */
+export function createWelcomeWindow({ BrowserWindow, nativeTheme, platform, options }) {
+  const { vibrancy, visualEffectState, backgroundMaterial, ...windowOptions } = options;
+  const background = () => nativeTheme.shouldUseDarkColors ? '#101218' : '#f3f6f6';
+  const titleBarOverlay = () => ({
+    ...options.titleBarOverlay,
+    symbolColor: nativeTheme.shouldUseDarkColors ? '#eef5f6' : '#161c23',
+  });
+  const window = new BrowserWindow({
+    ...windowOptions,
+    hasShadow: false,
+    backgroundColor: background(),
+    ...(platform === 'win32' ? { thickFrame: false, accentColor: false, titleBarOverlay: titleBarOverlay() } : {}),
+  });
+  const updateTheme = () => {
+    window.setBackgroundColor(background());
+    if (platform === 'win32') window.setTitleBarOverlay(titleBarOverlay());
+  };
+  nativeTheme.on('updated', updateTheme);
+  window.once('closed', () => nativeTheme.removeListener('updated', updateTheme));
+  return window;
+}
+
 /** Keep one bounded, local startup record; diagnostic I/O must never gate startup. */
 export function createStartupTiming(directory, { now = () => performance.now(), startedAt = new Date().toISOString() } = {}) {
   const start = now(), stages = [], seen = new Set();
@@ -38,18 +61,15 @@ export function createStartupTiming(directory, { now = () => performance.now(), 
 }
 
 /** Start a local sandboxed splash without waiting for Chromium; return its cleanup handle. */
-export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativeTheme, page, iconPath, onVisible }) {
+export async function openStartupWindow({ app, BrowserWindow, nativeImage, page, iconPath, onVisible }) {
   const icon = iconPath && nativeImage ? nativeImage.createFromPath(iconPath) : undefined;
-  const background = () => nativeTheme?.shouldUseDarkColors ? '#101218' : '#f3f6f6';
   const window = new BrowserWindow({
     width: 420, height: 300, useContentSize: true, center: true,
     frame: false, resizable: false, maximizable: false, fullscreenable: false,
-    show: false, backgroundColor: background(), title: 'BenchGo',
+    show: false, transparent: true, hasShadow: false, title: 'BenchGo',
     ...(icon && !icon.isEmpty() ? { icon } : {}),
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
   });
-  const updateTheme = () => { if (!window.isDestroyed()) window.setBackgroundColor(background()); };
-  nativeTheme?.on('updated', updateTheme);
   const waiting = new Map();
   let disposed = false, loaded = false, phase = -1;
   const sendStage = () => {
@@ -62,7 +82,6 @@ export async function openStartupWindow({ app, BrowserWindow, nativeImage, nativ
   const dispose = () => {
     if (disposed) return;
     disposed = true;
-    nativeTheme?.removeListener('updated', updateTheme);
     app.removeListener('browser-window-created', observe);
     app.removeListener('will-quit', dispose);
     for (const [other, shown] of waiting) {

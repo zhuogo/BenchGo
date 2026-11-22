@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { routerAdmissionLanguagePolicy } from '../src/router-language-policy.mjs';
 
 test('builtin responsibilities require real memory writes and keep Dreams and maintenance within authority', async () => {
   const prompt = await readFile(new URL('../prompts/builtin-layer.md', import.meta.url), 'utf8');
@@ -58,7 +59,15 @@ test('delegation instructions preserve the target device from the first investig
   const source = await readFile(new URL('../src/router-tools.mjs', import.meta.url), 'utf8');
   const local = source.match(/register\('assistant_delegate', routerAdmissionLanguagePolicy \+ '([^']+)'/)?.[1] ?? '';
   assert.match(local, /business Task on THIS host/);
-  assert.match(local, /executionConfig selected from assistant_devices/);
+  assert.match(local, /assistant_devices\(deviceId\) returns workerPreference.config, omit executionConfig/);
   assert.match(local, /all Task IDs, queries, controls, revisions and results remain on this host/);
   assert.doesNotMatch(source, /register\('assistant_remote_task'/);
+});
+
+test('assignment text is executable while explicit verbatim and cross-device work survive dispatch', async () => {
+  const prompt = await readFile(new URL('../prompts/builtin-layer.md', import.meta.url), 'utf8');
+  assert.match(prompt, /宿主保留用户原始消息及来源。Router 将当前委派整理成 Worker 可直接执行的任务。用户明确要求逐字传递的内容，以及必须精确使用的文本、命令和标识，按原样保留。/);
+  assert.match(prompt, /通过 `deviceId` 和 `projectId` 完成绑定.*跨设备访问、传输或比较本身是任务要求/);
+  assert.match(routerAdmissionLanguagePolicy, /pass verbatim.*text, commands and identifiers/);
+  assert.match(routerAdmissionLanguagePolicy, /deviceId and projectId.*cross-device access, transfer or comparison.*authorized scope/);
 });

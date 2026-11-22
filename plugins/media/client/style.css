@@ -47,7 +47,7 @@
 .voice-provider-settings>label{display:grid;gap:6px;font-size:12px;margin:12px 0}
 .voice-provider-settings input:not([role=switch],[type=radio]){min-width:0;width:100%;border:1px solid var(--voice-border);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px;padding:9px 11px;line-height:1.4;outline-offset:2px}
 .voice-provider-settings input::placeholder{color:var(--voice-muted);opacity:.8}
-.voice-model-field>label,.voice-sound-fields>label,.voice-connection-settings label{display:grid;gap:6px;font-size:12px;margin:12px 0}
+.voice-model-field>label,.voice-sound-fields>label,.voice-speed-provider,.voice-connection-settings label{display:grid;gap:6px;font-size:12px;margin:12px 0}
 .voice-sound-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:center}
 .voice-field-label{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .voice-speed-field output{font-variant-numeric:tabular-nums;color:var(--voice-muted)}

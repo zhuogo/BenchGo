@@ -14,10 +14,11 @@ export function TaskAttention({ api, task, attention, onAnswered, showQuestion =
   const request = useRef(null);
   const question = attention.question || {};
   const options = question.options || [];
-  const answered = attention.state === 'answered' || submitted;
+  const superseded = attention.state === 'superseded';
+  const answered = !superseded && (attention.state === 'answered' || submitted);
   const desktop = task.mandate?.source?.channel === 'desktop';
   const stale = !attentionMatchesTask(attention, task);
-  const closed = terminalTaskStates.has(task.status) || task.executionControl?.stopRequested || task.executionControl?.stopped || stale;
+  const closed = superseded || terminalTaskStates.has(task.status) || task.executionControl?.stopRequested || task.executionControl?.stopped || stale;
   const ready = selected.length > 0 || custom.trim().length > 0;
   const change = action => { action(); request.current = null; setError(''); };
   const submit = async event => {
@@ -37,7 +38,7 @@ export function TaskAttention({ api, task, attention, onAnswered, showQuestion =
     onChange={event => change(() => setCustom(event.target.value))} /></label>;
   return <section className="ba-pending ba-task-attention" aria-label="任务问题" data-state={answered ? 'answered' : closed ? 'closed' : busy ? 'busy' : error ? 'error' : 'ready'}>
     <style>{css}</style>
-    <header className="ba-attention-head"><strong><UIIcon name={answered ? 'check' : closed ? 'close' : 'topic'} size={16} />{answered ? '已答复' : stale ? '旧版本的问题 · 已失效' : closed ? '任务已结束' : '需要你的答复'}</strong>
+    <header className="ba-attention-head"><strong><UIIcon name={answered ? 'check' : closed ? 'close' : 'topic'} size={16} />{answered ? '已答复' : superseded ? '问题已作废' : stale ? '旧版本的问题 · 已失效' : closed ? '任务已结束' : '需要你的答复'}</strong>
       {!answered && !closed && options.length > 0 && <span>{question.multiSelect ? '可多选' : '单选'}</span>}</header>
     {showQuestion && <p className="ba-attention-question">{question.question}</p>}
     {question.detail && <p className="ba-attention-detail">{question.detail}</p>}

@@ -1,5 +1,5 @@
 import { fileAddressFor, resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path';
-import { openRemoteResource } from '../../link/client/resource-navigation-store.mjs';
+import { openRemoteExecutionFile } from './execution-session-navigation.mjs';
 
 /** Reuse the official Sidebar file address, resolving the session cwd at click time. */
 export function createReplyFileOpener(ctx, sessionId, { api, threadId } = {}) {
@@ -20,11 +20,7 @@ export function createReplyFileOpener(ctx, sessionId, { api, threadId } = {}) {
       if (!source || typeof source.remote !== 'boolean') throw new Error('文件所属回复无法核实，请刷新原聊天后重试。');
       if (source.remote) {
         if (source.available !== true || ![source.deviceId, source.hostId, source.authorizationId, source.sessionId, source.ownerHostId, source.taskId, source.executionId].every(value => typeof value === 'string' && value)) throw new Error(source.reason || '文件所属远端执行暂不可用，请返回原任务核验。');
-        await openRemoteResource({ device: { id: source.deviceId, hostId: source.hostId, authorizationId: source.authorizationId }, resource: {
-          kind: 'sessions', resourceId: source.sessionId,
-          ownerTask: { taskId: source.taskId, ownerHostId: source.ownerHostId, executionId: source.executionId },
-          file: { path, ...(options.line === undefined ? {} : { line: options.line }) },
-        } }, { isCurrent });
+        await openRemoteExecutionFile(source, path, { line: options.line, isCurrent });
         return;
       }
     }

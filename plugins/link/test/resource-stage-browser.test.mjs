@@ -59,6 +59,7 @@ test('remote resources announce late readiness, reuse a live device document and
         const mode = await page.evaluate(() => window.mode);
         if (mode === 'loading') return route.fulfill({ json: { device, url: 'http://127.0.0.1:17883/pending/' } });
         if (mode === 'error') return route.fulfill({ status: 503, json: { error: '服务器工作台暂不可用' } });
+        if (mode === 'legacy') return route.fulfill({ json: { device: { id: device.id }, url: 'http://127.0.0.1:17883/remote/?ticket=' + selections.length } });
         return route.fulfill({ json: { device, url: 'http://127.0.0.1:17883/remote/?ticket=' + selections.length } });
       }
       if (url.pathname === '/receiver.js') return route.fulfill({ contentType: 'text/javascript', body: receiverScript });
@@ -221,6 +222,9 @@ test('remote resources announce late readiness, reuse a live device document and
     await page.evaluate(()=>window.resourceScenario('data',{deviceId:'owner-policy',identity:{hostId:'host-b',authorizationId:'auth-b'},resource:{kind:'sessions',resourceId:'last-session'}}));
     await page.locator('.cmd-resource-stage-status').waitFor({state:'hidden'});
     assert.equal(await remote.evaluate(()=>readInputBlock('session')),undefined,'navigating away restores the previous composer policy');
+    await page.evaluate(()=>window.resourceScenario('legacy',{deviceId:'legacy',identity:{hostId:'host-b',authorizationId:'auth-b'},resource:{kind:'sessions',resourceId:'last-session'}}));
+    await page.frameLocator('iframe').getByText('远端会话内容 last-session').waitFor();
+    await page.locator('.cmd-resource-stage-status').waitFor({state:'hidden'});
     await page.evaluate(resource=>window.resourceScenario('data',{deviceId:'identity-changed',identity:{hostId:'rebound-host',authorizationId:'auth-b'},resource}),ownerResource);
     await page.getByRole('alert').filter({hasText:'目标设备身份或授权已变化'}).waitFor();
     assert.equal(await page.locator('iframe').count(),0,'identity mismatch cannot mount a different workbench');

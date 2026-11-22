@@ -5,6 +5,7 @@ import { modelCapabilityLabels, normalizeModelCapabilities, structuredCapabiliti
 import { normalizeInputModalities } from '../shared/model-profile-match.mjs';
 
 const providerWrites = new Map();
+const emptyModels = new Map();
 
 async function request(action, args, signal) {
   const response = await fetch(new URL('api/commander/tooling', document.baseURI), {
@@ -18,32 +19,36 @@ async function request(action, args, signal) {
 
 export function useModelCapabilities(providerId) {
   const [state, setState] = useState(null);
+  const [directory, setDirectory] = useState(null);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     if (!providerId) return;
     const abort = new AbortController();
     const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(23000)]);
-    Promise.allSettled([
-      Promise.allSettled(providerWrites.get(providerId)?.values() ?? [])
-        .then(() => request('modelCapabilities', { providerId }, signal)),
-      request('models', { providerId }, signal),
-    ]).then(([overrides, directory]) => {
+    const finishOverrides = saved => {
       if (abort.signal.aborted) return;
-      const saved = overrides.status === 'fulfilled' && Array.isArray(overrides.value.overrides) ? overrides.value.overrides : undefined;
-      const models = directory.status === 'fulfilled' && Array.isArray(directory.value.models) ? directory.value.models : undefined;
       setState({
         providerId, revision,
         overrides: new Map(saved?.map(row => [row.modelId, row.capabilities])),
-        models: new Map(models?.map(row => [row.id, row])),
         error: saved ? '' : '无法加载已保存的能力标签',
-        directoryError: models ? '' : '暂时无法获取供应商能力，可手动选择标签。',
       });
-    });
+    };
+    const finishDirectory = models => {
+      if (abort.signal.aborted) return;
+      setDirectory({ providerId, models: models ? new Map(models.map(row => [row.id, row])) : emptyModels,
+        error: models ? '' : '暂时无法获取供应商能力，可手动选择标签。' });
+    };
+    void Promise.allSettled(providerWrites.get(providerId)?.values() ?? [])
+      .then(() => request('modelCapabilities', { providerId }, signal))
+      .then(value => finishOverrides(Array.isArray(value.overrides) ? value.overrides : undefined), () => finishOverrides());
+    void request('models', { providerId }, signal)
+      .then(value => finishDirectory(Array.isArray(value.models) ? value.models : undefined), () => finishDirectory());
     return () => abort.abort();
   }, [providerId, revision]);
   if (!providerId) return null;
+  const remote = directory?.providerId === providerId ? directory : null;
   return {
-    current: state?.providerId === providerId ? state : null,
+    current: state?.providerId === providerId ? { ...state, models: remote?.models ?? emptyModels, directoryError: remote?.error } : null,
     refreshing: state?.revision !== revision,
     retry: () => setRevision(value => value + 1),
     async save(modelId, capabilities) {
@@ -78,7 +83,11 @@ export function modelCatalogFacts(modelId, profile, catalog) {
 }
 
 export function ModelCapabilityEditor({ modelId, capabilities, catalog, disabled, styles }) {
-  if (typeof modelId !== 'string' || !modelId.trim() || !catalog) return null;
+  if (typeof modelId !== 'string' || !modelId.trim()) return null;
+  if (!catalog) return <fieldset className={styles.modelInputTypes}>
+    <legend className={styles.modelFieldLabel}>能力标签</legend>
+    <p className={styles.advancedHint}>创建供应商后即可编辑能力标签。</p>
+  </fieldset>;
   const { current, retry, refreshing } = catalog;
   return <fieldset className={styles.modelInputTypes}>
     <legend className={styles.modelFieldLabel}>能力标签</legend>

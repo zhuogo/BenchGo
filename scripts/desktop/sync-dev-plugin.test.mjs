@@ -53,9 +53,9 @@ for (const mode of ['valid', 'slots', 'store', 'dockkit', 'missing-seed', 'wrong
   const manifest = JSON.parse(await readFile(join(setup.source, 'package.json'), 'utf8'));
   manifest.dependencies['fixture-client'] = '1.0.0';
   await put(setup.source, 'package.json', manifest);
-  await put(setup.source, 'node_modules/fixture-client/package.json', { name: 'fixture-client', version: '1.0.0', [mode === 'node-dependency' ? 'dependencies' : 'peerDependencies']: { [name]: '^0.2.2-rc.1' } });
+  await put(setup.source, 'node_modules/fixture-client/package.json', { name: 'fixture-client', version: '1.0.0', [mode === 'node-dependency' ? 'dependencies' : 'peerDependencies']: { [name]: '^0.2.2-rc.5' } });
   const frontend = join(setup.root, 'official/node_modules/@deepseek-ai/dsh-web-frontend');
-  await put(frontend, 'package.json', { name: '@deepseek-ai/dsh-web-frontend', version: mode === 'wrong-version' ? '0.1.0' : '0.2.2-rc.1' });
+  await put(frontend, 'package.json', { name: '@deepseek-ai/dsh-web-frontend', version: mode === 'wrong-version' ? '0.1.0' : '0.2.2-rc.5' });
   await put(frontend, 'dist/index.html', '<script type="module" crossorigin src="./assets/index.js"></script>');
   const seed = 'function getStaticModules(){return {"@deepseek-ai/dsh-client-store":store,"@deepseek-ai/dsh-client-ui-slots":slots,"@deepseek-ai/dsh-client-ui-primitives":primitives,"@deepseek-ai/dsh-client-ui-dockkit":dockkit}}';
   await put(frontend, 'dist/assets/index.js', ['missing-seed', 'unused-asset'].includes(mode) ? 'console.log("@deepseek-ai/dsh-client-ui-primitives");' : seed);

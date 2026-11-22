@@ -46,8 +46,8 @@ export function createTaskCleanupContinuation({ database, orchestration, taskMan
       throw fail('CLEANUP_CONTINUATION_STALE', '执行身份或后续输入已变化，原待归档不再适用');
     if (current.archived) throw fail('TASK_ALREADY_ARCHIVED', '任务已由其他整理操作归档');
     if (!task.executionExited) {
-      if (!task.executionControl?.stopRequested && !task.executionControl?.stopped)
-        stopDesktopTask(orchestration, task.id, row.triggerId, `cleanup-stop:${row.id}`);
+      if (!task.executionControl?.stopped)
+        stopDesktopTask(orchestration, task.id, row.triggerId, `cleanup-stop:${row.id}`, { detachRemote: true });
       if (!orchestration.getTask(task.id).executionExited) return;
     }
     const preview = taskManagement.previewCleanup({ scope, ids: [task.id] });

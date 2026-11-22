@@ -24,6 +24,8 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
     question_key TEXT PRIMARY KEY, assignment_id TEXT NOT NULL REFERENCES sa_assignments(id),
     task_id TEXT NOT NULL REFERENCES sa_tasks(id), session_id TEXT NOT NULL, call_id TEXT NOT NULL,
     instruction_revision INTEGER NOT NULL, question TEXT NOT NULL, resolution TEXT NOT NULL, created_at TEXT NOT NULL);`);
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('sa_attentions') WHERE name='superseded_at'").get())
+    db.exec('ALTER TABLE sa_attentions ADD COLUMN superseded_at TEXT');
   const resolutionValue = row => ({ assignmentId: row.assignment_id, taskId: row.task_id, sessionId: row.session_id,
     callId: row.call_id, instructionRevision: row.instruction_revision, question: JSON.parse(row.question),
     ...JSON.parse(row.resolution), createdAt: row.created_at });
@@ -31,13 +33,29 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
     if (!row) return row;
     return { id: row.id, assignmentId: row.assignment_id, taskId: row.task_id,
       sessionId: row.session_id, callId: JSON.parse(row.question_key)[1], question: JSON.parse(row.question), outboxId: row.outbox_id,
-      answerTriggerId: row.answer_trigger_id, state: row.answer_trigger_id ? 'answered' : 'waiting', createdAt: row.created_at,
+      answerTriggerId: row.answer_trigger_id, state: row.superseded_at ? 'superseded' : row.answer_trigger_id ? 'answered' : 'waiting', createdAt: row.created_at,
       origin: 'worker', instructionRevision: row.instruction_revision };
   };
-  const currentRevision = (row, task) => !!task && api.getAssignment(row.assignment_id)?.taskId === task.id
+  const currentRevision = (row, task) => !row.superseded_at && !!task && api.getAssignment(row.assignment_id)?.taskId === task.id
     && row.instruction_revision === (api.getAssignment(row.assignment_id)?.appliedSnapshot?.instructionRevision ?? api.getAssignment(row.assignment_id)?.instructionRevision ?? 1)
     && api.runs(row.assignment_id).some(run => run.sessionId === row.session_id && !['cancelled', 'failed', 'completed'].includes(run.state));
   return {
+    supersedeRemoteAttention(assignmentId, { owner, fence, sessionId, callId, questionId, now = Date.now() }) {
+      return tx(() => {
+        const assignment = ownedAssignment(assignmentId, owner, fence, now), remote = api.remoteExecution(assignmentId);
+        if (remote?.sessionId !== sessionId || remote.question?.questionId !== questionId || remote.question.callId !== callId)
+          throw new Error('Remote Attention identity changed');
+        const at = new Date(now).toISOString();
+        const rows = db.prepare("SELECT id,outbox_id,answer_trigger_id FROM sa_attentions WHERE assignment_id=? AND session_id=? AND json_extract(question_key,'$[1]')=? AND superseded_at IS NULL")
+          .all(assignmentId, sessionId, callId);
+        for (const row of rows) {
+          db.prepare('UPDATE sa_attentions SET superseded_at=? WHERE id=?').run(at, row.id);
+          db.prepare("UPDATE sa_outbox SET state='cancelled',updated_at=? WHERE id=? AND state='queued'").run(at, row.outbox_id);
+          if (row.answer_trigger_id) db.prepare("UPDATE sa_task_inputs SET state='superseded' WHERE task_id=? AND trigger_id=? AND kind='answer' AND state='pending'")
+            .run(assignment.task_id, row.answer_trigger_id);
+        }
+      });
+    },
     attentionResolutions(taskId, { sessionId, callId } = {}) {
       return db.prepare('SELECT * FROM sa_attention_resolutions WHERE task_id=? ORDER BY created_at,rowid').all(taskId)
         .filter(row => (sessionId === undefined || row.session_id === sessionId) && (callId === undefined || row.call_id === callId)).map(resolutionValue);
@@ -159,6 +177,7 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
         if (!row) throw new Error('Attention not found');
         const task = api.getTask(taskId), origin = task.mandate.source;
         if (origin?.channel !== 'desktop' || task.mandate.actorId !== 'desktop-owner' || !origin.sessionId) throw new Error('Attention source owner mismatch');
+        if (row.superseded_at) throw new Error('问题已作废，无需再答复');
         if (instructionRevision !== value(row).instructionRevision || !currentRevision(row, task)) throw new Error('Attention requirements changed');
         const question = JSON.parse(row.question), labels = (question.options || []).map(option => option.label);
         if (!answer || !Array.isArray(answer.selected) || answer.selected.some(label => typeof label !== 'string' || !labels.includes(label))

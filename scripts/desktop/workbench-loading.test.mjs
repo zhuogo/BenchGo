@@ -27,7 +27,7 @@ test('workbench presentation is compiled into the document before boot and fails
   assert.throws(() => verifyWorkbenchLoadingBundle(source), /missing workbench loading/);
 });
 
-test('upstream boot page renders themed progress dots and retains failure and handoff', async t => {
+test('upstream boot page renders themed status text and retains failure and handoff', async t => {
   const { chromium } = require('playwright');
   const executablePath = [process.env.CHROMIUM_EXECUTABLE_PATH, chromium.executablePath(), 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(value => value && existsSync(value));
   if (!executablePath) return t.skip('Chromium/Edge is required');
@@ -52,8 +52,8 @@ test('upstream boot page renders themed progress dots and retains failure and ha
   await shot('empty');
   await page.evaluate(() => { window.boot = new window.BootPage(document.getElementById('root')); });
   const status = page.getByRole('status', { name: '正在加载工作台…' });
-  const dots = page.locator('.startup-loading');
-  const completed = () => dots.locator('span').evaluateAll(items => items.filter(item => getComputedStyle(item, '::after').opacity === '1').length);
+  const letters = status.locator('.bg-loading-character');
+  assert.equal(await status.innerText(), '正在加载工作台…');
   for (const theme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: theme });
     await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme', dark), theme === 'dark');
@@ -65,21 +65,23 @@ test('upstream boot page renders themed progress dots and retains failure and ha
     assert(Math.abs(box.y + box.height / 2 - 350) < 1);
     assert.equal(await page.locator('[data-dsh-boot]').evaluate(el => getComputedStyle(el).backgroundColor), theme === 'dark' ? 'rgb(16, 18, 24)' : 'rgb(243, 246, 246)');
     assert.equal(await page.locator('[data-dsh-boot-spinner]').evaluate(el => getComputedStyle(el).animationName), 'none');
-    assert.equal(await dots.evaluate(el => getComputedStyle(el, '::after').animationName), 'startup-dot-lift');
-    assert.equal(await dots.evaluate(el => getComputedStyle(el, '::after').backgroundColor), theme === 'dark' ? 'rgb(241, 132, 116)' : 'rgb(196, 78, 62)');
+    assert.equal(await status.evaluate(el => getComputedStyle(el).color), theme === 'dark' ? 'rgb(238, 245, 246)' : 'rgb(22, 28, 35)');
+    assert.deepEqual(await letters.evaluateAll(items => items.map(item => {
+      const { animationName, animationDelay, animationDuration } = getComputedStyle(item);
+      return [item.textContent, animationName, Number.parseFloat(animationDelay), animationDuration];
+    })), [...'正在加载工作台…'].map((character, index) => [character, 'bg-loading-hit', index * 75 / 1000, '1.6s']));
     await shot(theme);
   }
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const firstLetter = await letters.first().elementHandle();
   await page.evaluate(() => {
     window.boot.setTotal(2);
     window.boot.setState('fixture-ready', 'active');
   });
-  assert.equal(await completed(), 3);
-  assert.equal(await dots.evaluate(el => getComputedStyle(el, '::after').translate), '48px');
+  assert.equal(await firstLetter.evaluate(el => el.isConnected), true, 'plugin progress does not restart the loading text');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await shot('reduced');
   await page.evaluate(() => window.boot.setState('fixture-plugin', 'active'));
-  assert.equal(await completed(), 6);
-  assert.equal(await dots.evaluate(el => getComputedStyle(el, '::after').opacity), '0');
+  assert.equal(await firstLetter.evaluate(el => getComputedStyle(el).opacity), '1');
   assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
   await page.setViewportSize({ width: 260, height: 410 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 260);

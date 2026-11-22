@@ -13,10 +13,3 @@ export function configuredWorkModel(policy) {
   const harness = policy.workerHarness ?? policy.routingConfig?.workerHarness;
   return { ...model, ...(harness ? { harness } : {}) };
 }
-
-export function usesExternalWorker(database, task) {
-  const assignment = database.assignments(task.id).at(-1);
-  const run = assignment && database.runs(assignment.id).at(-1);
-  const frozen = run && database.getWorkerExecutionState(run.id)?.models[0]?.harness;
-  return ['codex', 'claude'].includes(task.mandate?.execution?.config?.harness ?? frozen ?? assignment?.model?.harness);
-}

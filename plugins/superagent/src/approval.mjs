@@ -15,3 +15,26 @@ export async function requestBusinessApproval(approval, request) {
     { code: 'APPROVAL_POLICY_NEVER' });
   return outcome;
 }
+
+const settingsApprovals = new WeakSet();
+
+export async function requestSettingsApproval(approval, request) {
+  const { session } = request.agent;
+  const policy = approval.overrideOf?.(session) ?? approval.config?.policy;
+  if (settingsApprovals.has(session)) throw Object.assign(new Error('请先处理当前设置审批'), { code: 'MANAGEMENT_APPROVAL_PENDING' });
+  if (policy !== 'never') return requestBusinessApproval(approval, request);
+  settingsApprovals.add(session);
+  try {
+    let pending;
+    // The official request checks policy synchronously before dispatching the card.
+    session.append('approval/policy', { policy: 'ask' });
+    try { pending = approval.request(request); }
+    finally {
+      try { session.append('approval/policy', { policy }); }
+      catch (error) { pending?.catch(() => {}); throw error; }
+    }
+    return await pending;
+  } finally {
+    settingsApprovals.delete(session);
+  }
+}

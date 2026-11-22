@@ -34,7 +34,12 @@ export function openRemoteExecutionStore(directory) {
           fingerprint TEXT NOT NULL, execution_id TEXT NOT NULL REFERENCES executions(id), payload TEXT NOT NULL,
           PRIMARY KEY(principal,request_id));
         CREATE TABLE IF NOT EXISTS execution_events(execution_id TEXT NOT NULL REFERENCES executions(id), seq INTEGER NOT NULL,
-          kind TEXT NOT NULL, data TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(execution_id,seq));`);
+          kind TEXT NOT NULL, data TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(execution_id,seq));
+        CREATE INDEX IF NOT EXISTS execution_progress ON execution_events(execution_id, seq) WHERE kind='execution.progress';`);
+      db.exec(`CREATE TABLE IF NOT EXISTS execution_session_archives(
+        id INTEGER PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id),
+        principal TEXT NOT NULL, at TEXT NOT NULL, instruction_revision INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS execution_session_archive_principal ON execution_session_archives(principal,id);`);
     });
   } catch (error) { db.close(); throw error; }
   const decode = row => row && JSON.parse(row.payload);
@@ -46,6 +51,7 @@ export function openRemoteExecutionStore(directory) {
     db.prepare('INSERT INTO execution_events VALUES(?,?,?,?,?)').run(id, seq, kind, JSON.stringify(data), at);
     return { seq, kind, data, at };
   };
+  const latestProgress = db.prepare("SELECT data FROM execution_events WHERE execution_id=? AND kind='execution.progress' ORDER BY seq DESC LIMIT 1");
   const receipt = (principal, requestId, input) => {
     const prior = db.prepare('SELECT * FROM execution_commands WHERE principal=? AND request_id=?').get(principal, requestId);
     if (prior && input !== undefined && prior.fingerprint !== commandFingerprint(input)) throw executionError('EXECUTION_COMMAND_CONFLICT', '同一请求 ID 不能改变执行命令');
@@ -71,10 +77,31 @@ export function openRemoteExecutionStore(directory) {
   };
   return {
     tx, get, save, event, receipt, recordCommand, bindOwner,
+    progress(id) { const row = latestProgress.get(id); return row ? JSON.parse(row.data) : null; },
+    publishProgress(id, snapshot) {
+      if (snapshot && JSON.stringify(snapshot) !== latestProgress.get(id)?.data) event(id, 'execution.progress', snapshot);
+    },
     updateCommand(principal, requestId, result) { db.prepare('UPDATE execution_commands SET payload=? WHERE principal=? AND request_id=?').run(JSON.stringify(result), principal, requestId); },
     latest: id => db.prepare('SELECT coalesce(max(seq),0) AS seq FROM execution_events WHERE execution_id=?').get(id).seq,
     bySession: sessionId => decode(db.prepare('SELECT payload FROM executions WHERE session_id=?').get(sessionId)),
     rows: () => db.prepare('SELECT payload FROM executions').all().map(decode),
+    archiveSession(row, archived) {
+      if (Boolean(row.sessionArchived) === archived) return;
+      row.sessionArchived = archived;
+      if (archived) {
+        row.sessionArchiveInstructionRevision = row.receivedInstructionRevision;
+        row.sessionArchiveCursor = Number(db.prepare('INSERT INTO execution_session_archives(execution_id,principal,at,instruction_revision) VALUES(?,?,?,?)')
+          .run(row.id, row.principal, new Date().toISOString(), row.sessionArchiveInstructionRevision).lastInsertRowid);
+      }
+      save(row);
+    },
+    sessionArchives(principal, after, limit) {
+      return db.prepare(`SELECT a.id AS cursor,a.at,a.instruction_revision,e.payload FROM execution_session_archives a JOIN executions e ON e.id=a.execution_id
+        WHERE a.principal=? AND a.id>? ORDER BY a.id LIMIT ?`).all(principal, after, limit).map(item => {
+        const row = JSON.parse(item.payload);
+        return { cursor: item.cursor, at: item.at, executionId: row.id, sessionId: row.sessionId, identity: row.identity, instructionRevision: item.instruction_revision };
+      });
+    },
     owned(id, principal) { const row = get(id); if (!row || row.principal !== principal) throw executionError('EXECUTION_NOT_FOUND', '执行实例不存在或不属于当前认证设备', 404); return row; },
     create(principal, input, extra, verifiedSourceHostId = null) {
       const i = input.identity;

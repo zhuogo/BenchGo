@@ -46,6 +46,33 @@ test('public model profiles use fixed server-side URL without provider credentia
   assert.equal((await service.fetch(request())).status, 400);
 });
 
+test('native DeepSeek sync reads the registered catalog and returns only model fields', async () => {
+  const calls = [];
+  const ctx = {
+    effect() {},
+    llm: {
+      listConfigurableProviders: () => [
+        { provider: 'deepseek-official', settingsNs: 'llm-deepseek' },
+        { provider: 'deepseek-compatible', settingsNs: 'llm-pi-ai' },
+      ],
+      async listModels(provider) {
+        calls.push(provider);
+        return [{ id: 'opaque/Model:V1', name: 'Fixture', inputModalities: ['text', 'image'], internal: 'ignored' }];
+      },
+    },
+  };
+  const providers = { resolve() { throw Error('native discovery owns credential resolution'); } };
+  const { fetch } = await mountTooling(ctx, null, providers, { directory: '/unused', installer: {} });
+  const sync = providerId => fetch(new Request('http://test/api/commander/tooling', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'deepSeekModels', providerId }),
+  }));
+  assert.equal((await sync('deepseek-compatible')).status, 404);
+  assert.deepEqual(await (await sync('deepseek-official')).json(), {
+    models: [{ id: 'opaque/Model:V1', name: 'Fixture', inputModalities: ['text', 'image'] }],
+  });
+  assert.deepEqual(calls, ['deepseek-official']);
+});
+
 test('runtime resolves the selected system executable', async () => {
   const commander = new Commander({ providers: { codex: { env: { KEEP: 'yes' } } } });
   commander.toolInstaller = { resolveLaunch: async () => ({ command: '/managed/node', args: ['/managed/codex.js'] }) };

@@ -88,6 +88,7 @@ function openAssistantTab(ctx, tab, selection) {
   dispatchAssistantEvent('benchgo:assistant-tab', tab);
 }
 export function AssistantSidebarEntry({ ctx, showArchived = false }) {
+  const [confirm, confirmation] = useConfirmation();
   const config = useSyncExternalStore(assistantConfigSync.subscribe, assistantConfigSync.getSnapshot);
   const name = config?.name || DEFAULT_NAME;
   const [threads, setThreads] = useState([]), [expanded, setExpanded] = useState(true), [selected, setSelected] = useState(selectedAssistantThread), [error, setError] = useState(''), [creating, setCreating] = useState(false);
@@ -176,6 +177,17 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
     finally { setCreating(false); }
   };
   const mutate = async operation => { setSaving(true); try { await operation(); document.dispatchEvent(new Event('benchgo:assistant-changed')); setMenu(null); } catch (cause) { setError(cause.message); } finally { setSaving(false); } };
+  const archiveThread = thread => void mutate(async () => {
+    const input = { threadId: thread.id, archived: !showArchived };
+    try { await api('archiveThread', input); }
+    catch (error) {
+      if (error.serverCode !== 'workspace/session-active') throw error;
+      setMenu(null);
+      if (!await confirm({ title: `停止并归档“${thread.title}”？`, description: '正在进行的活动将停止，已有历史和成果会保留。', confirmLabel: '停止并归档' })) return;
+      await api('archiveThread', { ...input, stopActivity: true });
+    }
+    if (input.archived && selected === thread.id) openAssistantThread(ctx, 'main');
+  });
   const visible = sidebarThreads(threads, { list: imList ? 'im' : 'side', archived: showArchived, channels });
   const listError = loadError || (imList && channelsError), listLoading = !loaded || imList && !channelsLoaded;
   const hasConnectedChannels = channels.some(channel => channelIsConnected(channel.status));
@@ -194,12 +206,11 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
     const stateLabel = { archived: '已归档', pending: '待确认', running: '忙碌', idle: '空闲', unknown: '状态未知' }[state];
     const updatedAt = session?.updatedAt || thread.createdAt;
     const { hasDate, timeLabel, dateTime, detail } = formatTime(updatedAt);
-    const archive = () => void mutate(async () => { await api('archiveThread', { threadId: thread.id, archived: !showArchived }); if (!showArchived && selected === thread.id) openAssistantThread(ctx, 'main'); });
     return <div className={`cmd-session-row ${showArchived ? 'is-archived' : ''} ${active ? 'is-selected' : ''}`} data-source={fixedSource ? 'im' : 'side'} data-menu-open={menu === thread.id || undefined} key={thread.id}>
       <Button variant="ghost" type="button" className={`cmd-session ${active ? 'cmd-selected' : ''}`} title={fixedSource ? `${title}，${sourceLabel}` : undefined} aria-label={fixedSource ? `${title}，${sourceLabel}` : undefined} aria-current={active ? 'page' : undefined} onClick={() => { setMenu(null); openAssistantThread(ctx, thread.id); }}><span className="ba-thread-copy">{fixedSource && <ChannelBrandIcon channel={thread.source.channel} available size={14} />}<span className="ba-thread-title">{title}</span><span className="ba-thread-meta"><Hint label={hasDate ? `${session?.updatedAt ? '最近活动' : '创建于'} ${detail}` : '时间暂不可用'}><time className="ba-thread-time" dateTime={dateTime}>{timeLabel}</time></Hint>{!fixedSource && <span className="ba-thread-status" data-status={state}><i aria-hidden="true" />{stateLabel}</span>}</span></span></Button>
       {!fixedSource && <div className="ba-thread-actions">
         {!showArchived && <Hint label={thread.pinned ? '取消置顶' : '置顶'}><Button variant="ghost" type="button" className="cmd-session-quick" aria-label={thread.pinned ? '取消置顶' : '置顶会话'} aria-pressed={!!thread.pinned} disabled={saving} onClick={event => { event.stopPropagation(); void mutate(() => api('pinThread', { threadId: thread.id, pinned: !thread.pinned })); }}>{thread.pinned ? <IconPinFillMedium size={16} /> : <IconPinOutlineMedium size={16} />}</Button></Hint>}
-        <Hint label={showArchived ? '取消归档' : '归档'}><Button variant="ghost" type="button" className="cmd-session-quick" aria-label={showArchived ? '取消归档对话' : '归档对话'} disabled={saving} onClick={event => { event.stopPropagation(); archive(); }}>{showArchived ? <IconArchiveOffOutlineMedium size={16} /> : <IconArchiveOutlineMedium size={16} />}</Button></Hint>
+        <Hint label={showArchived ? '取消归档' : '归档'}><Button variant="ghost" type="button" className="cmd-session-quick" aria-label={showArchived ? '取消归档对话' : '归档对话'} disabled={saving} onClick={event => { event.stopPropagation(); archiveThread(thread); }}>{showArchived ? <IconArchiveOffOutlineMedium size={16} /> : <IconArchiveOutlineMedium size={16} />}</Button></Hint>
         {showArchived && <Hint label="删除"><Button variant="ghost" type="button" className="cmd-session-quick cmd-danger" aria-label="删除旁聊" disabled={saving} onClick={event => { event.stopPropagation(); void mutate(async () => { await api('deleteThread', { threadId: thread.id }); if (selected === thread.id) openAssistantThread(ctx, 'main'); }); }}><UIIcon name="trash" size={14} /></Button></Hint>}
         {!showArchived && <Hint label="对话操作"><Button variant="ghost" type="button" className="cmd-session-more" aria-label={'对话操作：' + thread.title} aria-expanded={menu === thread.id} aria-haspopup="menu" onClick={event => { menuAnchor.current = event.currentTarget; setMenu(menu === thread.id ? null : thread.id); }}><IconEllipsisOutlineMedium size={16} /></Button></Hint>}
       </div>}
@@ -210,7 +221,7 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
       {listLoading && !visible.length && !listError && <Loading label={`正在加载${listLabel}`} compact />}
       {!listLoading && !visible.length && !listError && !error && <div className="ba-sidebar-state" data-kind="empty">{showArchived ? <ResourceState icon="archive" title="暂无归档旁聊" description="归档后的旁聊会保留在这里。" /> : imList ? <ResourceState icon="devices" title={hasConnectedChannels ? '暂无 IM 会话' : '尚未连接渠道'} description={hasConnectedChannels ? '已连接渠道收到消息后，会显示在这里。' : '连接渠道后接收消息，即可在这里查看。'}><Button variant="ghost" type="button" onClick={() => openAssistantTab(ctx, 'connections')}>连接渠道</Button></ResourceState> : <p className="ba-sidebar-quote">“或许你不需要我”</p>}</div>}
       {(listError || error) && <div className="ba-sidebar-state" data-kind="error"><ResourceState kind="error" title={error ? '操作未完成' : listLoading ? `${listLabel}加载失败` : `${listLabel}暂时无法更新`} description={error || (imList && channelsError ? '无法核实渠道连接状态，请重试。已有会话会保留。' : '请检查连接后重试，已有对话会保留。')}><Button variant="ghost" type="button" disabled={refreshing} onClick={() => { setError(''); return refreshRef.current?.(true); }}><UIIcon name="refresh" size={14} />{refreshing ? '正在重试…' : error ? '重新加载' : '重试加载'}</Button></ResourceState></div>}
-    </div></div></div></div><Menu open={!showArchived && assistantExpanded && !!current} onClose={() => { if (!saving) setMenu(null); }} anchor={null} anchorRef={menuAnchor} side="right" align="end" portal autoFocus compact listClassName="cmd-actions-popover">{current && <div className="cmd-session-actions">{!showArchived && <Button variant="ghost" type="button" role="menuitem" disabled={saving} onClick={() => void mutate(() => api('pinThread', { threadId: current.id, pinned: !current.pinned }))}>{current.pinned ? <IconPinFillMedium size={16} /> : <IconPinOutlineMedium size={16} />}<span>{current.pinned ? '取消置顶' : '置顶会话'}</span></Button>}<Button variant="ghost" type="button" role="menuitem" disabled={saving} onClick={() => { setRenameTarget(current); setMenu(null); }}><UIIcon name="edit" size={16} /><span>重命名</span></Button><div className="cmd-session-action-divider" role="separator" /><Button variant="ghost" type="button" role="menuitem" disabled={saving} onClick={() => void mutate(async () => { await api('archiveThread', { threadId: current.id, archived: !showArchived }); if (!showArchived && selected === current.id) openAssistantThread(ctx, 'main'); })}><IconArchiveOutlineMedium size={16} /><span>{showArchived ? '取消归档' : '归档对话'}</span></Button></div>}</Menu><AssistantRenameDialog target={renameTarget} onClose={() => setRenameTarget(null)} onError={setError} /></section>;
+    </div></div></div></div><Menu open={!showArchived && assistantExpanded && !!current} onClose={() => { if (!saving) setMenu(null); }} anchor={null} anchorRef={menuAnchor} side="right" align="end" portal autoFocus compact listClassName="cmd-actions-popover">{current && <div className="cmd-session-actions">{!showArchived && <Button variant="ghost" type="button" role="menuitem" disabled={saving} onClick={() => void mutate(() => api('pinThread', { threadId: current.id, pinned: !current.pinned }))}>{current.pinned ? <IconPinFillMedium size={16} /> : <IconPinOutlineMedium size={16} />}<span>{current.pinned ? '取消置顶' : '置顶会话'}</span></Button>}<Button variant="ghost" type="button" role="menuitem" disabled={saving} onClick={() => { setRenameTarget(current); setMenu(null); }}><UIIcon name="edit" size={16} /><span>重命名</span></Button><div className="cmd-session-action-divider" role="separator" /><Button variant="ghost" type="button" role="menuitem" disabled={saving} onClick={() => archiveThread(current)}><IconArchiveOutlineMedium size={16} /><span>{showArchived ? '取消归档' : '归档对话'}</span></Button></div>}</Menu><AssistantRenameDialog target={renameTarget} onClose={() => setRenameTarget(null)} onError={setError} />{confirmation}</section>;
 }
 function loadCatalog() { return assistantModelCatalog.load(); }
 function messageText(message) {

@@ -43,7 +43,7 @@
 .ba-board-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;padding:0 16px 16px;scroll-padding:12px}
 .ba-board-section+.ba-board-section{margin-top:16px}
 .ba-root .ba-board .ba-board-section-head,.ba-board-day{display:flex;align-items:center;gap:7px;width:100%;margin:0;padding:8px 2px 10px;border:0;border-radius:6px;background:transparent;font-size:13px;font-weight:600;line-height:1.5;text-align:left;color:var(--ba-muted)}
-.ba-board .ba-board-section-head{cursor:pointer}
+.ba-root .ba-board .ba-board-section-head{box-sizing:border-box;padding-inline:12px;cursor:pointer}
 .ba-board .ba-board-section-head:hover{background:transparent;color:var(--board-ink)}
 .ba-board-section-count,.ba-board-day>span{font-size:11px;font-weight:500;font-variant-numeric:tabular-nums}
 .ba-board-section-head>.cmd-ui-icon{margin-left:auto;transition:transform .18s}

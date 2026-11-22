@@ -20,6 +20,8 @@ import { createLinkSettingsAdapter, LINK_TRANSPORT_NAMESPACE, LINK_RELAY_NAMESPA
 import { settingsSnapshot, settingsFingerprint, assertSettingsExpected, applySettingsOps, notifySettings } from '../../base/shared/settings-adapter-utils.mjs';
 import { captureHostScope, hostScope } from '../../base/shared/host-scope.mjs';
 
+const executionOperations = ['catalog','submit','get','input','control','ack','archive','archives'];
+
 /** Owner admin uses Harness Connection; remote devices get a distinct TLS carrier. */
 export function mountLink(ctx, config = {}) {
   return hostScope(ctx)(() => mountLinkHost(ctx, config));
@@ -71,11 +73,13 @@ async function mountLinkHost(ctx, config) {
   const cloudAccess = await createCloudAccess(directory, { env: config.env ?? process.env, probe: config.cloudProbe });
   const dispatch = async (input, device) => {
     authorizePairedDevice(device);
-    const owner = input?.id && ctx.get?.('benchgoExecution')?.ownerOfSession?.(input.id);
-    if (owner && ['send', 'cancel', 'respond', 'sessionAction'].includes(input.action)) throw Object.assign(new Error('远端执行会话只读，请在业务宿主的原工单提交输入或控制'), { status: 403, code: 'EXECUTION_INPUT_REQUIRES_OWNER' });
+    const archive = input?.action === 'sessionAction' && ['archive', 'unarchive'].includes(input.operation);
+    const sessionId = input?.id && (input.native === true && input.id.startsWith?.('native:') ? input.id.slice(7) : input.id);
+    const owner = sessionId && ctx.get?.('benchgoExecution')?.ownerOfSession?.(sessionId);
+    if (owner && !archive && ['send', 'cancel', 'respond', 'sessionAction'].includes(input.action)) throw Object.assign(new Error('远端执行会话只读，请在业务宿主的原工单提交输入或控制'), { status: 403, code: 'EXECUTION_INPUT_REQUIRES_OWNER' });
     if (input?.action === 'sessionAction') return sessionActions.dispatch(input, device);
     if (input?.action === 'execution') {
-      if (input.version !== 2 || !['catalog','submit','get','input','control','ack'].includes(input.operation)) throw Object.assign(new Error('不支持的执行协议版本或操作'), { status: 422, code: 'UNSUPPORTED_EXECUTION_PROTOCOL' });
+      if (input.version !== 2 || !executionOperations.includes(input.operation)) throw Object.assign(new Error('不支持的执行协议版本或操作'), { status: 422, code: 'UNSUPPORTED_EXECUTION_PROTOCOL' });
       const execution = ctx.get?.('benchgoExecution');
       if (typeof execution?.dispatch !== 'function') throw Object.assign(new Error('目标执行服务尚不可用'), { status: 422, code: 'UNSUPPORTED' });
       const { principal, sourceProof, ...safe } = input;
@@ -99,12 +103,13 @@ async function mountLinkHost(ctx, config) {
     }
     if (input?.action === 'resources') {
       const page = resourcePage(input);
+      const hasReturnPairing = device.pairingReturn === 'mutual';
       const capabilities = [
         { id: 'resources', available: true, operations: ['projects','sessions','recent','models','capabilities'] },
         ...sessionActions.capabilities(device),
-        { id: 'execution', version: 2, available: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function', reason: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function' ? null : '目标执行服务尚不可用', operations: ['catalog','submit','get','input','control','ack'] },
+        { id: 'execution', version: 2, available: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function', reason: typeof ctx.get?.('benchgoExecution')?.dispatch === 'function' ? null : '目标执行服务尚不可用', operations: executionOperations },
         { id: 'management', available: true, reason: null, operations: ['status','relay-test','settings-read','settings-apply','operation'] },
-        { id: 'reverse', available: false, reason: '反向协作需要另一设备明确配对并建立回程目录', operations: [] },
+        { id: 'reverse', available: hasReturnPairing, reason: hasReturnPairing ? null : '此连接尚未建立回程配对', operations: [] },
       ];
       let state, recent;
       if (page.kind === 'projects' || page.kind === 'recent') {
@@ -118,8 +123,7 @@ async function mountLinkHost(ctx, config) {
         const availableProjects = ctx.workspaceRegistry.list();
         state = { sessions: [...await sessions.list(device, availableProjects), ...native.list(availableProjects, { includeArchived: true })] };
         if (page.kind === 'recent') {
-          if (!recent) throw Object.assign(new Error('目标最近工作区尚未初始化'), { status: 422, code: 'UNSUPPORTED' });
-          state.sessions = state.sessions.filter(row => row.projectId === recent.id);
+          state.sessions = state.sessions.filter(row => row.ungrouped || (recent && row.projectId === recent.id));
         }
       }
       return { ...projectResources(state, { ...input, ...page }, 'local'), hostId: identity ? 'sha256:' + identity.pin : null, protocolVersion: 1 };

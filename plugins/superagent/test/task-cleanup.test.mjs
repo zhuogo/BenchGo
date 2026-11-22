@@ -8,6 +8,7 @@ import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
 import { CLEANUP_PREVIEW_TTL_MS } from '../src/task-cleanup-store.mjs';
+import { createWorkerArchive } from '../src/worker-archive.mjs';
 
 const scope = { owner: 'desktop-owner', mode: 'global' };
 async function fixture(t) {
@@ -29,6 +30,38 @@ async function fixture(t) {
     get database() { return database; }, get tasks() { return tasks; },
     reopen() { database.close(); database = createAssistantRuntimeStore({ directory }); tasks = createTaskManagement({ database, orchestration }); } };
 }
+
+test('local session archive syncs the current Worker only and keeps actual stop independent', async t => {
+  const f = await fixture(t);
+  f.task('dispatch', 'waiting');
+  const historical = f.orchestration.createAssignment('dispatch', {});
+  const [first] = f.orchestration.claimAssignments('worker', { validateMandate: () => true });
+  f.orchestration.prepareRun(historical.id, { ...first, sessionId: 'historical', directory: f.directory });
+  f.orchestration.confirmExecutionStopped(historical.id, first);
+  f.orchestration.finishAssignment(historical.id, { ...first, status: 'cancelled' });
+  const current = f.orchestration.createAssignment('dispatch', {});
+  const [second] = f.orchestration.claimAssignments('worker', { validateMandate: () => true });
+  f.orchestration.prepareRun(current.id, { ...second, sessionId: 'current', directory: f.directory });
+  let onChange;
+  const registry = { archivedSessionIds: [], async archiveSession(sessionId) {
+    const archivedSessionIds = [...this.archivedSessionIds, sessionId];
+    onChange({ domain: 'workspace', table: '', operation: 'put', value: { archivedSessionIds } });
+    this.archivedSessionIds = archivedSessionIds;
+  } };
+  const workerArchive = createWorkerArchive({ ctx: { workspaceRegistry: registry, on(_name, listener) { onChange = listener; } },
+    commander: {}, orchestration: f.orchestration, database: f.database, signal: new AbortController().signal, wake() {} });
+  await registry.archiveSession('historical');
+  await registry.archiveSession('child');
+  assert.equal(f.orchestration.getTask('dispatch').archived, false);
+  await registry.archiveSession('current');
+  const task = f.orchestration.getTask('dispatch');
+  assert.equal(task.archived, true);
+  assert.equal(task.executionControl.stopRequested, true);
+  assert.equal(task.executionControl.stopped, false);
+  assert.deepEqual(f.orchestration.listTasks({ archived: true }).map(row => row.id), ['dispatch']);
+  assert.equal(f.tasks.cleanupHistory({ taskId: 'dispatch' }).length, 1);
+  await workerArchive.dispose();
+});
 
 test('cleanup freezes a persistent list, excludes unsettled work and archives only the human-approved subset', async t => {
   const f = await fixture(t);
@@ -131,6 +164,7 @@ test('pending executor release cannot be hidden even when the task status is ter
   f.orchestration.cancelTask('unsafe');
   const preview = f.tasks.previewCleanup({ scope, includeUnsettled: true });
   assert.equal(preview.items.length, 0); assert.equal(preview.excluded[0].code, 'EXECUTION_PENDING');
+  assert.deepEqual(preview.excluded[0].next, { op: 'stop-and-archive', ids: ['unsafe'], requires: 'explicit-owner-confirmation' });
   assert.equal(f.database.meta('task-presentation:task:unsafe'), null);
 });
 

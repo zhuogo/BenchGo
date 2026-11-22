@@ -39,6 +39,83 @@ test('matching candidates honor exact host or selected type and purpose without 
   assert.deepEqual(protocolCandidates('asr', endpoint({ baseURL: 'https://api.stepfun.com/v1' }), 'streaming'), ['stepfun-sse', 'transcriptions-sse']);
   assert.deepEqual(protocolCandidates('asr', endpoint({ baseURL: 'https://api.stepfun.com.attacker.test/v1' }), 'streaming'), ['openai-websocket', 'transcriptions-sse']);
   assert.deepEqual(protocolCandidates('tts', endpoint({ apiType: 'openai' })), ['speech', 'speech-stream']);
+  assert.deepEqual(protocolCandidates('tts', endpoint({ baseURL: 'https://routergo.cn/api/v1', model: 'Any/@opaque' })), ['speech', 'speech-stream', 'speech-wav']);
+  assert.deepEqual(protocolCandidates('tts', endpoint({ baseURL: 'https://routergo.cn.example.test/api/v1' })), ['speech', 'speech-stream']);
+  assert.deepEqual(protocolCandidates('tts', endpoint({ protocol: 'speech-wav' }), 'any', true), ['speech-wav']);
+});
+
+test('RouterGo WAV can be matched, saved and used after reopening the actual voice configuration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'voice-routergo-'));
+  const opened = await new VoiceConfig({ dataDir: directory }).open();
+  const expected = { providerId: 'routergo', model: 'qwen3-tts-flash', voice: 'Chelsie', speed: 1.2 };
+  const baseURL = 'https://routergo.cn/api/v1';
+  const sample = Buffer.from('524946462800000057415645666d74201000000001000100c05d000080bb000002001000646174610400000001000200', 'hex');
+  sample.writeUInt32LE(0x7fffffbf, 4);
+  sample.writeUInt32LE(0x7fffff9b, 40);
+  const requests = [];
+  const providers = { resolve: async id => { assert.equal(id, expected.providerId); return { baseURL, apiKey: 'private-key' }; } };
+  const fetcher = async (url, options) => {
+    assert.equal(url, baseURL + '/audio/speech');
+    assert.equal(options.headers.authorization, 'Bearer private-key');
+    const input = JSON.parse(options.body);
+    requests.push(input);
+    if (input.response_format !== 'wav' || Object.hasOwn(input, 'speed')) return Response.json({ error: { code: 'invalid_parameter' } }, { status: 400 });
+    return new Response(sample, { headers: { 'content-type': 'audio/wav' } });
+  };
+  const handlers = createVoiceHandlers(opened, { providers, fetcher });
+  try {
+    const detection = await handlers.config(json({ action: 'protocol.detect', kind: 'tts', config: expected }));
+    assert.equal(detection.status, 200);
+    const { result } = await detection.json();
+    assert.equal(result.protocol, 'speech-wav');
+    assert.equal(result.attempts.find(item => item.protocol === 'speech-wav').bytes, 4);
+    assert.deepEqual(requests.map(input => [input.response_format, Object.hasOwn(input, 'speed')]), [['pcm', false], ['pcm', false], ['wav', false]]);
+    assert.equal(opened.value.tts.protocol, '');
+    const stored = await handlers.config(json({ action: 'configure', config: { readAloud: true, tts: { ...expected, apiType: result.apiType, protocol: result.protocol } } }));
+    assert.equal(stored.status, 200);
+    const reopened = await new VoiceConfig({ dataDir: directory }).open();
+    assert.deepEqual(reopened.value.tts, { ...expected, baseURL: '', apiKey: '', apiType: 'openai', protocol: 'speech-wav', stream: true });
+    const reloaded = createVoiceHandlers(reopened, { providers, fetcher });
+    try {
+      const before = requests.length;
+      const voice = await reloaded.speech(json({ text: '你好' }));
+      assert.equal(voice.status, 200);
+      assert.equal(voice.headers.get('x-voice-format'), 'pcm_s16le');
+      assert.deepEqual(Buffer.from(await voice.arrayBuffer()), sample.subarray(44));
+      assert.equal(requests.length, before + 1);
+      assert.deepEqual(requests.at(-1), { model: expected.model, voice: expected.voice, input: '你好', response_format: 'wav' });
+    } finally { reloaded.dispose(); }
+  } finally {
+    handlers.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('testing a selected PCM protocol sends the configured speed', async () => {
+  const requests = [];
+  const service = new ProtocolDetection({ fetcher: async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return pcm();
+  } });
+  const result = await service.detect('tts', endpoint({ protocol: 'speech', speed: 1.35 }), { explicit: true });
+  assert.equal(result.status, 'supported');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].speed, 1.35);
+});
+
+test('matching reports supplier model unavailability while trying other protocols', async () => {
+  const replies = [
+    Response.json({ error: { code: 'validation_error' } }, { status: 400 }),
+    Response.json({ error: { code: 'model_unavailable', message: 'private upstream detail' } }, { status: 503 }),
+    Response.json({}, { status: 502 }),
+  ];
+  const service = new ProtocolDetection({ fetcher: async () => replies.shift() });
+  const result = await service.detect('tts', endpoint({ baseURL: 'https://routergo.cn/api/v1' }));
+  assert.equal(result.status, 'inconclusive');
+  assert.match(result.message, /所选模型或语音能力暂不可用/u);
+  assert.equal(result.attempts[1].message, result.message);
+  assert.match(result.attempts[2].message, /HTTP 502/u);
+  assert.doesNotMatch(JSON.stringify(result), /private upstream detail/u);
 });
 
 test('matching tests all candidates and prefers capability before latency', async () => {

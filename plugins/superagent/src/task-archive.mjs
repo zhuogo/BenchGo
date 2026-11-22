@@ -15,7 +15,7 @@ export function taskExecutionExitedSql() {
 /** Archival is an explicit user presentation choice and never follows completion. */
 export function taskPresentation(row, stored = { version: 0 }) {
   const settled = taskIsSettled(row);
-  const current = settled && stored.archiveRevision === (row.instructionRevision ?? 1);
+  const current = (settled || stored.archiveStopAccepted === true) && stored.archiveRevision === (row.instructionRevision ?? 1);
   return { ...stored,
     ...(stored.archived ? { archived: current } : {}),
     ...(stored.completed && (!settled || stored.executionRevision !== (row.instructionRevision ?? 1)) ? { completed: false } : {}) };
@@ -26,8 +26,9 @@ export function taskIsArchived(row, stored) {
 
 /** Apply the same manual visibility predicate before ORDER/LIMIT/OFFSET. */
 export function taskArchiveSql() {
-  return `(${taskExecutionExitedSql()} AND EXISTS (
+  return `(EXISTS (
     SELECT 1 FROM task_meta tm WHERE tm.key='task-presentation:task:' || sa_tasks.id
       AND json_extract(tm.value,'$.archiveRevision')=sa_tasks.instruction_revision
+      AND (${taskExecutionExitedSql()} OR json_extract(tm.value,'$.archiveStopAccepted')=1)
       AND json_extract(tm.value,'$.archived')=1))`;
 }

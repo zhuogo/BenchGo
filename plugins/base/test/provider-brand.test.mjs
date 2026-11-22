@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { providerBrand, providerInitial } from '../client/provider-brand.mjs';
 import { providersForTool } from '../client/model-picker-state.mjs';
+import { providerTemplates, templateProviderId } from '../shared/provider-templates.mjs';
 const catalog = JSON.parse(readFileSync(new URL('../client/assets/provider-brands/catalog.json', import.meta.url)));
 test('registered providers resolve local brand marks while custom routes retain initials', () => {
   assert.equal(providerBrand('deepseek'), 'deepseek');
@@ -40,7 +41,7 @@ test('registered providers resolve local brand marks while custom routes retain 
   assert.equal(providerInitial('RouterGo'), 'R');
   assert.equal(providerInitial('我的供应商'), '我');
   assert.equal(providerInitial('🚀 API'), '🚀');
-  const vendorOnly = new Set(['bailing', 'cohere', 'inception', 'liquid', 'perplexity', 'poolside', 'tencent', 'volcengine']);
+  const vendorOnly = new Set(['bailing', 'cohere', 'inception', 'liquid', 'perplexity', 'poolside', 'tencent']);
   for (const brand of Object.keys(catalog)) {
     assert.equal(providerBrand(brand), vendorOnly.has(brand) ? null : brand);
     if (brand === 'bailing') {
@@ -57,4 +58,14 @@ test('custom route identity stays custom in both builtin and delegated supplier 
   const groups = [{ id: 'deepseek', name: 'My API', models: [{ id: 'model' }] }, { id: 'commander-codex', name: 'Codex', models: [{ id: 'opaque' }] }];
   const data = { providers: [{ id: 'deepseek', name: 'My API', declared: true, tools: ['deepseek', 'codex'] }], routes: [{ tool: 'codex', providerId: 'deepseek', providerName: 'My API', modelId: 'opaque', nativeModelId: 'model' }] };
   for (const tool of ['deepseek', 'codex']) assert.equal(providersForTool(groups, data, tool)[0].declared, true);
+});
+
+test('saved template routes resolve existing artwork by exact route identity', () => {
+  for (const template of providerTemplates) {
+    const route = templateProviderId(template.kind);
+    assert.equal(providerBrand(route, true), template.brand);
+    assert.equal(providerBrand(route.toUpperCase(), true), null);
+    assert.equal(providerBrand(` ${route}`, true), null);
+    if (template.brand) assert.ok(catalog[template.brand], template.brand);
+  }
 });

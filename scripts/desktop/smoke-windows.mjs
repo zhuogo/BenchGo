@@ -73,6 +73,7 @@ try {
   const assertProfile = async () => {
     const report = await call('/api/benchgo-packaging-probe', {});
     if (report.modules.length !== 5 || report.modules.some(row => !row.available || row.state !== 2)) throw new Error(`Packaged module activation failed: ${JSON.stringify(report)}`);
+    await call('/api/commander/assistant', { action: 'state' });
     const boot = ready.injections?.find(item => item.kind === 'global' && item.name === '__DSH_BOOT__')?.value;
     if (!boot?.entries?.some(entry => entry.id === 'benchgo-plugin') || boot.entries.some(entry => entry.id === 'benchgo')) throw new Error('Packaged unified BenchGo client registration is missing or uses the retired id');
     const updates = await call('/api/commander/updates', { action: 'status' });

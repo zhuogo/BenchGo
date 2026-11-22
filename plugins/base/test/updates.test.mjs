@@ -190,7 +190,7 @@ test('mounted updates identify only the official running engine manifest across 
   const root = await mkdtemp(join(tmpdir(), 'benchgo-update-engine-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const cases = [
-    { label: 'desktop', path: 'resources/app.asar/dsh/node_modules/@deepseek-ai/dsh', name: 'desktop', manifest: { name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }, expected: '0.2.2-rc.1' },
+    { label: 'desktop', path: 'resources/app.asar/dsh/node_modules/@deepseek-ai/dsh', name: 'desktop', manifest: { name: '@deepseek-ai/dsh', version: '0.2.2-rc.5' }, expected: '0.2.2-rc.5' },
     { label: 'server', path: 'runtime/node_modules/@deepseek-ai/dsh', name: 'web', manifest: { name: '@deepseek-ai/dsh', version: '1.2.3' }, expected: '1.2.3' },
     { label: 'source', path: 'source/apps/cli', name: 'desktop', manifest: { name: '@deepseek-ai/dsh', version: '2.3.4-beta.1' }, expected: '2.3.4-beta.1' },
     { label: 'wrong-package', manifest: { name: 'benchgo-desktop', version: '9.9.9' } },

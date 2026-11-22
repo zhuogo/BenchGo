@@ -71,7 +71,7 @@ test('catalog exposes only implemented formats and native types reuse compatible
   assert.equal(protocolDescriptor('asr', 'stepfun-sse').transport, 'sse');
   assert.equal(protocolDescriptor('tts', 'speech-stream').streaming, true);
   assert.equal(protocolDescriptor('tts', 'speech').streaming, true);
-  assert.deepEqual(protocolOptions('tts', 'stepfun').map(item => item.value), ['speech', 'speech-stream', 'stepfun-speech-sse', 'stepfun-speech-websocket']);
+  assert.deepEqual(protocolOptions('tts', 'stepfun').map(item => item.value), ['speech', 'speech-stream', 'speech-wav', 'stepfun-speech-sse', 'stepfun-speech-websocket']);
   assert.equal(protocolDescriptor('tts', 'stepfun-speech-websocket').inputStreaming, true);
   assert.equal(protocolDescriptor('tts', 'speech').inputStreaming, false);
   assert.equal(protocolOptions('asr', 'openai').some(item => item.apiType === 'stepfun'), false);

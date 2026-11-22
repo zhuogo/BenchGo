@@ -13,7 +13,7 @@ const tar = createRequire(new URL('../../base/package.json', import.meta.url))('
 const digest = value => createHash('sha256').update(value).digest('hex');
 const keys = generateKeyPairSync('ed25519');
 const publicKey = keys.publicKey.export({ type: 'spki', format: 'pem' });
-const expected = { schemaVersion: 1, delivery: 'online', releaseVersion: '2.0.0', pluginVersion: '1.2.3', harnessVersion: '0.2.2-rc.1', harnessCommit: 'a'.repeat(40), sourceDigest: 'c'.repeat(64) };
+const expected = { schemaVersion: 1, delivery: 'online', releaseVersion: '2.0.0', pluginVersion: '1.2.3', harnessVersion: '0.2.2-rc.5', harnessCommit: 'a'.repeat(40), sourceDigest: 'c'.repeat(64) };
 
 async function fixture(t, { corruptArchive = false, engine = expected.harnessVersion, badSignature = false, duplicate = false, linked = false, slow = false, delivery = 'online' } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-server-resources-'));

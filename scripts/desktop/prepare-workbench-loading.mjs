@@ -23,7 +23,7 @@ export function workbenchLoadingPlugin(documentPath) {
 }
 
 export function verifyWorkbenchLoadingBundle(source) {
-  for (const required of ['data-benchgo-workbench-loading', 'data-dsh-boot-spinner', 'startup-dot-lift', '--dsh-boot-arc']) {
+  for (const required of ['data-benchgo-workbench-loading', 'data-dsh-boot-spinner', 'bg-loading-character', 'bg-loading-hit']) {
     if (!source.includes(required)) throw new Error(`Compiled desktop is missing workbench loading presentation: ${required}`);
   }
 }

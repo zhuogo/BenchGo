@@ -62,7 +62,7 @@ export function deliverySuppression(database, row) {
   }
   if (payload.type === 'task.attention') {
     const attention = database.attentions(task.id).find(entry => entry.id === payload.attentionId);
-    if (attention?.answerTriggerId) return 'attention-resolved';
+    if (attention?.answerTriggerId || attention?.state === 'superseded') return 'attention-resolved';
   }
   return null;
 }

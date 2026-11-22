@@ -262,7 +262,15 @@ function ProviderSettings({ name, draft, config, catalog, update, clearKey, togg
     </div>
     {providerId && !manualModel && !loading && !models.length && <p className="voice-provider-hint">没有可选模型，可手动填写。</p>}
     {error && <p role="status" className="voice-settings-error">{error}；可手动填写模型 ID。</p>}
-    {name === 'tts' && <div className="voice-sound-fields"><label>音色<input type="text" autoComplete="off" placeholder="留空使用默认音色" value={draft.voice} onChange={event => update({ voice: event.target.value })} /></label><label className="voice-speed-field"><span className="voice-field-label">语速 <output>{normalizeTtsSpeed(draft.speed).toFixed(2)}×</output></span><input type="range" min={TTS_SPEED_MIN} max={TTS_SPEED_MAX} step="0.05" value={normalizeTtsSpeed(draft.speed)} aria-label="语速" onChange={event => update({ speed: normalizeTtsSpeed(event.target.value) })} /></label></div>}
+    {name === 'tts' && <div className="voice-sound-fields">
+      <label>音色<input type="text" autoComplete="off" placeholder="留空使用默认音色" value={draft.voice} onChange={event => update({ voice: event.target.value })} /></label>
+      {draft.protocol === 'speech-wav' ? <div className="voice-speed-field voice-speed-provider">
+        <span>语速</span><p className="voice-provider-hint">使用供应商默认语速</p>
+      </div> : <label className="voice-speed-field">
+        <span className="voice-field-label">语速 <output>{normalizeTtsSpeed(draft.speed).toFixed(2)}×</output></span>
+        <input type="range" min={TTS_SPEED_MIN} max={TTS_SPEED_MAX} step="0.05" value={normalizeTtsSpeed(draft.speed)} aria-label="语速" onChange={event => update({ speed: normalizeTtsSpeed(event.target.value) })} />
+      </label>}
+    </div>}
     {!supported && <p role="alert" className="voice-settings-error">当前协议 {draft.protocol} 已不支持，请在高级设置中重新选择。</p>}
     <ProtocolStatus check={check} name={name} draft={draft} config={config} justSaved={justSaved} />
     <Disclosure title="高级设置" open={advanced} onOpenChange={setAdvanced} className="voice-connection-settings">

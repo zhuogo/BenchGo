@@ -21,6 +21,8 @@ function loadDeepSeekCatalog() {
 }
 
 const selector = fileURLToPath(new URL('../client/provider-settings.jsx', import.meta.url));
+const providerSelection = fileURLToPath(new URL('../client/provider-selection.ts', import.meta.url));
+const templates = fileURLToPath(new URL('../shared/provider-templates.mjs', import.meta.url));
 const deepSeekProvider = fileURLToPath(new URL('../client/deepseek-provider.mjs', import.meta.url));
 const routerGoAccount = fileURLToPath(new URL('../client/routergo-account.jsx', import.meta.url));
 const accountReference = fileURLToPath(new URL('../shared/routergo-account.mjs', import.meta.url));
@@ -29,11 +31,11 @@ const reasoningState = fileURLToPath(new URL('../client/model-reasoning-state.mj
 const capabilityEditor = fileURLToPath(new URL('../client/model-capabilities.jsx', import.meta.url));
 const profileMatch = fileURLToPath(new URL('../client/model-profile.jsx', import.meta.url));
 const catalogFilter = fileURLToPath(new URL('../client/model-catalog-filter.jsx', import.meta.url));
+const modelOperations = fileURLToPath(new URL('../client/model-operations.jsx', import.meta.url));
 const textSearch = fileURLToPath(new URL('packages/util/text-search/src/index.ts', harness));
 const capabilityFacts = fileURLToPath(new URL('../shared/model-capabilities.mjs', import.meta.url));
 const loading = fileURLToPath(new URL('../../shared/client/ui/loading.jsx', import.meta.url));
 const select = fileURLToPath(new URL('../../shared/client/select.jsx', import.meta.url));
-const disclosure = fileURLToPath(new URL('../../shared/client/ui/collapsible.jsx', import.meta.url));
 const installedReasoning = () => Object.fromEntries(catalogProviderIds().flatMap(provider => {
   const entries = [...catalogModels(provider)].flatMap(([id, model]) => {
     if (!model.reasoning) return [];
@@ -47,6 +49,64 @@ const once = (source, before, after, label) => {
   return source.replace(before, after);
 };
 
+function replaceSection(source, start, end, replacement, label) {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from);
+  if (from < 0 || to <= from) throw new Error('Official Models UI changed: ' + label);
+  return source.slice(0, from) + replacement + source.slice(to);
+}
+
+function adaptProviderAdd(source) {
+  source = once(source, 'import { useId, useState }', 'import { useState }', 'remove add tab ids');
+  source = once(source, ', Modal, SegmentedControl }', ', Modal }', 'remove add tabs');
+  source = replaceSection(source, '/**\n * The two ways the add card', '/** The child slots', '', 'add modes type');
+  source = replaceSection(source, '/** A dormant directory row', '/** Values that vary', '', 'add mode types');
+  source = replaceSection(source, "  const [addMode, setAddMode]", "  const [deleteTarget", [
+    '  const [selection, setSelection] = useState<ProviderSelection | undefined>(undefined)',
+    '  const [addBusy, setAddBusy] = useState(false)',
+    '',
+  ].join('\n'), 'add state');
+  source = replaceSection(source, '  /**\n   * Close the add card whole.', '  const closeEditor', [
+    '  const closeAdd = (): void => {',
+    '    setEditing(undefined)',
+    '    setSelection(undefined)',
+    '    setAddOpen(false)',
+    '    setAddBusy(false)',
+    '  }', '',
+  ].join('\n'), 'close provider add form');
+  source = replaceSection(source, '  const configurable =', '\n  return (', [
+    "  const piAi = state.namespaces.get('llm-pi-ai')",
+    '  const protocols = protocolChoices(piAi, schema)',
+    '  const reasoningLevels = reasoningLevelChoices(piAi, schema)',
+    '  const taken = state.rows.map(row => row.entry.provider)',
+    '',
+  ].join('\n'), 'add choices');
+  source = replaceSection(source, '        {addOpen\n', '      <Modal', [
+    '        {addOpen ? (',
+    "          <div className={styles['addCard']}>",
+    '            <ProviderAddForm selection={selection} protocols={protocols}',
+    '              busy={addBusy} onSelect={setSelection} onBack={() => setSelection(undefined)} onClose={closeAdd}>',
+    '              {selection && piAi !== undefined && <CustomProviderCard key={selection.id}',
+    '                preset={selection.type === "custom" ? undefined : selection}',
+    '                taken={taken} protocols={protocols} reasoningLevels={reasoningLevels} revision={piAi.revision}',
+    '                operations={operations} t={t} readOnly={!state.writable}',
+    '                onClose={closeEditor} onBusyChange={setAddBusy} />}',
+    '            </ProviderAddForm>',
+    '          </div>',
+    '        ) : protocols.length > 0 && (',
+    "          <div className={styles['addActions']}>",
+    "            <button type=\"button\" className={styles['addButton']} disabled={!state.writable || state.status !== 'ready'}",
+    '              onClick={() => { setEditing(undefined); setAddOpen(true) }}>',
+    "              <IconPlusOutlineRegular size={14} />{t('add')}",
+    '            </button>',
+    '          </div>',
+    '        )}',
+    '      </div>',
+    "      {renderSlot('settings.models.footer', {})}", '',
+  ].join('\n'), 'provider add form');
+  return source;
+}
+
 function adaptProtocolSelect(source) {
   source = once(source, '<select\n', '<Select\n', 'protocol select opening');
   source = once(source, '</select>', '</Select>', 'protocol select closing');
@@ -55,17 +115,9 @@ function adaptProtocolSelect(source) {
   return 'import { Select } from ' + JSON.stringify(select) + ';\n' + source;
 }
 
-function foldProtocolField(source, indent) {
-  const field = indent + "<div className={styles['field']}>\n" + indent + "  <span className={styles['fieldLabel']}>{t('customApi')}</span>";
-  const start = source.indexOf(field);
-  const end = source.indexOf('\n' + indent + '</div>', start) + ('\n' + indent + '</div>').length;
-  if (start < 0 || end <= start || source.indexOf(field, start + 1) >= 0) throw Error('Official Models UI changed: protocol field');
-  const wrapped = indent + '<Disclosure className="cmd-provider-advanced" title="高级连接设置">\n' + source.slice(start, end) + '\n' + indent + '</Disclosure>';
-  return 'import { Disclosure } from ' + JSON.stringify(disclosure) + ';\n' + once(source, source.slice(start, end), wrapped, 'advanced protocol setting');
-}
-
 function adaptModelCatalog(source, deepSeek) {
   const prefix = deepSeek ? 'props.' : '';
+  source = 'import { ContextOptimization } from ' + JSON.stringify(modelOperations) + ';\n' + source;
   source = 'import { useState as useFilterState } from "react";\nimport { usePublicModelProfiles } from ' + JSON.stringify(profileMatch)
     + ';\nimport { ModelCatalogFilter, ModelVendorFilter, filterModelRows, useCatalogModelProfiles } from ' + JSON.stringify(catalogFilter) + ';\n' + source;
   source = once(source, '  return (\n    <section className={styles[\'modelCatalog\']}', `  const [filter, setFilter] = useFilterState({ query: '', category: '', vendor: '' })
@@ -81,7 +133,29 @@ function adaptModelCatalog(source, deepSeek) {
   source = once(source, meta, '', 'remove catalog provenance label');
   source = once(source, "className={styles['modelCatalogTitle']}>" + '{' + prefix + "t('models')}</span>\n        </div>", "className={styles['modelCatalogTitle']}>" + '{' + prefix + "t('models')}</span>\n        </div>\n        <ModelCatalogFilter filter={filter} onChange={setFilter} />", 'catalog filter toolbar');
   const nextLine = deepSeek ? "      <AnimatedRows" : "      {models.length === 0";
-  source = once(source, '      </div>\n' + nextLine, '      </div>\n      <ModelVendorFilter profiles={profiles} filter={filter} onChange={setFilter} />\n' + nextLine, 'catalog vendor filters');
+  const actions = deepSeek
+    ? '        <DeepSeekCatalogSync providerId={props.providerId} models={props.models} onChange={props.onChange} disabled={props.disabled} />\n        <ContextOptimization models={props.models} onChange={props.onChange} disabled={props.disabled} defaultMaxTokens={props.defaultMaxTokens} />'
+    : `        {props.syncAction ?? (
+          <button type="button" className={styles['secondaryButton'] + ' cmd-model-discover'} aria-busy={busy}
+            ref={syncButton} aria-expanded={pickerOpen}
+            disabled={disabled || busy || !askable || props.probeBlocked !== undefined}
+            title={props.probeBlocked !== undefined ? t(props.probeBlocked) : askable ? undefined : t('fetchNeedsBaseUrl')}
+            onClick={() => { if (pickerOpen) closePicker(); else void fetchModels() }}>
+            {busy ? '正在同步…' : '同步模型'}
+          </button>
+        )}
+        <ContextOptimization models={models} onChange={onChange} disabled={disabled || busy} baseURL={probe.baseURL} defaultMaxTokens={props.defaultMaxTokens} discoveredModels={discoveredModels} />`;
+  source = once(source, '      </div>\n' + nextLine, [
+    '        {props.actions && <div className="cmd-model-list-actions">{props.actions}</div>}',
+    '      </div>',
+    '      <div className="cmd-model-catalog-tools">',
+    '        <ModelVendorFilter profiles={profiles} filter={filter} onChange={setFilter} />',
+    '        <div className="cmd-model-list-actions">',
+    actions,
+    '        </div>',
+    '      </div>',
+    nextLine,
+  ].join('\n'), 'catalog secondary toolbar');
   source = once(source, '<AnimatedRows className={styles[\'modelList\'] as string} rowKeys={rowState.rows.map(row => String(row.key))} ready resetKey="">', '<div className={styles[\'modelList\']}>', 'direct grid layout');
   source = once(source, '</AnimatedRows>', '</div>', 'close model grid');
   source = once(source, 'AnimatedRows, ', '', 'remove unused row animation');
@@ -91,7 +165,40 @@ function adaptModelCatalog(source, deepSeek) {
           return (`, 'render filtered rows');
   source = once(source, '          />\n        ))}', '          />\n          )\n        })}', 'close filtered model rows');
   const add = deepSeek ? "props.onChange([...props.models.map(model => ({ ...model })), { id: '' }])" : "onChange([...models, { id: '' }])";
-  return once(source, 'onClick={() => { ' + add + ' }}', "onClick={() => { setFilter({ query: '', category: '', vendor: '' }); " + add + ' }}', 'reveal newly added model');
+  return once(source, 'onClick={() => { ' + add + ' }}', "onClick={() => { setFilter({ query: '', category: '', vendor: '' }); rowState.add() }}", 'expand newly added model');
+}
+
+function inlineModelDiscovery(source) {
+  source = once(source, 'useEffect, useMemo, useState', 'useEffect, useMemo, useRef, useState', 'model discovery focus refs');
+  source = once(source, ', Modal }', ' }', 'remove nested discovery modal');
+  source = once(source, "  const [candidateQuery, setCandidateQuery] = useState('')", [
+    "  const [candidateQuery, setCandidateQuery] = useState('')",
+    '  const syncButton = useRef<HTMLButtonElement>(null)',
+    '  const candidateSearch = useRef<HTMLInputElement>(null)',
+    '  const pickerOpen = candidates !== undefined',
+    '  useEffect(() => { if (pickerOpen) candidateSearch.current?.focus() }, [pickerOpen])',
+  ].join('\n'), 'focus inline discovery');
+  source = once(source, '  const closePicker = (): void => {', '  const closePicker = (): void => {\n    syncButton.current?.focus()', 'restore discovery trigger focus');
+  const start = source.indexOf('      <Modal\n');
+  const end = source.indexOf('      </Modal>', start);
+  if (start < 0 || end < 0) throw Error('Official model discovery picker changed');
+  const picker = source.slice(start, end);
+  const bodyStart = picker.indexOf("        <div className={styles['candidateToolbar']}>");
+  const footer = picker.match(/        footer=\{\(\n          <>\n([\s\S]*?)\n          <\/>/u)?.[1];
+  if (bodyStart < 0 || footer === undefined) throw Error('Official model discovery controls changed');
+  const body = once(picker.slice(bodyStart), '            type="search"', '            type="search"\n            ref={candidateSearch}', 'bind discovery search');
+  source = once(source, picker + '      </Modal>\n', '', 'move model discovery controls');
+  return once(source, '      {models.length === 0', [
+    "      {failure !== undefined ? <p className={styles['error']} role=\"alert\">{failure}</p> : null}",
+    '      {pickerOpen && <section className="cmd-model-discovery-panel" aria-label={t(\'fetchTitle\')}>',
+    "        <h3>{t('fetchTitle')}</h3>",
+    body.trimEnd(),
+    '        <div className="cmd-model-list-actions">',
+    footer,
+    '        </div>',
+    '      </section>}',
+    '      {models.length === 0',
+  ].join('\n'), 'render discovery within the current catalog');
 }
 
 /** Strict build-only adaptation; the official submodule always stays untouched. */
@@ -99,7 +206,7 @@ export function officialModelsUi() {
   return { name: 'commander-official-models-ui', setup(build) {
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ModelsSection\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
-      source = 'import { ModelSettingsNotice, ProviderSelect, ProviderBrandIcon, prioritizeRouterGo, routerGo } from ' + JSON.stringify(selector) + ';\n' + source;
+      source = 'import { ModelSettingsNotice, ProviderAddForm, ProviderBrandIcon, prioritizeRouterGo, routerGo } from ' + JSON.stringify(selector) + ';\n' + source;
       source = 'import { RouterGoAccount, RouterGoBrand } from ' + JSON.stringify(routerGoAccount) + ';\n' + source;
       source = 'import { isRouterGoAccountReference } from ' + JSON.stringify(accountReference) + ';\n' + source;
       source = 'import { UIIcon } from ' + JSON.stringify(fileURLToPath(new URL('../client/iconsax.jsx', import.meta.url))) + ';\n' + source;
@@ -127,27 +234,7 @@ export function officialModelsUi() {
         '        </div>',
         "        <ModelSettingsNotice key={errorText} message={`${t('loadFailed')}: ${errorText}`} />",
       ].join('\n'), 'provider directory error feedback');
-      source = once(source, "const [addMode, setAddMode] = useState<AddMode>('catalog')", "const [addMode, setAddMode] = useState<AddMode>('catalog')\n  const [providerPreset, setProviderPreset] = useState<any>(undefined)", 'preset state');
-      const start = source.indexOf('                      <select\n');
-      const end = source.indexOf('                      </select>', start);
-      if (start < 0 || end < 0 || source.indexOf('                      <select\n', start + 1) !== -1) throw new Error('Official Models UI changed: provider select');
-      const original = source.slice(start, end + '                      </select>'.length);
-      if (!original.includes('value={draft.target.provider}') || !original.includes('setEditing(targetOf(picked.row))')) throw new Error('Official Models UI changed: provider selection semantics');
-      const fieldStart = source.lastIndexOf('                    <div className={styles[\'field\']}>', start);
-      const fieldEnd = source.indexOf('                    </div>', end) + '                    </div>'.length;
-      if (fieldStart < 0 || fieldEnd < end) throw new Error('Official Models UI changed: provider field');
-      source = source.slice(0, fieldStart) + source.slice(fieldEnd);
-      source = once(source, '              <div className={styles[\'addModes\']}>', '              <div className={styles[\'addModes\']}>\n' + [
-        '                      <ProviderSelect',
-        '                        value={mode === "custom" ? providerPreset?.id ?? "__custom" : draft?.target.provider}',
-        '                        options={state.rows.filter(row => row.entry.provider !== "deepseek-account" && (row.configured || addable.some(candidate => candidate.row.entry.provider === row.entry.provider))).map(row => ({ id: row.entry.provider, name: row.entry.displayName, declared: row.entry.declared === true }))}',
-        "                        label={t('provider')} disabled={catalogBusy || customBusy}",
-        '                        taken={state.rows.map(row => row.entry.provider)}',
-        '                        customEnabled={customEnabled}',
-        '                        onChange={(id) => { const picked = addable.find(candidate => candidate.row.entry.provider === id); setProviderPreset(undefined); if (picked) { setEditing(targetOf(picked.row)); setAddMode("catalog"); setVisited(previous => new Set([...previous, "catalog"])) } else { const row = state.rows.find(candidate => candidate.entry.provider === id); if (row) { setAddOpen(false); setEditing(targetOf(row)) } } }}',
-        "                        onPreset={(preset) => { setProviderPreset(preset); setAddMode('custom'); setVisited(previous => new Set([...previous, 'custom'])) }}",
-        '                      />',
-      ].join('\n'), 'provider picker');
+      source = 'import type { ProviderSelection } from ' + JSON.stringify(providerSelection) + ';\n' + adaptProviderAdd(source);
       source = once(source, "                  <span className={styles['rowName']}>{row.entry.displayName}</span>", [
         '                  {isRouterGo ? <RouterGoBrand /> : <>',
         '                    <ProviderBrandIcon id={row.entry.provider} name={row.entry.displayName} declared={row.entry.declared === true} />',
@@ -155,15 +242,15 @@ export function officialModelsUi() {
         '                  </>}',
       ].join('\n'), 'configured provider brand');
       source = once(source, "                ? renderProviderEditor({\n                  target,\n                  row,", "                ? renderProviderEditor({\n                  target,\n                  row,\n                  hideTitle: true,", 'reuse configured provider heading');
-      source = once(source, "'readOnly' | 'onClose'\n> {", "'readOnly' | 'onClose' | 'hideTitle'\n> {", 'provider editor heading option');
+      source = once(source, "'readOnly' | 'onClose'\n> {", "'readOnly' | 'onClose' | 'hideTitle' | 'renderSyncAction'\n> {", 'provider editor options');
       source = once(source, "                </span>\n                <span className={styles['rowActions']}>", "                  {open && target.provider !== target.displayName ? <span className={styles['editorRoute']}>{target.provider}</span> : null}\n                </span>\n                <span className={styles['rowActions']}>", 'show expanded provider route in heading');
       source = once(source, "aria-label={providerCopy(t('editProvider'), target)}", "aria-label={providerCopy(t('editProvider'), target)}\n                        aria-expanded={open}", 'provider editor expanded state');
       source = once(source, '  const configured = state.rows.filter(row => row.configured)', '  const configured = prioritizeRouterGo(state.rows.filter(row => row.configured), undefined, row => row.entry.provider)', 'prioritize RouterGo');
       source = once(source, "      <ul className={styles['rows']}>\n        {configured.map", [
         "      <ul className={styles['rows'] + ' cmd-routergo-provider-list'}>",
         "        {!configured.some(row => row.entry.provider === routerGo.id) ? <li className={styles['rowCard'] + ' cmd-routergo-row'}>",
-        "          <RouterGoAccount writable={state.writable && customEnabled} ready={state.status === 'ready'} onSaved={() => announceSaved({ provider: routerGo.id, displayName: routerGo.name })} onEdit={() => {",
-        "            setSavedTarget(undefined); setEditing(undefined); setProviderPreset(routerGo); setAddMode('custom'); setVisited(new Set(['custom'])); setAddOpen(true)",
+        "          <RouterGoAccount writable={state.writable && protocols.includes(routerGo.protocol)} ready={state.status === 'ready'} onSaved={() => announceSaved({ provider: routerGo.id, displayName: routerGo.name })} onEdit={() => {",
+        "            setEditing(undefined); setSelection({ type: 'routergo', ...routerGo }); setAddOpen(true)",
         "            requestAnimationFrame(() => document.querySelector('[data-routergo-manual-draft] input[aria-label]')?.focus())",
         "          }} />",
         '        </li> : null}',
@@ -192,30 +279,22 @@ export function officialModelsUi() {
       source = once(source, "            : <p role=\"alert\" className={styles['error']}>{row.entry.error}</p>", '            : <Tooltip label={row.entry.error}><span className="cmd-provider-error-mark" tabIndex={0} role="img" aria-label={row.entry.error}><UIIcon name="close" size={16} /></span></Tooltip>', 'provider row error indicator');
       source = once(source, "                <span className={styles['rowActions'] + (isRouterGo ? ' cmd-routergo-actions' : '')}>\n                  {login}", "                <span className={styles['rowActions'] + (isRouterGo ? ' cmd-routergo-actions' : '')}>\n                  {error}\n                  {login}", 'place provider error indicator in header');
       source = once(source, "                onSaved={() => { closeAdd(); announceSaved(target) }} /> : renderHeader()}\n              {error}", "                onSaved={() => { closeAdd(); announceSaved(target) }} /> : renderHeader()}", 'remove separate provider error row');
+      const editorStart = '              {open\n                ? renderProviderEditor({';
+      const editorEnd = '            </li>';
+      const start = source.indexOf(editorStart);
+      const end = source.indexOf(editorEnd, start);
+      if (start < 0 || end < 0) throw Error('Official Models UI changed: configured provider editor');
+      const editor = source.slice(start, end).trim().slice(1, -1);
+      source = once(source, source.slice(start, end), '              {!isRouterGo && renderEditor()}\n', 'render unmanaged provider editor');
+      source = once(source, '          const renderHeader =', '          const renderEditor = (syncing = false, renderSyncAction?: ProviderEditorRenderProps["renderSyncAction"]) => ' +
+        editor.replace('hideTitle: true,', 'hideTitle: true, renderSyncAction,').replace('readOnly: !state.writable,', 'readOnly: !state.writable || syncing,')
+        + '\n          const renderHeader =', 'reuse editor inside RouterGo account');
+      source = once(source, 'available={routerGoAvailable}', 'available={routerGoAvailable} editorOpen={open} renderEditor={renderEditor} refreshProviders={() => controller.load()}', 'RouterGo catalog sync owner');
       source = once(source, "        {deleteFailure === undefined ? null : <p className={styles['error']}>{deleteFailure}</p>}", '        {deleteFailure === undefined ? null : <ModelSettingsNotice key={deleteFailure} message={deleteFailure} />}', 'provider deletion error notification');
       source = once(source, "                  {row.removable\n                    ? (", "                  {row.removable ? (() => {\n                    const removeButton = (", 'RouterGo remove tooltip trigger');
       source = once(source, "                      </button>\n                    )\n                    : null}", "                      </button>\n                    )\n                    return isRouterGo ? <Tooltip label={providerCopy(t('removeProvider'), target)}>{removeButton}</Tooltip> : removeButton\n                  })() : null}", 'RouterGo remove tooltip');
-      source = once(source, "            <div className={styles['addCard']}>", "            <div className={styles['addCard']} data-routergo-manual-draft={providerPreset?.id === routerGo.id ? true : undefined}>", 'RouterGo manual draft focus');
-      source = once(source, '                    <CustomProviderCard\n', '                    <CustomProviderCard key={providerPreset?.id ?? "custom"} preset={providerPreset}\n', 'custom preset prop');
-      source = once(source, "              <div className={styles['addModes']}>", "              <div className={styles['addModes']}>\n                <button type=\"button\" className={styles['iconButton'] + ' cmd-model-add-close'} aria-label={t('close')} disabled={catalogBusy || customBusy} onClick={closeAdd}><UIIcon name=\"close\" size={16} /></button>", 'close provider form from its header');
-      source = once(source, "{row.entry.declared === true\n", "{row.entry.declared === true && row.entry.provider !== routerGo.id\n", 'builtin provider classification');
-      source = once(source, "                {bothOffered\n", "                {providerPreset ? <div className={styles['editorHeader']}><ProviderBrandIcon id={providerPreset.id} /><span className={styles['editorTitle']}>{providerPreset.name}</span></div> : bothOffered\n", 'builtin provider heading');
-      source = once(source, "{t(mode === 'catalog' ? 'addCatalogHint' : 'addCustomHint')}", "{providerPreset ? '填写 API 密钥，获取并选择要使用的模型。' : t(mode === 'catalog' ? 'addCatalogHint' : 'addCustomHint')}", 'builtin provider guidance');
-      // The add card opens on BenchGo's gateway instead of the catalog's first row,
-      // unless that route already exists; every catalog row stays one choice away.
-      source = once(source, [
-        '                    const first = addable[0]',
-        '                    const initial: AddMode = catalogEnabled ? \'catalog\' : \'custom\'',
-        '                    setSavedTarget(undefined)',
-        '                    setEditing(first === undefined ? undefined : targetOf(first.row))',
-      ].join('\n'), [
-        '                    const first = addable[0]',
-        '                    const routerFree = customEnabled && !state.rows.some(row => row.entry.provider === routerGo.id)',
-        '                    const initial: AddMode = routerFree || !catalogEnabled ? \'custom\' : \'catalog\'',
-        '                    setSavedTarget(undefined)',
-        '                    setProviderPreset(routerFree ? routerGo : undefined)',
-        '                    setEditing(routerFree || first === undefined ? undefined : targetOf(first.row))',
-      ].join('\n'), 'default add target');
+      source = once(source, "          <div className={styles['addCard']}>", "          <div className={styles['addCard']} data-routergo-manual-draft={selection?.type === 'routergo' ? true : undefined}>", 'RouterGo manual draft focus');
+      source = replaceSection(source, '                  {/* Only the adapter can tell a hand-declared route', '                  {/* The store keeps the account row', '', 'remove custom badge');
       source = source.replace(/^  const \[savedTarget, setSavedTarget\].*\n/m, '');
       source = source.replace(/^ *setSavedTarget\(undefined\);? *\n?/gm, '');
       source = source.replace(/  const announceSaved = [\s\S]*?\n  }\n/, '  const refreshProviders = (): void => { void controller.load() }\n');
@@ -223,7 +302,6 @@ export function officialModelsUi() {
       source = source.replaceAll('announceSaved({ provider: routerGo.id, displayName: routerGo.name })', 'refreshProviders()');
       source = once(source, 'const closeEditor = (changed: boolean, target: ProviderIdentity)', 'const closeEditor = (changed: boolean)', 'remove saved row identity from editor close');
       source = source.replaceAll('closeEditor(changed, target)', 'closeEditor(changed)');
-      source = once(source, 'closeEditor(changed, draft.target)', 'closeEditor(changed)', 'close the added provider editor');
       source = source.replace(/  \/\/ The saved provider as the directory currently names it\.[\s\S]*?(?=  \/\/ One fact decides both first-run postures)/, '');
       source = source.replace(/^      \{savedIdentity === undefined[\s\S]*?^        \)}\n/m, '');
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
@@ -232,6 +310,8 @@ export function officialModelsUi() {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
       source = adaptProtocolSelect(source);
       source = 'import { useRef } from "react";\nimport { resolveModelProfiles } from ' + JSON.stringify(profileMatch) + ';\n' + source;
+      source = 'import { normalizeTemplateBaseURL } from ' + JSON.stringify(templates) + ';\n' + source;
+      source = 'import type { ProviderPreset } from ' + JSON.stringify(providerSelection) + ';\n' + source;
       source = once(source, '  const [models, setModels] = useState<readonly ModelDraft[]>([])', '  const [models, setModels] = useState<readonly ModelDraft[]>([])\n  const discoveredModels = useRef(new Map<string, ModelDraft>()).current', 'new provider model defaults');
       source = once(source, '        onChange={setModels}', '        onChange={setModels}\n        discoveredModels={discoveredModels}', 'new provider discovery defaults');
       source = once(source, 'models: models.map(model => ({ ...model })),', 'models: reasoning.levelsOnly ? models : await resolveModelProfiles(models, true, false, discoveredModels),', 'save new provider with public model defaults');
@@ -239,22 +319,34 @@ export function officialModelsUi() {
       const identityStart = source.indexOf("      <div className={styles['field']}>\n        <span className={styles['fieldLabel']}>{t('customRoute')}");
       const identityEnd = source.indexOf("      <div className={styles['field']}>\n        <span className={styles['fieldLabel']}>{t('baseUrl')}", identityStart);
       if (identityStart < 0 || identityEnd < 0) throw Error('Provider identity fields changed');
-      source = source.slice(0, identityStart) + '{!props.preset ? <>\n' + source.slice(identityStart, identityEnd) + '</> : null}\n' + source.slice(identityEnd);
-      const addressStart = source.indexOf("      <div className={styles['field']}>\n        <span className={styles['fieldLabel']}>{t('baseUrl')}");
+      const nameStart = source.lastIndexOf("      <div className={styles['field']}>", source.indexOf("{t('customDisplayName')}", identityStart));
+      if (nameStart <= identityStart || nameStart >= identityEnd) throw Error('Provider name field changed');
       const keyStart = source.indexOf("      <div className={styles['field']}>\n        <span className={styles['fieldLabel']}>{t('keyInput')}");
       const modelsStart = source.indexOf('      <ModelListEditor\n');
-      if (addressStart < 0 || keyStart <= addressStart || modelsStart <= keyStart) throw Error('Provider connection fields changed');
-      const addressFields = once(source.slice(addressStart, keyStart),
+      if (keyStart <= identityEnd || modelsStart <= keyStart) throw Error('Provider connection fields changed');
+      const addressFields = once(source.slice(identityEnd, keyStart),
         "      </div>\n      {baseUrlInvalid ? <p className={styles['error']}>{t('customBaseUrlInvalid')}</p> : null}",
         "        {baseUrlInvalid ? <p className={styles['error']}>{t('customBaseUrlInvalid')}</p> : null}\n      </div>", 'address error within field');
-      source = source.slice(0, addressStart) + '      <div className="cmd-provider-fields">\n' + source.slice(keyStart, modelsStart) + addressFields + '      </div>\n' + source.slice(modelsStart);
-      source = foldProtocolField(source, '      ');
-      source = once(source, 'export interface CustomProviderCardProps {', 'export interface CustomProviderCardProps {\n  preset?: { id: string; name: string; baseURL: string; protocol: string }', 'preset interface');
-      for (const [name, field] of [['route', 'id'], ['displayName', 'name'], ['baseURL', 'baseURL']]) {
+      source = source.slice(0, identityStart) + '{!props.preset ? <>\n' + source.slice(identityStart, nameStart) + '</> : null}\n'
+        + '      <div className="cmd-provider-fields">\n'
+        + '{props.preset?.type !== "routergo" ? <>\n' + source.slice(nameStart, identityEnd) + '</> : null}\n'
+        + source.slice(keyStart, modelsStart) + addressFields + '      </div>\n' + source.slice(modelsStart);
+      source = once(source, "<div className={styles['editor']}>", "<div className={styles['editor']} data-provider-create>", 'scope new connection form');
+      source = once(source, 'export interface CustomProviderCardProps {', 'export interface CustomProviderCardProps {\n  preset?: ProviderPreset', 'preset interface');
+      for (const [name, field] of [['route', 'id'], ['displayName', 'name']]) {
         const capital = name[0].toUpperCase() + name.slice(1);
         source = once(source, "const [" + name + ', set' + capital + "] = useState('')", "const [" + name + ', set' + capital + "] = useState(props.preset?." + field + " ?? '')", 'preset ' + name);
       }
-      source = once(source, "const [protocol, setProtocol] = useState(protocols[0] ?? '')", "const [protocol, setProtocol] = useState(() => [props.preset?.protocol, 'openai-responses', ...protocols].find(choice => choice && protocols.includes(choice)) ?? '')", 'default connection protocol');
+      source = once(source, "const [baseURL, setBaseURL] = useState('')", "const [baseURL, setBaseURL] = useState(props.preset?.type === 'template' ? props.preset.template.baseURL : props.preset?.baseURL ?? '')", 'initial template endpoint');
+      source = once(source, "const [protocol, setProtocol] = useState(protocols[0] ?? '')", "const [protocol, setProtocol] = useState(() => [props.preset?.type === 'template' ? props.preset.template.protocol : props.preset?.protocol, 'openai-responses', ...protocols].find(choice => choice && protocols.includes(choice)) ?? '')", 'default connection protocol');
+      source = once(source, 'const normalizedBaseURL = baseURL.trim()', "const template = props.preset?.type === 'template' ? props.preset.template : undefined\n  const normalizedBaseURL = normalizeTemplateBaseURL(template, baseURL.trim())", 'normalize template connection address');
+      source = once(source, 'const keyMissing = protocolNeedsKey(protocol) && keyDraft.trim().length === 0', 'const requiresKey = template !== undefined || protocolNeedsKey(protocol)\n  const keyMissing = requiresKey && keyDraft.trim().length === 0', 'require a template credential');
+      source = once(source, 'required={protocolNeedsKey(protocol)}', 'required={requiresKey}', 'template credential field');
+      source = once(source, "placeholder={t(BASE_URL_PLACEHOLDERS[protocol] ?? 'customBaseUrlPlaceholder')}", "placeholder={template?.placeholder ?? t(BASE_URL_PLACEHOLDERS[protocol] ?? 'customBaseUrlPlaceholder')}\n          onBlur={() => { setBaseURL(normalizedBaseURL) }}", 'template address guidance');
+      source = once(source, "{baseUrlInvalid ? <p className={styles['error']}>{t('customBaseUrlInvalid')}</p> : null}", "{baseUrlInvalid ? <p className={styles['error']}>{t('customBaseUrlInvalid')}</p> : template?.hint && <p className=\"cmd-provider-template-hint\">{template.hint}</p>}", 'template address help');
+      source = once(source, '&& !routeTaken\n', '&& (!routeTaken || committed)\n', 'retry credential after profile creation');
+      source = once(source, '|| route.length === 0 || routeInvalid || routeTaken || baseUrlInvalid', '|| route.length === 0 || routeInvalid || (routeTaken && !committed) || baseUrlInvalid', 'retry hint after profile creation');
+      source = once(source, '      <ModelListEditor\n', '      <ModelListEditor\n        defaultMaxTokens={128_000}\n        startWithNoModelsSelected={template !== undefined}\n', 'template model discovery starts unselected');
       source = once(source, '    } finally {\n      setBusy(false)', '    } catch (error) {\n      setFailure(error instanceof Error ? error.message : String(error))\n    } finally {\n      setBusy(false)', 'custom harness failure');
       source = once(source, '  const modelFailure = validateDeepSeekModels(models)', '  const reasoningFailure = validateModelReasoning(models)\n  const modelFailure = validateDeepSeekModels(models)', 'custom reasoning validation');
       source = once(source, '    && keyFailure === undefined', '    && keyFailure === undefined && reasoningFailure === undefined', 'custom reasoning submit gate');
@@ -270,8 +362,10 @@ export function officialModelsUi() {
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ProviderEditor\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
       source = adaptProtocolSelect(source);
+      source = 'import { normalizeTemplateBaseURL, providerTemplateForRoute } from ' + JSON.stringify(templates) + ';\n' + source;
       source = 'import { useRef } from "react";\nimport { resolveModelProfiles } from ' + JSON.stringify(profileMatch) + ';\n' + source;
       source = once(source, '  const [busy, setBusy] = useState(false)', '  const discoveredModels = useRef(new Map<string, Record<string, unknown>>()).current\n  const [busy, setBusy] = useState(false)', 'provider model defaults');
+      source = once(source, 'export interface ProviderEditorProps {', 'export interface ProviderEditorProps {\n  renderSyncAction?: (dirty: boolean) => ReactNode', 'provider catalog sync option');
       source = 'import { validateModelReasoning, reasoningLevelLabels } from ' + JSON.stringify(reasoningState) + ';\n' + source;
       source = 'import { ProviderBrandIcon } from ' + JSON.stringify(selector) + ';\n' + source;
       source = 'import { isRouterGoAccountReference } from ' + JSON.stringify(accountReference) + ';\n' + source;
@@ -281,11 +375,16 @@ export function officialModelsUi() {
         "  const probeApi = managedRouterGo ? routerGo.protocol : stringAt(draft, 'api') ?? stringAt(fallback, 'api')",
       ].join('\n'), 'identify RouterGo account credentials');
       source = once(source, "  const probeBaseURL = stringAt(draft, 'baseURL') ?? stringAt(fallback, 'baseURL')", [
-        "  const probeBaseURL = managedRouterGo ? routerGo.baseURL : stringAt(draft, 'baseURL') ?? stringAt(fallback, 'baseURL')",
+        '  const template = providerTemplateForRoute(props.provider)',
+        "  const draftBaseURL = stringAt(draft, 'baseURL')",
+        "  const editedBaseURL = template && draftBaseURL !== stringAt(committedOriginal, 'baseURL')",
+        '    ? normalizeTemplateBaseURL(template, draftBaseURL?.trim()) : draftBaseURL',
+        "  const probeBaseURL = managedRouterGo ? routerGo.baseURL : editedBaseURL ?? stringAt(fallback, 'baseURL')",
       ].join('\n'), 'RouterGo account discovery stays on official endpoint');
       source = once(source, '    const next = layout ===', '    let next = layout ===', 'extend official provider draft');
       source = once(source, '      : profileDraft', [
         '      : profileDraft',
+        "    if (editedBaseURL !== draftBaseURL) next = schema.setPath(next, ['baseURL'], editedBaseURL)",
         "    if (!props.credentialOnly && layout !== 'unknown' && !reasoning.levelsOnly) {",
         "      const owned = schema.getPath(next, ['models'])",
         "      const rows = Array.isArray(owned) ? owned : inheritedModels()",
@@ -319,6 +418,9 @@ export function officialModelsUi() {
       source = once(source, "defaultMaxTokens={typeof defaultMaxTokens === 'number' ? defaultMaxTokens : undefined}\n                />", "defaultMaxTokens={typeof defaultMaxTokens === 'number' ? defaultMaxTokens : undefined}\n                />\n                </>", 'direct DeepSeek reasoning layout');
       source = once(source, '                  catalogProvider={props.declared === true ? undefined : props.provider}', '                  catalogProvider={props.declared === true ? undefined : props.provider}\n                  defaultReasoningEffort={defaultReasoningEffort}', 'reasoning provider editor properties');
       source = once(source, '        {keylessNativeAuth\n', '        {!managedRouterGo && <div className="cmd-provider-fields">\n        {keylessNativeAuth\n', 'connection fields opening');
+      source = once(source, "import { RetryPolicyEditor, retryPolicyDefaults, retryPolicyFailure } from './RetryPolicyEditor.tsx'\n", '', 'remove provider retry editor import');
+      source = replaceSection(source, '  const [draft, setDraft]', '  // Undefined is untouched;', "  const [draft, setDraft] = useState(() => draftAt(schema, namespace, settingsPath))\n", 'remove retry draft initialization');
+      source = replaceSection(source, '  const retryNode = useMemo(', '  const keyFailure =', '', 'remove inline retry validation');
       source = once(source, '  const [customizedOpen, setCustomizedOpen] = useState(false)\n', '', 'inline retry settings state');
       source = once(source, [
         '        {props.credentialOnly === true ? null : <details',
@@ -328,33 +430,39 @@ export function officialModelsUi() {
         "          <summary className={styles['customizedSummary']}>{t('customized')}</summary>",
         "          <div className={styles['customizedBody']}>",
       ].join('\n'), '        {props.credentialOnly === true ? null : <>', 'inline provider fields');
-      source = once(source, '            {retryDefaults === undefined', '        </>}\n        </div>}\n        {props.credentialOnly === true ? null : <>\n            {retryDefaults === undefined', 'keep retry policy and models available for managed RouterGo');
-      source = once(source, '                  showFailure={customizedOpen}', '                  showFailure', 'show inline retry errors');
+      source = replaceSection(source, '            {retryDefaults === undefined', '            {/* Both families edit the same rows', '        </>}\n        </div>}\n        {props.credentialOnly === true ? null : <>\n', 'remove provider retry fields');
       source = once(source, [
         '      {/* A closed fold hides the fields, so a refused stored policy still explains a disabled Apply. */}',
         '      {retryFailure === undefined || customizedOpen',
         '        ? null',
         "        : <p id={`${props.provider}-retry-failure`} className={styles['error']}>{retryFailure.message}</p>}",
       ].join('\n') + '\n', '', 'remove folded retry error');
+      source = once(source, '          || retryFailure !== undefined\n', '', 'remove inline retry submit gate');
       source = once(source, '          </div>\n        </details>}', '        </>}', 'inline model list');
-      source = foldProtocolField(source, '                ');
       source = once(source, "            <span className={styles['editorTitle']}>{props.displayName}</span>", "            <ProviderBrandIcon id={props.provider} name={props.displayName} declared={props.declared === true} />\n            <span className={styles['editorTitle']}>{props.displayName}</span>", 'provider editor brand');
       source = once(source, '  const modelFailure = validateModels(', "  const reasoningFailure = layout === 'pi-ai' && props.credentialOnly !== true ? validateModelReasoning(schema.getPath(draft, ['models'])) : undefined\n  const modelFailure = validateModels(", 'provider reasoning validation');
-      source = once(source, '    if (props.credentialOnly !== true) {', '    if (props.credentialOnly !== true) {\n      if (reasoningFailure !== undefined) return reasoningFailure\n      if (retryFailure !== undefined) return retryFailure.message\n      if (modelFailure !== undefined) return `${t(\'model\')} ${String(modelFailure.index + 1)}: ${t(modelFailure.key)}`', 'provider write validation');
+      source = once(source, '    if (props.credentialOnly !== true) {', '    if (props.credentialOnly !== true) {\n      if (reasoningFailure !== undefined) return reasoningFailure\n      if (modelFailure !== undefined) return `${t(\'model\')} ${String(modelFailure.index + 1)}: ${t(modelFailure.key)}`', 'provider write validation');
       source = once(source, "      {failure !== undefined ? <p className={styles['error']}>{failure}</p> : null}", "      {failure !== undefined ? <p className={styles['error']}>{failure}</p> : null}\n      {props.credentialOnly !== true && reasoningFailure !== undefined ? <p role=\"alert\" className={styles['error']}>{reasoningFailure}</p> : null}", 'provider reasoning failure hint');
       source = once(source, "          || (props.credentialOnly !== true && modelFailure !== undefined)", "          || (props.credentialOnly !== true && (modelFailure !== undefined || reasoningFailure !== undefined))", 'provider reasoning submit gate');
       const footer = source.match(/      <EditorFooter\n[\s\S]*?\n      \/>/)?.[0];
       if (!footer) throw Error('Provider actions changed');
-      source = once(source, footer, "      {layout !== 'pi-ai' || props.credentialOnly === true ? editorActions : null}", 'standalone provider actions');
-      source = once(source, "  const curatedFields = (family:", '  const editorActions = (' + footer.trim().replace('<EditorFooter', "<EditorFooter catalogActions={layout === 'pi-ai' && props.credentialOnly !== true}") + ')\n  const curatedFields = (family:', 'reuse provider actions');
-      source = once(source, '                <ModelListEditor\n', '                <ModelListEditor actions={editorActions} discoveredModels={discoveredModels}\n', 'save and discover actions');
+      source = once(source, footer, "      {layout === 'unknown' || props.credentialOnly === true ? editorActions : null}", 'standalone provider actions');
+      source = once(source, "  const curatedFields = (family:", '  const editorActions = (' + footer.trim().replace('<EditorFooter', "<EditorFooter catalogActions={layout !== 'unknown' && props.credentialOnly !== true}") + ')\n  const curatedFields = (family:', 'reuse provider actions');
+      source = once(source, '                <DeepSeekModelsEditor providerId={props.provider}', '                <DeepSeekModelsEditor providerId={props.provider} actions={editorActions}', 'DeepSeek catalog save');
+      source = once(source, '                <ModelListEditor\n', `                <ModelListEditor actions={editorActions} discoveredModels={discoveredModels}
+                  syncAction={managedRouterGo ? props.renderSyncAction?.(
+                    busy || JSON.stringify(draft) !== JSON.stringify(committedOriginal ?? {}),
+                  ) : undefined}
+                  defaultMaxTokens={Number(schema.getPath(draft, ["defaultMaxTokens"]) ?? schema.getPath(fallback, ["defaultMaxTokens"]) ?? 128_000)}
+`, 'save and discover actions');
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
     });
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]DeepSeekModelsEditor\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
       source = 'import { useModelProfiles } from ' + JSON.stringify(profileMatch) + ';\n' + source;
       source = 'import { ModelCapabilityEditor, modelCatalogFacts, useModelCapabilities } from ' + JSON.stringify(capabilityEditor) + ';\n' + source;
-      source = once(source, 'export interface DeepSeekModelsEditorProps {', 'export interface DeepSeekModelsEditorProps {\n  providerId?: string', 'deepseek model label provider');
+      source = 'import { DeepSeekCatalogSync } from ' + JSON.stringify(modelOperations) + ';\n' + source;
+      source = once(source, 'export interface DeepSeekModelsEditorProps {', 'export interface DeepSeekModelsEditorProps {\n  providerId?: string\n  actions?: ReactNode', 'deepseek model toolbar props');
       source = once(source, '  const reset = (): void => {\n    rowState.reset()\n    props.onReset()\n  }\n\n', '', 'remove unused deepseek reset');
       const resetStart = source.indexOf('        {props.overridden\n          ? (');
       const resetEnd = source.indexOf('          : null}', resetStart);
@@ -389,6 +497,39 @@ export function officialModelsUi() {
       ].join('\n'), 'input modality controls');
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
     });
+    build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]useModelRows\.ts$/ }, async args => {
+      let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
+      source = once(source, '  expanded: boolean\n', '', 'keep expansion outside the row drafts');
+      source = once(source, '  rows: (RowState & { model:', '  rows: (RowState & { expanded: boolean; model:', 'derive row expansion');
+      source = once(source, '  toggle: (index: number) => void', '  add: () => void\n  toggle: (index: number) => void', 'add a model draft');
+      source = once(source, 'return { key, expanded: false, editing: new Map() }', 'return { key, editing: new Map() }', 'keep only identity and editing state');
+      source = once(source, '  const [dragged, setDragged]', '  const [expandedKey, setExpandedKey] = useState<number>()\n  const [dragged, setDragged]', 'track one expanded model');
+      source = once(source, '      ...state,\n      model,', '      ...state,\n      model,\n      expanded: state.key === expandedKey,', 'use model identity for expansion');
+      source = once(source, [
+        '    toggle: (index: number): void => {',
+        '      setRows(rows.map((row, at) => at === index ? { ...row, expanded: !row.expanded } : row))',
+        '    },',
+      ].join('\n'), [
+        '    add: (): void => {',
+        '      const row = createRow(nextKey.current++)',
+        '      setRows([...rows, row])',
+        '      setExpandedKey(row.key)',
+        "      onChange([...models, { id: '' }])",
+        '    },',
+        '    toggle: (index: number): void => {',
+        '      const key = rows[index]?.key',
+        '      setExpandedKey(current => current === key ? undefined : key)',
+        '    },',
+      ].join('\n'), 'switch expanded model');
+      source = once(source, '      setRows(rows.filter((_row, index) => !removed.has(index)))', [
+        '      const remaining = rows.filter((_row, index) => !removed.has(index))',
+        '      setRows(remaining)',
+        '      setExpandedKey(current => remaining.some(row => row.key === current) ? current : undefined)',
+      ].join('\n'), 'clear removed expansion');
+      source = once(source, 'reset: (): void => { setRows(models.map(() => createRow(nextKey.current++))); endDrag() }',
+        'reset: (): void => { setRows(models.map(() => createRow(nextKey.current++))); setExpandedKey(undefined); endDrag() }', 'reset model expansion');
+      return { contents: source, loader: 'ts', resolveDir: dirname(args.path) };
+    });
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ModelRow\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
       source = 'import { hasTextCapability } from ' + JSON.stringify(capabilityFacts) + ';\n' + source;
@@ -405,15 +546,12 @@ export function officialModelsUi() {
       source = once(source, "      {field === 'name'\n        ? <span className={`${styles['modelFieldLabel']} ${styles['modelNameLabel']}`}>{t('modelName')}</span>\n        : null}", "      <span className={styles['modelFieldLabel']}>{t(field === 'id' ? 'modelId' : 'modelName')}</span>", 'display field labels');
       source = once(source, "placeholder={t(field === 'id' ? 'modelId' : 'modelName')}", "placeholder={field === 'name' ? String(model.id || t('modelNamePlaceholder')) : t('modelId')}", 'display name falls back to raw ID');
       source = once(source, "        onFocus={field === 'name' && !props.expanded ? props.onToggle : undefined}\n", '', 'editing visible fields leaves row expansion unchanged');
-      source = once(source, "      data-row-key={props.rowKey}", "      data-row-key={props.rowKey}\n      data-expanded={expanded || undefined}", 'expanded grid row');
-      source = 'import { useState as useInitialExpansion } from "react";\n' + source;
-      source = once(source, '  const { model, position, t, disabled } = props', "  const { model, position, t, disabled } = props\n  const [newRow, setNewRow] = useInitialExpansion(() => !model.id)\n  const expanded = props.expanded || newRow || !model.id\n  const displayName = String(model.name || model.id || t('modelId'))", 'expand new model');
-      source = once(source, 'onClick={(event) => { event.currentTarget.focus(); props.onToggle() }}', 'onClick={(event) => { event.currentTarget.focus(); if (newRow) setNewRow(false); else props.onToggle() }}', 'keep new row expanded while typing');
-      source = once(source, "      <div className={styles['modelRow']} data-expanded={props.expanded || undefined}>", "      <div className={styles['modelRow']} data-expanded={expanded || undefined}>", 'row disclosure state');
+      source = once(source, "      data-row-key={props.rowKey}", "      data-row-key={props.rowKey}\n      data-expanded={props.expanded || undefined}", 'expanded grid row');
+      source = once(source, '  const { model, position, t, disabled } = props', "  const { model, position, t, disabled } = props\n  const displayName = String(model.name || model.id || t('modelId'))", 'show draft model title');
       source = once(source, "        {modelField('id')}\n        <button", "        <button", 'move ID into expanded body');
-      source = once(source, "          className={styles['iconButton']}\n          aria-label={`${t('modelAdvanced')} ${String(position)}`}\n          aria-expanded={props.expanded}", "          className=\"cmd-model-row-summary\"\n          aria-label={`${t('modelAdvanced')} ${String(position)}`}\n          aria-expanded={expanded}\n          disabled={!model.id}", 'use model name as disclosure');
-      source = once(source, '          {props.expanded ? <IconChevronDownOutlineRegular /> : <IconChevronRightOutlineRegular />}', '          <span title={displayName}>{displayName}</span>\n          {expanded ? <IconChevronDownOutlineRegular /> : <IconChevronRightOutlineRegular />}', 'model disclosure content');
-      source = once(source, "        {modelField('name')}\n        {props.expanded", '        {expanded', 'show details on expansion');
+      source = once(source, "          className={styles['iconButton']}\n          aria-label={`${t('modelAdvanced')} ${String(position)}`}\n          aria-expanded={props.expanded}", "          className=\"cmd-model-row-summary\"\n          aria-label={`${t('modelAdvanced')} ${String(position)}`}\n          aria-expanded={props.expanded}", 'use model name as disclosure');
+      source = once(source, '          {props.expanded ? <IconChevronDownOutlineRegular /> : <IconChevronRightOutlineRegular />}', '          <span title={displayName}>{displayName}</span>\n          {props.expanded ? <IconChevronDownOutlineRegular /> : <IconChevronRightOutlineRegular />}', 'model disclosure content');
+      source = once(source, "        {modelField('name')}\n        {props.expanded", '        {props.expanded', 'show display name inside details');
       source = once(source, "            <div className={styles['modelAdvanced']}>", "            <div className={styles['modelAdvanced']}>\n              {modelField('name')}\n              {modelField('id')}", 'editable display name and ID');
       source = once(source, '              {props.reasoningLevels !== undefined && props.reasoningLevels.length > 0',
         '              {props.extraSettings}\n              {props.reasoningLevelsOnly === true && props.reasoningLevels !== undefined && props.reasoningLevels.length > 0', 'expanded model extension');
@@ -425,7 +563,8 @@ export function officialModelsUi() {
       source = 'const installedReasoning = JSON.parse(' + JSON.stringify(JSON.stringify(installedReasoning())) + ')\n' + source;
       source = 'import { useModelProfiles } from ' + JSON.stringify(profileMatch) + ';\nimport { ModelReasoningEditor } from ' + JSON.stringify(reasoningEditor) + ';\n' + source;
       source = 'import { ModelCapabilityEditor, modelCatalogFacts, useModelCapabilities } from ' + JSON.stringify(capabilityEditor) + ';\n' + source;
-      source = once(source, 'export interface ModelListEditorProps {', 'export interface ModelListEditorProps {\n  actions?: ReactNode\n  discoveredModels?: Map<string, ModelDraft>\n  defaultReasoningEffort?: string', 'model reasoning and actions props');
+      source = once(source, 'export interface ModelListEditorProps {', 'export interface ModelListEditorProps {\n  actions?: ReactNode\n  syncAction?: ReactNode\n  discoveredModels?: Map<string, ModelDraft>\n  defaultMaxTokens?: number\n  defaultReasoningEffort?: string\n  startWithNoModelsSelected?: boolean', 'model reasoning and actions props');
+      source = once(source, 'configuredIds.size === 0 || configuredIds.has(id)', '(configuredIds.size === 0 && !props.startWithNoModelsSelected) || configuredIds.has(id)', 'require explicit selection from a new template');
       source = once(source, '  const { catalogProvider } = props', '  const { catalogProvider, discoveredModels } = props\n  useModelProfiles(models, onChange, disabled || props.reasoningLevelsOnly === true, true, props.overridden === false, discoveredModels)\n  const capabilityCatalog = useModelCapabilities(probe.provider)', 'public model profiles');
       source = once(source, '    onChange([...keptRows, ...addedRows])', "    for (const index of removedRows) discoveredModels?.delete(textOf(models[index], 'id'))\n    for (const model of addedRows) discoveredModels?.set(textOf(model, 'id'), model)\n    onChange([...keptRows, ...addedRows])", 'record engine defaults for adopted models');
       source = once(source, '              onChange(models.filter((_model, at) => at !== index))', "              discoveredModels?.delete(textOf(model, 'id'))\n              onChange(models.filter((_model, at) => at !== index))", 'discard removed model defaults');
@@ -433,13 +572,10 @@ export function officialModelsUi() {
       const resetEnd = source.indexOf('          : null}', resetStart);
       if (resetStart < 0 || resetEnd < 0) throw Error('Official model reset control changed');
       source = source.slice(0, resetStart) + source.slice(resetEnd + '          : null}'.length);
-      source = once(source, '        <button\n          type="button"\n          className={styles[\'linkButton\']}\n          disabled={disabled || busy', '        <div className="cmd-model-list-actions">\n        {props.actions}\n        <button\n          type="button"\n          className={styles[\'linkButton\']}\n          disabled={disabled || busy', 'discover and provider controls');
-      source = once(source, "        </button>\n      </div>\n      {models.length === 0", "        </button>\n        </div>\n      </div>\n      {models.length === 0", 'model actions end');
-      source = once(source, "className={styles['linkButton']}\n          disabled={disabled || busy", "className={styles['secondaryButton'] + ' cmd-model-discover'}\n          aria-busy={busy}\n          disabled={disabled || busy", 'discover button style');
+      source = replaceSection(source, '        <button\n          type="button"\n          className={styles[\'linkButton\']}\n          disabled={disabled || busy', '      </div>\n      {models.length === 0', '', 'move discovery to secondary toolbar');
       source = once(source, "      setFailure(answer.kind === 'refused' ? answer.message : undefined)\n    })", "      setFailure(answer.kind === 'refused' ? answer.message : undefined)\n    }).catch(error => { if (current) { setInheritedCatalog({ provider: catalogProvider, models: [] }); setFailure(error instanceof Error ? error.message : String(error)) } })", 'inherited catalog failure');
       // Adoption must remain synchronous: optional public metadata must never gate a user's selection.
       source = once(source, '    } finally {\n      setBusy(false)', '    } catch (error) {\n      setFailure(error instanceof Error ? error.message : String(error))\n    } finally {\n      setBusy(false)', 'model discovery error');
-      source = once(source, "          {busy ? t('fetching') : t('fetchModels')}", "          {busy ? t('fetching') : t('fetchModels').replace('获取可用模型', '获取模型').replace('Fetch available models', 'Get models')}", 'text-only discovery label');
       source = once(source, '  const rowState = useModelRows(models, onChange, disabled)', `  const rowState = useModelRows(models, onChange, disabled)
   const [reasoningDrafts, setReasoningDrafts] = useState<Map<number, { id: unknown; mapping: Record<string, string | null> }>>(() => new Map())
   const providerReasoning = probe.provider !== undefined && Object.hasOwn(installedReasoning, probe.provider)
@@ -459,6 +595,8 @@ export function officialModelsUi() {
                 }} />}</>}
             onFieldChange={(field, value)`, 'per-model capability and reasoning settings');
       source = adaptModelCatalog(source, false);
+      source = once(source, "      {failure !== undefined ? <p className={styles['error']}>{failure}</p> : null}\n", '', 'move discovery failure to the toolbar');
+      source = inlineModelDiscovery(source);
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
     });
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]EditorFooter\.tsx$/ }, async args => {
@@ -472,7 +610,15 @@ export function officialModelsUi() {
       return { contents: source, loader: 'tsx', resolveDir: dirname(args.path) };
     });
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]ModelsSection\.module\.css$/ }, async args => {
-      const result = await esbuild({ stdin: { contents: 'import styles from ' + JSON.stringify(args.path) + '; export default styles;', resolveDir: dirname(args.path) }, bundle: true, write: false, outdir: join(tmpdir(), 'commander-css-memory'), format: 'cjs', loader: { '.css': 'local-css' }, logLevel: 'silent' });
+      const result = await esbuild({ stdin: { contents: 'import styles from ' + JSON.stringify(args.path) + '; export default styles;', resolveDir: dirname(args.path) }, bundle: true, write: false, outdir: join(tmpdir(), 'commander-css-memory'), format: 'cjs', loader: { '.css': 'local-css' }, logLevel: 'silent',
+        plugins: [{ name: 'trim-unused-model-settings-styles', setup(cssBuild) {
+          cssBuild.onLoad({ filter: /ModelsSection\.module\.css$/ }, async ({ path }) => {
+            let css = (await readFile(path, 'utf8')).replaceAll('\r\n', '\n');
+            css = css.replace(/\/\* Reads as an annotation on the name[\s\S]*?\.rowTag \{[^}]*\}\n/u, '');
+            return { contents: replaceSection(css, '/* The add card\'s mode switch', '.addCard,', '', 'remove obsolete provider add styles'), loader: 'local-css', resolveDir: dirname(path) };
+          });
+        } }],
+      });
       const js = result.outputFiles.find(file => file.path.endsWith('.js'));
       const css = result.outputFiles.find(file => file.path.endsWith('.css'));
       if (!js || !css) throw new Error('Official Models CSS module did not compile');
@@ -498,6 +644,7 @@ export function officialModelsUi() {
         .${modelAdvanced} .${input} { height: 34px; font-size: 13px; }
         @container benchgo-model-row (min-width: 600px) { .${modelAdvanced} { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) repeat(2, minmax(0, .8fr)); } }
         @media (pointer: coarse) { .${modelEntry} .${iconButton} { width: 40px; height: 44px; } .${modelAdvanced} .${input} { height: 44px; font-size: 16px; } }
+        @media (pointer: coarse) { [data-provider-create] .${modelListHead} > .cmd-model-catalog-filter { order: 1; flex-basis: 100%; } }
         @container (min-width: 540px) { .${modelList} { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @container (min-width: 740px) { .${modelList} { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
         @container (min-width: 540px) {

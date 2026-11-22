@@ -87,6 +87,7 @@ test('the actual main bundle preserves show, quit, relabel and disposal through 
   assert.doesNotMatch(code, /messages\.checkUpdatesMenu/);
   assert.match(code, /messages\.cliCommandMenu/);
   assert.ok(code.includes('重启') && code.includes('Restart'));
+  assert.match(code, /createWelcomeWindow\(\{[\s\S]*?platform: process\.platform/);
   const section = code.match(/[/][/]#region [^\n]*lib[/]types[/]tray\.js\n([\s\S]*?)[/][/]#endregion/)[1];
   let nativeTray;
   class Tray {
