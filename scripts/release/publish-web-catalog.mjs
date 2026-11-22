@@ -1,4 +1,4 @@
-/** Publish original signed catalog bytes on a CORS-readable, append-only branch. */
+/** Publish signed download catalogs and the browser's stable release entry point. */
 import { createPublicKey, verify } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -6,14 +6,26 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { githubJson, assetBytes, sha256 } from './github.mjs';
 import { immutableArtifact } from './assemble.mjs';
+import { compareVersions } from '../../plugins/base/shared/update-feed.mjs';
 
 const branch = 'release-metadata';
 const names = ['downloads.json', 'downloads.json.sig'];
+const latestPath = 'latest.json';
+const stableVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
+
+export function webCatalogSnapshot(raw, signature, publishedAt) {
+  return Buffer.from(JSON.stringify({
+    version: JSON.parse(raw).releaseVersion,
+    publishedAt,
+    catalog: raw.toString('base64'),
+    signature: signature.toString('utf8').trim(),
+  }) + '\n');
+}
 
 export async function publishWebCatalog({ directory, releaseVersion, sourceSha, publicKey,
   request = githubJson, downloadAsset = assetBytes }) {
-  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(releaseVersion) || !sha(sourceSha)) throw new Error('Invalid web catalog version or source');
+  if (!stableVersion.test(releaseVersion) || !sha(sourceSha)) throw new Error('Invalid web catalog version or source');
   const tag = `v${releaseVersion}`, bytes = [];
   for (const [index, name] of names.entries()) {
     const path = resolve(directory, name), size = (await stat(path)).size;
@@ -28,6 +40,7 @@ export async function publishWebCatalog({ directory, releaseVersion, sourceSha, 
   for (const file of catalog.files) immutableArtifact(file);
   const release = await request(`/releases/tags/${tag}`);
   if (!release || release.draft || release.prerelease || release.tag_name !== tag || release.target_commitish !== sourceSha
+    || typeof release.published_at !== 'string' || !Number.isFinite(Date.parse(release.published_at))
     || (await request(`/commits/${tag}`)).sha !== sourceSha) throw new Error('Web catalog release does not match public stable source');
   // Exact comparison also works on older GitHub assets without a stored digest.
   for (const [index, name] of names.entries()) {
@@ -41,17 +54,30 @@ export async function publishWebCatalog({ directory, releaseVersion, sourceSha, 
   const head = ref?.object?.sha;
   if (ref && !sha(head)) throw new Error('Invalid web metadata branch head');
   const paths = names.map(name => `releases/${tag}/${name}`), tree = [];
-  const check = async (commit, index) => {
-    const file = await request(`/contents/${paths[index]}?ref=${commit}`, { missing: true });
-    if (!file) return false;
-    if (file.type !== 'file' || file.encoding !== 'base64' || file.size !== bytes[index].length
-      || !Buffer.from(file.content, 'base64').equals(bytes[index])) throw new Error(`Refusing to overwrite immutable web metadata: ${paths[index]}`);
-    return true;
+  const read = async (commit, path) => {
+    const file = await request(`/contents/${path}?ref=${commit}`, { missing: true });
+    if (!file) return null;
+    const contents = file.type === 'file' && file.encoding === 'base64' && typeof file.content === 'string'
+      ? Buffer.from(file.content, 'base64') : null;
+    if (!contents || contents.length !== file.size) throw new Error(`Invalid web metadata: ${path}`);
+    return contents;
   };
+  const stage = (path, contents) => tree.push({ path, mode: '100644', type: 'blob', bytes: contents });
   for (const [index, path] of paths.entries()) {
-    if (head && await check(head, index)) continue;
-    // Blob API base64 preserves every original byte, including trailing newlines.
-    tree.push({ path, mode: '100644', type: 'blob', bytes: bytes[index] });
+    const existing = head && await read(head, path);
+    if (!existing) stage(path, bytes[index]);
+    else if (!existing.equals(bytes[index])) throw new Error(`Refusing to overwrite immutable web metadata: ${path}`);
+  }
+  const previousSnapshot = head && await read(head, latestPath);
+  const nextSnapshot = webCatalogSnapshot(...bytes, release.published_at);
+  if (previousSnapshot) {
+    const previous = JSON.parse(previousSnapshot);
+    if (typeof previous.version !== 'string' || !stableVersion.test(previous.version)) throw new Error('Invalid stable web catalog version');
+    const order = compareVersions(releaseVersion, previous.version);
+    if (order > 0) stage(latestPath, nextSnapshot);
+    if (order === 0 && !previousSnapshot.equals(nextSnapshot)) throw new Error('Refusing to publish different web metadata for the same version');
+  } else {
+    stage(latestPath, nextSnapshot);
   }
   if (!tree.length) return { branch, tag, commit: head, changed: false };
   const parent = head ? await request(`/git/commits/${head}`) : null;
@@ -69,7 +95,9 @@ export async function publishWebCatalog({ directory, releaseVersion, sourceSha, 
   // A concurrent update fails closed; never force or discard another release.
   if (head) await send(`/git/refs/heads/${branch}`, 'PATCH', { sha: commit.sha, force: false });
   else await send('/git/refs', 'POST', { ref: `refs/heads/${branch}`, sha: commit.sha });
-  for (const index of names.keys()) if (!await check(commit.sha, index)) throw new Error('Published web metadata verification failed');
+  for (const { path, bytes: expected } of tree) {
+    if (!(await read(commit.sha, path))?.equals(expected)) throw new Error(`Published web metadata verification failed: ${path}`);
+  }
   return { branch, tag, commit: commit.sha, changed: true };
 }
 

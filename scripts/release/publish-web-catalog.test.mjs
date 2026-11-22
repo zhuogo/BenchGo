@@ -21,6 +21,7 @@ async function fixture(t, { existing = false } = {}) {
   const bytes = [raw, signature];
   for (const [i, path] of paths.entries()) await writeFile(join(directory, path.split('/').at(-1)), bytes[i]);
   const release = { draft: false, prerelease: false, tag_name: tag, target_commitish: source,
+    published_at: '2026-11-22T02:32:18Z',
     assets: bytes.map((value, i) => ({ id: i + 1, name: paths[i].split('/').at(-1), size: value.length, digest: `sha256:${sha256(value)}` })) };
   const files = new Map(existing ? [[`releases/v0.1.1/downloads.json`, Buffer.from('historical')]] : []), blobs = new Map(), calls = [];
   const state = { head: existing ? previous : null, release, commitSource: source, files };
@@ -56,6 +57,11 @@ test('creates a root metadata branch with original signed bytes and becomes idem
   const f = await fixture(t), result = await publishWebCatalog(f.options);
   assert.equal(result.changed, true);
   for (const [i, path] of paths.entries()) assert.deepEqual(f.files.get(path), f.bytes[i]);
+  const snapshot = JSON.parse(f.files.get('latest.json'));
+  assert.equal(snapshot.version, version);
+  assert.equal(snapshot.publishedAt, f.release.published_at);
+  assert.deepEqual(Buffer.from(snapshot.catalog, 'base64'), f.bytes[0]);
+  assert.equal(snapshot.signature, f.bytes[1].toString().trim());
   assert.deepEqual(f.calls.find(call => call.path === '/git/commits').body.parents, []);
   assert.equal(f.calls.find(call => call.path === '/git/refs').body.ref, 'refs/heads/release-metadata');
   const writes = f.calls.filter(call => call.method !== 'GET').length;
@@ -83,7 +89,18 @@ test('repairs an incomplete pair while preserving the original existing half', a
   const f = await fixture(t, { existing: true });
   f.files.set(paths[0], f.bytes[0]);
   await publishWebCatalog(f.options);
-  assert.deepEqual(f.calls.find(call => call.path === '/git/trees').body.tree.map(row => row.path), [paths[1]]);
+  assert.deepEqual(f.calls.find(call => call.path === '/git/trees').body.tree.map(row => row.path), [paths[1], 'latest.json']);
+});
+
+test('backfills or advances the static catalog without rolling back a newer version', async t => {
+  for (const previousVersion of [null, '0.1.1', '0.1.10']) {
+    const f = await fixture(t, { existing: true });
+    for (const [index, path] of paths.entries()) f.files.set(path, f.bytes[index]);
+    if (previousVersion) f.files.set('latest.json', Buffer.from(JSON.stringify({ version: previousVersion })));
+    const result = await publishWebCatalog(f.options);
+    assert.equal(result.changed, previousVersion !== '0.1.10');
+    assert.equal(JSON.parse(f.files.get('latest.json')).version, previousVersion === '0.1.10' ? previousVersion : version);
+  }
 });
 
 test('rejects tampered signatures, versions, source and unsafe URLs', async t => {
