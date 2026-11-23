@@ -1,6 +1,7 @@
 import { Disclosure } from '../../shared/client/ui/collapsible.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import * as nativeRuntime from './api.mjs';
+import { LoadingText } from '../../shared/client/ui/loading.jsx';
 import { UIIcon } from '../../base/client/iconsax.jsx';
 import pairingCss from './pairing.css';
 import { Button, ErrorText, StatusDot, useLinkStyle } from './app.jsx';
@@ -103,11 +104,11 @@ export function LinkPairingApp({ runtime = nativeRuntime }) {
     <header className="link-mobile-topbar"><Brand /><span className="link-mobile-connection"><StatusDot state={!online ? 'failed' : pairPending ? 'waiting' : 'idle'} />{!online ? '网络已断开' : pairWaiting ? '等待电脑允许' : busy ? '正在连接' : '尚未连接'}</span></header>
     <section className="link-mobile-section link-mobile-pair-intro"><h1>连接你的电脑</h1><p>把桌面的项目和会话，接到手机上。</p></section>
     <section className="link-mobile-pair-card">
-      <div className="link-mobile-pair-symbol"><UIIcon name="link" size={28} /></div><h2>{pairWaiting ? '请在电脑上允许连接' : busy ? '正在发送连接请求…' : pairUri ? '连接工作台' : isNative() ? '扫码连接工作台' : '连接桌面工作台'}</h2><p>{pairWaiting ? '请求已发送，无需再次扫码或点击连接。' : busy ? '正在连接电脑，请稍候。' : pairUri ? '扫码后自动连接，仅需电脑确认。' : isNative() ? '在电脑「远程连接」中点击「连接手机」，再扫描电脑上的二维码。' : '在电脑「远程连接」中点击「连接手机」，在下方粘贴配对码。'}</p>
+      <div className="link-mobile-pair-symbol"><UIIcon name="link" size={28} /></div><h2 aria-label={!pairWaiting && busy ? '正在发送连接请求…' : undefined}>{pairWaiting ? '请在电脑上允许连接' : busy ? <LoadingText label="正在发送连接请求…" /> : pairUri ? '连接工作台' : isNative() ? '扫码连接工作台' : '连接桌面工作台'}</h2><p>{pairWaiting ? '请求已发送，无需再次扫码或点击连接。' : busy ? '正在连接电脑，请稍候。' : pairUri ? '扫码后自动连接，仅需电脑确认。' : isNative() ? '在电脑「远程连接」中点击「连接手机」，再扫描电脑上的二维码。' : '在电脑「远程连接」中点击「连接手机」，在下方粘贴配对码。'}</p>
       <label className="link-mobile-field" htmlFor="pair-name"><span>这台设备的名称</span><input id="pair-name" autoComplete="off" maxLength={100} value={name} disabled={pairPending} onChange={e => setName(e.target.value)} placeholder="我的手机" /></label>
       {pairDetails?.code && <div className="link-mobile-pair-details"><span>连接电脑</span><strong>{new URL(pairDetails.url).host}</strong><label className="link-mobile-field" htmlFor="pair-code"><span>已识别配对码</span><input id="pair-code" aria-label="已识别配对码" value={pairDetails.code} readOnly onFocus={event => event.target.select()} /></label></div>}
       {isNative() && !pairUri && <button className="link-mobile-scan-button" onClick={scan} disabled={busy}><UIIcon name="scan" size={21} />扫描桌面二维码</button>}
-      {(pairUri || !isNative()) && !pairTerminal && <Button kind="primary" onClick={pair} disabled={!pairUri.trim() || pairPending}>{busy ? '正在连接…' : pairWaiting ? '等待电脑允许…' : error ? '重试连接' : '连接工作台'}</Button>}
+      {(pairUri || !isNative()) && !pairTerminal && <Button kind="primary" onClick={pair} disabled={!pairUri.trim() || pairPending}>{busy ? <LoadingText label="正在连接…" /> : pairWaiting ? <LoadingText label="等待电脑允许…" /> : error ? '重试连接' : '连接工作台'}</Button>}
       {isNative() && pairUri && !pairPending && <Button icon="scan" onClick={scan}>重新扫码</Button>}
       {pairState && <div className={'link-mobile-pair-feedback ' + (pairWaiting ? '' : 'is-warning')} role="status"><StatusDot state={pairWaiting ? 'waiting' : pairState === 'approved' ? 'running' : 'failed'} /><div><strong>{pairWaiting ? '请在电脑上允许连接' : pairState === 'rejected' ? '电脑未允许这次连接' : pairState === 'expired' ? '配对码已过期' : '已确认'}</strong><p>{pairWaiting ? '打开电脑的「远程连接」，确认设备名称后点击「允许」。' : '请在电脑上生成新的二维码，再重新扫码。'}</p></div></div>}
       {error && <div className="link-mobile-pair-feedback is-warning"><ErrorText>{connectionError(error, isNative() && !!identity?.pin)}</ErrorText></div>}

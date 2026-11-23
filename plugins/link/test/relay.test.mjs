@@ -204,7 +204,7 @@ test('two Link hosts share a relay without replacing each other', async t => {
       webRoot: new URL('./', pathToFileURL(join(directory, 'index.html'))) });
     const channel = createRelayHost({ relayUrl: url, relayCa: identity.cert, token, hostKey: owner.key,
       target: { url: `https://127.0.0.1:${link.port}`, pin: owner.pin } });
-    hosts.push({ channel, link, id: 'sha256:' + owner.pin });
+    hosts.push({ channel, link, store, id: 'sha256:' + owner.pin });
   }
   for (let i = 0; i < 100 && hosts.some(host => !host.channel.status().connected); i++) await new Promise(resolve => setTimeout(resolve, 20));
   const info = host => request(relayPort, '/link/api/info', { headers: { 'x-benchgo-relay-target': host.id } });
@@ -214,6 +214,17 @@ test('two Link hosts share a relay without replacing each other', async t => {
   assert.equal(String(page.body), 'B');
   const cookie = page.headers['set-cookie'][0].split(';')[0];
   assert.equal(JSON.parse((await request(relayPort, '/link/api/info', { cookie })).body).hostName, 'B');
+  const targetHeaders = { 'x-benchgo-relay-target': hosts[1].id, 'content-type': 'application/json' };
+  const post = (path, body) => request(relayPort, path, { method: 'POST', headers: targetHeaders, body: JSON.stringify(body) });
+  const pairing = hosts[1].store.begin();
+  const pending = await post('/link/api/pair', { code: pairing.code, name: 'Android' });
+  assert.equal(pending.status, 200);
+  assert.equal(hosts[0].store.pending().length, 0);
+  const { requestId, pollToken } = JSON.parse(pending.body);
+  await hosts[1].store.decide(requestId, true);
+  const approved = await post('/link/api/pair/status', { requestId, pollToken });
+  assert.equal(JSON.parse(approved.body).hostName, 'B');
+  assert.equal((await post('/link/api/pair', { code: pairing.code, name: 'Replay' })).status, 400);
   await hosts[0].channel.close();
   for (let i = 0; i < 100 && (await info(hosts[0])).status !== 503; i++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal((await info(hosts[0])).status, 503);

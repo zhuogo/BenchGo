@@ -599,7 +599,8 @@ export function officialModelsUi() {
     build.onLoad({ filter: /ui-settings-models[\\/]src[\\/]client[\\/]EditorFooter\.tsx$/ }, async args => {
       let source = (await readFile(args.path, 'utf8')).replaceAll('\r\n', '\n');
       source = once(source, 'export interface EditorFooterProps {', 'export interface EditorFooterProps {\n  catalogActions?: boolean', 'catalog action variant');
-      source = once(source, "        {props.busy ? t(props.submitBusyLabelKey) : t(props.submitLabelKey)}", "        {props.busy ? <span className={styles['buttonSpinner']} aria-hidden=\"true\" /> : null}{props.busy ? t(props.submitBusyLabelKey) : t(props.submitLabelKey)}", 'submit spinner');
+      source = `import { LoadingText } from ${JSON.stringify(loading)};\n` + source;
+      source = once(source, "        {props.busy ? t(props.submitBusyLabelKey) : t(props.submitLabelKey)}", "        {props.busy ? <LoadingText label={t(props.submitBusyLabelKey)} /> : t(props.submitLabelKey)}", 'submit loading text');
       source = once(source, "className={styles['primaryButton']}", "className={props.catalogActions ? styles['secondaryButton'] : styles['primaryButton']}", 'unified catalog button style');
       const buttons = source.match(/^(      <button\n[\s\S]*?^      <\/button>)\n(      <button\n[\s\S]*?^      <\/button>)/m);
       if (!buttons) throw Error('Provider action buttons changed');
@@ -656,14 +657,12 @@ export function officialModelsUi() {
           .${rows} > :not(.${rowCard}), .${rowCard}:has(.${rowActions} > [aria-expanded=true]) { grid-column: 1 / -1; }
         }
       `;
-      const spinner = '.buttonSpinner{display:inline-block;vertical-align:middle;margin-right:7px;width:12px;height:12px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:commander-button-spin .7s linear infinite}@keyframes commander-button-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.buttonSpinner{animation:none}}';
-      module.exports.default.buttonSpinner = 'buttonSpinner';
       return { loader: 'js', contents: `
         export function mountOfficialModelsStyle() {
           const id = 'commander-official-models-style';
           let style = document.getElementById(id);
           if (!style) { style = document.createElement('style'); style.id = id; document.head.append(style); }
-          style.textContent = ${JSON.stringify(css.text + layout + spinner)};
+          style.textContent = ${JSON.stringify(css.text + layout)};
           style.dataset.users = String(Number(style.dataset.users || 0) + 1);
           let active = true;
           return () => {

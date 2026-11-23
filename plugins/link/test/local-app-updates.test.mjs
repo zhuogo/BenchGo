@@ -62,7 +62,7 @@ test('local APK update UI renders four states and completes check, source-save a
           :{...idle(),phase:'available',available:true,releaseVersion:'0.1.1',android:{version:'0.1.1',versionCode:13,url:'https://github.com/zhuogo/BenchGo/releases/download/v0.1.1/benchgo-0.1.1-android.apk'},notice:'发现已验证签名的手机新版本'};
         const runtime={isNative:()=>native,bootstrap:()=>({capabilities:{devices:true,appUpdates:true}}),clientName:()=> '这部手机',async call(action,args){
           window.calls.push({action,args,selectedSource:config.source});
-          if(action==='list')return{devices:[{id:'local',name:'这部手机',kind:'local',deviceType:'mobile',status:'online'}],capabilities:{ssh:false}};
+          if(action==='list')return{devices:[{id:'local',name:'这部手机',kind:'local',deviceType:'mobile',status:'online'}],capabilities:{ssh:native}};
           if(action==='appUpdateStatus')return mode==='loading'?new Promise(()=>{}):['idle','flow','entry'].includes(mode)?idle():checked();
           if(action==='appUpdateCheck'){await new Promise(resolve=>setTimeout(resolve,80));return checked();}
           if(action==='appUpdateConfigure'){config=args;return idle();}
@@ -91,7 +91,7 @@ test('local APK update UI renders four states and completes check, source-save a
         if (mode === 'loading') await page.getByRole('status', { name: '正在读取本机版本…' }).waitFor();
         else if (mode === 'error') await page.getByRole('alert').getByText('更新清单签名校验失败').waitFor();
         else if (mode === 'missing') { await page.getByText('已验证发布签名，尚无手机更新信息', { exact: true }).waitFor(); assert.equal(await page.getByText('本机应用已是最新版本', { exact: true }).count(), 0); }
-        else { await page.getByRole('button', { name: '立即更新', exact: true }).waitFor(); await page.getByText('统一发布 v0.1.1 · 已验证发布清单签名').waitFor(); }
+        else { await page.getByRole('button', { name: '立即更新', exact: true }).waitFor(); await page.getByText('BenchGo v0.1.0 → v0.1.1').waitFor(); }
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), mode + '/' + width + '/' + theme + ' overflow');
         if (screenshots) await page.screenshot({ path: join(screenshots, `${mode}-${width}-${theme}.png`), fullPage: true });
       }
@@ -126,12 +126,35 @@ test('local APK update UI renders four states and completes check, source-save a
     assert.equal(await page.evaluate(() => window.calls.filter(item => item.action === 'appUpdateCheck').at(-1).selectedSource), 'custom');
 
     await page.evaluate(() => window.renderScenario('entry', true));
+    const update = page.getByRole('button', { name: '检查应用更新', exact: true });
+    await update.waitFor();
+    assert.equal(await page.getByRole('tab', { name: '设备', exact: true }).count(), 0);
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 760 });
+      await page.getByText('这部手机', { exact: true }).waitFor();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      const centered = await page.locator('[data-device-icon=mobile] .dc-device-symbol').evaluate(tile => {
+        const slot = tile.getBoundingClientRect();
+        const ink = tile.querySelector('.cmd-ui-linear svg g').getBoundingClientRect();
+        return Math.abs(slot.x + slot.width / 2 - ink.x - ink.width / 2) < 1
+          && Math.abs(slot.y + slot.height / 2 - ink.y - ink.height / 2) < 1;
+      });
+      assert(centered, 'phone glyph is centered in the icon tile');
+      if (screenshots) await page.screenshot({ path: join(screenshots, 'android-device-center-' + width + '.png'), fullPage: true });
+    }
     await page.getByRole('button', { name: '这部手机设置', exact: true }).click();
+    await page.getByRole('dialog').waitFor();
+    assert.equal(await page.getByRole('region', { name: '本机应用更新', exact: true }).count(), 0);
+    await page.getByRole('button', { name: '关闭', exact: true }).click();
+    await update.click();
     await page.getByRole('region', { name: '本机应用更新', exact: true }).waitFor();
+    await page.getByRole('button', { name: '立即更新', exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.calls.filter(item => item.action.startsWith('appUpdate')).map(item => item.action)), ['appUpdateCheck']);
     await page.getByRole('button', { name: '关闭', exact: true }).click();
     await page.evaluate(() => window.renderScenario('entry', false));
     await page.getByRole('button', { name: '这部手机设置', exact: true }).click();
     await page.getByRole('dialog').waitFor();
+    assert.equal(await update.count(), 0);
     assert.equal(await page.getByRole('region', { name: '本机应用更新', exact: true }).count(), 0);
     assert.equal(await page.evaluate(() => window.calls.filter(item => item.action.startsWith('appUpdate')).length), 0);
     assert.deepEqual(errors, []);

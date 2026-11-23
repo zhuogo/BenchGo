@@ -8,12 +8,13 @@ import java.security.MessageDigest
 import java.util.Base64
 
 data class Identity(val url: String, val pin: String, val code: String, val name: String, val token: String,
-    val id: String = stableId(url, pin), val kind: String = "computer", val ssh: JSONObject? = null, val warning: String = "", val routes: JSONArray? = null, val alias: String = "", val hostId: String = "") {
-    val hostKey: String get() = "$url|$pin"
+    val id: String = stableId(url, pin), val kind: String = "computer", val ssh: JSONObject? = null, val warning: String = "", val routes: JSONArray? = null, val alias: String = "", val hostId: String = "", val relayTarget: String = "") {
+    val hostKey: String get() = if (relayTarget.isEmpty()) "$url|$pin" else "$url|$pin|$relayTarget"
     fun toJson() = JSONObject().apply {
         put("url", url); put("pin", pin); put("code", code); put("name", name); put("token", token)
         if (routes != null) put("routes", routes)
         if (hostId.isNotEmpty()) put("hostId", hostId)
+        if (relayTarget.isNotEmpty()) put("relayTarget", relayTarget)
         if (alias.isNotBlank()) put("alias", alias)
         put("id", id); put("kind", kind); if (ssh != null) put("ssh", ssh); if (warning.isNotBlank()) put("warning", warning)
     }
@@ -31,14 +32,18 @@ data class Identity(val url: String, val pin: String, val code: String, val name
             if (pin.isNotEmpty()) require(runCatching { Base64.getDecoder().decode(pin).size == 32 }.getOrDefault(false)) { "SPKI pin 无效" }
             val code = json.optString("code").trim()
             val token = json.optString("token").trim()
+            val relayTarget = validateRelayTarget(json.optString("relayTarget"), pin)
             require(code.length <= 256 && token.length <= 4096) { "设备凭据无效" }
             require(code.isNotEmpty() || token.isNotEmpty()) { "缺少配对码或设备令牌" }
-            return Identity(url, pin, code, json.optString("name").take(128), token, json.optString("id").ifBlank { stableId(url, pin) }, json.optString("kind", "computer"), json.optJSONObject("ssh"), json.optString("warning"), json.optJSONArray("routes"), json.optString("alias").take(128), json.optString("hostId"))
+            return Identity(url, pin, code, json.optString("name").take(128), token, json.optString("id").ifBlank { stableId(url, pin, relayTarget) }, json.optString("kind", "computer"), json.optJSONObject("ssh"), json.optString("warning"), json.optJSONArray("routes"), json.optString("alias").take(128), json.optString("hostId"), relayTarget)
         }
     }
 }
 
-internal fun stableId(url: String, pin: String): String = MessageDigest.getInstance("SHA-256").digest("$url|$pin".toByteArray()).take(16).joinToString("") { "%02x".format(it) }
+internal fun stableId(url: String, pin: String, relayTarget: String = ""): String {
+    val key = if (relayTarget.isEmpty()) "$url|$pin" else "$url|$pin|$relayTarget"
+    return MessageDigest.getInstance("SHA-256").digest(key.toByteArray()).take(16).joinToString("") { "%02x".format(it) }
+}
 
 /** The encrypted document migrates the original single identity without dropping its token. */
 internal class IdentityStore(context: Context) {

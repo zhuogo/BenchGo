@@ -135,12 +135,17 @@ export async function openStore(directory, { groupPrincipal = () => undefined } 
       const code = secret(), expiresAt = Date.now() + 300_000;
       pairings.set(hash(code), { expiresAt, registerReturn }); return { code, expiresAt };
     },
+    isPairingActive(code) {
+      prune();
+      return pairings.has(hash(text(code, '配对码', 128)));
+    },
     request(code, name, deviceType = 'unknown', returnOffer, groupInvitation) {
       prune(); const key = hash(text(code, '配对码', 128)); const value = pairings.get(key);
       if (!value) throw new Error('配对码已使用或过期');
+      const deviceName = text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100);
       pairings.delete(key);
       const pollToken = secret(), id = randomUUID();
-      pending.set(id, { id, name: text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100), deviceType: returnOffer ? 'computer' : ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pairingHash: key, pollHash: hash(pollToken), status: 'pending', returnOffer, groupInvitation, registerReturn: value.registerReturn });
+      pending.set(id, { id, name: deviceName, deviceType: returnOffer ? 'computer' : ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pairingHash: key, pollHash: hash(pollToken), status: 'pending', returnOffer, groupInvitation, registerReturn: value.registerReturn });
       return { requestId: id, pollToken, expiresAt: value.expiresAt, ...(returnOffer ? { reciprocal: true } : {}), ...(groupInvitation ? { deviceGroup: true } : {}) };
     },
     poll(id, pollToken) {

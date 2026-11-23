@@ -40,23 +40,42 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
       initialized.current = true;
     }
   };
-  const refresh = async (syncForm = false, signal) => {
-    const id = ++request.current, value = await management('status', {}, signal);
-    if (id === request.current) { applyStatus(value, syncForm); setStatusError(''); setDiagnostic(''); setLoading(false); }
+  const refresh = async (syncForm = false, signal, activePairingCode) => {
+    const id = ++request.current, value = await management('status', activePairingCode ? { activePairingCode } : {}, signal);
+    if (signal?.aborted || id !== request.current) return;
+    applyStatus(value, syncForm); setStatusError(''); setDiagnostic(''); setLoading(false);
     return value;
+  };
+  const createPairing = (mode, current, signal) => {
+    const address = mode === 'lan' && current.addresses?.includes(lanAddress) ? lanAddress : '';
+    return management('pairing', { mode, ...(address ? { address } : {}) }, signal);
   };
   useEffect(() => {
     const controller = new AbortController(); let timer;
+    const { signal } = controller;
+    const code = pairing?.code;
     const poll = async () => {
       let succeeded = false;
-      try { await refresh(false, controller.signal); succeeded = true; }
-      catch (e) { if (!controller.signal.aborted) { setStatusError(e.message); setDiagnostic(e.detail || ''); setLoading(false); setPairing(null); } }
-      finally { if (!controller.signal.aborted && succeeded) timer = setTimeout(poll, pairing ? 1_500 : 10_000); }
+      try {
+        const value = await refresh(false, signal, code);
+        succeeded = true;
+        if (value?.enabled && value.pairingActive === false && code) {
+          setPairing(current => current?.code === code && !current.invalid ? { ...current, invalid: true } : current);
+          try {
+            const next = await createPairing(pairing.mode, value, signal);
+            if (!signal.aborted) setPairing(current => current?.code === code ? next : current);
+          } catch (e) {
+            if (!signal.aborted) setPairing(current => current?.code === code ? { ...current, refreshError: e.message } : current);
+          }
+        }
+      }
+      catch (e) { if (!signal.aborted) { setStatusError(e.message); setDiagnostic(e.detail || ''); setLoading(false); setPairing(null); } }
+      finally { if (!signal.aborted && succeeded) timer = setTimeout(poll, pairing ? 1_500 : 10_000); }
     };
     const retry = async () => { clearTimeout(timer); await poll(); };
     retryPolling.current = retry;
     poll(); return () => { retryPolling.current = null; controller.abort(); clearTimeout(timer); };
-  }, [refreshToken, !!pairing]);
+  }, [refreshToken, pairing?.code]);
   useEffect(() => { if (lanAddress && !status?.addresses?.includes(lanAddress)) setLanAddress(''); }, [status?.addresses, lanAddress]);
   const saveConfig = async (input, syncForm = false) => {
     setPairing(null);
@@ -71,8 +90,7 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
     try {
       const { mode, publicUrl } = pairingConnection(status, defaults);
       const current = !status.enabled || (mode === 'public' && status.publicUrl !== publicUrl) ? await saveConfig({ enabled: true, ...(mode === 'public' && publicUrl ? { publicUrl } : {}) }) : status;
-      const address = mode === 'lan' && current.addresses?.includes(lanAddress) ? lanAddress : '';
-      setPairing(await management('pairing', { mode, ...(address ? { address } : {}) }));
+      setPairing(await createPairing(mode, current));
     } catch (e) { setError(e.message); } finally { setBusy(''); }
   };
   const confirm = async (id, action) => { setBusy(action); setError(''); try { const value = await management(action, { id }); ++request.current; applyStatus(value); } catch (e) { setError(e.message); } finally { setBusy(''); } };
@@ -177,6 +195,7 @@ export function PairingDialog({ pairing, pending = [], onClose, onConfirm, busy,
     return () => { if (previous?.isConnected) previous.focus(); };
   }, [approvalOpen]);
   const publicPairing = pairing.mode === 'public' || pairing.mode === 'relay';
+  useEffect(() => { setFeedback(null); }, [pairing.code, pairing.invalid]);
   const copy = async () => {
     try {
       if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
@@ -188,12 +207,12 @@ export function PairingDialog({ pairing, pending = [], onClose, onConfirm, busy,
     <div ref={dialog} className="link-dialog link-pair-dialog" role="dialog" aria-modal={approvalOpen ? undefined : 'true'} aria-labelledby={titleId} aria-describedby={warningId} tabIndex={-1}>
       <button type="button" className="link-dialog-close" onClick={onClose} aria-label="关闭配对窗口"><UIIcon name="close" size={20} /></button>
       <h3 id={titleId} className="link-pair-title"><UIIcon name="scan" size={20} />连接此设备</h3>
-      <PairQr value={publicPairing ? pairing.webUrl : pairing.uri} size={224} />
-      <small className="link-expiry">有效期至 {formatTime(pairing.expiresAt)}</small>
+      {pairing.invalid ? <div className="link-qr-refresh"><DeviceLoading label="正在刷新连接码…" /></div> : <PairQr value={publicPairing ? pairing.webUrl : pairing.uri} size={224} />}
+      {!pairing.invalid && <small className="link-expiry">有效期至 {formatTime(pairing.expiresAt)}</small>}
       <p id={warningId} className="link-pair-warning">仅授权你信任的设备，不要分享此二维码。</p>
-      <Button icon="copy" onClick={copy}>复制连接信息</Button>
+      <Button icon="copy" onClick={copy} disabled={pairing.invalid}>复制连接信息</Button>
       <p className={feedback?.ok === false ? 'link-copy-feedback link-error' : 'link-copy-feedback'} role="status" aria-live="polite">{feedback?.text || ''}</p>
-      {!approvalOpen && <ErrorText>{error}</ErrorText>}
+      {!approvalOpen && <ErrorText>{error || pairing.refreshError}</ErrorText>}
       {!!pending.length && <div className="link-pair-requests"><Button kind="primary" icon="devices" onClick={() => setDismissedPending('')} disabled={!!busy}>查看连接请求（{pending.length}）</Button></div>}
     </div>
   </div>{approvalOpen && <div className="link-dialog-backdrop link-approval-backdrop" role="presentation" onClick={event => { event.stopPropagation(); if (event.target === event.currentTarget) dismissApproval(); }}>

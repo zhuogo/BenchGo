@@ -605,12 +605,19 @@ test('one approval pairs both Link hosts over real TLS and each host can revoke 
       version: 2, available: true, operation: input.operation, sourceHost: access.verifiedSourceHostId ?? null,
     }) } : get(name);
   }
-  const invitation = await b.link.admin({ action: 'pairing' });
+  const invitation = await b.deviceApi({ action: 'hostPairing', mode: 'lan' });
+  const invitationStatus = () => b.deviceApi({ action: 'hostStatus', activePairingCode: invitation.code });
+  assert.equal((await invitationStatus()).pairingActive, true);
   const pending = await a.deviceApi({ action: 'pair', uri: invitation.uri });
   assert.deepEqual(await a.deviceApi({ action: 'pairStatus', requestId: pending.requestId }), { status: 'pending' });
   assert.equal(a.link.status().devices.length, 0);
   assert.equal(b.link.status().devices.length, 0);
-  const [request] = b.link.status().pending;
+  const scanned = await invitationStatus();
+  assert.equal(scanned.pairingActive, false);
+  const [request] = scanned.pending;
+  const next = await b.deviceApi({ action: 'hostPairing', mode: 'lan' });
+  assert.notEqual(next.code, invitation.code);
+  assert.deepEqual((await invitationStatus()).pending, [request]);
   assert.equal(request.reciprocal, true);
   assert.deepEqual(a.link.status().pending, []);
   await b.link.admin({ action: 'confirm', id: request.id });

@@ -40,8 +40,11 @@ test('real TLS certificate identity is stable and matches the QR SPKI', async t 
 });
 test('single-use pairing needs desktop approval and a secret poll token; devices survive restart and revoke', async t => {
   const f = await setup(t), pairing = f.store.begin();
+  assert.equal(f.store.isPairingActive(pairing.code), true);
   const pair = await f.call('/link/api/pair', { body: { code: pairing.code, name: 'Phone' } });
   assert.equal(pair.status, 200);
+  assert.equal(f.store.isPairingActive(pairing.code), false);
+  assert.equal(f.store.isPairingActive(f.store.begin().code), true);
   const query = pair.value;
   assert.equal((await f.call('/link/api/pair', { body: { code: pairing.code, name: 'Replay' } })).status, 400);
   assert.equal((await f.call('/link/api/pair/status', { body: { ...query, pollToken: 'wrong' } })).status, 400);

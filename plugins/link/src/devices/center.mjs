@@ -226,7 +226,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     const hostActions = { hostRelayTest: 'relay-test', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke', hostRenameDevice: 'rename-device' };
     if (Object.hasOwn(hostActions, input.action)) {
       if (typeof hostAdmin !== 'function') throw fail('此客户端不支持本机连接管理，请更新应用');
-      const fields = { hostRelayTest: ['id', 'url', 'token'], hostRelayPoolConfigure: ['expected', 'operation', 'id', 'url', 'token', 'enabled'], hostStatus: [], hostConfigure: ['enabled', 'host', 'port', 'publicUrl', 'name'], hostPairing: ['mode', 'address', 'relayId'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'], hostRenameDevice: ['id', 'name'] }[input.action];
+      const fields = { hostRelayTest: ['id', 'url', 'token'], hostRelayPoolConfigure: ['expected', 'operation', 'id', 'url', 'token', 'enabled'], hostStatus: ['activePairingCode'], hostConfigure: ['enabled', 'host', 'port', 'publicUrl', 'name'], hostPairing: ['mode', 'address', 'relayId'], hostConfirm: ['id'], hostReject: ['id'], hostRevoke: ['id'], hostRenameDevice: ['id', 'name'] }[input.action];
       return hostAdmin({ action: hostActions[input.action], ...Object.fromEntries(fields.filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]])) });
     }
     if (input.action === 'pair') {

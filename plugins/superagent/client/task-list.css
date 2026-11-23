@@ -77,7 +77,4 @@
 .ba-studio-body .ba-task-inline>.ba-task-dialog-body{flex:none;overflow:visible;overscroll-behavior:auto}
 .ba-task-inline .ba-activity-detail-title>span:last-child{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .ba-task-inline .ba-task-dialog-footer button{white-space:normal;min-height:36px}.ba-task-inline:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#315be8);outline-offset:-2px}
-.ba-task-icon-spinning{animation:ba-task-icon-spin 600ms linear infinite}
-@keyframes ba-task-icon-spin{to{transform:rotate(360deg)}}
-@media(prefers-reduced-motion:reduce){.ba-task-icon-spinning{animation:none}}
 @media(max-width:640px){.ba-task-inline-head{padding:8px 16px 12px}.ba-task-inline .ba-task-dialog-footer button{min-height:44px}}

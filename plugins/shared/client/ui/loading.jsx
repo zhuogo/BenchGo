@@ -1,16 +1,22 @@
 import React from 'react';
 import css from './loading.css';
 
-/** A quiet loading beat: one readable phrase, with characters lifted in order. */
-export function Loading({ label = '加载中', className = '', compact = false, ...props }) {
+export function LoadingText({ label = '加载中' }) {
   const text = String(label || '加载中');
   const characters = typeof Intl.Segmenter === 'function'
     ? Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), part => part.segment)
     : Array.from(text);
-  return <div {...props} className={`bg-loading${compact ? ' bg-loading-compact' : ''}${className ? ' ' + className : ''}`} role="status" aria-label={text} aria-live="polite" aria-atomic="true" aria-busy="true">
+  return <>
     <style>{css}</style>
-    <span className="bg-loading-text" aria-hidden="true" style={{ '--loading-cycle': `${Math.max(1.6, characters.length * .075 + .8)}s` }}>
+    <span className="bg-loading-text" style={{ '--loading-cycle': `${Math.max(1.6, characters.length * .075 + .8)}s` }}>
       {characters.map((character, index) => <span key={index} className="bg-loading-character" style={{ animationDelay: `${index * .075}s` }}>{character}</span>)}
     </span>
+  </>;
+}
+
+/** A quiet loading beat: one readable phrase, with characters lifted in order. */
+export function Loading({ label = '加载中', className = '', compact = false, ...props }) {
+  return <div {...props} className={`bg-loading${compact ? ' bg-loading-compact' : ''}${className ? ' ' + className : ''}`} role="status" aria-label={label || '加载中'} aria-live="polite" aria-atomic="true" aria-busy="true">
+    <span aria-hidden="true"><LoadingText label={label} /></span>
   </div>;
 }

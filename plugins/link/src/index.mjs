@@ -666,7 +666,10 @@ async function mountLinkHost(ctx, config) {
   const admin = async (input, pairingCenter = getCenter) => {
     if (closed) throw new Error('Link 已关闭');
     const action = text(input?.action, '操作');
-    if (action === 'status') return input.pairingCode === undefined ? status() : { pending: store.pending(input.pairingCode) };
+    if (action === 'status') {
+      if (input.pairingCode !== undefined) return { pending: store.pending(input.pairingCode) };
+      return { ...status(), ...(input.activePairingCode === undefined ? {} : { pairingActive: store.isPairingActive(input.activePairingCode) }) };
+    }
     if (action === 'pairing-probe') return store.beginProbe();
     if (action === 'relay-test') {
       const previous = input.id ? relayPool.find(node => node.id === input.id) : undefined;

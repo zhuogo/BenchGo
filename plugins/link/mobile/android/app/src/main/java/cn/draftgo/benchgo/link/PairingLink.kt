@@ -4,7 +4,12 @@ import java.net.URI
 import java.net.URLDecoder
 import java.util.Base64
 
-internal data class PairingLink(val url: String, val pin: String, val code: String, val name: String)
+internal data class PairingLink(val url: String, val pin: String, val code: String, val name: String, val relayTarget: String = "")
+
+internal fun validateRelayTarget(target: String, pin: String): String {
+    require(target.isEmpty() || pin.isEmpty() && Regex("^sha256:[A-Za-z0-9+/]{43}=$").matches(target)) { "中继目标无效" }
+    return target
+}
 
 /** Accept only Link pairing formats; scanning never navigates to arbitrary URLs. */
 internal fun parsePairingLink(raw: String): PairingLink {
@@ -20,7 +25,7 @@ internal fun parsePairingLink(raw: String): PairingLink {
             require(hostUri.rawQuery == null && hostUri.rawFragment == null &&
                 (hostUri.rawPath.isNullOrEmpty() || hostUri.rawPath == "/")) { "配对主机地址无效" }
             PairingLink(httpsOrigin(hostUri), query["pin"] ?: error("配对地址缺少安全身份"),
-                query["code"].orEmpty(), query["name"].orEmpty())
+                query["code"].orEmpty(), query["name"].orEmpty(), query["relayTarget"].orEmpty())
         }
         "https" -> {
             require(uri.rawPath in setOf("/link", "/link/", "/link/index.html")) { "请扫描 Link 配对页面的二维码" }
@@ -29,7 +34,7 @@ internal fun parsePairingLink(raw: String): PairingLink {
             val fragmentCode = fragment["code"]
             require(queryCode == null || fragmentCode == null || queryCode == fragmentCode) { "配对码存在冲突" }
             PairingLink(httpsOrigin(uri), "", fragmentCode ?: queryCode.orEmpty(),
-                fragment["name"] ?: query["name"].orEmpty())
+                fragment["name"] ?: query["name"].orEmpty(), query["relayTarget"].orEmpty())
         }
         else -> error("请使用 Link 的 HTTPS 配对地址或本地配对码")
     }
@@ -37,7 +42,8 @@ internal fun parsePairingLink(raw: String): PairingLink {
     if (result.pin.isNotEmpty()) {
         require(runCatching { Base64.getDecoder().decode(result.pin.removePrefix("sha256/")).size == 32 }.getOrDefault(false)) { "配对安全身份无效" }
     }
-    return result.copy(pin = result.pin.removePrefix("sha256/"), name = result.name.take(128))
+    val pin = result.pin.removePrefix("sha256/")
+    return result.copy(pin = pin, name = result.name.take(128), relayTarget = validateRelayTarget(result.relayTarget, pin))
 }
 
 private fun httpsOrigin(uri: URI): String {

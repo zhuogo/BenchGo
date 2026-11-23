@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
-/** Rasterize the canonical artwork; Android only adds adaptive-icon safe space. */
+/** Rasterize the canonical artwork and inset the Android system splash mark. */
 export async function prepareAndroidBrand(root = repositoryRoot) {
   const require = createRequire(join(root, 'deepseek-harness/apps/desktop/package.json'));
   const sharp = require('sharp');
@@ -24,16 +24,14 @@ export async function prepareAndroidBrand(root = repositoryRoot) {
   for (const [density, size] of [['mdpi', 48], ['hdpi', 72], ['xhdpi', 96], ['xxhdpi', 144], ['xxxhdpi', 192]]) {
     await save(`mipmap-${density}/ic_benchgo.png`, await sharp(app).resize(size, size).png().toBuffer());
   }
-  // A dedicated bitmap prevents <bitmap> from resolving the adaptive mipmap XML.
+  // Android 8–11 uses this density-independent startup bitmap.
   await save('drawable-nodpi/ic_benchgo_art.png', await sharp(app).resize(432, 432).png().toBuffer());
 
-  // 108dp layer at xxxhdpi. The tightly framed 680x480 mark at 68dp wide
-  // keeps its 600px-wide body at 60dp, inside the 66dp safe circle.
-  const foreground = await sharp(mark).resize({ width: 272 }).png().toBuffer();
+  // Inset the compact mark to keep its 600px-wide body at 60dp.
+  const foreground = await sharp(mark).resize({ width: 258 }).png().toBuffer();
   await save('drawable-nodpi/ic_benchgo_foreground_art.png', await sharp({
     create: { width: 432, height: 432, channels: 4, background: '#00000000' },
   }).composite([{ input: foreground, gravity: 'centre' }]).png().toBuffer());
-  // Android's required adaptive-icon and window backgrounds live in values/colors.xml.
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

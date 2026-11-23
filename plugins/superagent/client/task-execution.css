@@ -8,9 +8,7 @@
 .ba-execution-mark{display:flex;align-items:center;justify-content:center;flex:none;width:16px;height:20px;color:var(--ba-muted)}
 .ba-execution-mark i{width:6px;height:6px;border:1.5px solid currentColor;border-radius:50%}
 .ba-execution-mark[data-status=running]{color:var(--dsw-alias-state-business-primary,#438bea)}
-.ba-execution-mark[data-active=true] i{box-sizing:border-box;width:13px;height:13px;border:1.5px solid color-mix(in srgb,currentColor 22%,transparent);border-top-color:currentColor;border-right-color:currentColor;animation:ba-execution-spin .85s linear infinite}
-@keyframes ba-execution-spin{to{transform:rotate(360deg)}}
-@media(prefers-reduced-motion:reduce){.ba-execution-mark[data-active=true] i{animation:none}}
+.ba-execution-mark[data-active=true] .bg-loading-character{font-size:11px}
 .ba-execution-mark[data-status=completed]{color:var(--dsw-alias-state-success-primary,#36a36b)}
 .ba-execution-mark[data-status=failed]{color:var(--dsw-alias-state-error-primary,#d05c5c)}
 .ba-execution-worker-body{min-width:0;flex:1}

@@ -44,7 +44,7 @@ function fixture(component, props = {}) {
   const frameWindows = new Map();
   const render = () => { dirty = false; cursor = 0; tree = module.exports[component]({ ...props, runtime }); for (const node of nodes(tree)) if (node.type === 'iframe' && node.props.ref) { if (!frameWindows.has(node.props.src)) frameWindows.set(node.props.src, { messages: [], postMessage(data, origin) { this.messages.push({ data, origin }); } }); node.props.ref({ contentWindow: frameWindows.get(node.props.src) }); } for (const effect of effects.splice(0)) effect(); return tree; };
   const settle = async () => { for (let i = 0; i < 10; i++) { if (dirty) render(); await new Promise(resolve => setImmediate(resolve)); } return tree; };
-  return { calls, runtime, parent, settle, frameWindows, emit(event) { for (const fn of [...(listeners.get('message') || [])]) fn(event); }, nodes: () => nodes(tree), get tree() { return tree; }, async click(text) { const button = nodes(tree).find(node => typeof node.type === 'function' && textOf(node) === text); assert(button, text); await button.props.onClick(); return settle(); }, async tick() { const ready = [...timers.values()]; timers.clear(); for (const fn of ready) await fn(); return settle(); }, status(value) { pairStatus = value; } };
+  return { calls, runtime, parent, settle, frameWindows, emit(event, name = 'message') { for (const fn of [...(listeners.get(name) || [])]) fn(event); }, nodes: () => nodes(tree), get tree() { return tree; }, async click(text) { const button = nodes(tree).find(node => typeof node.type === 'function' && textOf(node) === text); assert(button, text); await button.props.onClick(); return settle(); }, async tick() { const ready = [...timers.values()]; timers.clear(); for (const fn of ready) await fn(); return settle(); }, status(value) { pairStatus = value; } };
 }
 
 test('device state remains unknown before probing and SSH credentials are preserved', () => {
@@ -65,9 +65,28 @@ test('pairing waits for approval and opens exactly the approved device', async (
   const added = [], view = fixture('AddComputer', { onAdded: value => added.push(value) }); await view.settle();
   view.nodes().find(node => node.type === 'textarea').props.onChange({ target: { value: 'dshlink://pair?url=https://desk&code=one' } }); await view.settle();
   await view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
-  assert(textOf(view.tree).includes('请在目标设备上允许连接')); assert.equal(added.length, 0);
+  assert(view.nodes().some(node => node.props.label === '请在目标设备上允许连接')); assert.equal(added.length, 0);
   view.status('approved'); await view.tick();
   assert.equal(added[0].id, 'desk'); assert.equal(view.calls.filter(item => item.action === 'pair').length, 1);
+});
+
+test('Android redelivery keeps the original pairing request through approval', async () => {
+  const added = [];
+  let scan = null;
+  const view = fixture('AddComputer', { onAdded: value => added.push(value), runtime: {
+    isNative: () => true, bootstrap: () => scan, contextUri: identity => identity.uri,
+  } });
+  await view.settle();
+  scan = { code: 'once', uri: 'benchgo://pair?url=https%3A%2F%2Fdesk&code=once' };
+  view.emit({}, 'link:bootstrap');
+  view.emit({}, 'link:bootstrap');
+  await view.settle();
+  await view.tick();
+  view.emit({}, 'link:bootstrap');
+  view.status('approved');
+  await view.tick();
+  assert.equal(view.calls.filter(item => item.action === 'pair').length, 1);
+  assert.equal(added[0]?.id, 'desk');
 });
 
 test('server authentication starts after fingerprint confirmation', async () => {
@@ -637,7 +656,7 @@ test('leaving a group from local settings requires confirmation', async () => {
 test('a phone local device opens its name settings instead of selecting a workbench', async () => {
   const view = fixture('DeviceCenter', { runtime: { isNative: () => true } }); await view.settle();
   const add = view.nodes().find(node => typeof node.type === 'function' && textOf(node) === '添加设备');
-  assert.equal(add.props.icon, undefined);
+  assert.equal(add.props.icon, 'plus');
   await view.nodes().find(node => node.props.className === 'dc-device-open' && textOf(node).includes('本机')).props.onClick(); await view.settle();
   assert.equal(view.calls.some(call => call.action === 'select'), false);
   assert(view.nodes().some(node => typeof node.type === 'function' && node.type.name === 'ManageDevice' && node.props.device.id === 'local'));

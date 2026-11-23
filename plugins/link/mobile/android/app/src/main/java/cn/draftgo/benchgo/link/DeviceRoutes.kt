@@ -13,6 +13,7 @@ internal data class DeviceRoute(
     val kind: String,
     val relayId: String = "",
     val priority: Int = 0,
+    val relayTarget: String = "",
 )
 
 internal class RouteHttpFailure(val status: Int, message: String) : IOException(message)
@@ -39,6 +40,9 @@ internal fun trustedRoutes(raw: JSONArray?, hostId: String = ""): JSONArray? {
                 kind == "relay" && target.pin.isEmpty()) { "连接路由信任配置无效" }
             put(JSONObject().put("url", target.url).put("pin", target.pin).put("kind", kind).apply {
                 if (kind == "relay") {
+                    val relayTarget = validateRelayTarget(route.optString("relayTarget"), target.pin)
+                    require(relayTarget.isEmpty() || hostId.isEmpty() || relayTarget == hostId) { "中继目标与主机身份不一致" }
+                    if (relayTarget.isNotEmpty()) put("relayTarget", relayTarget)
                     val relayId = route.optString("relayId").ifBlank { route.optString("id") }.take(128)
                     if (relayId.isNotEmpty()) put("relayId", relayId)
                     put("priority", route.optInt("priority", index))
@@ -57,10 +61,13 @@ private fun localRouteHost(url: String): Boolean {
 internal fun orderedDeviceRoutes(identity: Identity): List<DeviceRoute> {
     val expectedHostId = identity.hostId.ifBlank { if (identity.pin.isEmpty()) "" else "sha256:${identity.pin}" }
     val routes = trustedRoutes(identity.routes, expectedHostId)
-    if (routes == null || routes.length() == 0) return listOf(DeviceRoute(identity.url, identity.pin, if (identity.pin.isEmpty()) "relay" else "direct"))
+    if (routes == null || routes.length() == 0) return listOf(DeviceRoute(identity.url, identity.pin, if (identity.pin.isEmpty()) "relay" else "direct", relayTarget = identity.relayTarget))
     val candidates = (0 until routes.length()).map { index ->
         val route = routes.getJSONObject(index)
-        DeviceRoute(route.getString("url"), route.getString("pin"), route.getString("kind"), route.optString("relayId"), route.optInt("priority", index))
+        val url = route.getString("url")
+        val kind = route.getString("kind")
+        val relayTarget = route.optString("relayTarget").ifBlank { if (kind == "relay" && url == identity.url) identity.relayTarget else "" }
+        DeviceRoute(url, route.getString("pin"), kind, route.optString("relayId"), route.optInt("priority", index), relayTarget)
     }
     return orderDeviceRouteCandidates(candidates, identity.url)
 }

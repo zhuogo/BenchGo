@@ -177,6 +177,7 @@ class MainActivity : AppCompatActivity() {
         val value = JSONObject().apply {
             put("url", parsed.url); put("pin", parsed.pin); put("code", parsed.code)
             if (parsed.name.isNotEmpty()) put("name", parsed.name)
+            if (parsed.relayTarget.isNotEmpty()) put("relayTarget", parsed.relayTarget)
         }.toString()
         val saved = bridge.saveIdentity(value)
         val outcome = JSONObject(saved)
@@ -214,6 +215,21 @@ class MainActivity : AppCompatActivity() {
     }
     fun canOpenDevice(id: String): Boolean = workbenches.containsKey(id) || workbenches.size < 4
     fun workbenchLoading(loading: Boolean) { runOnUiThread { loadingView.setLoading(loading) } }
+    internal fun setWorkbenchCookies(identity: Identity, cookie: String, isCurrent: () -> Boolean, ready: (Boolean) -> Unit) {
+        if (!isCurrent()) return
+        val manager = android.webkit.CookieManager.getInstance()
+        val url = identity.url + "/link/workbench/"
+        if (identity.relayTarget.isEmpty()) {
+            manager.setCookie(url, cookie) { if (isCurrent()) ready(it) }
+            return
+        }
+        val route = "dsh_link_relay_target=" + identity.relayTarget + "; Path=/link; Secure; HttpOnly; SameSite=Lax"
+        manager.setCookie(url, route) { accepted ->
+            if (!isCurrent()) return@setCookie
+            if (accepted) manager.setCookie(url, cookie) { if (isCurrent()) ready(it) }
+            else ready(false)
+        }
+    }
     fun forgetDevice(id: String) {
         runOnUiThread { workbenches.remove(id)?.let { view -> if (view === webView) returnToDevices(); appearance.detach(view); deviceNavigation.detach(view); view.destroy() } }
     }
@@ -223,8 +239,7 @@ class MainActivity : AppCompatActivity() {
             if (!isCurrent()) return@runOnUiThread
             val cached = workbenches[identity.id]
             if (cached != null && cached.tag == identity.url) {
-                android.webkit.CookieManager.getInstance().setCookie(identity.url + "/link/workbench/", cookie) { accepted ->
-                    if (!isCurrent()) return@setCookie
+                setWorkbenchCookies(identity, cookie, isCurrent) { accepted ->
                     if (accepted) {
                         workbenchLoading(false)
                         showView(cached, identity.publicJson().optString("name")); workbenchIdentity = identity; pendingBootstrap = null
@@ -265,8 +280,7 @@ class MainActivity : AppCompatActivity() {
                     return runCatching { uploadPicker.launch(params.createIntent()); true }.getOrElse { uploadCallback?.onReceiveValue(null); uploadCallback = null; false }
                 }
             }
-            android.webkit.CookieManager.getInstance().setCookie(identity.url + "/link/workbench/", cookie) { accepted ->
-                if (!isCurrent()) return@setCookie
+            setWorkbenchCookies(identity, cookie, isCurrent) { accepted ->
                 if (accepted) {
                     val path = getSharedPreferences("link_locations", Context.MODE_PRIVATE).getString(identity.id, "/link/workbench/") ?: "/link/workbench/"
                     val restored = runCatching { URI(identity.url + path) }.getOrNull()
@@ -366,15 +380,19 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
     private val pairs = ConcurrentHashMap<String, NativePair>()
     private val routeCooldowns = ConcurrentHashMap<String, ConcurrentHashMap<DeviceRoute, Long>>()
     private val activeRoutes = ConcurrentHashMap<String, DeviceRoute>()
-    @Volatile private var pendingIdentity: Identity? = null
+    private val pendingIdentity = java.util.concurrent.atomic.AtomicReference<Identity?>()
     @Volatile private var devicesVisible = true
     private val connectionGeneration = java.util.concurrent.atomic.AtomicLong()
     private val servers = SshServerManager(context) { identity -> store.write(identity, false) }
     private val appUpdates = AppUpdates(context)
     private data class NativePair(val identity: Identity, val pollToken: String, val expiresAt: Long)
+    private fun existingDevice(identity: Identity) = store.all().firstOrNull {
+        it.hostKey == identity.hostKey ||
+            identity.relayTarget.isNotEmpty() && it.url == identity.url && it.pin.isEmpty() && it.hostId == identity.relayTarget
+    }
     private fun capabilities() = JSONObject().put("devices", true).put("ssh", true).put("appUpdates", true)
-    fun showDevices() { connectionGeneration.incrementAndGet(); pendingIdentity = null; devicesVisible = true }
-    private fun currentIdentity() = pendingIdentity ?: store.read()
+    fun showDevices() { connectionGeneration.incrementAndGet(); pendingIdentity.set(null); devicesVisible = true }
+    private fun currentIdentity() = pendingIdentity.get() ?: store.read()
     private fun canOpenAnother(id: String) = context.canOpenDevice(id)
 
     @JavascriptInterface
@@ -387,14 +405,14 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
             val value = JSONObject(raw)
             var incoming = Identity.parse(value)
             if (value.optString("localName").isNotBlank()) store.renameLocal(value.getString("localName"))
-            val existing = store.all().firstOrNull { it.hostKey == incoming.hostKey }
+            val existing = existingDevice(incoming)
             if (existing != null && existing.token.isNotEmpty() && incoming.token.isNotEmpty() && existing.token != incoming.token && incoming.code.isEmpty()) {
                 return errorJson("缺少一次性配对码")
             }
             if (existing != null && incoming.token.isEmpty() && incoming.code.isEmpty()) incoming = incoming.copy(token = existing.token)
             if (existing != null) incoming = incoming.copy(id = existing.id, kind = existing.kind, ssh = existing.ssh, alias = existing.alias,
                 routes = incoming.routes ?: existing.routes, hostId = incoming.hostId.ifBlank { existing.hostId })
-            if (incoming.token.isNotEmpty()) { store.write(incoming); pendingIdentity = null } else pendingIdentity = incoming
+            if (incoming.token.isNotEmpty()) { store.write(incoming); pendingIdentity.set(null) } else pendingIdentity.set(incoming)
             connectionGeneration.incrementAndGet(); devicesVisible = false
             onIdentity(bootstrap())
             JSONObject().put("ok", true).toString()
@@ -446,7 +464,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
         return connectOnDeviceRoute(candidates, { route -> (cooldowns[route] ?: 0) > System.currentTimeMillis() },
             { route -> cooldowns[route] = System.currentTimeMillis() + 10_000 }) { route ->
             check(isCurrent()) { "连接已取消" }
-            val candidate = identity.copy(url = route.url, pin = route.pin)
+            val candidate = identity.copy(url = route.url, pin = route.pin, relayTarget = route.relayTarget)
             val client = clientFor(candidate).newBuilder().connectTimeout(2, TimeUnit.SECONDS)
                 .readTimeout(5, TimeUnit.SECONDS).callTimeout(6, TimeUnit.SECONDS).retryOnConnectionFailure(false).build()
             val request = Request.Builder().url(candidate.url + "/link/api/info")
@@ -456,6 +474,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
                 JSONObject(result.body?.string() ?: "{}")
             }
             val hostId = info.optString("hostId")
+            if (candidate.relayTarget.isNotEmpty() && candidate.relayTarget != hostId) throw HostIdentityFailure()
             if (hostId.isNotEmpty()) {
                 val pin = hostPin(hostId)
                 if (identity.hostId.isNotEmpty() && identity.hostId != hostId ||
@@ -492,8 +511,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
                 val cookie = workbenchCookie(identity)
                 context.runOnUiThread {
                     if (generation != connectionGeneration.get() || store.selectedId() != identity.id) return@runOnUiThread
-                    android.webkit.CookieManager.getInstance().setCookie(identity.url + "/link/workbench/", cookie) { accepted ->
-                        if (generation != connectionGeneration.get() || store.selectedId() != identity.id) return@setCookie
+                    context.setWorkbenchCookies(identity, cookie, { generation == connectionGeneration.get() && store.selectedId() == identity.id }) { accepted ->
                         if (accepted) view.reload() else context.workbenchFailed("无法恢复设备会话，请重试")
                     }
                 }
@@ -533,7 +551,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
                 val identity = store.get(targetId) ?: error("设备不存在")
                 require(identity.kind != "ssh" || servers.status(identity.id) == "connected") { "SSH 隧道已断开，请重新连接" }
                 require(canOpenAnother(identity.id)) { "已保留 4 个工作台，请先关闭暂不用的设备页面" }
-                connectionGeneration.incrementAndGet(); store.select(identity.id); pendingIdentity = null; devicesVisible = false
+                connectionGeneration.incrementAndGet(); store.select(identity.id); pendingIdentity.set(null); devicesVisible = false
                 val launched = JSONObject(openWorkbench()); require(launched.optBoolean("ok")) { launched.optString("error") }
                 JSONObject().put("device", identity.publicJson())
             }
@@ -555,28 +573,34 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
                 context.getSharedPreferences("link_locations", Context.MODE_PRIVATE).edit().remove(targetId).apply()
                 JSONObject().put("ok", true)
             }
-            "pair" -> {
+            "pair" -> synchronized(pairs) {
                 pairs.entries.removeIf { it.value.expiresAt <= System.currentTimeMillis() }
-                require(pairs.size < 16) { "待批准连接过多" }
                 val parsed = parsePairingLink(input.optString("uri"))
-                val identity = Identity(parsed.url, parsed.pin, parsed.code, parsed.name, "")
+                val identity = Identity(parsed.url, parsed.pin, parsed.code, parsed.name, "",
+                    id = stableId(parsed.url, parsed.pin, parsed.relayTarget), relayTarget = parsed.relayTarget)
+                val existing = pairs.entries.firstOrNull { samePairing(it.value.identity, identity) }
+                if (existing != null) return@synchronized pairingRequest(existing.key, existing.value)
+                require(pairs.size < 16) { "待批准连接过多" }
                 val pair = post(identity, "/link/api/pair", JSONObject().put("code", identity.code).put("name", store.localName()).put("deviceType", "mobile"))
-                pairs[pair.getString("requestId")] = NativePair(identity, pair.getString("pollToken"), pair.optLong("expiresAt", System.currentTimeMillis() + 300000))
-                JSONObject().put("requestId", pair.getString("requestId"))
+                val id = pair.getString("requestId")
+                val pending = NativePair(identity, pair.getString("pollToken"), pair.optLong("expiresAt", System.currentTimeMillis() + 300000))
+                pairs[id] = pending
+                pairingRequest(id, pending)
             }
             "pairStatus" -> {
                 val id = input.optString("requestId"); val pair = pairs[id] ?: error("配对请求已过期")
                 val result = post(pair.identity, "/link/api/pair/status", JSONObject().put("requestId", id).put("pollToken", pair.pollToken))
                 if (result.optString("status") == "approved") {
-                    val previous = store.all().firstOrNull { it.hostKey == pair.identity.hostKey }
                     val hostId = result.optString("hostId")
                     val pin = hostPin(hostId)
                     if (pin.isNotEmpty() && pair.identity.pin.isNotEmpty() && pin != pair.identity.pin) throw HostIdentityFailure()
+                    if (pair.identity.relayTarget.isNotEmpty() && pair.identity.relayTarget != hostId) throw HostIdentityFailure()
+                    val previous = existingDevice(pair.identity)
                     val device = pair.identity.copy(name = result.optString("hostName").ifBlank { result.optString("name").ifBlank { pair.identity.name.ifBlank { "设备-" + pair.identity.id.take(5).uppercase() } } }, token = result.getString("token"), code = "", id = previous?.id ?: pair.identity.id, routes = trustedRoutes(result.optJSONArray("routes"), hostId), alias = previous?.alias.orEmpty(), hostId = hostId)
                     routeCooldowns.remove(device.id); activeRoutes.remove(device.id)
-                    store.write(device, false); pairs.remove(id)
+                    store.write(device, false); forgetPair(id, pair)
                     JSONObject().put("status", "approved").put("device", device.publicJson())
-                } else { if (result.optString("status") == "rejected") pairs.remove(id); JSONObject().put("status", result.optString("status")) }
+                } else { if (result.optString("status") in listOf("rejected", "expired")) forgetPair(id, pair); JSONObject().put("status", result.optString("status")) }
             }
             "sshProbe" -> servers.probe(input)
             "sshConnect" -> servers.connect(input)
@@ -593,6 +617,15 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
 
     private fun localDevice() = JSONObject().put("id", "local").put("name", store.localName()).put("kind", "local").put("deviceType", "mobile").put("status", "online")
         .put("appVersion", BuildConfig.VERSION_NAME).put("appVersionCode", BuildConfig.VERSION_CODE)
+
+    private fun samePairing(left: Identity, right: Identity) = left.hostKey == right.hostKey && left.code == right.code
+
+    private fun pairingRequest(id: String, pair: NativePair) = JSONObject().put("requestId", id).put("expiresAt", pair.expiresAt)
+
+    private fun forgetPair(id: String, pair: NativePair) {
+        pairs.remove(id, pair)
+        pendingIdentity.get()?.let { if (samePairing(it, pair.identity)) pendingIdentity.compareAndSet(it, null) }
+    }
 
     private fun post(identity: Identity, path: String, body: JSONObject): JSONObject {
         val request = Request.Builder().url(identity.url + path).post(body.toString().toRequestBody("application/json".toMediaType())).build()
@@ -619,6 +652,11 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
             val uri = URI(identity.url)
             val builder = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
                 .connectTimeout(12, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS)
+            if (identity.relayTarget.isNotEmpty()) {
+                builder.addInterceptor { chain ->
+                    chain.proceed(chain.request().newBuilder().header("x-benchgo-relay-target", identity.relayTarget).build())
+                }
+            }
             if (identity.pin.isNotEmpty()) {
                 // The QR pin is the trust anchor for local self-signed certificates.
                 val trust = object : javax.net.ssl.X509TrustManager {

@@ -216,14 +216,45 @@ test('pairing refreshes status quickly while settings retain the normal idle pol
   await view.find(view.render(), '生成连接信息').props.onClick(); stopIdle();
   view.render(); const stopPairing = view.effects[1](); await new Promise(resolve => setImmediate(resolve));
   assert.equal([...view.timers.values()][0].delay, 1_500);
-  assert.deepEqual(Array.from(view.effectDeps[1]), [0, true]);
+  assert.deepEqual(Array.from(view.effectDeps[1]), [0, 'FULL.CODE']);
   stopPairing();
   const callsBefore = view.calls.length;
   view.render(view.exports.LinkSettings, { refreshToken: 42 });
-  assert.deepEqual(Array.from(view.effectDeps[1]), [42, true]);
+  assert.deepEqual(Array.from(view.effectDeps[1]), [42, 'FULL.CODE']);
   const stopRefresh = view.effects[1](); await new Promise(resolve => setImmediate(resolve));
   assert.equal(view.calls.length, callsBefore + 1); assert.equal(view.calls.at(-1).action, 'status');
   stopRefresh();
+});
+
+test('the desktop replaces only the consumed QR and keeps its approval request', async () => {
+  let active = true, issued = 0, finishRefresh;
+  const view = fixture({ origin: 'http://localhost:3000', respond: async (action, input, status) => {
+    if (action === 'pairing') {
+      const code = `CODE-${++issued}`, next = { mode: input.mode, code, uri: `benchgo://pair?code=${code}` };
+      if (issued === 1) return next;
+      return new Promise(resolve => { finishRefresh = () => resolve(next); });
+    }
+    return { ...status, ...(input.activePairingCode ? { pairingActive: active } : {}) };
+  } });
+  const dialog = () => nodes(view.render()).find(node => node.type === view.exports.PairingDialog);
+  view.render(); const stopIdle = view.effects[1](); await new Promise(resolve => setImmediate(resolve));
+  await view.find(view.render(), '生成连接信息').props.onClick();
+  stopIdle();
+  view.status.pending = [{ id: 'other' }];
+  view.render(); const stopPairing = view.effects[1](); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(issued, 1);
+  assert.equal(view.calls.at(-1).input.activePairingCode, 'CODE-1');
+
+  active = false;
+  view.status.pending.push({ id: 'scanned' });
+  const rotation = [...view.timers.values()].at(-1).callback();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(dialog().props.pairing.invalid, true);
+  assert.equal(issued, 2);
+  finishRefresh(); await rotation;
+  assert.equal(dialog().props.pairing.code, 'CODE-2');
+  assert.deepEqual(dialog().props.pending.map(device => device.id), ['other', 'scanned']);
+  stopPairing();
 });
 
 test('host failure ends loading, disables dependent actions, stops polling and recovers on retry', async () => {

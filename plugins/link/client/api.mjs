@@ -5,7 +5,7 @@ let browserIdentity;
 const localSaves = new Map();
 const identityKey = value => JSON.stringify([
   String(value?.url || '').trim().replace(/\/+$/, ''), String(value?.pin || '').trim().replace(/^sha256\//, ''),
-  String(value?.code || '').trim(), String(value?.name || '').slice(0, 128), String(value?.token || '').trim(),
+  String(value?.code || '').trim(), String(value?.name || '').slice(0, 128), String(value?.token || '').trim(), value?.relayTarget || '',
 ]);
 if (typeof window !== 'undefined') window.__linkNativeResult = (id, value) => {
   const request = pending.get(id);
@@ -147,14 +147,23 @@ export function pairingContext(input) {
     if (uri.hostname !== 'pair' || uri.username || uri.password || uri.port || !['', '/'].includes(uri.pathname) || uri.hash) throw new Error('配对地址无效');
     const url = uri.searchParams.get('url');
     if (!url || new URL(url).protocol !== 'https:') throw new Error('配对主机必须使用 HTTPS');
-    return { url, code: uri.searchParams.get('code') || '', pin: uri.searchParams.get('pin') || '', ...(uri.searchParams.get('name') ? { name: uri.searchParams.get('name').slice(0, 128) } : {}) };
+    const pin = uri.searchParams.get('pin') || '', name = uri.searchParams.get('name');
+    return { url, code: uri.searchParams.get('code') || '', pin, ...pairingRelayTarget(uri, pin), ...(name ? { name: name.slice(0, 128) } : {}) };
   }
   if (uri.protocol !== 'https:' || (!isNative() && uri.origin !== location.origin)) throw new Error('请在主机提供的 HTTPS 页面中配对');
   const fragment = new URLSearchParams(uri.hash.slice(1));
   const name = fragment.get('name') || uri.searchParams.get('name');
-  return { url: uri.origin, code: fragment.get('code') || uri.searchParams.get('code') || '', ...(name ? { name: name.slice(0, 128) } : {}) };
+  return { url: uri.origin, code: fragment.get('code') || uri.searchParams.get('code') || '', ...pairingRelayTarget(uri), ...(name ? { name: name.slice(0, 128) } : {}) };
 }
+
+function pairingRelayTarget(uri, pin) {
+  const targets = uri.searchParams.getAll('relayTarget');
+  if (!targets.length) return {};
+  if (pin || targets.length !== 1 || !/^sha256:[A-Za-z0-9+/]{43}=$/.test(targets[0])) throw new Error('中继目标无效');
+  return { relayTarget: targets[0] };
+}
+
 export function contextUri(value) {
   if (!value?.url || !value?.code) return '';
-  return `benchgo://pair?${new URLSearchParams({ url: value.url, pin: value.pin || '', code: value.code, ...(value.name ? { name: value.name } : {}) })}`;
+  return `benchgo://pair?${new URLSearchParams({ url: value.url, pin: value.pin || '', code: value.code, ...(value.name ? { name: value.name } : {}), ...(value.relayTarget ? { relayTarget: value.relayTarget } : {}) })}`;
 }

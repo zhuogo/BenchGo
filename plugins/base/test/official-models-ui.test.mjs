@@ -75,11 +75,14 @@ test('official Models CSS remains a scoped module rather than a text export', as
   const { contents, loader } = await transform('ModelsSection.module.css');
   assert.equal(loader, 'js');
   assert(contents.includes('commander-official-models-style'));
-  assert(contents.includes('buttonSpinner'));
-  assert(contents.includes('commander-button-spin'));
   assert(contents.includes('export default {'));
   assert(contents.includes('"addCard":'));
   assert.doesNotMatch(contents, /addModes|addPanel/);
+});
+
+test('busy provider submits use the shared loading text', async () => {
+  const { contents } = await transform('EditorFooter.tsx');
+  assert.match(contents, /<LoadingText label=\{t\(props\.submitBusyLabelKey\)\} \/>/);
 });
 
 test('official Models stylesheet restores on dependency reactivation and supports overlapping owners', async () => {

@@ -2,6 +2,7 @@ import React, { useId } from 'react';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
 import { ResourceState } from './resource-state.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
+import { LoadingText } from '../../shared/client/ui/loading.jsx';
 import css from './task-execution.css';
 import { executionStatusText } from '../src/task-lifecycle.mjs';
 
@@ -23,7 +24,7 @@ function UpdatedAt({ value }) {
 }
 function ExecutionMark({ status, active, label }) {
   const paths = status === 'completed' ? <path d="m4 8 3 3 5-6" /> : status === 'failed' ? <><path d="m5 5 6 6m0-6-6 6" /></> : status === 'cancelled' ? <path d="M5 8h6" /> : null;
-  return <Tooltip label={label}><span className="ba-execution-mark" data-status={status} data-active={active ? 'true' : undefined} role="img" aria-label={label} tabIndex={0}>{paths ? <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths}</svg> : <i aria-hidden="true" />}</span></Tooltip>;
+  return <Tooltip label={label}><span className="ba-execution-mark" data-status={status} data-active={active ? 'true' : undefined} role="img" aria-label={label} tabIndex={0}>{paths ? <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths}</svg> : active ? <span aria-hidden="true"><LoadingText label="…" /></span> : <i aria-hidden="true" />}</span></Tooltip>;
 }
 
 /** One timeline of retained summaries, executor activity history and current facts. */

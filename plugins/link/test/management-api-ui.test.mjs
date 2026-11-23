@@ -11,6 +11,21 @@ test('branded connection information round trips while legacy links remain accep
   for (const uri of ['benchgo://other?code=x', 'benchgo://pair/other?code=x', 'benchgo://user@pair?code=x', 'benchgo://pair:123?code=x', 'benchgo://pair?code=x#extra']) assert.throws(() => pairingContext(uri), /地址无效/);
 });
 
+test('Android bootstrap round trips the target of a shared relay QR', t => {
+  const relayTarget = 'sha256:' + 'A'.repeat(43) + '=';
+  const qr = new URL('https://relay.example/link/#code=one-use');
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: qr });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, 'location', previous); else delete globalThis.location; });
+  qr.searchParams.set('relayTarget', relayTarget);
+  const scanned = pairingContext(qr.href);
+  assert.equal(scanned.relayTarget, relayTarget);
+  assert.deepEqual(pairingContext(contextUri(scanned)), { ...scanned, pin: '' });
+  qr.searchParams.append('relayTarget', relayTarget);
+  assert.throws(() => pairingContext(qr.href), /中继目标无效/);
+  assert.throws(() => pairingContext(contextUri({ ...scanned, pin: relayTarget.slice(7) })), /中继目标无效/);
+});
+
 test('management API preserves same-origin credentials, bounds requests and returns recoverable 404 diagnostics', async () => {
   const previous = new Map();
   const calls = [];

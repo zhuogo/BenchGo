@@ -1,10 +1,10 @@
-应用名称为“BenchGo”。图标只从 `assets/brand/benchgo-app.svg`（透明方标）与 `benchgo-mark.svg`（紧凑透明形象）生成，PC 与 Android 使用同一形象，保留母版比例、细节、原有阴影和必要的透明留白，不额外绘制外圈底板。
+应用名称为“BenchGo”。PC 与 Android 图标均由 [统一品牌母版](../../../../assets/brand/README.md) 生成。
 
 - `mipmap-*/ic_benchgo.png`：由方标母版生成 48 / 72 / 96 / 144 / 192px 各密度图标。
-- `drawable-nodpi/ic_benchgo_art.png`：方标的 432px 位图，供 `drawable/ic_benchgo.xml` 与 Android 8–11 启动页使用，避免位图引用命中自适应 XML。
-- `drawable-nodpi/ic_benchgo_foreground_art.png`：108dp（432px）透明画布，等比放置完整透明母版；主体宽 60dp，位于 Android 自适应图标 66dp 安全圆内。
-- 普通与圆形 launcher 都使用 `mipmap/ic_benchgo`；Android 8+ 由系统蒙版裁切自适应前景。Android 12+ 启动页使用同一透明前景。
-- 系统背景色 `#E8EAE5` 由 `values/colors.xml` 独立维护，供自适应图标背景层、启动页及初始原生窗口使用；不从透明 SVG 的内部图形猜测背景色。紧凑母版按 68dp 宽等比放置于自适应前景，保持主体宽 60dp，避免系统蒙版裁切。
+- `drawable-nodpi/ic_benchgo_art.png`：方标的 432px 位图，供 Android 8–11 启动页使用。
+- `drawable-nodpi/ic_benchgo_foreground_art.png`：108dp（432px）透明画布，居中放置宽约 60dp 的吉祥物，供 Android 12+ 系统启动页使用。
+- 普通与圆形 launcher 均使用透明的 `mipmap/ic_benchgo`。桌面启动器可以按系统主题添加外框。
+- `values/colors.xml` 维护原生窗口及启动页的背景色。
 
 `preBuild` 的 `prepareBenchGoBrand` 任务使用已有 Node 与官方 Desktop 锁定的 `sharp` 依赖，在母版或生成器变化时自动生成资源；根目录 `npm run build:android` 和直接 Gradle 构建都遵循此步骤。先运行根目录 `npm run setup` 安装官方依赖。仅同步图标可运行：
 

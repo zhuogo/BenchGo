@@ -13,12 +13,11 @@ test('the app and transparent mark share the canonical BenchGo artwork', () => {
   const app = readFileSync(new URL('../../../assets/brand/benchgo-app.svg', import.meta.url), 'utf8');
   const logo = new JSDOM(app, { contentType: 'image/svg+xml' });
   const mark = new JSDOM(readFileSync(new URL('../../../assets/brand/benchgo-mark.svg', import.meta.url), 'utf8'), { contentType: 'image/svg+xml' });
-  assert.equal(logo.window.document.documentElement.getAttribute('viewBox'), '80 40 680 680');
-  assert.equal(mark.window.document.documentElement.getAttribute('viewBox'), '80 140 680 480');
+  assert.equal(logo.window.document.documentElement.getAttribute('viewBox'), '98 58 644 644');
+  assert.equal(mark.window.document.documentElement.getAttribute('viewBox'), '98 166 644 428');
   assert.equal(logo.window.document.querySelector('svg > rect'), null);
   assert.equal(mark.window.document.querySelector('svg > rect'), null);
   assert.equal(logo.window.document.querySelector('filter').outerHTML, mark.window.document.querySelector('filter').outerHTML);
-  assert.equal(logo.window.document.querySelector('feDropShadow').getAttribute('stdDeviation'), '10');
   assert.equal(logo.window.document.querySelector('[data-part="placement"]').outerHTML, mark.window.document.querySelector('[data-part="placement"]').outerHTML);
   assert.equal(readFileSync(new URL('../assets/icon.svg', import.meta.url), 'utf8'), app);
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));

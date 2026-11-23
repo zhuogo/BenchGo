@@ -22,6 +22,15 @@ class PairingLinkTest {
         }
     }
 
+    @Test fun sharedRelayTargetSurvivesHttpsQrAndCopiedLink() {
+        val target = "sha256:" + "A".repeat(41) + "+/="
+        val encoded = java.net.URLEncoder.encode(target, "UTF-8")
+        val expected = PairingLink("https://relay.example", "", "one-time-code", "", target)
+        assertEquals(expected, parsePairingLink("https://relay.example/link/?relayTarget=$encoded#code=one-time-code"))
+        assertEquals(expected, parsePairingLink("benchgo://pair?url=https%3A%2F%2Frelay.example&code=one-time-code&relayTarget=$encoded"))
+        assertTrue(runCatching { parsePairingLink("https://relay.example/link/?relayTarget=unknown#code=one-time-code") }.isFailure)
+    }
+
     @Test fun customSchemesStillRequireThePairHostAndValidParameters() {
         for (scheme in listOf("benchgo", "dshlink")) {
             for (address in listOf(

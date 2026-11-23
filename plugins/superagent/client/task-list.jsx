@@ -2,6 +2,7 @@ import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { Dialog, DialogContent, DialogTitle } from '../../shared/client/ui/dialog.jsx';
+import { LoadingText } from '../../shared/client/ui/loading.jsx';
 import { UIIcon } from '../../base/client/iconsax.jsx';
 import css from './task-list.css';
 import { Tooltip } from '../../shared/client/ui/tooltip.jsx';
@@ -27,7 +28,7 @@ export function TaskStatusTitle({ title, status, label }) {
 
 export function TaskIconButton({ label, tooltip = label, icon, spinning = false, ...props }) {
   const paths = { play: <path d="m8 5 11 7-11 7Z" /> };
-  return <Tooltip label={tooltip}><Button variant="ghost" size="icon" type="button" className="ba-task-icon" aria-label={label} aria-busy={spinning || undefined} {...props}>{paths[icon] ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">{paths[icon]}</svg> : <UIIcon name={icon} size={18} className={spinning ? 'ba-task-icon-spinning' : undefined} />}</Button></Tooltip>;
+  return <Tooltip label={tooltip}><Button variant="ghost" size="icon" type="button" className="ba-task-icon" aria-label={label} aria-busy={spinning || undefined} {...props}>{spinning ? <span aria-hidden="true"><LoadingText label="…" /></span> : paths[icon] ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">{paths[icon]}</svg> : <UIIcon name={icon} size={18} />}</Button></Tooltip>;
 }
 
 export function TaskDetail({ open, title, onClose, dirty = false, children, footer, headerActions, inline = false }) {
