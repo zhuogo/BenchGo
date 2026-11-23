@@ -1,5 +1,6 @@
 import { taskExecutionBlocked, taskStopped, taskPaused } from './task-lifecycle.mjs';
 import { createHash, randomUUID } from 'node:crypto';
+import { normalizeTaskTitle } from './task-title.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -48,16 +49,19 @@ export function installTaskInputStore({ db, tx, api }) {
       if (old.task_id === input.taskId && old.trigger_id === input.triggerId && input.kind === 'context') return value(old);
       if (old.task_id === input.taskId && old.trigger_id === input.triggerId && old.kind === 'context'
         && (old.state === 'pending' && ['revision', 'stop', 'pause'].includes(input.kind)
-          || old.state === 'applied' && ['stop', 'pause'].includes(input.kind))) {
+          || old.state === 'applied' && (input.confirmWorkerMessage || ['stop', 'pause'].includes(input.kind)))) {
         // Subscription delivery may consume this same owner message before the
         // Router resolves its explicit control intent. Refine one source receipt
         // while retaining the complete prior consumption evidence, never replay it.
         const consumed = old.state === 'applied' ? { contextReceipt: { kind: old.kind, state: old.state,
           fingerprint: old.fingerprint, instructionRevision: old.instruction_revision, authorizationVersion: old.authorization_version,
           snapshot: old.snapshot ? JSON.parse(old.snapshot) : null, application: old.application ? JSON.parse(old.application) : null } } : {};
-        const nextSnapshot = Object.keys(consumed).length ? { ...(input.snapshot || {}), ...consumed } : input.snapshot ?? null;
-        db.prepare("UPDATE sa_task_inputs SET kind=?,fingerprint=?,instruction_revision=?,authorization_version=?,snapshot=?,state='pending',application=NULL WHERE id=?")
-          .run(input.kind, fingerprint, revision, authorizationVersion, nextSnapshot ? JSON.stringify(nextSnapshot) : null, old.id);
+        const workerMessage = old.snapshot && JSON.parse(old.snapshot).workerMessage;
+        const nextSnapshot = Object.keys(consumed).length || workerMessage
+          ? { ...(input.snapshot || {}), ...consumed, ...(workerMessage ? { workerMessage } : {}) } : input.snapshot ?? null;
+        db.prepare('UPDATE sa_task_inputs SET kind=?,fingerprint=?,instruction_revision=?,authorization_version=?,snapshot=?,state=?,application=? WHERE id=?')
+          .run(input.kind, fingerprint, revision, authorizationVersion, nextSnapshot ? JSON.stringify(nextSnapshot) : null,
+            input.confirmWorkerMessage ? 'applied' : 'pending', input.confirmWorkerMessage ? old.application : null, old.id);
         return value(db.prepare('SELECT * FROM sa_task_inputs WHERE id=?').get(old.id));
       }
       if (old.task_id !== input.taskId || old.trigger_id !== input.triggerId || old.kind !== input.kind
@@ -79,6 +83,12 @@ export function installTaskInputStore({ db, tx, api }) {
       || !run || run.owner !== application.owner || run.fence !== application.fence || (application.sessionId && run.sessionId !== application.sessionId)) throw fail('FENCING_CONFLICT', '输入应用不属于当前真实执行');
     db.prepare("UPDATE sa_task_inputs SET state='applied',application=? WHERE id=?").run(JSON.stringify({ ...application, at: new Date().toISOString() }), row.id);
     return value(db.prepare('SELECT * FROM sa_task_inputs WHERE id=?').get(row.id));
+  }
+  function applyTitle(input) {
+    if (!input || input.kind !== 'revision' || !input.snapshot?.title) return false;
+    const title = normalizeTaskTitle(input.snapshot.title);
+    return db.prepare('UPDATE sa_tasks SET title=? WHERE id=? AND instruction_revision=? AND title<>?')
+      .run(title, input.taskId, input.instructionRevision, title).changes > 0;
   }
   function updatePayload(row, current, at) {
     const prior = JSON.parse(row.payload);
@@ -110,23 +120,11 @@ export function installTaskInputStore({ db, tx, api }) {
     taskInputs: taskId => db.prepare('SELECT * FROM sa_task_inputs WHERE task_id=? ORDER BY rowid').all(taskId).map(value),
     pendingTaskInputs: taskId => db.prepare("SELECT * FROM sa_task_inputs WHERE task_id=? AND state='pending' ORDER BY rowid").all(taskId).map(value),
     applyTaskInputInTransaction: applyInput,
+    applyWorkerMessageTitleInTransaction: applyTitle,
     applyTaskInput: (triggerId, application) => tx(() => applyInput(triggerId, application)),
     applyTaskStopInputInTransaction: controlApplied,
     applyTaskStopInput: (taskId, triggerId) => tx(() => controlApplied(taskId, triggerId)),
     applyTaskPauseInputInTransaction: (taskId, triggerId) => controlApplied(taskId, triggerId, 'pause'),
-    saveExecutionInputDisposition(triggerId, { assignmentId, owner, fence, runId, sessionId, disposition }) {
-      return tx(() => {
-        const assignment = api.getAssignment(assignmentId), run = assignment && api.runs(assignmentId).find(row => row.id === runId);
-        const input = assignment && db.prepare('SELECT * FROM sa_task_inputs WHERE task_id=? AND trigger_id=?').get(assignment.taskId, triggerId);
-        if (!assignment || assignment.state !== 'claimed' || assignment.owner !== owner || assignment.fence !== fence || assignment.leaseUntil <= Date.now()
-          || !run || run.owner !== owner || run.fence !== fence || run.sessionId !== sessionId || !input) throw fail('FENCING_CONFLICT', '执行输入分诊不属于当前真实执行');
-        if (input.kind !== 'context') return value(input);
-        // A context receipt has no requirement snapshot. Reuse that existing JSON
-        // slot for its host disposition; no parallel input or lifecycle ledger.
-        db.prepare('UPDATE sa_task_inputs SET snapshot=? WHERE id=?').run(JSON.stringify({ executionInput: disposition }), input.id);
-        return value(db.prepare('SELECT * FROM sa_task_inputs WHERE id=?').get(input.id));
-      });
-    },
     appliedTaskSnapshot(assignmentId) {
       const assignment = api.getAssignment(assignmentId);
       if (!assignment) throw fail('ASSIGNMENT_NOT_FOUND', '执行安排不存在');

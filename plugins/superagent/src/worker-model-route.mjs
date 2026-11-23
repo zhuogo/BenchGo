@@ -4,6 +4,14 @@ export const selectWorkerModel = (agent, model) => agent.model?.select?.({ provi
   ...(model.options?.reasoningEffort === undefined ? {} : { reasoningEffort: model.options.reasoningEffort }) });
 const fail = message => Object.assign(new Error(message), { code: 'WORKER_MODEL_ROUTE' });
 
+export function usesLocalOfficialWorker(database, task) {
+  if (!task || task.mandate.execution) return false;
+  const assignment = database.assignments(task.id).at(-1);
+  const run = assignment && database.runs(assignment.id).at(-1);
+  const frozen = run && database.getWorkerExecutionState(run.id);
+  return (frozen?.models?.[0]?.harness || assignment?.model?.harness || 'official') === 'official';
+}
+
 /** A Run keeps the route frozen at its creation, never today's configuration. */
 export function workerModelRoute({ policy, assignment, savedQueue, resumed }) {
   // A continued Run without its frozen route must not silently adopt current settings.

@@ -7,6 +7,7 @@ import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { Agent, createServer as createHttpsServer } from 'node:https';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { mountLink } from '../src/index.mjs';
 import { createDeviceProxy } from '../src/devices/proxy.mjs';
 import { openDeviceGroup } from '../src/devices/group.mjs';
@@ -107,6 +108,100 @@ async function waitForGroup(condition) {
   } while (Date.now() < deadline);
   assert.fail('device group changes did not propagate');
 }
+
+test('one mobile approval syncs every saved host asset and grants revocable access', async t => {
+  if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }
+  const terminalCalls = [];
+  const windows = await host(t, 'Windows', [], null, { host: '::' }, { linkConfig: {
+    deviceManagerFactory: async () => ({
+      sshTarget() {}, state() {}, agentAvailable: () => false,
+      openTerminal: async deviceId => { terminalCalls.push(['open', deviceId]); return { id: 'pty-1' }; },
+      writeTerminal: async input => { terminalCalls.push(['write', input.deviceId, input.data]); return { ok: true }; },
+      closeTerminal: async input => { terminalCalls.push(['close', input.deviceId]); return { ok: true }; },
+      disconnect: async () => {}, close: async () => {},
+    }),
+  } });
+  const peer = await host(t, '组内服务器', [], null, { host: '::' });
+  const target = await host(t, 'A', [], null, { host: '::' });
+  target.ctx.connection.createPeer = () => ({ dispose() {} });
+  const invite = await target.link.admin({ action: 'pairing', mode: 'lan' });
+  const outgoing = await windows.deviceApi({ action: 'pair', uri: invite.uri });
+  await target.link.admin({ action: 'confirm', id: target.link.status().pending[0].id });
+  assert.equal((await windows.deviceApi({ action: 'pairStatus', requestId: outgoing.requestId })).status, 'approved');
+  const savedPath = join(windows.directory, 'outgoing', 'connections.json');
+  const saved = JSON.parse(await readFile(savedPath, 'utf8'));
+  saved.devices.push(...[...'BCDEFG'].map(name => ({ id: name, name, kind: 'ssh', url: '',
+    ssh: { host: name + '.example', username: 'account', password: 'private-ssh-fixture' } })));
+  await writeFile(savedPath, JSON.stringify(saved));
+  await windows.restart();
+  await joinGroup(windows, [peer]);
+
+  const pairCode = await windows.link.admin({ action: 'pairing', mode: 'lan' });
+  const pairAddress = new URL(pairCode.uri).searchParams;
+  const sponsor = { url: pairAddress.get('url'), pin: pairAddress.get('pin') };
+  const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const key = keys.publicKey.export({ format: 'der', type: 'spki' });
+  const mobileId = 'sha256:' + createHash('sha256').update(key).digest('base64');
+  const signed = value => sign('sha256', Buffer.from(JSON.stringify(value)), keys.privateKey).toString('base64');
+  const { value: request } = await remoteJson(sponsor, '/link/api/pair', { code: pairCode.code, name: '手机', groupClientKey: key.toString('base64') });
+  assert.equal(request.deviceGroup, true);
+  assert.equal(windows.link.status().pending[0].deviceGroup, true);
+  const poll = async () => (await remoteJson(sponsor, '/link/api/pair/status', request)).value;
+  assert.equal((await poll()).status, 'pending');
+  await windows.link.admin({ action: 'confirm', id: request.requestId });
+  const approved = await poll();
+  const rpc = async (host, token, input) => (await remoteJson(host, '/link/api/rpc', { action: 'deviceGroup', ...input }, { token })).value;
+  const admit = proof => rpc(sponsor, approved.token, { operation: 'admitClient', proof });
+  await assert.rejects(admit('wrong-signature'), { status: 403 });
+  const proof = signed(['benchgo-group-client-v1', approved.hostId, approved.deviceId]);
+  const directory = await admit(proof);
+  assert.equal(directory.self.id, mobileId);
+  assert.equal(directory.self.deviceType, 'mobile');
+  assert.deepEqual(directory.assets.map(row => row.name).sort(), [...'ABCDEFG']);
+  assert.ok(directory.members.some(row => row.id === peer.link.status().hostId));
+  assert.doesNotMatch(JSON.stringify(directory), /private-ssh-fixture|token|B\.example/);
+  assert.equal(windows.link.status().devices.some(row => row.id === approved.deviceId), false);
+  const tokenFor = (hostId, sync = false) => {
+    const claim = ['benchgo-group-auth-v1', directory.groupId, mobileId, hostId, Date.now() + 90_000, sync, directory.self.generation];
+    return 'group.' + Buffer.from(JSON.stringify(claim)).toString('base64url') + '.' + signed(claim);
+  };
+  const sponsorRpc = input => rpc(sponsor, tokenFor(approved.hostId), input);
+  const computer = directory.assets.find(row => row.name === 'A');
+  const lease = await sponsorRpc({ operation: 'asset', command: 'workspace', assetId: computer.id });
+  assert.match(lease.cookie, /HttpOnly.+Max-Age=120/);
+  assert.equal(lease.hostId, target.link.status().hostId);
+  const leaseCookie = lease.cookie.split(';')[0];
+  const open = () => remoteJson(lease, '/link/workbench/device-center/api/devices', { action: 'list' }, { cookie: leaseCookie });
+  assert.equal((await open()).value.devices[0].name, 'A');
+  const { token: personalToken } = saved.devices[0];
+  assert.ok(!JSON.stringify(lease).includes(personalToken));
+  const ssh = directory.assets.find(row => row.name === 'B');
+  assert.deepEqual(await sponsorRpc({ operation: 'asset', command: 'serverTerminal', assetId: ssh.id }), { id: 'pty-1' });
+  await sponsorRpc({ operation: 'asset', command: 'serverTerminalWrite', assetId: ssh.id, id: 'pty-1', data: 'test' });
+  await assert.rejects(sponsorRpc({ operation: 'asset', command: 'serverTerminalRead', assetId: directory.assets.find(row => row.name === 'C').id, id: 'pty-1' }), { status: 404 });
+  await waitForGroup(async () => (await peer.deviceApi({ action: 'list' })).devices.filter(row => row.groupAsset).length === 7);
+  const peerMember = directory.members.find(row => row.id === peer.link.status().hostId);
+  const peerClient = await rpc(peerMember.routes[0], tokenFor(peerMember.id), { operation: 'directory' });
+  assert.deepEqual(peerClient.assets.map(row => row.name).sort(), [...'ABCDEFG']);
+  await windows.deviceApi({ action: 'rename', deviceId: 'C', name: 'C renamed' });
+  await windows.deviceApi({ action: 'remove', deviceId: 'G' });
+  const fresh = await sponsorRpc({ operation: 'directory' });
+  assert.deepEqual(fresh.assets.map(row => row.name).sort(), ['A', 'B', 'C renamed', 'D', 'E', 'F']);
+  await waitForGroup(async () => (await peer.deviceApi({ action: 'list' })).devices.some(row => row.name === 'C renamed'));
+  await windows.deviceApi({ action: 'groupRemove', deviceId: mobileId });
+  assert.deepEqual(terminalCalls, [['open', 'B'], ['write', 'B', 'test'], ['close', 'B']]);
+  await assert.rejects(sponsorRpc({ operation: 'directory' }), { status: 401 });
+  await assert.rejects(open(), { status: 401 });
+  assert.deepEqual(await rpc(sponsor, tokenFor(approved.hostId, true), { operation: 'clientDirectory' }), { groupId: directory.groupId, revoked: true });
+  await assert.rejects(admit(proof), { status: 403 });
+  await windows.link.close();
+  const next = await host(t, '新组员', [], null, { host: '::' });
+  await joinGroup(peer, [next]);
+  await waitForGroup(async () => {
+    const assets = (await next.deviceApi({ action: 'list' })).devices.filter(row => row.groupAsset);
+    return JSON.stringify(assets.map(row => row.name).sort()) === JSON.stringify(['A', 'B', 'C renamed', 'D', 'E', 'F']);
+  });
+});
 
 test('one device-group owner token works through the relay and expires on every device after rotation', async t => {
   if (!connectionAddresses().length) { t.skip('No non-loopback interface available'); return; }

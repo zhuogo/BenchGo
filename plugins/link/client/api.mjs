@@ -86,7 +86,7 @@ export function nativeDeviceCall(action, args = {}) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('设备操作超时，请重试')); }, 30000);
     pending.set(id, { resolve, reject, timer });
-    try { bridge.deviceCall(JSON.stringify({ ...args, action, id })); }
+    try { bridge.deviceCall(JSON.stringify({ ...args, action, ...(args.id === undefined ? {} : { operationId: args.id }), id })); }
     catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
   });
 }

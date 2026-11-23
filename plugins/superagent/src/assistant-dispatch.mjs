@@ -157,7 +157,7 @@ export function createAssistantDispatch(runtime) {
         if (!task.executionControl?.paused && !task.executionControl?.pauseRequested) {
           const pending = orchestrationRuntime.state({ taskId: task.id })[0]?.execution?.uncertainty;
           if (pending) return orchestrationRuntime.manageExecution({ taskId: task.id, assignmentId: pending.assignmentId,
-            fence: pending.fence, instructionRevision: pending.instructionRevision, operation: 'resume', automatic: false });
+            fence: pending.fence, instructionRevision: pending.instructionRevision, operation: 'resume' });
         }
         return store.orchestration.resumeTask(task.id);
       }

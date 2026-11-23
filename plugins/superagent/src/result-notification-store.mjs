@@ -2,6 +2,7 @@ import { taskPaused, taskStopped } from './task-lifecycle.mjs';
 
 export function resultReplyDelivered(result, source) {
   const reply = result?.reply;
+  source = result?.deliverySource || source;
   return Boolean(reply?.sessionId && reply.requestId && reply.messageIds?.length
     && JSON.stringify(reply.source) === JSON.stringify(source)
     && (source.channel === 'desktop' || reply.receipt?.status === 'accepted' && typeof reply.receipt.messageId === 'string' && reply.receipt.messageId.trim()));
@@ -14,7 +15,7 @@ export function installResultNotificationStore({ db, tx, api }) {
   const parse = JSON.parse;
   const save = result => db.prepare('UPDATE sa_results SET payload=? WHERE task_id=? AND version=?').run(JSON.stringify(result), result.taskId, result.version);
   const notice = (task, result) => ({ uniqueKey: result.deliveryKey, taskId: task.id, payload: {
-    type: 'task.result', taskId: task.id, source: task.mandate.source,
+    type: 'task.result', taskId: task.id, source: result.deliverySource || task.mandate.source,
     instructionRevision: result.instructionRevision, resultVersion: result.version, outcome: result.outcome } });
   const current = (task, result) => task && result && task.instructionRevision === result.instructionRevision
     && task.resultVersion === result.version && !taskStopped(task) && !taskPaused(task);

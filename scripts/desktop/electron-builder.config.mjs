@@ -5,10 +5,12 @@ import { createRequire } from 'node:module';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createElectronBuilderConfig } from '../../deepseek-harness/apps/desktop/scripts/electron-builder-config.mjs';
 import { prepareDesktopBrand, prepareDesktopRenderer, startupArtwork } from './prepare-brand.mjs';
+import { prepareWindowsInstaller } from './prepare-windows-installer.mjs';
 import { verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyStartupBundle } from './prepare-startup.mjs';
 import { verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
 import { verifyBackgroundBundle } from './prepare-background.mjs';
+import { verifyBrowserStorageBundle } from './prepare-browser-storage.mjs';
 import { verifyUpdateBridgeBundle } from './prepare-update-bridge.mjs';
 import { assertSidebarPayload, DESKTOP_ELECTRON_LANGUAGES, inspectPluginPayload } from './payload-policy.mjs';
 
@@ -32,13 +34,11 @@ config.protocols = [{ name: 'BenchGo', schemes: ['dsh'] }];
 config.artifactName = `benchgo-${version}-win-x64-setup.exe`;
 config.directories.output = `${root}/artifacts/windows`;
 const brandOutput = `${root}/.local/desktop/brand`;
-const officialBeforeBuild = config.beforeBuild;
-config.beforeBuild = async (...args) => {
-  const result = await officialBeforeBuild(...args);
+config.beforeBuild = async () => {
+  await prepareWindowsInstaller(root, brandOutput);
   await prepareDesktopBrand(root, brandOutput);
   await prepareDesktopRenderer(root, `${brandOutput}/renderer`);
-  await copyFile(`${root}/deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/installer-ui/window-frame.dll`, `${brandOutput}/window-frame.dll`);
-  return result;
+  return true;
 };
 config.win.icon = `${brandOutput}/benchgo-icon.png`;
 config.nsis.installerIcon = config.nsis.uninstallerIcon = `${brandOutput}/benchgo.ico`;
@@ -143,12 +143,16 @@ config.afterPack = async context => {
   await officialAfterPack?.(context);
   const require = createRequire(new URL('../../deepseek-harness/apps/desktop/package.json', import.meta.url));
   const { extractFile } = createRequire(require.resolve('app-builder-lib'))('@electron/asar');
-  verifyTrayBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
-  verifyStartupBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
-  verifyWorkbenchLoadingBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
-  verifyBackgroundBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
-  verifyUpdateBridgeBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/main.js').toString('utf8'));
-  verifyUpdateBridgeBundle(extractFile(`${context.appOutDir}/resources/app.asar`, 'lib/preload-app.cjs').toString('utf8'), true);
+  const archive = `${context.appOutDir}/resources/app.asar`;
+  const main = extractFile(archive, 'lib/main.js').toString('utf8');
+  const preload = extractFile(archive, 'lib/preload-app.cjs').toString('utf8');
+  verifyTrayBundle(main);
+  verifyStartupBundle(main);
+  verifyWorkbenchLoadingBundle(main);
+  verifyBackgroundBundle(main);
+  verifyUpdateBridgeBundle(main);
+  verifyUpdateBridgeBundle(preload, true);
+  verifyBrowserStorageBundle(main, preload);
   const startupIcon = startupArtwork(await readFile(`${root}/assets/brand/benchgo-mark.svg`, 'utf8'));
   for (const name of ['welcome.html', 'splash.html']) {
     if (!extractFile(`${context.appOutDir}/resources/app.asar`, `renderer/${name}`).toString('utf8').includes(startupIcon)) {

@@ -55,7 +55,8 @@ async function initializeWeb(ctx, { directory, getCommander = () => ctx.get('com
     const assistant = ctx.get?.('assistant');
     if (assistant?.sidebarPrivateSessionIds) privateSessionIds = await assistant.sidebarPrivateSessionIds();
     return {
-      projects: ctx.workspaceRegistry.list().map(p => ({ id: p.id, path: p.path, title: p.title, sessionIds: p.sessionIds })),
+      projects: ctx.workspaceRegistry.list().map(p => ({ id: p.id, path: p.path, title: p.title, sessionIds: p.sessionIds,
+        ...(p.updatedAt === undefined ? {} : { updatedAt: p.updatedAt }) })),
       sessions: (getCommander()?.list() ?? []).map(session => session.route
         ? { ...session, routeModelId: encodeRouteModelId(session.route.providerId, session.route.model) }
         : session), deletedHarnessIds: [...deletedHarnessIds], privateSessionIds,

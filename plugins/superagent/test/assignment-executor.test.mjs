@@ -34,6 +34,7 @@ for (const harness of ['codex', 'claude']) test(`local ${harness} Worker uses th
     async submit(id, prompt, { requestId }) {
       assert.equal(id, session.id);
       assert.ok(prompt.includes(task.target));
+      assert.ok(prompt.includes('进展：'));
       assert.equal(requestId, `worker:${database.runs(assignment.id)[0].id}`);
       const answer = ask({ kind: 'question', id: 'approval', nativeRequestId: 'native-question', details: {
         questions: [{ id: 'question', question: 'Which environment?', options: [{ label: 'Test' }] }],
@@ -46,10 +47,13 @@ for (const harness of ['codex', 'claude']) test(`local ${harness} Worker uses th
         : { allow: true, answers: { 'Which environment?': 'Test' } });
       return { turnId: 'turn', status: 'accepted' };
     },
-    events: () => ({ cursor: 2, events: [
-      { seq: 1, turnId: 'turn', type: 'text.delta', data: { text: 'Observed result' } },
-      { seq: 2, turnId: 'turn', type: 'turn.completed', time: '2026-11-17T12:00:00.000Z', data: { status: 'completed' } },
-    ] }),
+    events: (_id, cursor) => cursor === 0 ? { cursor: 1, latest: 2, events: [
+      { seq: 1, turnId: 'turn', type: 'text.delta', time: '2026-11-17T11:59:00.000Z',
+        data: { text: '进展：正在核对本地项目\nObserved result' } },
+    ] } : { cursor: 2, events: [
+      { seq: 2, turnId: 'turn', type: 'turn.completed', time: '2026-11-17T12:00:00.000Z',
+        data: { status: 'completed' } },
+    ] },
     snapshot: () => session,
     persist: async () => {},
     stopExecution() { assert.fail('Completed execution never requires interruption'); },
@@ -67,6 +71,9 @@ for (const harness of ['codex', 'claude']) test(`local ${harness} Worker uses th
   assert.equal(run.sessionId, session.id);
   assert.equal(run.evidence.nativeExecution.nativeId, 'native-handle');
   assert.equal(database.getExecutionProjection(session.id).state.status, 'completed');
+  assert.deepEqual(database.getExecutionProjection(session.id).state.activityHistory, [
+    { seq: 1, time: '2026-11-17T11:59:00.000Z', status: 'running', activity: '正在核对本地项目', activitySource: 'report' },
+  ]);
   assert.equal(disconnected, session.id);
   assert.equal(released, true);
 });

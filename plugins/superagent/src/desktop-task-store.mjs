@@ -5,6 +5,9 @@ import { createHash, randomUUID } from 'node:crypto';
 export function installDesktopTaskStore({ db, tx, api, insertTask }) {
   db.exec('CREATE TABLE IF NOT EXISTS sa_desktop_requests(request_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES sa_tasks(id), trigger_id TEXT REFERENCES sa_triggers(id))');
   return {
+    hasTaskForTrigger(triggerId) {
+      return Boolean(db.prepare('SELECT 1 FROM sa_task_triggers WHERE trigger_id=? LIMIT 1').get(triggerId));
+    },
     desktopRequest(requestKey) {
       const row = db.prepare('SELECT * FROM sa_desktop_requests WHERE request_key=?').get(requestKey);
       if (!row) return undefined;

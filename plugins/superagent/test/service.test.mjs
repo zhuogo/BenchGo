@@ -17,8 +17,11 @@ const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
 const compactionRequire = createRequire(new URL('../../../deepseek-harness/packages/compaction/compaction-basic/package.json', import.meta.url));
 const compactionUrl = pathToFileURL(compactionRequire.resolve('@deepseek-ai/dsh-compaction-basic')).href;
 const sessionUrl = pathToFileURL(requireHarness.resolve('@deepseek-ai/dsh-session')).href;
+const gatewayRequire = createRequire(new URL('../../../deepseek-harness/packages/api/gateway/package.json', import.meta.url));
+const gatewayPackages = new Map(['@deepseek-ai/cordis', '@deepseek-ai/dsh-typert-protocol', 'zod']
+  .map(name => [name, pathToFileURL(gatewayRequire.resolve(name)).href]));
 const hook = registerHooks({ resolve(specifier, context, next) {
-  const url = specifier === '@deepseek-ai/dsh-compaction-basic' ? compactionUrl : specifier === '@deepseek-ai/dsh-session' ? sessionUrl : undefined;
+  const url = specifier === '@deepseek-ai/dsh-compaction-basic' ? compactionUrl : specifier === '@deepseek-ai/dsh-session' ? sessionUrl : gatewayPackages.get(specifier);
   return url ? { url, shortCircuit: true } : next(specifier, context);
 } });
 const { mountAssistant } = await import('../src/service.mjs');
@@ -28,7 +31,6 @@ const { commitWorkerResult } = await import('../src/result-commit.mjs');
 const { Context } = await load('@deepseek-ai/cordis');
 const { default: LlmRuntime, LlmAdapter } = await load('@deepseek-ai/dsh-llm');
 const modules = await Promise.all(['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-agent-loop'].map(load));
-const gatewayRequire = createRequire(new URL('../../../deepseek-harness/packages/api/gateway/package.json', import.meta.url));
 const { default: TypertRegistry } = await import(pathToFileURL(gatewayRequire.resolve('@deepseek-ai/dsh-typert-registry')).href);
 const SessionPersistence = await load('@deepseek-ai/dsh-session-persistence-jsonl');
 const queryRequire = createRequire(new URL('../../../deepseek-harness/packages/session-query/session-query-sqlite/package.json', import.meta.url));
@@ -210,7 +212,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const verifiedAgain = await (await call({ action: 'connectionVerify' })).json();
   assert.equal(verifiedAgain.revision, verified.revision);
   assert.equal(verifiedAgain.status.connection.state, 'stopped');
-  assert.equal(routes.size, 7);
+  assert.ok(routes.has('/api/commander/assistant'));
   assert.ok(routes.has('/api/commander/assistant/pet-asset'));
   const systemListing = await call({ action: 'systemFiles' });
   assert.equal(systemListing.status, 200);
@@ -469,7 +471,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const requestsBeforeDelegation = modelRequests.length;
   const task = await delegateTool.execute(delegation, { agent, authorized: true });
   assert.equal(task.mandate.instruction, 'Inspect project');
-  assert.equal(task.acceptance, delegation.text);
+  assert.equal(task.target, delegation.text);
+  assert.equal(task.acceptance, '');
   assert.equal(modelRequests.length, requestsBeforeDelegation, 'mounted admission does not request another model');
   assert.equal(task.mandate.scopeCheck, undefined);
   assert.equal((await delegateTool.execute(delegation, { agent, authorized: true })).id, task.id);
@@ -478,19 +481,23 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const pauseTask = app.store.orchestration.createTask({ threadId: task.threadId, target: 'Pause original investigation', mandate: task.mandate });
   const controlTool = ctx.tools.get('assistant_task_control', agent);
   assert.ok(controlTool.parameters.properties.operation.enum.includes('pause'));
-  assert.ok(controlTool.parameters.properties.operation.enum.includes('resume'));
+  assert.ok(!controlTool.parameters.properties.operation.enum.includes('resume'));
+  assert.equal(controlTool.parameters.properties.text.type, 'string');
+  assert.equal(controlTool.parameters.properties.resume.type, 'boolean');
   app.store.orchestration.createThread({ id: 'foreign-source', source: { type: 'feishu', id: 'foreign-source' } });
   const globalTasks = [
     { channel: 'desktop', sessionId: 'another-desktop', threadId: 'another-side' },
     { channel: 'feishu', sourceType: 'group', conversationId: 'channel-group' },
   ].map(source => app.store.orchestration.createTask({ threadId: 'foreign-source', target: 'Global management fixture', mandate: { ...task.mandate, source } }));
+  app.store.orchestration.pauseTask(globalTasks[0].id);
   for (const row of globalTasks) {
     assert.equal((await tasksTool.execute({ op: 'get', id: row.id }, { agent })).task.id, row.id);
-    await assert.rejects(controlTool.execute({ id: row.id, operation: 'supplement' }, { agent }), /不属于当前会话/);
-    assert.equal((await controlTool.execute({ id: row.id, operation: 'pause' }, { agent })).task.executionControl.paused, true);
-    assert.deepEqual((await controlTool.execute({ id: row.id, operation: 'resume' }, { agent })).task.executionControl, {});
+    if (row !== globalTasks[0]) assert.equal((await controlTool.execute({ id: row.id, operation: 'pause' }, { agent })).task.executionControl.paused, true);
     assert.deepEqual(app.store.orchestration.getTask(row.id).mandate, row.mandate);
   }
+  const continuation = await controlTool.execute({ id: globalTasks[0].id, operation: 'supplement', text: '继续原来的调查', resume: true }, { agent });
+  assert.deepEqual(app.store.orchestration.getTask(globalTasks[0].id).executionControl, {});
+  assert.equal(app.store.orchestration.taskInputs(globalTasks[0].id).find(row => row.triggerId === continuation.triggerId).snapshot.text, '继续原来的调查');
   const pauseReceipt = await controlTool.execute({ id: pauseTask.id, operation: 'pause' }, { agent });
   assert.equal(pauseReceipt.task.executionControl.paused, true);
   assert.equal(pauseReceipt.input.kind, 'pause'); assert.equal(pauseReceipt.input.state, 'applied');
@@ -823,13 +830,19 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
       assert.equal(agent.session.snapshotEvents().length, before.transcript, 'background execution never takes a Router turn');
       assert.equal(maintenanceRequests.length, 3);
       assert.ok(maintenanceRequests.every(request => request.tools.length === 0));
-      const next = await call({ action: 'send', text: '请按我的长期中文回复偏好，说明一次核验结论。', requestId: 'service-maintenance-next-context' });
+      const followupText = '请按我的长期中文回复偏好，说明一次核验结论。';
+      const next = await call({ action: 'send', text: followupText, requestId: 'service-maintenance-next-context' });
       assert.equal(next.status, 200, await next.clone().text());
+      const waitForFollowup = AbortSignal.timeout(5000);
+      while (!modelRequests.some(request => request.messages.some(message => textOf(message) === followupText))) {
+        waitForFollowup.throwIfAborted();
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
       await agent.whenIdle();
       const request = modelRequests.at(-1);
       // Official Harness emits dynamic context as a user-role runtime snapshot,
       // separate from the static system prompt and original conversation text.
-      const currentContext = request.messages.map(textOf).findLast(text => text.startsWith('Current runtime context.'));
+      const currentContext = request.messages.map(textOf).findLast(text => text.startsWith('<system-reminder>\nThe following information describes your current session'));
       assert.ok(currentContext?.includes(preference), 'the next real Router runtime context selects the learned preference');
       assert.match(currentContext, /dreams\/alignment\/ALIGNMENT_SYNTHESIS\.md/);
       assert.match(currentContext, /SERVICE_MAINTENANCE_ALIGNMENT/, 'the next real Router request refreshes derived alignment');

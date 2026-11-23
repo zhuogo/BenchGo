@@ -169,6 +169,7 @@ test('unified updates render honest states beside the workbench in both themes a
         await downloads.getByRole('link', { name: /下载 Android APK/ }).waitFor();
         assert.equal(await downloads.getByRole('link', { name: /下载 macOS/ }).count(), 2);
         assert.equal(await launcher.getAttribute('data-update-available'), String(['available', 'restart', 'same-release-app'].includes(mode)));
+        assert.equal(await launcher.locator('.cmd-update-dot').isVisible(), width >= 768 && ['available', 'same-release-app'].includes(mode));
         assert.equal(await dialog.getByRole('button', { name: /^(更新插件|检查应用更新)$/ }).count(), 0, 'component-specific update actions are absent');
         const details = dialog.getByRole('button', { name: '版本详情', exact: true });
         if (mode !== 'loading') assert.equal(await details.getAttribute('aria-expanded'), 'false', 'component versions start collapsed');

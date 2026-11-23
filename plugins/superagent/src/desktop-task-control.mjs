@@ -3,6 +3,7 @@ import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 import { ownsDesktopTask } from './desktop-task-owner.mjs';
 import { isDesktopTaskManagementScope } from './desktop-task-management-authority.mjs';
+import { usesLocalOfficialWorker } from './worker-model-route.mjs';
 
 /** Same trusted stop/input path for live control and an already authorized continuation. */
 export function stopDesktopTask(database, taskId, triggerId, inputKey = `trigger:${triggerId}:task:${taskId}`, options) {
@@ -13,11 +14,11 @@ export function stopDesktopTask(database, taskId, triggerId, inputKey = `trigger
 }
 
 /** Controls retain the existing mandate; only the live owner turn supplies context. */
-export function createDesktopTaskControl({ ctx, database }) {
+export function createDesktopTaskControl({ ctx, database, wake }) {
   return {
-    control({ id, operation, attentionId }, exec, { ownerAgent, threadId = 'main', ownerScope, managementScope } = {}) {
+    control({ id, operation, attentionId, text, resume }, exec, { ownerAgent, threadId = 'main', ownerScope, managementScope } = {}) {
       if (!ownerAgent || exec?.agent !== ownerAgent) throw new Error('只有总助手当前会话可管理任务');
-      if (!['supplement', 'cancel', 'pause', 'resume', 'answer'].includes(operation)) throw new Error('无效任务操作');
+      if (!['supplement', 'cancel', 'pause', 'answer'].includes(operation)) throw new Error('无效任务操作');
       if (operation === 'answer' && (typeof attentionId !== 'string' || !attentionId)) throw new Error('请先读取并明确选择原任务的问题');
       const instruction = currentHumanInstruction(ctx, ownerAgent);
       const message = instruction?.message;
@@ -25,10 +26,12 @@ export function createDesktopTaskControl({ ctx, database }) {
       const task = database.getTask(id);
       if (!task) throw new Error('任务不存在');
       const source = task.mandate.source;
-      const globalControl = ['cancel', 'pause', 'resume'].includes(operation) && isDesktopTaskManagementScope(managementScope);
+      const workerMessage = operation === 'supplement' && usesLocalOfficialWorker(database, task);
+      const globalControl = operation !== 'answer' && isDesktopTaskManagementScope(managementScope);
       if (!globalControl && (!ownsDesktopTask(task, ownerScope ?? { threadId, sessionIds: [ownerAgent.id] })
         || (source.threadId || 'main') !== threadId || task.threadId !== `desktop:${source.sessionId}`)) throw new Error('任务不属于当前会话');
       exec.signal?.throwIfAborted();
+      if (operation === 'supplement' && text !== undefined && (typeof text !== 'string' || !text.trim() || text.length > 100000)) throw new Error('工单消息正文无效');
       if (operation === 'answer') {
         const question = database.attentions(id).find(row => row.id === attentionId);
         if (!question) throw new Error('任务原问题不存在');
@@ -42,7 +45,6 @@ export function createDesktopTaskControl({ ctx, database }) {
         throw Object.assign(new Error('此外部 Harness 暂无可核实的补充应用边界，请在新任务中提交要求'), { code: 'NATIVE_WORKER_INPUT_UNSUPPORTED' });
       if (operation === 'pause' && (task.status === 'completed' || taskStopped(task))) throw new Error('任务已完成或停止，不能暂停');
       const { trigger } = recordDesktopTrigger(database, { sessionId: ownerAgent.id, threadId, message });
-      if (operation === 'resume') return { operation, triggerId: trigger.id, task: database.resumeTask(id) };
       // One owner instruction may control several explicitly selected Tasks,
       // including when it only has the current conversation's owner scope.
       const inputKey = `trigger:${trigger.id}:task:${id}`;
@@ -54,8 +56,10 @@ export function createDesktopTaskControl({ ctx, database }) {
       if (operation === 'cancel') {
         return stopDesktopTask(database, id, trigger.id, inputKey);
       }
-      const delivery = database.deliverSubscribedMessage(trigger.id, { taskId: id, subscribeIfMissing: true });
+      const delivery = database.deliverSubscribedMessage(trigger.id, { taskId: id, subscribeIfMissing: true, workerMessage,
+        text, resume: resume === true });
       if (!delivery) throw new Error('任务没有活动订阅，补充未送达；请查询任务状态');
+      if (wake) void Promise.resolve().then(wake).catch(() => ctx.logger?.warn?.('任务消息已收下，等待调度器送达'));
       return { operation, taskId: id, ...delivery };
     },
   };

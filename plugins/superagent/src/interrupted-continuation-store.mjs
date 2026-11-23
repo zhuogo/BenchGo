@@ -8,11 +8,11 @@ export function installInterruptedContinuationStore({ db, tx, api }) {
       return tx(() => {
         const assignment = api.getAssignment(assignmentId), task = assignment && api.getTask(assignment.taskId);
         const run = api.runs(assignmentId).find(item => item.id === runId && item.fence === fence);
-        if (!assignment || assignment.state !== 'uncertain' || assignment.fence !== fence || !run || run.state !== 'uncertain'
+        if (!assignment || !['uncertain', 'failed'].includes(assignment.state) || assignment.fence !== fence || !run || !['uncertain', 'verifying', 'failed'].includes(run.state)
           || assignment.stopRequest) throw fail('FENCING_CONFLICT', 'Interrupted execution ownership changed');
         if ((!task || taskExecutionBlocked(task)) || typeof validateMandate !== 'function' || !validateMandate(task.mandate)
           || JSON.stringify(task.mandate) !== JSON.stringify(mandate)) throw fail('MANDATE_REVOKED', 'Original execution authorization changed');
-        if (task.instructionRevision !== instructionRevision || assignment.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Interrupted execution requirements changed');
+        if (task.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Interrupted execution requirements changed');
         if (!api.getWorkerExecutionState(runId)?.models?.length || evidence?.interrupted !== true
           || evidence.runId !== runId || evidence.sessionId !== run.sessionId || evidence.directory !== run.directory
           || !evidence.transcript?.hash || !Number.isSafeInteger(evidence.transcript.lastSeq)
@@ -26,7 +26,7 @@ export function installInterruptedContinuationStore({ db, tx, api }) {
           fromFence: fence, instructionRevision, sessionId: run.sessionId,
           observation: evidence.transcript, at: new Date(now).toISOString(),
         }];
-        db.prepare('UPDATE sa_runs SET payload=?,updated_at=? WHERE id=?').run(JSON.stringify(runPayload), new Date(now).toISOString(), runId);
+        db.prepare("UPDATE sa_runs SET state='uncertain',payload=?,updated_at=? WHERE id=?").run(JSON.stringify(runPayload), new Date(now).toISOString(), runId);
         db.prepare("UPDATE sa_assignments SET state='queued',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?").run(JSON.stringify(payload), new Date(now).toISOString(), assignmentId);
         db.prepare("UPDATE sa_tasks SET status='running',continuation_wait=NULL,updated_at=? WHERE id=?").run(new Date(now).toISOString(), task.id);
         return api.getAssignment(assignmentId);

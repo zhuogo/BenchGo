@@ -104,12 +104,13 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
       try { voice.acceptRealtimeSocket(ws); } catch { ws.terminate(); }
     });
   };
-  const begin = async (device, res) => {
+  const begin = async (device, res, { groupAssetLease } = {}) => {
     if (closed) throw fail('Link 已关闭', 503);
     const token = randomBytes(32).toString('base64url');
-    await store.saveWorkbenchSession(digest(token), { id: device.id, tokenHash: device.tokenHash, expires: Date.now() + SESSION_AGE });
-    res.setHeader('set-cookie', COOKIE + '=' + token + '; Path=' + WORKBENCH_PATH + '; HttpOnly; Secure; SameSite=Strict; Max-Age=' + SESSION_AGE / 1000);
-    return { url: WORKBENCH_PATH };
+    const age = groupAssetLease ? 120_000 : SESSION_AGE;
+    await store.saveWorkbenchSession(digest(token), { id: device.id, tokenHash: device.tokenHash, expires: Date.now() + age });
+    res.setHeader('set-cookie', COOKIE + '=' + token + '; Path=' + WORKBENCH_PATH + '; HttpOnly; Secure; SameSite=Strict; Max-Age=' + age / 1000);
+    return { url: WORKBENCH_PATH, ...(groupAssetLease ? { groupAssetLease: true } : {}) };
   };
   const handle = async (req, res, url, headers) => {
     if (closed) throw fail('Link 已关闭', 503);

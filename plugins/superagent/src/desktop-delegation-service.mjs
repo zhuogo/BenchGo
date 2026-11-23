@@ -5,10 +5,13 @@ import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs
 import { readQuestionReply } from './question-reply.mjs';
 import { readRemoteExecutionCatalog, selectRemoteExecution } from './execution-catalog.mjs';
 import { assertExternalWorkerModel, assertExternalWorkerTask } from './external-worker.mjs';
+import { recordDesktopTrigger } from './desktop-trigger.mjs';
+import { fallbackRequestIds, modelFallbackSource } from './model-fallback.mjs';
+import { routerRecoveryRequests, routerRecoverySource } from './router-recovery.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex');
-export function currentHumanInstruction(ctx, agent) {
+export function currentHumanInstruction(ctx, agent, { allowDelegationContinuation = false } = {}) {
   if (ctx.agents?.get(agent.id) !== agent || agent.status !== 'running'
     || ctx.agents.currentInitiator() !== agent || agent.session.header.origin === 'subagent') return null;
   const events = agent.session.snapshotEvents();
@@ -24,7 +27,20 @@ export function currentHumanInstruction(ctx, agent) {
     const reply = readQuestionReply(event.data, events);
     return reply?.answers.some(answer => answer.selected.length || answer.custom?.trim());
   })?.data;
-  return message ? { turn: start, message } : null;
+  if (message) return { turn: start, message };
+  if (!allowDelegationContinuation) return null;
+  const notice = current.findLast(event => event.type === 'user/message' && (
+    event.data?.source?.kind === modelFallbackSource
+    || event.data?.source?.kind === routerRecoverySource && event.data.source.sessionId === agent.id
+  ))?.data;
+  if (!notice) return null;
+  const requestId = notice.source.kind === modelFallbackSource
+    ? fallbackRequestIds(events).get(notice.id)
+    : routerRecoveryRequests(events).requests.get(notice.id);
+  if (!requestId) return null;
+  const original = events.slice(0, start).find(event => event.type === 'user/message'
+    && event.data?.source?.kind === 'user' && event.data.id === requestId)?.data;
+  return original ? { turn: start, message: original, continuationId: notice.id } : null;
 }
 const required = (value, name, max = 100000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`无效${name}`);
@@ -35,6 +51,7 @@ const required = (value, name, max = 100000) => {
 export function createDesktopDelegationService({ ctx, store, database = store.orchestration,
   readPolicy = () => readAssessmentPolicy(store, ctx.workspaceRegistry), wake }) {
   const pending = new Map();
+  const continuations = new WeakMap();
   async function admit(input, exec, { ownerAgent, threadId = 'main' } = {}) {
     rejectModelOverride(input);
     input = structuredClone(input);
@@ -50,10 +67,11 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
     const acceptance = input.acceptance ?? '';
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
     const fingerprint = digest([deviceId, input.executionConfig ?? null, projectId, target, acceptance, ...(input.title !== undefined ? [title] : []), ...(duplicateOfTaskId ? [duplicateOfTaskId] : [])]);
-    const instruction = structuredClone(currentHumanInstruction(ctx, ownerAgent));
+    const readInstruction = () => currentHumanInstruction(ctx, ownerAgent, { allowDelegationContinuation: true });
+    const instruction = structuredClone(readInstruction());
     const message = instruction?.message;
     const instructionFingerprint = digest(instruction);
-    if (!message?.id) throw new Error('桌面委派缺少当前原始用户消息');
+    if (!message?.id) throw Object.assign(new Error('桌面委派缺少当前原始用户消息，请向用户说明待办并等候回复'), { code: 'DESKTOP_DELEGATION_USER_INPUT_REQUIRED' });
     const source = { channel: 'desktop', sessionId, messageId: message.id, threadId };
     // Host-derived identity survives retries without requiring model-generated IDs.
     const requestId = input.requestId === undefined ? digest([source, fingerprint, null]) : required(input.requestId, '请求标识', 200);
@@ -76,13 +94,25 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       exec.signal?.throwIfAborted();
       const original = (message.content || []).filter(block => block.type === 'text').map(block => block.text || '').join('\n');
       if (!original.trim()) throw new Error('桌面委派缺少原始用户文字指令');
+      let recoveredTrigger;
+      if (instruction.continuationId) {
+        recoveredTrigger = recordDesktopTrigger(database, { sessionId, threadId, message }).trigger;
+        let continuation = continuations.get(ownerAgent);
+        if (continuation?.id !== instruction.continuationId) {
+          // A prompt can request multiple tasks. Only admissions predating
+          // this continuation make a newly worded request ambiguous.
+          continuation = { id: instruction.continuationId, hadAcceptedTask: database.hasTaskForTrigger(recoveredTrigger.id) };
+          continuations.set(ownerAgent, continuation);
+        }
+        if (continuation.hadAcceptedTask) throw Object.assign(new Error('原消息已有受理记录。请查询原任务，剩余待办请向用户说明并等待回复'), { code: 'DESKTOP_DELEGATION_RECOVERY_ALREADY_ACCEPTED' });
+      }
       const taskAcceptance = acceptance.trim();
       const policy = structuredClone(await readPolicy());
       const remote = deviceId !== 'local' ? selectRemoteExecution(await readRemoteExecutionCatalog(ctx, deviceId, exec.signal), input) : undefined;
       const project = remote ? remote.project : projectId === undefined ? undefined : policy.projects.find(item => item.id === projectId);
       if (!remote && projectId !== undefined && !project) throw new Error('项目不存在');
       // Router owns the delegation decision; the host binds its real source.
-      const { trigger } = database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, source.messageId])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
+      const trigger = recoveredTrigger ?? database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, source.messageId])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' }).trigger;
       const selectedModel = remote ? remote.model : configuredWorkModel(policy);
       if (!remote && selectedModel.harness && selectedModel.harness !== 'official') {
         assertExternalWorkerTask({ target, acceptance: taskAcceptance });
@@ -100,7 +130,7 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       }
       const current = await readPolicy();
       exec.signal?.throwIfAborted();
-      const latest = currentHumanInstruction(ctx, ownerAgent);
+      const latest = readInstruction();
       if (!latest || digest(latest) !== instructionFingerprint) throw new Error('安排任务期间当前用户指令已变化，请重试');
       if (current.desktopVersion !== policy.desktopVersion || (!remote && project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('安排任务期间项目或授权规则已变化，请重试');
       if (!remote && digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('安排任务期间工作角色模型已变化，请重试');

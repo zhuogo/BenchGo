@@ -39,14 +39,15 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
       return row ? JSON.parse(row.snapshot).mandate : fallback;
     },
     changeTask(taskId, input) { return tx(() => api.changeTaskInTransaction(taskId, input)); },
-    changeTaskInTransaction(taskId, { operation, expectedInstructionRevision, target, acceptance, reason, requestKey, mandate, triggerId, model, validateMandate, authorizeExpansion, requestPayload }) {
+    changeTaskInTransaction(taskId, { operation, expectedInstructionRevision, target, acceptance, title, reason, requestKey, mandate, triggerId, model, validateMandate, authorizeExpansion, requestPayload, confirmWorkerMessage = false }) {
       if (!['revise', 'adjustment'].includes(operation) || !Number.isSafeInteger(expectedInstructionRevision) || expectedInstructionRevision < 1
         || typeof requestKey !== 'string' || !requestKey || requestKey.length > 1024
         || typeof target !== 'string' || !target.trim() || target.length > 100000
         || typeof acceptance !== 'string' || acceptance.length > 100000
         || typeof reason !== 'string' || !reason.trim() || reason.length > 10000
         || !model?.providerId || !model?.modelId || typeof validateMandate !== 'function') throw fail('INVALID_TASK_CHANGE', '任务变更缺少版本、原因、要求或明确模型');
-      const fingerprint = createHash('sha256').update(JSON.stringify([taskId, operation, expectedInstructionRevision, target, acceptance, reason, model, triggerId, mandate])).digest('hex');
+      const fingerprint = createHash('sha256').update(JSON.stringify([taskId, operation, expectedInstructionRevision, target, acceptance, reason, model, triggerId, mandate,
+        ...(confirmWorkerMessage ? [title] : [])])).digest('hex');
         const previous = db.prepare('SELECT * FROM sa_task_revision_requests WHERE request_key=?').get(requestKey);
         if (previous) {
           if (previous.fingerprint !== fingerprint) throw fail('IDEMPOTENCY_CONFLICT', '请求标识已用于其他任务变更');
@@ -113,7 +114,7 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
         const snapshot = row => JSON.stringify({ target: row.target, acceptance: row.acceptance, mandate: row.mandate });
         db.prepare('INSERT OR IGNORE INTO sa_task_revisions VALUES (?,?,?,?,?)').run(taskId, task.instructionRevision, 'original', snapshot(task), task.updatedAt);
         const priorSnapshot = JSON.parse(db.prepare('SELECT snapshot FROM sa_task_revisions WHERE task_id=? ORDER BY revision DESC LIMIT 1').get(taskId).snapshot);
-        const completeSnapshot = { target, acceptance, mandate: appliedMandate, reason, triggerId,
+        const completeSnapshot = { target, acceptance, ...(title && target !== task.target ? { title } : {}), mandate: appliedMandate, reason, triggerId,
           authorizationVersion: appliedMandate.authorizationVersion ?? 1,
           context: [...(priorSnapshot.context || []), { triggerId, source: trigger.source, actor: trigger.actor, text: trigger.content }],
           toolScope: appliedMandate.scope?.toolNames ?? appliedMandate.toolScope ?? null };
@@ -122,8 +123,9 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
         db.prepare('UPDATE sa_tasks SET target=?,acceptance=?,instruction_revision=?,updated_at=? WHERE id=?').run(target, acceptance, revision, at, taskId);
         db.prepare('INSERT OR IGNORE INTO sa_task_triggers VALUES (?,?)').run(taskId, triggerId);
         api.recordTaskInputInTransaction({ taskId, triggerId, kind: 'revision', idempotencyKey: `trigger:${triggerId}:task:${taskId}`,
-          instructionRevision: revision, authorizationVersion: appliedMandate.authorizationVersion ?? 1,
+          instructionRevision: revision, authorizationVersion: appliedMandate.authorizationVersion ?? 1, confirmWorkerMessage,
           snapshot: { ...completeSnapshot, instructionRevision: revision, operation, createdAt: at } });
+        if (confirmWorkerMessage && completeSnapshot.title) db.prepare('UPDATE sa_tasks SET title=? WHERE id=?').run(completeSnapshot.title, taskId);
         db.prepare('INSERT INTO sa_task_revision_requests(request_key,fingerprint,task_id,revision,request_payload) VALUES (?,?,?,?,?)').run(requestKey, fingerprint, taskId, revision, requestPayload ? JSON.stringify(requestPayload) : null);
         if ((operation === 'revise' && remoteEnded) || (task.continuationWait?.code === 'EXECUTION_FAILED' && !taskExecutionBlocked(task))) {
           api.queueFailureContinuationInTransaction(taskId, { expectedResultVersion: task.resultVersion,

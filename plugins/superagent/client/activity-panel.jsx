@@ -90,7 +90,7 @@ const BoardRow = React.memo(function BoardRow({ row, onOpen }) {
       <span className="ba-board-iconbox" data-status={row.status} aria-hidden="true"><StatusGlyph status={row.status} /></span>
       <span className="ba-board-task-content">
         <span className="ba-board-task-heading"><strong title={title}>{title}</strong><time dateTime={dateValue(row.time)?.toISOString()} title={stamp(row.time)}>{timeShort(row.time) || '时间未知'}</time></span>
-        <span className="ba-board-task-meta" data-checking={row.executionNotice ? true : undefined}><span className="ba-board-chip" data-status={row.status}>{row.stateLabel || labels[row.status] || row.status || '状态未知'}</span><span className="ba-board-summary" title={summary}>{summary}</span>{hasChildren && <span className="ba-board-children-count" data-failed={childCounts.failed > 0 || undefined} aria-label={childLabel} title={childLabel}>子任务 {childCounts.completed || 0}/{childCounts.total}</span>}</span>
+        <span className="ba-board-task-meta"><span className="ba-board-chip" data-status={row.status}>{row.stateLabel || labels[row.status] || row.status || '状态未知'}</span><span className="ba-board-summary" title={summary}>{summary}</span>{hasChildren && <span className="ba-board-children-count" data-failed={childCounts.failed > 0 || undefined} aria-label={childLabel} title={childLabel}>子任务 {childCounts.completed || 0}/{childCounts.total}</span>}</span>
       </span>
     </button>
   </article>;

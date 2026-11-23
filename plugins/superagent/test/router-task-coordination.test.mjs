@@ -120,7 +120,7 @@ test('assistant_tasks get forwards section, exact record pointer, hash and chara
   assert.equal(isDesktopTaskManagementScope(f.calls[0].ownerScope), true);
   assert.equal(f.calls[0].id, 'old-task');
   assert.deepEqual(f.calls[0].options, options);
-  for (const section of ['overview', 'requirements', 'revisions', 'assignments', 'runs', 'attentions', 'deliveries']) {
+  for (const section of ['overview', 'progress', 'requirements', 'revisions', 'assignments', 'runs', 'attentions', 'deliveries']) {
     await f.run('assistant_tasks', { op: 'get', id: 'old-task', section });
     assert.deepEqual(f.calls.at(-1).options, { section });
   }
@@ -128,12 +128,12 @@ test('assistant_tasks get forwards section, exact record pointer, hash and chara
   assert.deepEqual(schema.properties.textOffset, { type: 'integer', minimum: 0 });
   assert.deepEqual(schema.properties.textLimit, { type: 'integer', minimum: 1, maximum: 12000 });
   assert.deepEqual(schema.properties.expectedHash, { type: 'string' });
-  assert.deepEqual(schema.properties.section.enum, ['overview', 'requirements', 'results', 'revisions', 'assignments', 'runs', 'attentions', 'deliveries']);
+  assert.deepEqual(schema.properties.section.enum, ['overview', 'progress', 'requirements', 'results', 'revisions', 'assignments', 'runs', 'attentions', 'deliveries']);
 });
 
 test('internal-only task reads fall back to logical ownership without inheriting global management', async () => {
   const f = fixture(); f.events[1].data.source = { kind: 'task-reply' };
-  await f.run('assistant_tasks', { op: 'get', id: 'old-task', section: 'requirements', textLimit: 120 });
+  await f.run('assistant_tasks', { op: 'get', id: 'old-task', section: 'progress' });
   assert.deepEqual(f.calls.map(row => row.method), ['ownerScope', 'read']);
   assert.equal(isDesktopTaskManagementScope(f.calls[1].ownerScope), false);
   assert.deepEqual(f.calls[1].ownerScope, { threadId: 'main', sessionIds: ['original-router', f.agent.id] });

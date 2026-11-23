@@ -5,6 +5,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { startupWindowPlugin, verifyStartupBundle, welcomePresentationPlugin } from './prepare-startup.mjs';
 import { workbenchLoadingPlugin, verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
 import { backgroundExecutionPlugin, verifyBackgroundBundle } from './prepare-background.mjs';
+import { browserStoragePlugin, verifyBrowserStorageBundle } from './prepare-browser-storage.mjs';
 import { updateBridgePlugin, verifyUpdateBridgeBundle } from './prepare-update-bridge.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -123,6 +124,7 @@ export async function prepareDesktopTray(repositoryRoot, output) {
       startupWindowPlugin(join(desktop, 'lib/types/main.js')),
       welcomePresentationPlugin(join(desktop, 'lib/types/welcome-window.js')),
       backgroundExecutionPlugin(join(desktop, 'lib/types/main.js')),
+      browserStoragePlugin(desktop),
       workbenchLoadingPlugin(join(desktop, 'lib/types/web-document.js')),
       updateBridgePlugin(join(desktop, 'lib/types/main.js')),
     ],
@@ -131,14 +133,17 @@ export async function prepareDesktopTray(repositoryRoot, output) {
   if (preload.length !== 1) throw new Error('Official desktop preload configuration changed; review update bridge compilation');
   await build({ ...preload[0], config: false, cwd: desktop,
     entry: { 'preload-app': join(desktop, 'lib/types/preload-app.js') }, outDir: output, clean: false,
-    plugins: [...preload[0].plugins, updateBridgePlugin(join(desktop, 'lib/types/preload-app.js'), true)] });
+    plugins: [...preload[0].plugins, updateBridgePlugin(join(desktop, 'lib/types/preload-app.js'), true),
+      browserStoragePlugin(desktop, { preload: true })] });
   const code = await readFile(join(output, 'main.js'), 'utf8');
+  const preloadCode = await readFile(join(output, 'preload-app.cjs'), 'utf8');
   verifyTrayBundle(code);
   verifyStartupBundle(code);
   verifyWorkbenchLoadingBundle(code);
   verifyBackgroundBundle(code);
   verifyUpdateBridgeBundle(code);
-  verifyUpdateBridgeBundle(await readFile(join(output, 'preload-app.cjs'), 'utf8'), true);
+  verifyUpdateBridgeBundle(preloadCode, true);
+  verifyBrowserStorageBundle(code, preloadCode);
   return join(output, 'main.js');
 }
 

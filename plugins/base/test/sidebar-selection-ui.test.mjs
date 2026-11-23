@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { createModuleSource } from '../client/modules.mjs';
 import * as helpers from '../client/sidebar-state.mjs';
+import { sessionStatusSource } from '../client/session-status.mjs';
 import * as resourceHelpers from '../../link/client/resource-state.mjs';
 const resourceNavigation={useResourceNavigation:()=>({scope:{mode:'current',deviceIds:[]},showLocal:true,remote:[],selected:[],devices:[],activeId:'local'}),remoteRecentRows:()=>[],installResourceReceiver:()=>()=>{}};
 
@@ -24,7 +25,11 @@ function render(activeSessionId, options = {}) {
   };
   const module = { exports: {} }, moduleSource = createModuleSource();
   moduleSource.update({base: true, harness: true, superagent: true, link: true, ...options.modules});
-  runInNewContext(code, { module, exports: module.exports, crypto: globalThis.crypto, localStorage: { getItem: () => null }, document: { addEventListener: (name, handler) => events.set(name, handler), removeEventListener() {} }, window: { matchMedia: () => ({ matches: true }) }, require: id => id.endsWith('resource-navigation.jsx') ? { ...resourceNavigation, ...(options.navigation ? { useResourceNavigation: () => options.navigation } : {}) } : id.endsWith('resource-navigation-store.mjs') ? { installResourceOpener: () => () => {} } : id.endsWith('resource-creation.jsx') ? { ResourceCreationDialog: 'ResourceCreationDialog' } : id.endsWith('resource-state.mjs') ? resourceHelpers : id.endsWith('modules.mjs') ? { moduleSource } : id === 'react' ? react : id.endsWith('sidebar-state.mjs') ? helpers : id.includes('superagent/client') ? { AssistantSidebarEntry: 'AssistantSidebarEntry' } : id.includes('device-launcher') ? { DeviceLauncher: 'DeviceLauncher' } : id.includes('device-switch') ? { DeviceSwitch: 'DeviceSwitch' } : {} });
+  const mocks = {
+    '../../shared/client/ui/confirmation.jsx': { useConfirmation: () => [() => assert.fail('unexpected confirmation'), null] },
+    './session-status.mjs': { sessionStatusSource },
+  };
+  runInNewContext(code, { module, exports: module.exports, crypto: globalThis.crypto, localStorage: { getItem: () => null }, document: { addEventListener: (name, handler) => events.set(name, handler), removeEventListener() {} }, window: { matchMedia: () => ({ matches: true }), __DSH_LINK_WORKBENCH__: options.linkWorkbench }, require: id => mocks[id] ?? (id.endsWith('resource-navigation.jsx') ? { ...resourceNavigation, ...(options.navigation ? { useResourceNavigation: () => options.navigation } : {}) } : id.endsWith('resource-navigation-store.mjs') ? { installResourceOpener: () => () => {} } : id.endsWith('resource-creation.jsx') ? { ResourceCreationDialog: 'ResourceCreationDialog' } : id.endsWith('resource-state.mjs') ? resourceHelpers : id.endsWith('modules.mjs') ? { moduleSource } : id === 'react' ? react : id.endsWith('sidebar-state.mjs') ? helpers : id.includes('superagent/client') ? { AssistantSidebarEntry: 'AssistantSidebarEntry' } : id.includes('device-launcher') ? { DeviceLauncher: 'DeviceLauncher' } : id.includes('device-switch') ? { DeviceSwitch: 'DeviceSwitch' } : {}) });
   const sessions = ['first', 'second', 'third'];
   module.exports.setSidebarSnapshot(options.commander ?? { loaded: true, projects: [{ id: 'recent', isDefault: true, sessionIds: sessions }], sessions: [] }, options.defaultId);
   const snapshot = options.sessionSnapshot ?? { ids: sessions, byId: Object.fromEntries(sessions.map(id => [id, { id, title: id, retainedBy: id === activeSessionId ? { mainView: 1 } : {}, blank: false, running: false }])) };
@@ -285,6 +290,27 @@ test('official ungrouped sessions join Recent without attaching a Workspace or d
   const second = sessionRows(nodes).find(row => row.children.some(child => child.children?.includes('second')));
   assert.equal(second.props['aria-current'], 'page'); second.props.onClick();
   assert.deepEqual(opened, ['second']);
+});
+
+test('Link shows a Worker under its project when the workspace stream lags the host read', () => {
+  const earlier = '2026-11-23T03:14:00.000Z', later = '2026-11-23T03:14:20.000Z';
+  const project = { id: 'fde', title: 'FDE', path: '/fde', sessionIds: ['worker'], updatedAt: later };
+  const streamProject = { workspaceId: project.id, title: project.title, path: project.path, sessionIds: [], updatedAt: earlier };
+  const workspaces = { phase: 'ready', items: [streamProject] };
+  const worker = { id: 'worker', title: '勘察FDE与CLI', blank: false, retainedBy: {} };
+  let rerender;
+  const nodes = render('worker', {
+    linkWorkbench: true, workspaces, commander: { loaded: true, projects: [project], sessions: [] },
+    sessionSnapshot: { ids: ['worker'], byId: { worker } }, onRerender: update => { rerender = update; },
+  });
+  assert.deepEqual(rowTitles(nodes), [], 'the Worker is absent from Recent');
+  nodes.find(node => node.type === 'button' && node.children.some(child => child.children?.includes('FDE'))).props.onClick();
+  assert.deepEqual(rowTitles(rerender()), [worker.title], 'the Worker appears once under the expanded project');
+
+  workspaces.items = [{ ...streamProject, updatedAt: '2026-11-23T03:15:00.000Z' }];
+  assert.deepEqual(rerender().find(node => node.props.className === 'cmd-project-children').children.map(node => node.props.className), ['cmd-sidebar-empty'], 'an older read cannot override a later workspace membership');
+  workspaces.items = [];
+  assert.equal(rerender().some(node => node.children.includes('FDE')), false, 'an older read cannot restore a deleted project');
 });
 
 test('Recent keeps ungrouped sessions when the ready official Workspace catalog is empty', () => {

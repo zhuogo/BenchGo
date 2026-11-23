@@ -787,7 +787,9 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
       if (!stopped) timer = setTimeout(poll, 4000);
     };
     if (group?.enabled) timer = setTimeout(poll, 4000);
-    return () => { stopped = true; clearTimeout(timer); };
+    const changed = () => { void refresh().catch(() => {}); };
+    window.addEventListener('link:device-directory', changed);
+    return () => { stopped = true; clearTimeout(timer); window.removeEventListener('link:device-directory', changed); };
   }, [group?.enabled, refresh]);
   useEffect(() => {
     if (!loaded) return;
@@ -937,7 +939,7 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     const icon = deviceIcon(device);
     const server = icon === 'server';
     const managed = serverManagement && device.sshManaged;
-    const canOpen = !runtime.paired;
+    const canOpen = !runtime.paired && device.kind !== 'paired' && !(device.groupAsset && device.kind === 'ssh' && !device.hostId);
     const Open = canOpen ? 'button' : 'div';
     return <article key={device.id} className="dc-device" data-device-icon={icon}>
       <Open className="dc-device-open" {...(canOpen ? { disabled: !!busy, onClick: () => select(device) } : {})}>
@@ -946,15 +948,16 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
           {server ? <small className="dc-server-tag"><span>{deviceKind(device)}</span><ServerStatus device={device} opening={opening} /></small> : <small>
             <span>{deviceKind(device)}</span>
             {status && <span className={opening ? undefined : 'dc-device-status'} data-status={opening ? undefined : device.status}>{opening ? <LoadingText label={status} /> : status}</span>}
-            {membership ? <span className="dc-device-status">组成员</span> : runtime.paired && device.kind === 'paired' && <span className="dc-device-status">已配对</span>}
+            {membership || device.groupMember ? <span className="dc-device-status">组成员</span> : runtime.paired && device.kind === 'paired' && <span className="dc-device-status">已配对</span>}
           </small>}
+          {device.ownerName && <span className="dc-note">由 {device.ownerName} 连接</span>}
           {device.pairingNotice && <span className="dc-note">{device.pairingNotice}</span>}
           {device.warning && <span className="dc-device-error">{device.warning}</span>}
           {!server && device.lastError && device.lastError !== relayDataClosed && <span className="dc-device-error">{device.lastError}</span>}
         </span>
       </Open>
-      {managed && <Button icon="terminal" title="打开 SSH 终端" aria-label={`打开 ${device.name} 的 SSH 终端`} onClick={() => setModal({ type: 'terminal', device })} disabled={!!busy} />}
-      {!runtime.paired && (!membership || membership.local || group.manageable) && <Button icon="more" title="设备设置" aria-label={`${device.name}设置`} onClick={() => setModal({ type: 'manage', device })} disabled={!!busy} />}
+      {(managed || device.sharedTerminal) && <Button icon="terminal" title="打开 SSH 终端" aria-label={`打开 ${device.name} 的 SSH 终端`} onClick={() => setModal({ type: 'terminal', device: device.terminalAssetId ? { ...device, id: device.terminalAssetId } : device })} disabled={!!busy} />}
+      {!runtime.paired && !device.groupAsset && !(mobile && device.groupMember) && (!membership || membership.local || group.manageable) && <Button icon="more" title="设备设置" aria-label={`${device.name}设置`} onClick={() => setModal({ type: 'manage', device })} disabled={!!busy} />}
     </article>;
   };
   const closeWorkbench = device => {
@@ -977,7 +980,7 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     if (type === 'add') content = <AddDevice runtime={runtime} onAdded={added} sshAvailable={data.capabilities?.ssh !== false} agentAvailable={agentAvailable} />;
     if (type === 'bind') content = <AddServer runtime={runtime} device={device} agentAvailable={agentAvailable} onAdded={async () => { await refresh(); move('manage'); }} />;
     if (type === 'reconnect') content = <ReconnectServer runtime={runtime} device={device} agentAvailable={agentAvailable} onConnected={async () => { await refresh(); if (returnTo === 'workbench') await select(device); else move(returnTo); }} />;
-    if (type === 'terminal') content = <ServerTerminal key={device.id} runtime={runtime} device={device} allowResize={data.capabilities?.serverTerminalResize === true} onReconnect={reconnect} />;
+    if (type === 'terminal') content = <ServerTerminal key={device.id} runtime={runtime} device={device} allowResize={device.sharedTerminal || data.capabilities?.serverTerminalResize === true} onReconnect={device.sharedTerminal ? undefined : reconnect} />;
     if (type === 'pairing') content = <ServerPairing runtime={runtime} device={device} onClose={() => move('manage')} onReconnect={reconnect} />;
     if (type === 'manage') content = <ManageDevice device={device} runtime={runtime} onChanged={refresh} serverManagement={serverManagement} agentAvailable={agentAvailable} onServerAction={move} onOpenWorkbench={select} membership={memberFor(device)} canRemoveMember={group?.manageable} onCloseWorkbench={canCloseWorkbench ? () => closeWorkbench(device) : undefined} onRemoved={id => { setFrames(items => items.filter(frame => frame.id !== id)); if (activeId === id) { setActiveId(null); setShowDevices(true); } setModal(null); void refresh().catch(reason => setError(reason.message)); }} />;
     return <Sheet key={type} title={titles[type] || device?.name} onClose={closeModal} busy={!!busy} terminal={type === 'terminal'}>{content}</Sheet>;

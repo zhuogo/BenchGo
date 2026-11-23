@@ -9,9 +9,8 @@ export const taskReplyIdentity = value => value?.kind === 'watchdog' ? watchdogS
 
 export function taskReplySignal(database, delivery) {
   const payload = delivery?.payload, task = database.getTask(delivery?.taskId);
-  if (!delivery?.uniqueKey || !task || payload?.type !== 'task.result'
-    || payload.taskId && payload.taskId !== task.id
-    || JSON.stringify(payload.source) !== JSON.stringify(task.mandate.source)) return null;
+  if (!delivery?.uniqueKey || !task || payload?.type !== 'task.result' || payload.taskId && payload.taskId !== task.id) return null;
+  if ((isTaskStateNotice(payload) || payload.stateSignal) && JSON.stringify(payload.source) !== JSON.stringify(task.mandate.source)) return null;
   if (isTaskStateNotice(payload)) {
     const state = taskStateSignal(database, delivery);
     return state && { ...state, kind: 'state', source: payload.source };
@@ -25,7 +24,8 @@ export function taskReplySignal(database, delivery) {
     || payload.instructionRevision !== task.instructionRevision || payload.resultVersion !== task.resultVersion) return null;
   const result = database.results(task.id).find(row => row.version === payload.resultVersion);
   if (!result || result.instructionRevision !== payload.instructionRevision
-    || result.outcome !== payload.outcome || !['completed', 'failed'].includes(result.outcome)) return null;
+    || result.outcome !== payload.outcome || !['completed', 'failed'].includes(result.outcome)
+    || JSON.stringify(payload.source) !== JSON.stringify(result.deliverySource || task.mandate.source)) return null;
   const text = result.summary;
   if (typeof text !== 'string' || !text.trim()) return null;
   return { eventKey: delivery.uniqueKey, taskId: task.id, kind: 'result', title: task.title,

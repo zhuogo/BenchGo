@@ -144,7 +144,7 @@ export function LinkSettings({ ctx, management = call, embedded = false, refresh
   </section>;
 }
 function deviceAccessLabel({ reciprocal, deviceGroup }) {
-  if (deviceGroup) return '加入「我的设备」后，组内成员可互相打开工作台、委派任务，并使用设备提供的连接能力。';
+  if (deviceGroup) return '加入「我的设备」后，可打开组内工作台、访问共享设备和已登记的 SSH 服务器。';
   const capabilities = '已开放的工作台、任务协作及连接管理';
   return reciprocal ? `回程验证通过后，双方可使用对方${capabilities}。回程不可达时，仅对方可访问本机。` : `单向连接，对方可使用本机${capabilities}。`;
 }

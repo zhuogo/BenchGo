@@ -1,4 +1,4 @@
-import { inspectRouterRecovery } from './router-recovery.mjs';
+import { inspectRouterRecovery, routerRecoveryRequests, routerRecoverySource } from './router-recovery.mjs';
 import { createAuxiliaryCompactionHook } from './auxiliary-compaction.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -9,7 +9,7 @@ import { validateAssistantModels } from './store.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 import { taskCleanupNoticeKey } from './task-cleanup-continuation.mjs';
 import { createMessageInbox } from './message-inbox.mjs';
-import { activeChatReply, chatPublicationType, executionInputSource, projectChatMessages, chatNotificationIdentities } from './chat-publication.mjs';
+import { activeChatReply, chatPublicationType, taskCleanupNoticeSource, projectChatMessages, chatNotificationIdentities } from './chat-publication.mjs';
 import { historyPage, updateHistoryIndex } from './history-index.mjs';
 import { modelFallbackType, modelFallbackSource, modelRouteType, readModelFallbacks } from './model-fallback.mjs';
 import { findExecutionSessionOwner } from './execution-session.mjs';
@@ -19,7 +19,7 @@ import { reconcileRoutedReasoning } from '../../base/shared/live-reasoning.mjs';
 import { approvalSignalBinding } from './approval-chat-binding.mjs';
 import { channelMessageRecordType } from './channel-session-record.mjs';
 import { createSessionRoleAssembly, liveSessionRole } from './session-role-assembly.mjs';
-import { atRouterSessionBoundary, mountRouterSession, routerWriterClosing, waitRouterWriterRelease } from './router-session-attachment.mjs';
+import { atSessionBoundary, mountRouterSession, routerWriterClosing, waitRouterWriterRelease } from './router-session-attachment.mjs';
 import { createTaskExpression } from './router-task-expression.mjs';
 import { createRouterSessionSetup, routeKey } from './router-session-setup.mjs';
 
@@ -188,10 +188,10 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     const state = await store.getState();
     return { threadId, sessionIds: [...new Set([...(state.sessionLineage?.[threadId] || []), record.sessionId].filter(Boolean))] };
   }
-  const { mayReplyToTask, mayReplyToExecutionInput, settleTaskReply, disposeTaskReplies, ...expressionApi } = createTaskExpression({ ctx, store, now, thread, taskOwnerScope, updateState, ensureSourceThread, readWatchdogFacts, readTaskCleanupContinuation, onTaskReply, assertOpen, isStopped: () => stopped,
+  const { mayReplyToTask, mayReplyToTaskCleanup, settleTaskReply, disposeTaskReplies, ...expressionApi } = createTaskExpression({ ctx, store, now, thread, taskOwnerScope, updateState, ensureSourceThread, readWatchdogFacts, readTaskCleanupContinuation, onTaskReply, assertOpen, isStopped: () => stopped,
     get inbox() { return inbox; } });
   const sessionRuntime = { ctx, store, now, cooldownMs, builtinLayer, Compaction, appendRecord, appendChatRecord, setupTools, scheduleBridge, onSourceMessage, emit, mark,
-    timings, thread, taskOwnerScope, mayReplyToTask, mayReplyToExecutionInput, isStopped: () => stopped, cooldowns, errors, failures, models,
+    timings, thread, taskOwnerScope, mayReplyToTask, mayReplyToTaskCleanup, isStopped: () => stopped, cooldowns, errors, failures, models,
     activeRoutes, agentCompaction,
     get inbox() { return inbox; } };
   async function prepareRouterMessage(agent, message, { recovery = false } = {}) {
@@ -224,7 +224,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     readSession: sessionId => ctx.sessionQuery.readSession(sessionId),
     beforeDispatch: async (request, agent) => {
       await liveSessionRole(agent)?.reconcile();
-      if (request.message?.source?.kind === executionInputSource && !await mayReplyToExecutionInput(request.threadId, request.message)) return false;
+      if (request.message?.source?.kind === taskCleanupNoticeSource && !await mayReplyToTaskCleanup(request.threadId, request.message)) return false;
       if (request.taskReply && !await mayReplyToTask(request.threadId, request.messageId)) return false;
       if ((await thread(request.threadId)).sourceKey && !request.taskReply) return;
       await prepareRouterMessage(agent, request.message);
@@ -331,12 +331,12 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         }
         // A saved logical thread owns this identity. Missing in-memory role
         // observations cannot invalidate it or require a second writer.
-        const attachment = await atRouterSessionBoundary(existing, { signal: lifecycle.signal,
+        const attachment = await atSessionBoundary(existing, { signal: lifecycle.signal,
           current: () => ctx.agents.get(record.sessionId) === existing && !routerWriterClosing(existing) }, signal =>
           mountRouterSession({ agent: existing, setup, signal }));
         if (attachment) {
           handle = { agent: existing, current: attachment.current, async dispose() {
-            await atRouterSessionBoundary(existing, { signal: new AbortController().signal,
+            await atSessionBoundary(existing, { signal: new AbortController().signal,
               current: () => ctx.agents.get(record.sessionId) === existing }, () => attachment.dispose());
             await attachment.dispose();
           } };
@@ -401,7 +401,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       const facts = saved.map(row => ({ taskId: row.taskId, title: store.orchestration.getTask(row.taskId)?.title || '',
         status: row.status, receiptId: row.receiptId || null, code: row.code || null, reason: row.reason || null }));
       return inbox.enqueue({ threadId, requestId: `cleanup-notice:${eventKey}`,
-        hostExecutionInput: { cleanupContinuation: { operationId, ids: saved.map(row => row.id) }, eventKey },
+        hostCleanupNotice: { cleanupContinuation: { operationId, ids: saved.map(row => row.id) }, eventKey },
         text: '可信宿主通知：用户先前明确要求先停止再归档的部分任务已有以下持久处理结果。请结合原对话简短自然告知，只报告本批事实；pending 才是仍待办，conflict 表示未归档且需要核对，不把停止请求说成已经退出。此通知不是新真人授权，不能据此停止其他任务、扩范围、重新委派或修改设置。\n' + JSON.stringify({ operationId, items: facts }) });
     },
     async nativePrompt({ request, dispatch, signal }) {
@@ -512,7 +512,15 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
               agent.followup(message);
             }
           } else {
-            const message = createUserMessage({ content: [{ type: 'text', text: 'The host confirmed the previous Router writer is inactive and restored this same durable session. Read the existing conversation, Tasks and ledger, then continue only the original user mandate. Do not re-dispatch completed work or repeat completed external effects. This recovery notice grants no new authority.' }], source: { kind: 'benchgo-router-recovery', sessionId: record.sessionId, transcriptHash: evidence.hash } });
+            const { interruptedRequestId } = routerRecoveryRequests(events);
+            const guidance = interruptedRequestId
+              ? 'The host can bind unaccepted delegation to this exact interrupted user request. Check existing Tasks first and report any remaining work that needs a new user message.'
+              : 'If work still needs delegation, explain what remains and ask the user to continue.';
+            const message = createUserMessage({
+              content: [{ type: 'text', text: 'The host restored this same durable Router session. Read the existing conversation, Tasks and ledger. Continue only the original scope and never repeat accepted work or completed external effects. ' + guidance }],
+              source: { kind: routerRecoverySource, sessionId: record.sessionId, transcriptHash: evidence.hash,
+                requestId: interruptedRequestId ?? null },
+            });
             await prepareRouterMessage(agent, message, { recovery: true });
             assertOpen();
             agent.followup(message);

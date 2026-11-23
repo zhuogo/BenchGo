@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createAssistantEngine } from '../src/engine.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createDesktopDelegationService } from '../src/desktop-delegation-service.mjs';
@@ -110,18 +111,28 @@ async function fixture(t, { mode, proposal }) {
     } });
   t.after(async () => { await engine.dispose(); await ctx.fiber.dispose(); database.close(); });
   const agent = await engine.ensureSession();
-  await engine.send({ text: `之前的香港服务器只读巡检尚未取得结果，连接资料仍在原项目。${historyMarker}`, requestId: 'historical-inspection' });
-  await agent.whenIdle();
+  const errors = [];
+  ctx.on('agent/error', ({ error }) => errors.push(error?.stack ?? String(error)));
+  const send = async (text, requestId) => {
+    await engine.send({ text, requestId });
+    const signal = AbortSignal.timeout(5000);
+    for (;;) {
+      const request = (await store.getState()).requests?.find(row => row.requestId === requestId);
+      if (request?.status === 'processed') break;
+      assert.ok(!['failed', 'cancelled', 'uncertain'].includes(request?.status), JSON.stringify({ request, errors }));
+      await delay(10, undefined, { signal });
+    }
+  };
+  await send(`之前的香港服务器只读巡检尚未取得结果，连接资料仍在原项目。${historyMarker}`, 'historical-inspection');
   assert.equal(requests.length, 1);
   activeQuery = true;
-  return { ctx, engine, agent, database, requests, dispatched, routerModel, workerModel, linkReads: () => linkReads, routerSteps: () => routerSteps };
+  return { ctx, send, agent, database, requests, dispatched, routerModel, workerModel, linkReads: () => linkReads, routerSteps: () => routerSteps };
 }
 
 for (const question of ['有其他设备连接我们这台机器吗？', '手机最后一次访问是什么时候？']) {
   test(`Router selects the read-only tool without admission review or a Task: ${question}`, async t => {
     const f = await fixture(t, { mode: 'direct' });
-    await f.engine.send({ text: question, requestId: 'device-question' });
-    await f.agent.whenIdle();
+    await f.send(question, 'device-question');
     assert.deepEqual(f.dispatched.map(row => row.name), ['assistant_device_status']);
     assert.ok(f.dispatched.every(row => row.sessionId === f.agent.id));
     assert.equal(f.routerSteps(), 2);
@@ -135,13 +146,12 @@ for (const question of ['有其他设备连接我们这台机器吗？', '手机
   });
 }
 
-for (const request of ['请只读检查香港服务器负载、内存、磁盘和服务状态。', '再来一次呗']) {
+for (const request of ['请只读检查香港服务器负载、内存、磁盘和服务状态。', '开始执行']) {
   test(`Router delegates in the original conversation without a review request: ${request}`, async t => {
     const proposal = { title: '香港服务器巡检', text: '依据原项目连接资料，只读检查香港服务器负载、内存、磁盘和服务状态',
       acceptance: '报告实际发现、检查来源和无法确认的部分，不修改服务器', requestId: 'requested-inspection' };
     const f = await fixture(t, { mode: 'delegate', proposal });
-    await f.engine.send({ text: request, requestId: 'inspection-question' });
-    await f.agent.whenIdle();
+    await f.send(request, 'inspection-question');
     assert.deepEqual(f.dispatched.map(row => row.name), ['assistant_delegate']);
     assert.ok(f.dispatched.every(row => row.sessionId === f.agent.id));
     assert.equal(f.routerSteps(), 2);

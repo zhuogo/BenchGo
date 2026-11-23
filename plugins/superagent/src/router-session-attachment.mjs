@@ -34,7 +34,7 @@ async function idle(agent, signal) {
 }
 
 /** Reserve the official maintenance phase; waking input stays in its inbox. */
-export async function atRouterSessionBoundary(agent, { signal, current }, operation) {
+export async function atSessionBoundary(agent, { signal, current }, operation) {
   for (;;) {
     await idle(agent, signal);
     signal.throwIfAborted();

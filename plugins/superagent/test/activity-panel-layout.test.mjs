@@ -228,7 +228,18 @@ test('interrupted board details keep continuation in the bottom footer without r
       await page.evaluate(()=>window.renderScenario('interrupted'));
       await page.locator('.ba-activity-trigger').click();
       const panel=page.locator('.ba-activity-panel');
-      await panel.locator('[data-task-key="task:running"]').waitFor();
+      const row=panel.locator('[data-task-key="task:running"]');
+      await row.waitFor();
+      const summary=await row.locator('.ba-board-task-meta').evaluate(node=>{
+        const chip=node.querySelector('.ba-board-chip').getBoundingClientRect();
+        const summary=node.querySelector('.ba-board-summary');
+        return {
+          sameLine: Math.abs(chip.top-summary.getBoundingClientRect().top)<1,
+          whiteSpace: getComputedStyle(summary).whiteSpace,
+          overflow: getComputedStyle(summary).textOverflow,
+        };
+      });
+      assert.deepEqual(summary,{sameLine:true,whiteSpace:'nowrap',overflow:'ellipsis'});
       assert.equal(await panel.getByText(/原执行会话已中断|缺少可核对的完整结束记录|请查看原执行记录并排除该阻塞/).count(),0,'the board list also uses actual progress rather than removed guidance');
       await panel.locator('[data-task-key="task:running"] button').click();
       const detail=panel.getByRole('region',{name:'任务详情',exact:true});

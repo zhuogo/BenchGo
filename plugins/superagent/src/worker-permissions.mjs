@@ -14,6 +14,8 @@ export function workerAppliedTask(database, assignment, execution) {
   if (!current) throw new Error('Worker 任务不存在');
   if (taskExecutionBlocked(current)) throw fail('WORKER_TASK_INACTIVE', '任务已暂停、停止或结束');
   const task = { ...current, ...database.appliedTaskSnapshot(assignment.id), status: current.status, executionControl: current.executionControl };
+  // The inbox receipt tool only updates Task requirements. It does not use workspace capabilities.
+  if (execution.name === 'benchgo_adopt_task_message') return task;
   for (const names of [task.toolScope, current.mandate?.toolScope, current.mandate?.scope?.toolNames]) {
     if (names == null) continue;
     if (!Array.isArray(names) || !names.every(name => typeof name === 'string') || !names.includes(execution.name)) throw fail('WORKER_TOOL_SCOPE', '当前任务工具范围不允许此动作');
@@ -89,6 +91,11 @@ export function installWorkerFailureConvergence(scope, agent, { database, assign
   scope.on('agent/pre-step', (payload, next) => {
     for (const message of payload.messages || []) if (message.source?.kind === 'user' && !admittedUsers.has(message.id)) {
       admittedUsers.add(message.id); stopped = undefined; prior = undefined;
+    }
+    for (const input of database?.pendingTaskInputs?.(assignment.taskId) ?? []) {
+      if (input.snapshot?.workerMessage === true && !admittedUsers.has(input.id)) {
+        admittedUsers.add(input.id); stopped = undefined; prior = undefined;
+      }
     }
     if (stopped && stopped.revision === revision()) { onStop(stopped); return { kind: 'reject' }; }
     stopped = undefined;

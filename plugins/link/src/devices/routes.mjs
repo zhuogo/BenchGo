@@ -27,7 +27,7 @@ export function deviceIdentity(candidate, value) {
 }
 export async function readDeviceInfo(candidate, { signal } = {}) {
   const { value } = await remoteJson(candidate, '/link/api/info', undefined, { signal, timeout: 3500 });
-  return deviceIdentity(candidate, value);
+  return { ...deviceIdentity(candidate, value), ...(value.groupAssetLease === true ? { groupAssetLease: true } : {}) };
 }
 /** Stable route order: direct first, then relays by configured priority. */
 export function orderRoutes(routes, now = Date.now()) {

@@ -53,6 +53,29 @@ async function publish(f, value, agent) {
   assert.equal(result.isError, false, JSON.stringify(result));
 }
 
+const delegateCall = (id, task) => [
+  { type: 'block-start', index: 0, blockType: 'tool-call' },
+  { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'assistant_delegate', arguments: JSON.stringify({ text: task }) } },
+  { type: 'finish', reason: { kind: 'tool-calls' } },
+];
+
+function continuationDelegationTools(ctx, database) {
+  const delegation = createDesktopDelegationService({ ctx, database,
+    readPolicy: async () => ({ desktopVersion: 'continuation-policy', projects: [], workerModels: [{ providerId: 'test', modelId: 'exact' }] }) });
+  return (scope, { agent, threadId }) => {
+    scope.tools.register({ name: 'assistant_delegate', description: 'Delegate requested work',
+      parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+      output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: (args, execution) => {
+        if (agent.session.snapshotEvents().findLast(event => event.type === 'user/message' && event.data.source.kind !== 'runtime-context')?.data.source.kind !== 'user') {
+          assert.equal(currentHumanInstruction(ctx, agent), null, 'continuation authority is local to delegation');
+        }
+        return delegation.delegate(args, execution, { ownerAgent: agent, threadId });
+      },
+    });
+  };
+}
+
 async function fixture(t, script, options = {}) {
   const ctx = new Context();
   await ctx.plugin(LlmRuntime);
@@ -151,13 +174,13 @@ test('Router requests include builtin layer before user context without maintain
   assert.doesNotMatch(request, /You are the BenchGo (?:everyday general-purpose )?personal assistant|An empty name means unnamed|出厂无名|你是 BenchGo SuperAgent/);
   assert.ok(request.indexOf('# 内置层') < request.indexOf('Be concise.'));
   assert.doesNotMatch(request, /本节说明文字不属于提示词正文|插件发布清单包含本文件/);
-  assert.match(request, /assistant_task_control/);
-  assert.match(request, /saved request is not executor acknowledgement/);
-  assert.match(request, /assistant_execution_manage resumes interrupted work, not paused work/);
+  assert.match(request, /assistant_task_control supplement/);
+  assert.match(request, /A saved request confirms delivery to the Task inbox/);
+  assert.match(request, /Use assistant_execution_manage to inspect or recover work on another device/);
   assert.match(request, /从第一次探查起统一使用 assistant_delegate/);
-  assert.match(request, /Use assistant_delegate for all work/);
+  assert.match(request, /Use assistant_delegate for project and Task work/);
   assert.match(request, /The peer only executes and does not need SuperAgent/);
-  assert.match(request, /There is no lightweight direct-execution exception/);
+  assert.match(request, /不设轻量直做例外/);
 });
 
 test('Router acknowledgement streams before real tool execution and remains visible until the result', { timeout: 10000 }, async t => {
@@ -1538,15 +1561,19 @@ test('Router recovery resumes disposed work from the durable transcript with one
   const store = await createAssistantStore({ dataDirectory: directory });
   await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
   const options = { store, persistenceRoot: join(directory, 'sessions'), contextWindow: 131072 };
+  const userRequest = 'Compare the maintenance costs of the two approaches';
   let started;
   const ready = new Promise(resolve => { started = resolve; });
   const first = await fixture(t, async () => { started(); await new Promise(resolve => setTimeout(resolve, 50)); return text('Interrupted response'); }, options);
-  const sent = await first.engine.send({ text: 'Continue this original mandate', requestId: 'interrupted-router' });
+  const sent = await first.engine.send({ text: userRequest, requestId: 'interrupted-router' });
   await ready;
   assert.equal((await first.engine.recoverMain()).status, 'live');
   await first.engine.dispose(); await first.ctx.fiber.dispose();
   await store.updateConfig({ models: [{ providerId: 'test', modelId: 'next-primary/opaque' }] });
-  const second = await fixture(t, () => text('Recovered original work'), options);
+  let setupTools;
+  const second = await fixture(t, (_request, count) => count === 1 ? delegateCall('recovery-delegate', userRequest) : text('Recovered original work'),
+    { ...options, setupTools: (...args) => setupTools(...args) });
+  setupTools = continuationDelegationTools(second.ctx, store.orchestration);
   t.after(() => rm(directory, { recursive: true, force: true }));
   const recovered = await second.engine.recoverMain();
   assert.equal(recovered.status, 'recovered');
@@ -1554,11 +1581,16 @@ test('Router recovery resumes disposed work from the durable transcript with one
   const agent = await second.engine.ensureSession();
   await agent.whenIdle();
   assert.equal(agent.id, sent.sessionId);
-  assert.equal(second.requests.length, 1);
+  assert.equal(second.requests.length, 2);
   assert.equal(second.requests[0].model, 'exact', 'recovery preserves the recorded model despite a changed primary');
   const events = (await second.ctx.sessionQuery.readSession(agent.id)).events;
-  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user').length, 1);
+  const humanMessages = events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user');
+  assert.equal(humanMessages.length, 1);
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-router-recovery').length, 1);
+  const [task] = store.orchestration.listTasks();
+  assert.equal(task.mandate.source.messageId, humanMessages[0].data.id);
+  assert.equal(task.mandate.instruction, userRequest);
+  assert.equal((await second.engine.history()).messages.at(-1).text, 'Recovered original work');
   assert.equal((await second.engine.recoverMain()).status, 'live');
   await second.engine.send({ text: 'Start a new request', requestId: 'new-after-recovery' });
   await agent.whenIdle();
@@ -1778,6 +1810,36 @@ test('request failure switches once without replaying input and every new messag
   await f.engine.send({ text: 'After cooldown' });
   await agent.whenIdle();
   assert.equal(f.requests.at(-1).model, 'first');
+});
+
+for (const alreadyAccepted of [false, true]) test(`Router model fallback ${alreadyAccepted ? 'leaves the accepted task alone' : 'delegates under the original user message'}`, async t => {
+  const userRequest = 'Compare the maintenance costs of the two approaches';
+  const restatedTask = 'Review the relative maintenance cost of both approaches';
+  let setupTools;
+  const f = await fixture(t, (request, count) => {
+    if (request.model === 'first') {
+      if (alreadyAccepted && count === 1) return delegateCall('primary-delegate', userRequest);
+      return [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', status: 503, message: 'offline' } } }];
+    }
+    if (request.messages.some(message => message.role === 'tool' && message.toolCallId === 'fallback-delegate')) return text('Task status checked');
+    return delegateCall('fallback-delegate', restatedTask);
+  }, { setupTools: (...args) => setupTools(...args) });
+  setupTools = continuationDelegationTools(f.ctx, f.store.orchestration);
+  await f.engine.send({ text: userRequest });
+  const agent = await f.engine.ensureSession();
+  await agent.whenIdle();
+  const events = agent.session.snapshotEvents();
+  const [human] = events.filter(event => event.type === 'user/message' && event.data.source.kind === 'user');
+  const tasks = f.store.orchestration.listTasks();
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].target, alreadyAccepted ? userRequest : restatedTask);
+  assert.equal(tasks[0].mandate.source.messageId, human.data.id);
+  assert.equal(tasks[0].mandate.instruction, userRequest);
+  const result = events.find(event => event.type === 'tool/result' && event.data.message.toolCallId === 'fallback-delegate');
+  assert.ok(result, JSON.stringify(events.filter(event => ['tool/call', 'tool/result', 'turn/end'].includes(event.type))));
+  const toolError = result.data.error?.message ?? result.data.message.content.map(block => block.text).join('\n');
+  if (alreadyAccepted) assert.match(toolError, /原消息已有受理记录/);
+  else assert.equal(result.data.error, undefined);
 });
 
 test('main and side chats keep the Router fallback queue independent of Worker and auxiliary models', async t => {
@@ -2544,49 +2606,6 @@ test('execution native prompt delegates cold and completed Worker admission to t
   assert.equal(resumed[0].sessionId, run.sessionId);
   await assert.rejects(f.engine.nativePrompt({ request, dispatch: async () => { throw new Error('official admission failed'); } }), /official admission failed/);
 });
-
-test('execution input Router notification publishes one natural reply and survives official session restart without becoming user authority', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'execution-router-notice-'));
-  const store = await createAssistantStore({ dataDirectory: directory });
-  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }], workerModels: [{ providerId: 'test', modelId: 'exact' }] });
-  const options = { store, persistenceRoot: join(directory, 'sessions') };
-  const first = await fixture(t, () => text('新增网站和发送对象超出原范围，请在这里确认具体新增范围。'), options);
-  const router = await first.engine.ensureSession(), policy = await readAssessmentPolicy(store);
-  const source = { channel: 'desktop', sessionId: router.id, messageId: 'owner-original', threadId: 'main' };
-  const db = store.orchestration;
-  const original = db.ingest({ dedupeKey: 'owner-original', thread: { id: `desktop:${router.id}`, source: { type: 'desktop', id: router.id } },
-    source, actor: { kind: 'human', id: 'desktop-owner' }, content: '只读本地目录', mode: 'direct' }).trigger;
-  const task = db.createTask({ threadId: original.threadId, target: '只读本地目录', acceptance: '不联网',
-    mandate: { actorId: 'desktop-owner', source, instruction: '只读本地目录', policyVersion: policy.desktopVersion,
-      admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval' } });
-  db.createAssignment(task.id, { text: task.target, model: { providerId: 'test', modelId: 'exact' } });
-  const [assignment] = db.claimAssignments('worker', { validateMandate: () => true });
-  const run = db.prepareRun(assignment.id, { ...assignment, sessionId: 'worker-session', directory });
-  const nativeSource = { channel: 'desktop', sessionId: run.sessionId, messageId: 'native', executionSessionId: run.sessionId, executionMessageId: 'native' };
-  const trigger = db.ingest({ dedupeKey: 'native', thread: { id: 'desktop:worker-session', source: { type: 'desktop', id: 'worker-session' } },
-    source: nativeSource, actor: { kind: 'human', id: 'desktop-owner' }, content: 'RAW_EXPANSION_COMMAND', mode: 'direct' }).trigger;
-  db.subscribe(task.id, trigger.threadId, { beforeTriggerId: trigger.id }); db.deliverSubscribedMessage(trigger.id, { taskId: task.id });
-  db.saveExecutionInputDisposition(trigger.id, { ...assignment, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId,
-    disposition: { outcome: 'router', reason: '新增网站和发送对象' } });
-  const notice = { task, trigger, reason: '新增网站和发送对象' };
-  await first.engine.notifyExecutionInput(notice); await router.whenIdle();
-  const saved = (await store.getState()).requests.find(row => row.executionInput);
-  assert.equal(router.session.snapshotEvents().find(event => event.type === 'user/message' && event.data.id === saved.messageId).data.source.kind, 'benchgo-execution-input');
-  assert.equal((await first.engine.requestState()).length, 0);
-  const before = (await first.engine.history()).messages;
-  assert.equal(before.length, 1); assert.equal(before[0].role, 'assistant'); assert.match(before[0].text, /请在这里确认/);
-  assert.doesNotMatch(JSON.stringify(before), /RAW_EXPANSION_COMMAND/);
-  assert.equal(db.getTask(task.id).instructionRevision, 1);
-  assert.ok(router.session.snapshotEvents().some(event => event.type === 'plugin:benchgo-plugin/chat-publication' && event.data.requestId === saved.messageId));
-  await first.engine.dispose(); await first.ctx.fiber.dispose();
-  const second = await fixture(t, () => text('must not replay'), options);
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await second.engine.ensureSession();
-  await second.engine.notifyExecutionInput(notice);
-  assert.deepEqual((await second.engine.history()).messages, before);
-  assert.equal(second.requests.length, 0);
-});
-
 
 async function savedCleanupNotice(f, runtime, { requestId, threadId = 'main', sessionId, status = 'completed' }) {
   sessionId ||= (await f.engine.ensureSession({ threadId })).id;

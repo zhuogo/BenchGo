@@ -23,7 +23,7 @@ export function deviceSwitchItems(devices) {
   const rows = Array.isArray(devices) ? devices.filter(item => item && typeof item.id === 'string' && item.id && labelOf(item.name)) : [];
   const local = rows.find(item => item.kind === 'local') || { id: 'local', name: '本机', kind: 'local', status: 'online' };
   const seen = new Set([local.id]);
-  const remote = rows.filter(item => item.kind !== 'local' && !seen.has(item.id) && seen.add(item.id));
+  const remote = rows.filter(item => item.kind !== 'local' && !(item.groupAsset && item.kind === 'ssh' && !item.hostId) && !seen.has(item.id) && seen.add(item.id));
   return [{ ...local, name: labelOf(local.name) || '本机' }, ...remote.map(item => ({ ...item, name: labelOf(item.name) }))];
 }
 

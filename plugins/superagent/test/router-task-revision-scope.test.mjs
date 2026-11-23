@@ -5,7 +5,7 @@ import { createAssistantOrchestrationStore } from '../src/orchestration-store.mj
 import { createTaskRevisionService } from '../src/task-revision-service.mjs';
 import { createRouterTools } from '../src/router-tools.mjs';
 
-function fixture(t) {
+function fixture(t, harness = 'codex') {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   const events = [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'current-human', source: { kind: 'user' },
@@ -18,7 +18,7 @@ function fixture(t) {
     admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval' };
   database.createThread({ id: 'desktop:old-model-session', source: { type: 'desktop', id: 'old-model-session' } });
   const task = database.createTask({ id: 'original-task', threadId: 'desktop:old-model-session', target: '整理发布文档', acceptance: '保留完整操作步骤', mandate });
-  database.createAssignment(task.id, { model: { providerId: 'opaque-provider', modelId: 'Opaque/Model:1' }, text: task.target });
+  database.createAssignment(task.id, { model: { harness, providerId: 'opaque-provider', modelId: 'Opaque/Model:1' }, text: task.target });
   const side = database.createTask({ id: 'side-task', threadId: task.threadId, target: '旁聊任务', mandate: { ...mandate, source: { ...oldSource, threadId: 'unrelated-side' } } });
   const policy = { desktopVersion: 'current', projects: [], workerModels: [{ providerId: 'opaque-provider', modelId: 'Opaque/Model:1' }] };
   let onPolicy;
@@ -53,6 +53,13 @@ test('registered Router revision follows logical main-chat lineage after model-s
   assert.equal(revision.context.at(-1).source.messageId, 'current-human');
   assert.equal(revision.context.at(-1).text, f.events[1].data.content[0].text);
   assert.equal((await f.run()).instructionRevision, 2, 'retry reuses the current-human receipt');
+});
+
+test('registered Router revision sends ordinary local official changes to the Worker message entry point', async t => {
+  const f = fixture(t, 'official');
+  await assert.rejects(f.run(), { code: 'USE_WORKER_MESSAGE' });
+  assert.equal(f.database.getTask(f.task.id).instructionRevision, 1);
+  assert.deepEqual(f.database.taskInputs(f.task.id), []);
 });
 
 test('logical lineage does not grant revision authority to unrelated side chats or Worker handles', async t => {

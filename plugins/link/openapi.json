@@ -32,6 +32,22 @@
         }
       }
     },
+    "/link/api/pair": {
+      "servers": [{ "url": "/" }],
+      "post": {
+        "summary": "提交设备连接或入组申请",
+        "description": "Android 支持提交 groupClientKey（RSA-2048 SPKI DER 的 Base64）。主机支持时返回 deviceGroup=true，并将请求显示为入组审批。批准后使用 /link/api/pair/status 返回的短时邀请凭据和客户端对邀请的签名完成入组。",
+        "responses": { "200": { "description": "requestId、pollToken、expiresAt 和可选的 deviceGroup。" } }
+      }
+    },
+    "/link/api/rpc": {
+      "servers": [{ "url": "/" }],
+      "post": {
+        "summary": "设备组成员目录与登记资产",
+        "description": "action=deviceGroup。admitClient 使用获批邀请 Bearer 凭据及客户端签名完成入组，返回 groupId、self、members、assets。directory 使用目标主机绑定的组员签名 Bearer 凭据读取同一目录结构。asset 由登记主机通过 assetId 处理 workspace 和 serverTerminal 系列操作。工作台仅返回短时 HttpOnly 会话，终端会话绑定同一组员与资产。独立配对凭据只能使用已有的设备 RPC。",
+        "responses": { "200": { "description": "设备组目录、短时工作台会话或终端操作结果。" }, "401": { "description": "连接凭据无效或已撤销。" }, "403": { "description": "成员或邀请无权请求该操作。" } }
+      }
+    },
     "/link/workbench/api/commander/assistant": {
       "post": {
         "summary": "已配对设备的总助手通知与会话接口",

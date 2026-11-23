@@ -2,7 +2,7 @@ import { createSecureServer } from 'node:http2';
 import { readFile } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { isIP } from 'node:net';
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, randomBytes, timingSafeEqual } from 'node:crypto';
 import { normalizeReturnOffer, returnCredential } from '../pairing/return.mjs';
 import { integrationBearer } from '../../../base/shared/integration-token.mjs';
 export { validateLinkTransport as validateConfig } from '../config.mjs';
@@ -61,7 +61,7 @@ async function body(request, limit = 256 * 1024) {
 }
 
 /** Separate encrypted carrier: it exposes only Link's allowlist, never the Host admin API. */
-export async function listen({ identity, config, webRoot, store, dispatch, workbench, onError, routes, registerReturn, authenticateGroup, integration, hostName = () => store.state.name, runRequest = operation => operation() }) {
+export async function listen({ identity, config, webRoot, store, dispatch, workbench, onError, routes, registerReturn, authenticateGroup, activeGroup, integration, hostName = () => store.state.name, runRequest = operation => operation() }) {
   const rates = new Map(), deviceRates = new Map();
   const relayKey = randomBytes(32);
   const signRelaySource = source => createHmac('sha256', relayKey).update(source).digest('hex');
@@ -134,7 +134,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
             return send(res, 200, { proof });
           }
           return send(res, 200, { name: 'DSH Link', hostName: hostName(), version: '0.1.0',
-            ...(device ? { hostId: 'sha256:' + identity.pin, authorizationId: device.id, executionSourceProof: 1, ...(routes ? { routes: routes() } : {}) } : {}) });
+            ...(device ? { hostId: 'sha256:' + identity.pin, authorizationId: device.id, executionSourceProof: 1, groupAssetLease: true, ...(routes ? { routes: routes() } : {}) } : {}) });
         }
         const file = { '/link': 'index.html', '/link/': 'index.html', '/link/index.html': 'index.html', '/link/app.js': 'app.js', '/link/app.css': 'app.css' }[url.pathname];
         if (!file) throw fail('未找到', 404);
@@ -149,6 +149,16 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
         const input = await body(req);
         const agent = req.headers['user-agent'] || '';
         const deviceType = /iPad|Tablet/i.test(agent) ? 'tablet' : /Android|iPhone|Mobile/i.test(agent) ? 'mobile' : /Windows|Macintosh|X11/i.test(agent) ? 'computer' : 'unknown';
+        if (input.groupClientKey !== undefined) {
+          if (input.groupId !== undefined && input.groupId !== activeGroup?.()) throw fail('目标主机未加入当前设备组，请在组内主机添加它', 409);
+          if (typeof input.groupClientKey !== 'string' || input.groupClientKey.length > 512) throw fail('设备组公钥无效');
+          const bytes = Buffer.from(input.groupClientKey, 'base64');
+          const key = createPublicKey({ key: bytes, format: 'der', type: 'spki' });
+          if (bytes.toString('base64') !== input.groupClientKey || key.asymmetricKeyType !== 'rsa' ||
+            key.asymmetricKeyDetails.modulusLength !== 2048) throw fail('设备组公钥无效');
+          const id = 'sha256:' + createHash('sha256').update(bytes).digest('base64');
+          return send(res, 200, store.request(input.code, input.name, 'mobile', undefined, id, input.groupClientKey));
+        }
         const offer = registerReturn && normalizeReturnOffer(input.returnOffer);
         if (offer?.hostId === 'sha256:' + identity.pin) throw fail('不能配对当前设备');
         const groupInvitation = typeof input.groupInvitation === 'string' && /^sha256:[A-Za-z0-9+/]{43}=$/.test(input.groupInvitation) ? input.groupInvitation : undefined;
@@ -175,16 +185,17 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
       if (!device) throw fail('设备授权已失效，请重新配对', 401);
       if (url.pathname === '/link/api/workbench') {
         if (!workbench) throw fail('网页工作台尚未就绪', 503);
-        await body(req);
-        return send(res, 200, await workbench.begin(device, res));
+        const input = await body(req);
+        return send(res, 200, await workbench.begin(device, res, { groupAssetLease: input.groupAssetLease === true }));
       }
       const input = await body(req, RPC_BODY_BYTES);
       if (device.groupSyncOnly) {
-        if (input.action !== 'deviceGroup' || !['sync', 'integrationToken'].includes(input.operation)) throw fail('此授权仅用于同步设备组', 403);
+        if (input.action !== 'deviceGroup' || !['sync', 'integrationToken', 'clientDirectory'].includes(input.operation)) throw fail('此授权仅用于同步设备组', 403);
         return send(res, 200, await dispatch(input, device));
       }
       if (device.groupInvitation) {
-        if (input.action !== 'deviceGroup' || !['describe', 'join', 'admit'].includes(input.operation)) throw fail('此授权仅用于加入设备组', 403);
+        const allowed = device.groupClientKey ? ['admitClient'] : ['describe', 'join', 'admit'];
+        if (input.action !== 'deviceGroup' || !allowed.includes(input.operation)) throw fail('此授权仅用于加入设备组', 403);
         return send(res, 200, await dispatch(input, device));
       }
       if (!active || (store.principal?.(device.id) ?? store.state.devices.find(row => row.id === device.id))?.tokenHash !== device.tokenHash) throw fail('设备授权已失效', 401);

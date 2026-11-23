@@ -228,7 +228,9 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
   const archivedIds = new Set(workspaces.archivedSessionIds ?? []);
   const snapshot = useData();
   const d = modules.harness ? snapshot : { ...snapshot, sessions: [] };
-  const workspaceProjects = sidebarWorkspaces(workspaces, d.projects, defaultWorkspaceId);
+  const workspaceProjects = sidebarWorkspaces(workspaces, d.projects, defaultWorkspaceId, {
+    preferNewerMembership: window.__DSH_LINK_WORKBENCH__ === true,
+  });
   const privateIds = new Set(d.privateSessionIds ?? []);
   const verifiedIds = new Set(d.ownershipVerifiedIds || []);
   const isPrivate = id => privateIds.has(id) || (modules.superagent && id && harness.byId[id] && (!d.loaded || (d.ownershipVerifiedIds && !verifiedIds.has(id))));
@@ -382,7 +384,12 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
     setActionSession(null);
     const accepted = await confirmArchive({ title: label + '？', confirmLabel: label,
       description: '将归档此会话和工单「' + (worker.title || '未命名工单') + '」。' +
-        (worker.active ? '正在进行的活动将停止。' : '') + '历史记录和已有成果会保留。' });
+        (worker.active ? '正在进行的活动将停止。' : '') + '历史记录和已有成果会保留。',
+      skipPrompt: {
+        key: worker.active ? 'worker-stop-and-archive' : 'worker-archive',
+        description: worker.active ? '下次直接停止并归档关联工单' : '下次直接归档关联工单',
+      },
+    });
     if (!accepted) return true;
     const result = await workerArchiveRequest('archiveWorkerTask', { taskId: worker.taskId, worker, requestId: crypto.randomUUID() });
     if (!result.archived) throw new Error('关联工单的归档尚未确认，请刷新后核验');

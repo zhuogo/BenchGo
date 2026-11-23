@@ -57,10 +57,10 @@ export function remoteAgent(target, { maxSockets = 64, maxFreeSockets = 2 } = {}
   };
   return agent;
 }
-export function remoteJson(target, path, input, { agent, token = target.authorize?.() ?? target.token, signal, timeout = 20000 } = {}) {
+export function remoteJson(target, path, input, { agent, token = target.authorize?.() ?? target.token, cookie, signal, timeout = 20000 } = {}) {
   const own = !agent; agent ??= remoteAgent(target);
   return new Promise((resolve, reject) => {
-    const req = request(new URL(path, upstreamOrigin(target)), { method: input === undefined ? 'GET' : 'POST', agent, signal, timeout, headers: { ...relayTargetHeaders(target), ...(input === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: 'Bearer ' + token } : {}) } }, res => {
+    const req = request(new URL(path, upstreamOrigin(target)), { method: input === undefined ? 'GET' : 'POST', agent, signal, timeout, headers: { ...relayTargetHeaders(target), ...(input === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: 'Bearer ' + token } : {}), ...(cookie ? { cookie } : {}) } }, res => {
       const chunks = []; let bytes = 0;
       res.on('data', chunk => { bytes += chunk.length; if (bytes > 1024 * 1024) req.destroy(new Error('主机响应过大')); else chunks.push(chunk); });
       res.on('error', reject);

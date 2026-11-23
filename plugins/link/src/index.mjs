@@ -11,6 +11,7 @@ import { createSessionActions } from './session/actions.mjs';
 import { projectResources, resourcePage } from './devices/resources.mjs';
 import { createDeviceCenter } from './devices/center.mjs';
 import { openDeviceGroup } from './devices/group.mjs';
+import { createGroupAssets } from './devices/group-assets.mjs';
 import { remoteJson } from './devices/remote.mjs';
 import { selectRoute } from './devices/routes.mjs';
 import { createWorkbench } from './transport/workbench.mjs';
@@ -103,25 +104,50 @@ async function mountLinkHost(ctx, config) {
         await group.adopt(input.manifest, input.inviter, input.removals);
         return { joined: true, relay: await exchangeRelay(input.inviter, input.relay) };
       }
+      if (input.operation === 'admitClient' && device.groupClientKey) {
+        group.verifyClient(device.groupClientKey, device.groupInvitation, device.id, input.proof);
+        if (input.groupId !== undefined && (!group.enabled() || input.groupId !== group.snapshot().id))
+          throw Object.assign(new Error('设备组邀请已变更'), { status: 409 });
+        const row = { id: device.groupInvitation, key: device.groupClientKey, name: device.name,
+          deviceType: 'mobile', routes: [], removed: false };
+        const generation = await store.completeClient(device.id, async () => {
+          await group.include(row, true);
+          return group.member(row.id)?.generation;
+        });
+        if (group.member(row.id)?.generation !== generation || !group.member(row.id))
+          throw Object.assign(new Error('设备组邀请已撤销'), { status: 403 });
+        syncGroupSoon();
+        return groupDirectory(group.principal(row.id));
+      }
       if (input.operation === 'integrationToken' && device.groupSyncOnly) {
         const authority = group.authorityMember();
-        if (!group.member(device.id) || authority?.id !== group.localId) throw Object.assign(new Error('设备组 Token 管理设备已变更'), { status: 403 });
+        const member = group.member(device.id);
+        if (!member || member.deviceType === 'mobile' || authority?.id !== group.localId) throw Object.assign(new Error('设备组 Token 管理设备已变更'), { status: 403 });
         const { operation, token, revision } = group.unseal(device.id, input.credential, 'integration-request');
         const result = await useIntegrationToken(ctx.credentials, integrationScope(authority), operation, { token, revision });
         return { credential: group.seal(device.id, result, 'integration-response') };
       }
       if (input.operation === 'sync' && device.groupSyncOnly) {
+        if (group.member(device.id)?.deviceType === 'mobile') throw Object.assign(new Error('客户端使用设备目录接口同步'), { status: 403 });
         if (input.manifest && (group.member(device.id) || !group.enabled())) await group.adopt(input.manifest, undefined, input.removals);
         const membership = { manifest: group.snapshot(), removals: group.removals() };
         if (!group.enabled() || !group.member(device.id)) return membership;
+        await groupAssets.receive(input.assets);
         const providerService = ctx.get?.('benchgoGroupProviders');
         const relay = await exchangeRelay(device.id, input.relay);
         const providers = providerService && input.providers && group.member(device.id)
           ? group.seal(device.id, await providerService.exchange({ groupId: group.snapshot().id, hostId: group.localId, entries: group.unseal(device.id, input.providers) }))
           : undefined;
         const media = input.media ? await exchangeMedia(membership.manifest.id, device.id, input.media).catch(() => undefined) : undefined;
-        return { ...membership, providers, relay, media };
+        return { ...membership, providers, relay, media, assets: await groupAssets.publish() };
       }
+      if (input.operation === 'directory' && device.groupMember) return groupDirectory(device);
+      if (input.operation === 'clientDirectory' && device.groupSyncOnly) {
+        const client = group.members().find(row => row.id === device.id && row.deviceType === 'mobile');
+        if (group.enabled() && client?.removed) return { groupId: group.snapshot().id, revoked: true };
+        if (group.enabled() && client) return groupDirectory(group.principal(client.id));
+      }
+      if (input.operation === 'asset' && device.groupMember) return groupAssets.execute(device, input);
       throw Object.assign(new Error('不支持的设备组操作'), { status: 422 });
     }
     const archive = input?.action === 'sessionAction' && ['archive', 'unarchive'].includes(input.operation);
@@ -253,6 +279,7 @@ async function mountLinkHost(ctx, config) {
       ...revoked.flatMap(id => [sessions.revoke(id), workbench?.revoke(id), sessionActions.revoke(id), ctx.get?.('benchgoExecution')?.revokePrincipal?.(id)]),
       deviceCenter?.then(center => center.invalidateGroup(changed)),
       cloudCenter?.then(center => center.invalidateGroup(changed)),
+      groupAssets.revoke(revoked),
     ]);
   });
   const groupRoutes = (row, { sync = false, groupId = group.snapshot()?.id } = {}) => {
@@ -269,6 +296,29 @@ async function mountLinkHost(ctx, config) {
     return [...direct.slice(0, 16 - shared.length), ...shared, ...prior].slice(0, 16);
   };
   const groupRequest = async (target, input, signal) => (await remoteJson(target, '/link/api/rpc', { action: 'deviceGroup', ...input }, { signal, timeout: 4000 })).value;
+  const groupTarget = row => {
+    const routes = groupRoutes(row), first = routes[0];
+    if (!first && !row.publicUrl) throw Object.assign(new Error('登记主机暂时没有可用路线'), { status: 503 });
+    return { ...first, url: row.publicUrl || first.url, pin: row.publicUrl ? undefined : first.pin, hostId: row.id,
+      routes, pairedEndpointFallback: Boolean(row.publicUrl), authorize: () => group.token(row.id) };
+  };
+  const groupAssets = createGroupAssets({ group, store, identity, getCenter: () => getCenter(), targetFor: groupTarget,
+    async request(target, input) {
+      const selected = await selectRoute(target);
+      return (await remoteJson(selected, '/link/api/rpc', { action: 'deviceGroup', ...input }, { timeout: 20_000 })).value;
+    },
+  });
+  async function groupDirectory(device) {
+    authorizePairedDevice(device);
+    const localAssets = await groupAssets.local();
+    authorizePairedDevice(device);
+    const members = group.members().filter(row => !row.removed).map(({ id, name, generation, deviceType, publicUrl }) => ({
+      id, name, generation: generation ?? null, deviceType: deviceType ?? 'computer', publicUrl,
+      routes: deviceType === 'mobile' ? [] : groupRoutes(group.member(id)),
+    }));
+    return { groupId: group.snapshot().id, self: members.find(row => row.id === device.id), members,
+      assets: groupAssets.directory(localAssets) };
+  }
   const integrationScope = authority => JSON.stringify([group.snapshot().id, authority.id, authority.generation]);
   async function integrationToken(operation, input) {
     if (!group.enabled()) return useIntegrationToken(ctx.credentials, 'local', operation, input);
@@ -365,16 +415,19 @@ async function mountLinkHost(ctx, config) {
       const entries = group.enabled() ? await providerService?.snapshot({ groupId: manifest.id, hostId: group.localId }).catch(() => undefined) : undefined;
       const identity = mediaIdentity(manifest.id);
       const media = identity.active() ? await ctx.get?.('benchgoGroupMedia')?.exchange(identity).catch(() => undefined) : undefined;
-      const active = group.snapshot()?.id === manifest.id ? group.members().filter(row => row.id !== group.localId) : [];
+      const active = group.snapshot()?.id === manifest.id ? group.members().filter(row => row.id !== group.localId && row.deviceType !== 'mobile') : [];
+      const assets = group.enabled() ? await groupAssets.publish() : undefined;
       await Promise.allSettled([...active.map(async row => {
         const response = await synchronizeMembership({ row, manifest, removals: group.removals(),
           authorize: () => group.token(row.id, { sync: true }) }, {
+            assets,
             ...(entries && group.enabled() && group.member(row.id) ? { providers: group.seal(row.id, entries) } : {}),
             ...(media && mediaIdentity(manifest.id, row.id).active() ? { media: group.seal(row.id, media, 'media') } : {}),
             relay: relayEnvelope(row.id),
         });
         if (response?.manifest?.id !== manifest.id || group.snapshot()?.id !== manifest.id) return;
         if (group.member(row.id) || !group.enabled()) await group.adopt(response.manifest, undefined, response.removals);
+        await groupAssets.receive(response.assets);
         if (response.relay && group.enabled() && group.member(row.id)) await exchangeRelay(row.id, response.relay);
         if (response.providers && group.enabled() && group.member(row.id)) await providerService?.exchange({ groupId: manifest.id, hostId: group.localId, entries: group.unseal(row.id, response.providers) });
         if (response.media) await exchangeMedia(manifest.id, row.id, response.media);
@@ -396,7 +449,7 @@ async function mountLinkHost(ctx, config) {
   const start = () => hostScope(ctx)(async () => {
     identity ??= await loadIdentity(directory);
     workbench = createWorkbench(ctx, store, { webRoot, workbenchRoot: config.workbenchRoot, deviceCenter: pairedDeviceCenter, resourceNavigation: pairedResourceNavigation });
-    listener = await listen({ identity, config: { ...store.state }, webRoot, store, dispatch, workbench, runRequest: operation => hostScope(ctx)(operation), routes: connectionRoutes, hostName: () => group.member(group.localId)?.name ?? store.state.name, authenticateGroup: (token, path) => {
+    listener = await listen({ identity, config: { ...store.state }, webRoot, store, dispatch, workbench, runRequest: operation => hostScope(ctx)(operation), routes: connectionRoutes, hostName: () => group.member(group.localId)?.name ?? store.state.name, activeGroup: () => group.enabled() ? group.snapshot().id : undefined, authenticateGroup: (token, path) => {
       const member = group.authenticate(token);
       return member?.groupSyncOnly && path !== '/link/api/rpc' ? undefined : member;
     }, integration: () => ctx.get?.('benchgoIntegration'),
@@ -474,7 +527,7 @@ async function mountLinkHost(ctx, config) {
         await applyRelayState(nodes, current);
       } else if (current.previous.length && sameRelayRevision(relayRevision(current), relayRevision(incoming))) {
         const seen = { ...current.seen, [id]: relayRevision(incoming) };
-        const allSeen = group.members().every(member => member.removed || member.id === group.localId || sameRelayRevision(seen[member.id], relayRevision(current)));
+        const allSeen = group.members().every(member => member.removed || member.deviceType === 'mobile' || member.id === group.localId || sameRelayRevision(seen[member.id], relayRevision(current)));
         if (allSeen || !sameRelayRevision(seen[id], current.seen[id])) {
           await applyRelayState(current.nodes, { ...current, seen, previous: allSeen ? [] : current.previous });
         }
@@ -730,8 +783,8 @@ async function mountLinkHost(ctx, config) {
     record: (id, direction) => store.recordReturn(id, direction),
     revoke: id => store.revoke(id),
   };
-  const centerOptions = { webRoot, credentials: ctx.credentials, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name, pairing,
-    signSource: (target, command) => signExecutionSource(identity, target, command) };
+  const centerOptions = { webRoot, credentials: ctx.credentials, managerFactory: config.deviceManagerFactory, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name, pairing,
+    groupAssets, signSource: (target, command) => signExecutionSource(identity, target, command) };
   const getCenter = () => deviceCenter ??= createDeviceCenter({ ...centerOptions, directory: join(directory, 'outgoing'), hostAdmin: input => admin(input),
     group: { ...group, routes: groupRoutes, enroll: enrollGroup, syncSoon: syncGroupSoon } }).catch(error => { deviceCenter = undefined; throw error; });
   const deviceAction = async input => {

@@ -17,7 +17,7 @@ import { createRemoteAssignmentExecutor } from './remote-assignment-executor.mjs
 import { roleModels } from './routing.mjs';
 
 /** One local control plane for Task and Goal execution. */
-export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, notifyTaskResult, notifyExecutionInput, onDelivered, maintainTasks, execute, intervalMs = 1000, now = Date.now }) {
+export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliverDesktop, notifyTaskResult, onTaskTitleChanged, onDelivered, maintainTasks, execute, intervalMs = 1000, now = Date.now }) {
   const database = store.orchestration, owner = `delivery:${randomUUID()}`, shutdown = new AbortController();
   const finishDelivery = (id, options) => database.finishOutbox(id, { now: now(), ...options });
   const mirrored = new Set(), mirrorRetry = new Map(), mirrorPending = new Map();
@@ -81,7 +81,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       uniqueKey: `assignment-result:${assignment.id}:${result.runId || 'execution'}:${assignment.fence}` });
   }
   const executeTask = execute || createAssignmentExecutor({ ctx, database, workspaceRoot: join(store.paths.workspace, 'workers'), readPolicy,
-    notifyExecutionInput,
+    onTaskTitleChanged,
     authorizeAction: async ({ policy, mandate }) => ({ allowed: validateTaskMandate(mandate, { policy }) }),
     readContext: sessionId => store.getSessionContext(sessionId), memory: store.memory,
     readSourceContext: input => input.source?.channel === 'feishu' ? feishu?.readContext?.(input) : undefined,
@@ -177,6 +177,18 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   let timer, running, remoteRunning, mirroring, replaying, replayRetryAt = 0, schedulerHeartbeat = null;
   async function cycle() {
     await acceptSavedResults();
+    const interrupted = database.interruptedWorkerMessages({ now: now() });
+    if (interrupted.length) await Promise.all(interrupted.map(async assignment => {
+      const task = database.getTask(assignment.taskId);
+      try {
+        await requestInterruptedContinuation({ ctx, database, assignmentId: assignment.id, fence: assignment.fence,
+          instructionRevision: task.instructionRevision, readPolicy, signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(1500)]), now: now() });
+      } catch (error) {
+        // Keep the original input pending if the previous owner or its tools are still settling.
+        if (!shutdown.signal.aborted && !['FENCING_CONFLICT', 'SESSION_STILL_LIVE'].includes(error.code))
+          database.markWorkerMessageBlocked(assignment.taskId, { code: error.code, reason: error.message, now: now() });
+      }
+    }));
     let policy;
     const currentPolicy = async () => policy ||= await readPolicy();
     if (database.hasAnsweredAttention()) {
@@ -342,6 +354,10 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   }
   const runtime = {
     tick,
+    taskProgress(task) {
+      const assignments = database.assignments(task.id);
+      return task.mandate?.execution ? remoteProgress(task, assignments) : executionProgress.batch(task.id)(task, assignments);
+    },
     async manageExecution({ taskId, assignmentId, fence, instructionRevision, operation }) {
       const task = database.getTask(taskId);
       if (!task || task.instructionRevision !== instructionRevision)
@@ -376,9 +392,11 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       const tasks = taskId === undefined ? database.listTasks({ limit: boundedLimit, offset, newestFirst, archived }) : [database.getTask(taskId)].filter(Boolean);
       return tasks.map(task => {
         const assignments = database.assignments(task.id);
-        const inputDiagnostics = database.taskInputs(task.id).filter(input => input.snapshot?.executionInput?.outcome === 'failed')
-          .map(input => ({ id: input.id, triggerId: input.triggerId, state: input.state, receivedAt: input.receivedAt,
-            code: input.snapshot.executionInput.code, reason: input.snapshot.executionInput.reason }));
+        const inputDiagnostics = database.pendingTaskInputs(task.id).flatMap(input => {
+          const diagnostic = input.snapshot?.workerMessageBlocked;
+          return diagnostic ? [{ id: input.id, triggerId: input.triggerId, state: input.state, receivedAt: input.receivedAt,
+            code: diagnostic.code, reason: diagnostic.reason }] : [];
+        });
         const execution = task.mandate?.execution ? remoteProgress(task, assignments) : progress(task, assignments);
         const uncertainty = task.mandate?.execution ? execution?.uncertainty || null : executionUncertainty(database, task, { now: now() });
         const stopping = executionStopConfirmation(database, task, { now: now() });

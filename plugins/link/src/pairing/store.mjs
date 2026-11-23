@@ -139,13 +139,13 @@ export async function openStore(directory, { groupPrincipal = () => undefined } 
       prune();
       return pairings.has(hash(text(code, '配对码', 128)));
     },
-    request(code, name, deviceType = 'unknown', returnOffer, groupInvitation) {
+    request(code, name, deviceType = 'unknown', returnOffer, groupInvitation, groupClientKey) {
       prune(); const key = hash(text(code, '配对码', 128)); const value = pairings.get(key);
       if (!value) throw new Error('配对码已使用或过期');
       const deviceName = text(name || `BenchGo-${randomBytes(3).toString('hex')}`, '设备名称', 100);
       pairings.delete(key);
       const pollToken = secret(), id = randomUUID();
-      pending.set(id, { id, name: deviceName, deviceType: returnOffer ? 'computer' : ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pairingHash: key, pollHash: hash(pollToken), status: 'pending', returnOffer, groupInvitation, registerReturn: value.registerReturn });
+      pending.set(id, { id, name: deviceName, deviceType: returnOffer ? 'computer' : ['mobile', 'computer', 'tablet'].includes(deviceType) ? deviceType : 'unknown', createdAt: Date.now(), expiresAt: value.expiresAt, pairingHash: key, pollHash: hash(pollToken), status: 'pending', returnOffer, groupInvitation, groupClientKey, registerReturn: value.registerReturn });
       return { requestId: id, pollToken, expiresAt: value.expiresAt, ...(returnOffer ? { reciprocal: true } : {}), ...(groupInvitation ? { deviceGroup: true } : {}) };
     },
     poll(id, pollToken) {
@@ -193,6 +193,13 @@ export async function openStore(directory, { groupPrincipal = () => undefined } 
       p.completion = completion;
       try { return await completion; } catch (error) { delete p.completion; throw error; }
     },
+    completeClient(id, register) {
+      prune();
+      const request = [...pending.values()].find(row => row.deviceId === id && row.groupClientKey && row.status === 'approved');
+      if (!request) throw new Error('设备组邀请已过期');
+      request.admission ??= register().catch(error => { delete request.admission; throw error; });
+      return request.admission;
+    },
     authenticate(token) {
       if (typeof token !== 'string' || token.length > 256) return;
       const d = state.devices.find(d => sameSecret(token, d.tokenHash));
@@ -202,7 +209,7 @@ export async function openStore(directory, { groupPrincipal = () => undefined } 
       if (typeof token !== 'string' || token.length !== 43) return;
       prune();
       const p = [...pending.values()].find(row => row.status === 'approved' && row.groupInvitation && row.token === token);
-      if (p) return { id: p.deviceId, groupInvitation: p.groupInvitation };
+      if (p) return { id: p.deviceId, groupInvitation: p.groupInvitation, ...(p.groupClientKey ? { groupClientKey: p.groupClientKey, name: p.name } : {}) };
     },
     async renameDevice(id, name) {
       const device = state.devices.find(device => device.id === id);

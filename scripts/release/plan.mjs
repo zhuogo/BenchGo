@@ -34,7 +34,7 @@ export function classifyChanges(paths) {
     else if (path === 'plugins/base/shared/update-public-key.pem' || /^scripts\/desktop\/(?:plugin-bundle|payload-policy)\.mjs$/.test(path)) mark(all, path);
     else if (path === 'scripts/desktop/package-plugin-update.mjs') mark(['plugin'], path);
     else if (/^scripts\/desktop\/(?:package-macos|electron-builder\.macos\.config|macos-[^/]+)\.mjs$/.test(path)) mark(['macos'], path);
-    else if (/^scripts\/desktop\/(?:package-windows|electron-builder\.config|install-cleanup)\.mjs$/.test(path)) mark(['windows'], path);
+    else if (/^scripts\/desktop\/(?:(?:package-windows|prepare-windows-installer|electron-builder\.config|install-cleanup)\.mjs$|windows-installer\/)/.test(path)) mark(['windows'], path);
     else if (path.startsWith('scripts/desktop/') && !/(?:create-(?:app-update-feed|update-manifest|update-key)|sync-(?:browser-artifacts|dev-plugin)|prepare-dev)\.mjs$/.test(path)) mark(['windows', 'macos'], path);
     else if (path === 'scripts/build-link-android.mjs') mark(['android'], path);
     else if (/^plugins\/base\/(?:scripts\/shared-ui\.mjs|client\/(?:iconsax\.jsx|http-response\.mjs))$/.test(path)) mark(['plugin', 'android'], path);

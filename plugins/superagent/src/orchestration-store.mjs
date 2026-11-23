@@ -523,17 +523,23 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
           return task;
         }
         const pending = api.assignments(taskId).some(row => ['claimed', 'uncertain'].includes(row.state));
-        db.prepare("UPDATE sa_tasks SET status='waiting',execution_control=?,pause_reason=?,updated_at=? WHERE id=?").run(json({ pauseRequested: pending, paused: !pending }), json(reason), new Date().toISOString(), taskId);
+        const at = new Date().toISOString();
+        db.prepare("UPDATE sa_tasks SET status='waiting',execution_control=?,pause_reason=?,updated_at=? WHERE id=?")
+          .run(json({ pauseRequested: pending, paused: !pending }), json({ ...reason, at, ...(triggerId ? { triggerId } : {}) }), at, taskId);
         if (triggerId) api.applyTaskPauseInputInTransaction(taskId, triggerId);
         return api.getTask(taskId);
       });
     },
-    resumeTask(taskId) {
+    resumeTask(taskId, { afterPause = false } = {}) {
       return tx(() => {
         const task = api.getTask(taskId);
         if (!task) throw fail('TASK_NOT_FOUND', 'Task does not exist');
-        if (task.executionControl?.pauseRequested) throw fail('PAUSE_PENDING', 'Execution has not confirmed its pause');
         if (taskStopped(task) || task.status === 'completed') throw fail('TASK_STOPPED', 'Stopped execution requires a new authorized continuation');
+        if (task.executionControl?.pauseRequested) {
+          if (!afterPause) throw fail('PAUSE_PENDING', 'Execution has not confirmed its pause');
+          db.prepare("UPDATE sa_tasks SET execution_control=json_set(execution_control,'$.resumeAfterPause',json('true')) WHERE id=?").run(taskId);
+          return api.getTask(taskId);
+        }
         if (!task.executionControl?.paused) return task;
         const at = new Date().toISOString();
         for (const row of db.prepare("SELECT * FROM sa_assignments WHERE task_id=? AND state='paused'").all(taskId)) {
@@ -565,7 +571,8 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         db.prepare("UPDATE sa_runs SET state='waiting',updated_at=? WHERE id=?").run(at, run.id);
         db.prepare("UPDATE sa_assignments SET state='paused',owner=NULL,lease_until=NULL,updated_at=? WHERE id=?").run(at, assignmentId);
         const pending = api.assignments(task.id).some(row => ['claimed', 'uncertain'].includes(row.state));
-        db.prepare("UPDATE sa_tasks SET status='waiting',execution_control=?,updated_at=? WHERE id=?").run(json({ pauseRequested: pending, paused: !pending }), at, task.id);
+        db.prepare("UPDATE sa_tasks SET status='waiting',execution_control=?,updated_at=? WHERE id=?").run(json({ pauseRequested: pending, paused: !pending, ...(pending && task.executionControl.resumeAfterPause ? { resumeAfterPause: true } : {}) }), at, task.id);
+        if (!pending && task.executionControl.resumeAfterPause) api.resumeTask(task.id);
         return api.getAssignment(assignmentId);
       });
     },
@@ -883,7 +890,8 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         db.prepare("UPDATE sa_assignments SET state='paused',owner=NULL,lease_until=NULL,payload=?,updated_at=? WHERE id=?").run(json(payload), at, row.id);
         db.prepare("UPDATE sa_runs SET state='waiting',updated_at=? WHERE id=?").run(at, run.id);
         const pending = api.assignments(task.id).some(item => ['claimed','uncertain'].includes(item.state));
-        db.prepare("UPDATE sa_tasks SET status='waiting',execution_control=?,updated_at=? WHERE id=?").run(json({ pauseRequested: pending, paused: !pending }), at, task.id);
+        db.prepare("UPDATE sa_tasks SET status='waiting',execution_control=?,updated_at=? WHERE id=?").run(json({ pauseRequested: pending, paused: !pending, ...(pending && task.executionControl.resumeAfterPause ? { resumeAfterPause: true } : {}) }), at, task.id);
+        if (!pending && task.executionControl.resumeAfterPause) api.resumeTask(task.id);
         return api.getAssignment(row.id);
       });
     },
@@ -894,7 +902,7 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         const previous = parse(row.payload);
         const runOwner = db.prepare('SELECT owner FROM sa_runs WHERE assignment_id=? AND fence=?').get(assignmentId, fence)?.owner;
         if (row.owner !== owner && previous.revokedOwner !== owner && runOwner !== owner) return false;
-        const safeCodes = ['AUXILIARY_QUALITY', 'NO_ADAPTER', 'RATE_LIMIT', 'HTTP', 'NETWORK', 'TIMEOUT', 'ABORTED', 'WORKER_HOST_STOPPED', 'FENCING_CONFLICT', 'MANDATE_REVOKED', 'EXECUTION_PAUSE_UNVERIFIED', 'EXECUTION_EFFECTS_UNKNOWN', 'WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE', 'EXECUTION_INPUT_ASSESSMENT_FAILED', 'EXECUTION_INPUT_ROUTER_UNAVAILABLE',
+        const safeCodes = ['AUXILIARY_QUALITY', 'NO_ADAPTER', 'RATE_LIMIT', 'HTTP', 'NETWORK', 'TIMEOUT', 'ABORTED', 'WORKER_HOST_STOPPED', 'FENCING_CONFLICT', 'MANDATE_REVOKED', 'EXECUTION_PAUSE_UNVERIFIED', 'EXECUTION_EFFECTS_UNKNOWN', 'WORKER_SELF_CHECK', 'WORKER_TURN_INCOMPLETE',
           'WORKER_MODEL_ROUTE', 'SESSION_ROLE_STORE_UNAVAILABLE', 'SESSION_ROLE_OWNERSHIP', 'ROLE_ASSEMBLY_FAILED', 'ROLE_SERVICES_UNAVAILABLE', 'ROLE_PRESET_UNAVAILABLE', 'ROLE_CONFIGURATION_CHANGED', 'ROLE_MIGRATION_UNAVAILABLE', 'ROLE_PERMISSION_BUNDLE_INVALID', 'ROLE_LIVE_SESSION_UNMANAGED', 'CHILD_APPROVAL_PARENT_REQUIRED', 'REMOTE_SUBMIT_REFUSED', 'REMOTE_EXECUTION_ABANDONED', 'EXECUTION_NEVER_STARTED'];
         const safePhases = ['setup', 'resume', 'create', 'submit', 'attention-answer', 'completion', 'evidence'];
         const payload = { ...parse(row.payload), lastFailure: { stage: stage === 'result' ? 'result' : 'execution',
@@ -1029,14 +1037,16 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
       if (state) { where.push('state=?'); args.push(state); }
       return db.prepare(`SELECT * FROM sa_subscriptions${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY created_at,id`).all(...args).map(subscriptionValue);
     },
-    deliverSubscribedMessage(triggerId, { taskId, subscribeIfMissing = false } = {}) {
+    deliverSubscribedMessage(triggerId, { taskId, subscribeIfMissing = false, workerMessage = false, text, resume = false } = {}) {
       return tx(() => {
         const trigger = triggerRow(id(triggerId, 'triggerId'));
         if (!trigger) throw fail('TRIGGER_NOT_FOUND', 'Trigger does not exist');
         const existing = db.prepare('SELECT * FROM sa_message_ownership WHERE trigger_id=?').get(triggerId);
         if (existing) {
           if (taskId && existing.task_id !== taskId) throw fail('MESSAGE_OWNERSHIP_CONFLICT', 'Trigger already belongs to another Task');
-          return { triggerId, taskId: existing.task_id, subscriptionId: existing.subscription_id, cursor: existing.cursor_seq, duplicate: true, contextOnly: true };
+          const input = api.taskInputs(existing.task_id).find(row => row.triggerId === triggerId);
+          return { triggerId, taskId: existing.task_id, subscriptionId: existing.subscription_id, cursor: existing.cursor_seq,
+            duplicate: true, contextOnly: input?.snapshot?.workerMessage !== true };
         }
         const rows = api.subscriptions({ taskId, threadId: trigger.thread_id });
         if (rows.length > 1) throw fail('AMBIGUOUS_SUBSCRIPTION', 'Select the Task that owns this thread message');
@@ -1050,11 +1060,32 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         db.prepare("UPDATE sa_triggers SET intake_stage='admitted' WHERE id=?").run(triggerId);
         const now = new Date().toISOString();
         db.prepare('INSERT INTO sa_message_ownership VALUES (?,?,?,?,?)').run(triggerId, subscription.id, subscription.taskId, trigger.seq, now);
-        api.recordTaskInputInTransaction({ taskId: subscription.taskId, triggerId, kind: 'context', idempotencyKey: `trigger:${triggerId}` });
+        api.recordTaskInputInTransaction({ taskId: subscription.taskId, triggerId, kind: 'context', idempotencyKey: `trigger:${triggerId}`,
+          ...(workerMessage || text !== undefined ? { snapshot: { ...(workerMessage ? { workerMessage: true } : {}), ...(text === undefined ? {} : { text }) } } : {}) });
         db.prepare('UPDATE sa_subscriptions SET cursor_seq=?,updated_at=? WHERE id=?').run(trigger.seq, now, subscription.id);
         db.prepare('INSERT OR IGNORE INTO sa_task_triggers VALUES (?,?)').run(subscription.taskId, triggerId);
-        return { triggerId, taskId: subscription.taskId, subscriptionId: subscription.id, cursor: trigger.seq, deliveredAt: now, duplicate: false, contextOnly: true };
+        if (resume) api.resumeTask(subscription.taskId, { afterPause: true });
+        return { triggerId, taskId: subscription.taskId, subscriptionId: subscription.id, cursor: trigger.seq, deliveredAt: now,
+          duplicate: false, contextOnly: !workerMessage };
       });
+    },
+    interruptedWorkerMessages({ limit = 20, now = Date.now() } = {}) {
+      return db.prepare(`SELECT a.id FROM sa_assignments a JOIN sa_tasks t ON t.id=a.task_id
+        WHERE a.state IN ('uncertain','failed') AND COALESCE(json_extract(a.payload,'$.executor'),'harness')='harness'
+        AND a.id=(SELECT latest.id FROM sa_assignments latest WHERE latest.task_id=t.id ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1)
+        AND t.status!='completed' AND COALESCE(json_extract(t.execution_control,'$.pauseRequested'),0)=0
+        AND COALESCE(json_extract(t.execution_control,'$.paused'),0)=0
+        AND COALESCE(json_extract(t.execution_control,'$.stopRequested'),0)=0
+        AND COALESCE(json_extract(t.execution_control,'$.stopped'),0)=0
+        AND EXISTS (SELECT 1 FROM sa_task_inputs i WHERE i.task_id=t.id AND i.state='pending' AND json_extract(i.snapshot,'$.workerMessage')=1
+          AND COALESCE(json_extract(i.snapshot,'$.workerMessageBlocked.nextAt'),0)<=?)
+        ORDER BY a.updated_at,a.id LIMIT ?`).all(now, safeLimit(limit, 20, 100)).map(row => api.getAssignment(row.id));
+    },
+    markWorkerMessageBlocked(taskId, { triggerId = null, code, reason, now = Date.now() }) {
+      const failure = json({ code: code || 'SESSION_UNAVAILABLE', reason: redactExecutionText(String(reason || ''), 2000), nextAt: now + 30000 });
+      return tx(() => db.prepare(`UPDATE sa_task_inputs SET snapshot=json_set(snapshot,'$.workerMessageBlocked',json(?))
+        WHERE task_id=? AND state='pending' AND json_extract(snapshot,'$.workerMessage')=1
+        AND (? IS NULL OR trigger_id=?)`).run(failure, taskId, triggerId, triggerId));
     },
     subscriptionMessages(subscriptionId, { afterCursor = 0, limit = 100 } = {}) {
       id(subscriptionId, 'subscriptionId');
@@ -1081,8 +1112,9 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         const old = db.prepare('SELECT * FROM sa_subscription_applied WHERE trigger_id=?').get(triggerId);
         if (old && (old.session_id !== sessionId || old.message_id !== messageId)) throw fail('MESSAGE_RECEIPT_CONFLICT', 'Message already has another application receipt');
         db.prepare('INSERT OR IGNORE INTO sa_subscription_applied VALUES (?,?,?,?,?)').run(triggerId, assignmentId, sessionId, messageId, timestamp(now));
-        api.applyTaskInputInTransaction(triggerId, { assignmentId, owner, fence, runId: run.id, boundaryId: `message:${messageId}`, sessionId, messageId });
-        return { triggerId, applied: true, sessionId, messageId };
+        const input = api.applyTaskInputInTransaction(triggerId, { assignmentId, owner, fence, runId: run.id, boundaryId: `message:${messageId}`, sessionId, messageId });
+        const titleChanged = api.applyWorkerMessageTitleInTransaction(input);
+        return { triggerId, applied: true, sessionId, messageId, titleChanged };
       });
     },
     handback(taskId, triggerId, { policyVersion, reason } = {}) {
@@ -1163,6 +1195,12 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         const at = timestamp(now), version = duplicate?.version ?? db.prepare('SELECT COALESCE(MAX(version),0)+1 AS version FROM sa_results WHERE task_id=?').get(taskId).version;
         const current = assignment && db.prepare('SELECT * FROM sa_assignments WHERE id=? AND task_id=?').get(assignment.id, taskId);
         const activeRun = current && (draft.runId || runId) && api.runs(current.id).find(row => row.id === (draft.runId || runId));
+        const routedSource = activeRun && assignment && db.prepare(`SELECT tr.source FROM sa_task_inputs i
+          JOIN sa_subscription_applied s ON s.trigger_id=i.trigger_id JOIN sa_triggers tr ON tr.id=i.trigger_id
+          WHERE i.task_id=? AND i.state='applied' AND json_extract(i.snapshot,'$.workerMessage')=1
+          AND json_type(tr.source,'$.executionSessionId') IS NULL
+          AND json_extract(i.application,'$.runId')=? AND json_extract(i.application,'$.fence')=?
+          ORDER BY tr.seq DESC LIMIT 1`).get(taskId, activeRun.id, assignment.fence)?.source;
         const diagnostics = [];
         if (!assignment) diagnostics.push('UNBOUND_EXECUTION');
         if (prior.length && !duplicate) diagnostics.push('IDEMPOTENCY_CONTENT_CHANGED');
@@ -1195,9 +1233,9 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         if (!duplicate) db.prepare('INSERT INTO sa_results VALUES (?,?,?,?)').run(taskId, version, json(committed), at);
         const continueContext = normal && !!current && parse(current.payload).executor !== 'remote' && !!activeRun && current.fence === assignment.fence && activeRun.fence === current.fence
           && diagnostics.includes('PENDING_INPUT') && !blocked && !draft.waitingPause && !draft.waitingAttention;
-        return { task, committed, duplicate: !!duplicate, associated, completed, blocked, pending, normal, current, activeRun, draft, version, at, deliveryKey, resultRevision, continueContext };
+        return { task, committed, duplicate: !!duplicate, associated, completed, blocked, pending, normal, current, activeRun, draft, version, at, deliveryKey, resultRevision, continueContext, routedSource };
       });
-      const { task, committed, duplicate, associated, completed, blocked, pending, normal, current, activeRun, draft, version, at, deliveryKey, resultRevision, continueContext } = retained;
+      const { task, committed, duplicate, associated, completed, blocked, pending, normal, current, activeRun, draft, version, at, deliveryKey, resultRevision, continueContext, routedSource } = retained;
       let lifecycleCurrent = associated, markerOwned = false;
       try {
         tx(() => {
@@ -1271,6 +1309,7 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
           && !taskStopped(latest) && !taskPaused(latest) && !blocked && !pending && !draft.waitingPause && !draft.waitingAttention) {
           const stored = parse(db.prepare('SELECT payload FROM sa_results WHERE task_id=? AND version=?').get(taskId, version).payload);
           if (!stored.notification) {
+            if (routedSource) stored.deliverySource = parse(routedSource);
             const historical = db.prepare('SELECT state FROM sa_outbox WHERE unique_key=?').get(deliveryKey);
             stored.notification = historical && ['sent', 'uncertain', 'claimed'].includes(historical.state)
               ? { state: 'suppressed', reason: 'legacy-transport-retained' }

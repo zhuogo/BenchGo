@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 export const TASK_SUMMARY_MAX_CHARS = 320;
 const concise = (value, max = TASK_SUMMARY_MAX_CHARS) => typeof value === 'string' ? Array.from(value.replace(/\s+/gu, ' ').trim()).slice(0, max).join('') : '';
 const sections = ['requirements', 'results', 'revisions', 'assignments', 'runs', 'attentions', 'deliveries'];
+const detailSections = ['progress', ...sections];
 const sourceIdentity = source => Object.fromEntries(['channel', 'sessionId', 'threadId', 'deviceId', 'messageId']
   .filter(key => typeof source?.[key] === 'string').map(key => [key, source[key]]));
 function recordFragment({ identity, value }, { section, textLimit, textOffset = 0, expectedHash }) {
@@ -34,8 +35,26 @@ export function conciseTaskSummary(task) {
   return concise(summary || ({ running: '正在推进。', waiting: '等待执行条件。', completed: '已完成。' })[task.status]);
 }
 
+function taskProgress(execution) {
+  if (!execution) return { phase: 'unknown', observed: false, reason: 'no-execution-observation' };
+  const { worker, children, runId, phase, observed, updatedAt, appliedInstructionRevision, childCounts, completeness } = execution;
+  const currentPhase = phase === 'executing' && worker?.status === 'unknown' ? 'unknown' : phase;
+  const projectWorker = ({ status, activity, activitySource, updatedAt, historical, history = [], historyTruncated }, limit) => ({
+    status, activity: activity || null, activitySource: activitySource || null, updatedAt: updatedAt ?? null,
+    historical: historical === true || currentPhase === 'unknown',
+    recent: history.slice(-limit).reverse().map(({ time, status, activity, activitySource }) => ({ time, status, activity, activitySource })),
+    historyTruncated: historyTruncated === true || history.length > limit,
+  });
+  return {
+    runId, phase: currentPhase, observed, updatedAt, appliedInstructionRevision, childCounts, completeness,
+    worker: worker ? projectWorker(worker, 8) : null,
+    children: children.slice(0, 8).map(child => ({ label: child.label, ...projectWorker(child, 2) })),
+    childrenTruncated: children.length > 8,
+  };
+}
+
 /** Read current desktop conversation tasks from the orchestration store. */
-export function createDesktopTaskAccess(database, taskManagement) {
+export function createDesktopTaskAccess(database, taskManagement, readProgress) {
   const presentation = task => {
     const row = taskManagement ? taskManagement.project('task', [task])[0]
       : { ...task, taskMeta: { version: 0 }, archived: task.archived === true, cleanup: null };
@@ -70,13 +89,14 @@ export function createDesktopTaskAccess(database, taskManagement) {
       };
     },
     read(id, ownerSessionId, { section = 'overview', offset = 0, limit = 10, textLimit = 4000, textOffset = 0, recordId, expectedHash } = {}) {
-      if (!['overview', ...sections].includes(section)) throw new Error('无效任务详情分区');
+      if (!['overview', ...detailSections].includes(section)) throw new Error('无效任务详情分区');
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('任务详情 limit 必须为 1 到 50');
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(textOffset) || textOffset < 0) throw new Error('任务详情偏移必须为非负整数');
       if (!Number.isSafeInteger(textLimit) || textLimit < 1 || textLimit > 12000) throw new Error('任务详情 textLimit 必须为 1 到 12000');
       if (textOffset && (!recordId || limit !== 1)) throw new Error('分段续读须提供稳定 recordId 并使用 limit=1');
       if (expectedHash !== undefined && (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/u.test(expectedHash) || !recordId || limit !== 1)) throw new Error('记录版本校验须提供有效 expectedHash、recordId 并使用 limit=1');
       if (section === 'overview' && (offset || textOffset || recordId !== undefined)) throw new Error('概览不接受记录偏移，请选择具体详情分区');
+      if (section === 'progress' && (offset || textOffset || recordId !== undefined)) throw new Error('执行进展按当前快照读取，无需记录偏移');
       const raw = database.getTask(id);
       if (!raw) return null;
       const task = presentation(owned(raw, ownerSessionId));
@@ -92,7 +112,8 @@ export function createDesktopTaskAccess(database, taskManagement) {
         adjustmentOfTaskId: task.adjustmentOfTaskId ?? null, createdAt: task.createdAt, updatedAt: task.updatedAt,
         liveSummary: conciseTaskSummary(task),
         textTruncated: task.target.length > coreTextLimit || task.acceptance.length > coreTextLimit,
-        sections: sections.map(name => ({ section: name, ...(name === 'requirements' ? { recordId: requirementsId } : {}), offset: 0 })) };
+        sections: detailSections.map(name => ({ section: name, ...(name === 'requirements' ? { recordId: requirementsId } : {}), offset: 0 })) };
+      if (section === 'progress') return { ...core, section, progress: taskProgress(readProgress?.(task)) };
       if (section !== 'overview') {
         let page;
         if (section === 'requirements') {

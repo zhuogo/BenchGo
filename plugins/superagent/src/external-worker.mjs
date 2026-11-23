@@ -1,9 +1,16 @@
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { askNativeQuestion } from '../../base/src/questions.mjs';
+import { scanWorkerProgressLine, workerProgressInstruction } from '../../base/shared/worker-progress.mjs';
+import { nativeExecutionProgress } from '../../harness/src/remote-execution-progress.mjs';
 import { attentionBatchAnswers } from './worker-attention.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
+
+function resultText(text) {
+  const scan = {};
+  return text.split('\n').filter(line => !scanWorkerProgressLine(line, scan)).join('\n').trim();
+}
 
 export function assertExternalWorkerTask(task, assignment = {}) {
   const mandate = task.mandate || {};
@@ -37,9 +44,15 @@ export async function executeExternalWorker({ ctx, database, assignment, task, s
     throw fail('NATIVE_WORKER_CONTINUATION_UNSUPPORTED', '原生执行缺少可确认的续接条件，请检查原会话');
   }
   const sessionId = run.sessionId;
+  const projection = database.getExecutionProjection(sessionId);
+  const previous = projection?.runId === run.id ? projection.state : null;
+  const progress = nativeExecutionProgress(sessionId, previous?.activityHistory?.length ? { worker: {
+    ...previous, id: sessionId, history: previous.activityHistory, historyTruncated: previous.activityHistoryTruncated,
+  } } : undefined);
   let instructionRevision = snapshot?.instructionRevision ?? assignment.instructionRevision;
   const prompt = (continuing, messages) => (continuing ? 'Continue the original execution from its saved history. Preserve completed actions.\n' : '')
     + 'Execute this BenchGo task in the bound project. Follow its current mandate. Ask the user for missing information through the native question tool. Leave approvals and product configuration to the Router. Preserve existing work and report results and unresolved issues from observed evidence.\n'
+    + workerProgressInstruction + '\n'
     + JSON.stringify({ target: snapshot?.target ?? task.target, acceptance: snapshot?.acceptance ?? task.acceptance,
       executionScope: snapshot?.executionScope || assignment.text, mandate: snapshot?.mandate ?? task.mandate,
       context: snapshot?.context, ownerMessages: messages.map(({ content }) => content), sourceReference });
@@ -54,14 +67,18 @@ export async function executeExternalWorker({ ctx, database, assignment, task, s
     return liveTask?.executionControl?.pauseRequested === true;
   };
   const messagesForTurn = () => {
-    const pending = new Set(database.pendingTaskInputs(task.id).filter(input => input.kind === 'context').map(input => input.triggerId));
-    return pending.size ? database.pendingSubscriptionMessages(task.id).filter(message => pending.has(message.id)) : [];
+    const pending = new Map(database.pendingTaskInputs(task.id).filter(input => input.kind === 'context').map(input => [input.triggerId, input]));
+    return pending.size ? database.pendingSubscriptionMessages(task.id).filter(message => pending.has(message.id))
+      .map(message => ({ ...message, content: pending.get(message.id).snapshot?.text ?? message.content })) : [];
   };
   const observe = (status, seq, observedAt, kind, complete = false) => {
-    const activity = { running: '外部 Harness 正在执行', waiting: '等待答复', completed: '执行已结束',
+    const worker = progress.snapshot()?.worker;
+    const activity = status === 'running' && worker?.activity || { running: '外部 Harness 正在执行', waiting: '等待答复', completed: '执行已结束',
       cancelled: '执行已停止', failed: '执行失败' }[status];
     database.recordExecutionProjection({ ...ownership, taskId: task.id, assignmentId: assignment.id, runId: run.id, sessionId,
-      cursor: seq, complete, state: { status, activity, updatedAt: observedAt }, kind,
+      cursor: seq, complete, state: { status, activity, updatedAt: status === 'running' && worker?.updatedAt || observedAt,
+        activitySource: status === 'running' ? worker?.activitySource : 'runtime',
+        activityHistory: worker?.history, activityHistoryTruncated: worker?.historyTruncated }, kind,
       live: { status: status === 'running' ? 'running' : status === 'waiting' ? 'idle' : 'disposed', observedAt } });
   };
   try {
@@ -132,12 +149,17 @@ export async function executeExternalWorker({ ctx, database, assignment, task, s
         const batch = commander.events(session.id, cursor, 500);
         if (batch.truncated) throw fail('NATIVE_WORKER_HISTORY_TRUNCATED', '原生事件不完整，无法核实工单终态');
         cursor = batch.cursor;
+        const previousProgress = progress.snapshot()?.worker;
         for (const event of batch.events) {
           if (event.turnId !== receipt.turnId) continue;
           digest.update(JSON.stringify(event) + '\n');
+          progress.observe(event);
           if (event.type === 'text.delta') summaryDraft = (summaryDraft + (event.data?.text || '')).slice(-32_000);
           if (event.type === 'turn.completed') terminal = event;
         }
+        const activity = progress.snapshot()?.worker;
+        if (!terminal && !waiting && activity && activity !== previousProgress)
+          observe('running', cursor, activity.updatedAt, 'external.progress');
         if (terminal) break;
         if (cursor < batch.latest) continue;
         const changed = database.getTask(task.id).instructionRevision !== instructionRevision || (!waiting && messagesForTurn().length > 0);
@@ -158,7 +180,8 @@ export async function executeExternalWorker({ ctx, database, assignment, task, s
       continuing = true;
     }
     await commander.persist();
-    const summary = terminal.data?.result?.trim?.().slice(-32_000) || summaryDraft.trim();
+    const finalText = terminal.data?.result;
+    const summary = (typeof finalText === 'string' ? resultText(finalText.slice(-32_000)) : '') || resultText(summaryDraft);
     const waitingPause = inspect() && ['completed', 'interrupted', 'cancelled'].includes(terminal.data?.status);
     if (!waitingPause && (terminal.data?.status !== 'completed' || !summary)) throw fail('NATIVE_WORKER_FAILED', '外部 Harness 没有返回已完成的工单结果');
     result = { summary, transcript: { lastSeq: terminal.seq, hash: digest.digest('hex') },

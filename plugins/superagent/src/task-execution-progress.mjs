@@ -8,6 +8,7 @@ const latest = (...values) => values.filter(Boolean).sort().at(-1) || null;
 export function createTaskExecutionProgress({ ctx, database, now = Date.now, bootId = randomUUID() }) {
   const disposers = [], recovering = new Map(), shutdown = new AbortController();
   let handle, disposed = false, recoveryFailures = 0;
+  const nativeRun = runId => ['codex', 'claude'].includes(database.getWorkerExecutionState?.(runId)?.models?.[0]?.harness);
   const on = (name, callback) => { const stop = ctx.on(name, callback, { global: true }); if (stop) disposers.push(stop); };
   const bindingOf = state => {
     const sessionId = state.parentSessionId || state.sessionId;
@@ -41,7 +42,8 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
   async function recover(sessionId) {
     if (disposed || shutdown.signal.aborted) return;
     const binding = database.getExecutionBinding(sessionId);
-    if (database.remoteExecutionBySession?.(sessionId) || binding && database.getAssignment(binding.assignmentId)?.executor === 'remote') return;
+    if (database.remoteExecutionBySession?.(sessionId) || binding && (database.getAssignment(binding.assignmentId)?.executor === 'remote'
+      || nativeRun(binding.runId))) return;
     if (recovering.has(sessionId)) return recovering.get(sessionId);
     const operation = (async () => {
       let observation;
@@ -100,22 +102,25 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
     for (const agent of ctx.agents?.list?.() || []) observeLive(agent.session, { ...(database.getExecutionProjection(agent.id)?.live || {}),
       status: agent.status || 'unknown', observedAt: iso(now()), bootId });
   })();
-  function batch() {
+  function batch(taskId) {
     const agents = new Map((ctx.agents?.list?.() || []).map(agent => [agent.id, agent]));
-    const records = new Map(database.executionProjections().map(row => [row.sessionId, row]));
+    const records = new Map(database.executionProjections({ taskId }).map(row => [row.sessionId, row]));
     return (task, assignments = task.assignments || []) => {
       const revision = task.instructionRevision ?? 1, assignment = assignments.filter(row => row.taskId === task.id).at(-1);
       const run = assignment && database.runs(assignment.id).filter(row => row.fence === assignment.fence).at(-1);
       if (!run) return null;
-      const worker = records.get(run.sessionId), live = agents.get(run.sessionId) || worker?.live;
+      const worker = records.get(run.sessionId);
       const current = worker?.runId === run.id && worker?.fence === assignment.fence;
+      const native = nativeRun(run.id) ? ctx.get?.('commander')?.executionSession?.(run.id) : null;
+      const live = agents.get(run.sessionId) || native || (current && worker.live?.bootId === bootId ? worker.live : null);
       const historyOf = record => record?.runId === run.id ? (record.state?.activityHistory || [])
         .filter(row => row.time && row.time >= run.createdAt) : [];
       const completed = task.status === 'completed' || run.state === 'completed';
       const phase = completed ? 'finished' : run.state === 'prepared' ? 'preparing'
         : terminal.has(run.state) ? 'finished' : run.state === 'waiting' ? 'waiting' : run.state === 'uncertain' ? 'unknown' : 'executing';
       let status = completed ? 'completed' : terminal.has(run.state) ? run.state : live?.status === 'running' ? 'running'
-        : live?.status === 'idle' ? 'waiting' : current && terminal.has(worker?.state?.status) ? worker.state.status : 'unknown';
+        : ['idle', 'waiting'].includes(live?.status) || run.state === 'waiting' ? 'waiting'
+          : current && terminal.has(worker?.state?.status) ? worker.state.status : 'unknown';
       if (!completed && run.state === 'uncertain') status = 'unknown';
       const childRecords = [...records.values()].filter(row => row.parentSessionId === run.sessionId && row.runId === run.id);
       const childIndex = new Map((worker?.state?.children || []).filter(child => !records.has(child.sessionId)
@@ -143,8 +148,9 @@ export function createTaskExecutionProgress({ ctx, database, now = Date.now, boo
           : status === 'unknown' ? '执行状态待核实' : current && worker.state?.activity || '执行动态暂不可用';
       return { taskId: task.id, assignmentId: assignment.id, runId: run.id, sessionId: run.sessionId, fence: assignment.fence,
         instructionRevision: revision, appliedInstructionRevision: run.instructionRevision ?? assignment.instructionRevision ?? 1,
-        phase, observed: !!worker, updatedAt: latest(iso(run.updatedAt), worker?.state?.updatedAt, ...children.map(row => row.updatedAt)),
-        worker: { id: run.sessionId, label: '主 Worker', status, activity: text, updatedAt: latest(iso(run.updatedAt), worker?.state?.updatedAt),
+        phase, observed: !!current && (status !== 'unknown' || completed), updatedAt: latest(iso(run.updatedAt), worker?.state?.updatedAt, ...children.map(row => row.updatedAt)),
+        worker: { id: run.sessionId, label: '主 Worker', status, activity: text,
+          updatedAt: current && text === worker.state?.activity ? worker.state.updatedAt : iso(run.updatedAt),
           activitySource: current && text === worker.state?.activity && worker.state?.activitySource === 'report' ? 'report' : 'runtime',
           history: current ? historyOf(worker) : [], historyTruncated: current && worker.state?.activityHistoryTruncated === true },
         children, childCounts, milestones: worker?.state?.milestones || [],

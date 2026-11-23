@@ -1,5 +1,39 @@
 import { createHash } from 'node:crypto';
 import { recoveryStorage } from './execution-evidence.mjs';
+import { fallbackRequestIds } from './model-fallback.mjs';
+
+export const routerRecoverySource = 'benchgo-router-recovery';
+const interrupted = reason => reason?.kind === 'interrupted'
+  || reason?.kind === 'aborted' && reason.reason?.kind === 'disposed';
+
+/** Bind recovery notices to the immediately preceding interrupted human request. */
+export function routerRecoveryRequests(events, fallbacks = fallbackRequestIds(events)) {
+  const requests = new Map();
+  let active, previous;
+  for (const event of events) {
+    if (event.type === 'turn/start') active = { turn: event.data?.turn, requestId: undefined };
+    if (!active) continue;
+    if (event.type === 'user/message') {
+      const { id, source } = event.data;
+      if (source?.kind === 'user') active.requestId = id;
+      else if (fallbacks.has(id)) active.requestId = fallbacks.get(id);
+      else if (source?.kind === routerRecoverySource) {
+        if (!active.requestId && previous && (source.requestId === undefined || source.requestId === previous)) {
+          requests.set(id, previous);
+          active.requestId = previous;
+        }
+      } else if (source?.kind !== 'runtime-context' && source?.kind !== 'agent-instructions') {
+        // A later internal request cannot borrow an older human instruction.
+        active.requestId = undefined;
+      }
+    }
+    if (event.type === 'turn/end' && event.data?.turn === active.turn) {
+      previous = interrupted(event.data.reason) ? active.requestId : undefined;
+      active = undefined;
+    }
+  }
+  return { requests, interruptedRequestId: active ? active.requestId : previous };
+}
 
 /** Inspect original durable events, before the host adds crash-repair closers. */
 export function routerRecoveryEvidence(events) {
@@ -21,7 +55,7 @@ export function routerRecoveryEvidence(events) {
   return {
     lastSeq: events.at(-1)?.seq ?? null,
     hash: createHash('sha256').update(JSON.stringify(events)).digest('hex'),
-    needsContinuation: pendingUser || openTurn || ending?.kind === 'interrupted' || (ending?.kind === 'aborted' && ending.reason?.kind === 'disposed'),
+    needsContinuation: pendingUser || openTurn || interrupted(ending),
     unknownEffects: [...started.values()],
   };
 }

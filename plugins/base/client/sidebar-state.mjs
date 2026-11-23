@@ -26,14 +26,18 @@ export function workspaceActivity(project,liveSessions){
   }
   return activity;
 }
-/** The official workspace snapshot is authoritative once ready, including an empty list. */
-export function sidebarWorkspaces(snapshot,fallback=[],defaultId){
+/** The official stream owns the project list. Link can read newer membership from the same Host registry. */
+export function sidebarWorkspaces(snapshot,fallback=[],defaultId,{ preferNewerMembership = false } = {}){
   const items=snapshot?.items;
   const source=snapshot?.phase==='ready'||items?.length>0?items??[]:fallback;
   const previous=new Map(fallback.map(project=>[project.id??project.workspaceId,project]));
   return source.map(project=>{
     const id=project.workspaceId??project.id;
-    return {...project,id,sessionIds:project.sessionIds??[],isDefault:defaultId!=null?id===defaultId:(previous.get(id)?.isDefault??project.isDefault)===true};
+    const polled=previous.get(id);
+    const usePolledMembership=preferNewerMembership && polled?.path === project.path
+      && Date.parse(polled?.updatedAt) > Date.parse(project.updatedAt);
+    const sessionIds=(usePolledMembership ? polled.sessionIds : project.sessionIds) ?? [];
+    return {...project,id,sessionIds,isDefault:defaultId!=null?id===defaultId:(polled?.isDefault??project.isDefault)===true};
   });
 }
 /** Missing active identity must never match an absent owner; delegates remain independent rows. */

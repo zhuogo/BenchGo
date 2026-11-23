@@ -69,7 +69,11 @@ Var benchgoRetiredDirectory
     StrCpy $benchgoRetiredDirectory $dshOldDirectory
     StrCpy $dshOldMoved ""
   \${EndIf}
+  ; Keep the status job open through BenchGo profile initialization.
+  Push $RestartStatusJob
+  StrCpy $RestartStatusJob 0
   !insertmacro dshOfficialCustomInstall
+  Pop $RestartStatusJob
   Push $R0
   Push $R1
   Push $R2
@@ -81,6 +85,11 @@ Var benchgoRetiredDirectory
   Pop $R0
   Pop $R1
   System::Call 'Kernel32::SetEnvironmentVariable(t, t)i("ELECTRON_RUN_AS_NODE", "$R2").r1'
+  \${If} $RestartStatusJob != ""
+  \${AndIf} $RestartStatusJob != 0
+    System::Call 'kernel32::CloseHandle(p $RestartStatusJob)'
+    StrCpy $RestartStatusJob 0
+  \${EndIf}
   \${If} $R0 != 0
     MessageBox MB_OK|MB_ICONSTOP "BenchGo 初始化失败。请关闭 BenchGo 后重新运行安装程序。$\\r$\\n$R1" /SD IDOK
     SetErrorLevel 2

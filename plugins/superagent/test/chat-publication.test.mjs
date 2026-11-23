@@ -1,7 +1,7 @@
 import { channelMessageRecordType } from '../src/channel-session-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activeChatReply, chatPublicationType, executionInputSource, installChatPublication, projectChatMessages, chatNotificationIdentities } from '../src/chat-publication.mjs';
+import { activeChatReply, chatPublicationType, taskCleanupNoticeSource, installChatPublication, projectChatMessages, chatNotificationIdentities } from '../src/chat-publication.mjs';
 import { taskReplySource } from '../src/task-reply.mjs';
 import { chatPublicationRecordOf, hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../base/shared/public-chat-record.mjs';
 
@@ -244,7 +244,7 @@ test('incomplete or cross-request approval sources never attach a card to a natu
 
 test('execution scope notices hide their source, publish only after current host validation, and restore one natural reply', async () => {
   for (const allowed of [true, false]) {
-    const notice = { ...user, data: { ...user.data, id: 'execution-notice', source: { kind: executionInputSource, triggerId: 'native', taskId: 'same-task' },
+    const notice = { ...user, data: { ...user.data, id: 'execution-notice', source: { kind: taskCleanupNoticeSource, triggerId: 'native', taskId: 'same-task' },
       content: [{ type: 'text', text: 'PRIVATE_EXPANSION_ORIGINAL' }] } };
     const events = [start(), notice, answer([{ type: 'text', text: '新增范围需要你确认。' }])];
     assert.equal(activeChatReply(events).requestId, 'execution-notice');

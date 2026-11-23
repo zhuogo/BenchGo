@@ -10,6 +10,13 @@ import { createAssistantEngine } from '../src/engine.mjs';
 import { createAssignmentExecutor, workerExecutionBinding } from '../src/assignment-executor.mjs';
 import { createAssistantAssignmentWorker } from '../src/assignment-worker.mjs';
 import { installRoleHost, loadRolePackage } from './role-host-fixture.mjs';
+import { recordDesktopTrigger } from '../src/desktop-trigger.mjs';
+import { executionEvidence } from '../src/execution-evidence.mjs';
+import { createDesktopTaskControl } from '../src/desktop-task-control.mjs';
+import { desktopTaskManagementScope } from '../src/desktop-task-management-authority.mjs';
+import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
+import { readAssessmentPolicy } from '../src/assessment-policy.mjs';
+import { taskReplySignal } from '../src/task-reply.mjs';
 
 test('human conversation continuation atomically reclaims the original completed run and preserves its task', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-native-resume-'));
@@ -72,10 +79,8 @@ test('two completed official Workers accept concurrent native prompts without cr
     async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 } }; }
     async *stream(request) {
       requests.push(request);
-      const body = request.messages.findLast(message => message.role === 'user')?.content?.find(block => block.type === 'text')?.text;
-      let intake; try { intake = JSON.parse(body); } catch {}
+      assert.notEqual(request.purpose, 'superagent-assessment');
       let answer = 'Verified original work';
-      if (intake?.candidates) answer = JSON.stringify({ decisions: [{ candidateId: intake.candidates[0].candidateId, outcome: 'attach', taskId: intake.tasks[0].id, reason: 'Original Worker conversation input' }] });
       const agent = ctx.agents.get(request.sessionId);
       if (agent && workerExecutionBinding(agent)) {
         const messageText = JSON.stringify(request.messages);
@@ -145,4 +150,122 @@ test('two completed official Workers accept concurrent native prompts without cr
     assert.ok(ownRequests.length >= 2);
     assert.ok(ownRequests.every(request => !JSON.stringify(request.messages).includes(`FOLLOWUP_ONLY_${1 - index}`)));
   }
+});
+
+test('Router messages recover and redirect the same official Worker without an execution assessment', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-router-worker-message-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  const database = store.orchestration;
+  const load = name => loadRolePackage('core/agent-loop', name);
+  const { Context } = await load('@deepseek-ai/cordis');
+  const { default: LlmRuntime, LlmAdapter } = await load('@deepseek-ai/dsh-llm');
+  const ctx = new Context(), firstRequest = Promise.withResolvers(), release = Promise.withResolvers();
+  let warm, runtime;
+  t.after(async () => { release.resolve(); await runtime?.stop(); await warm?.dispose(); await ctx.fiber.dispose(); await store.close(); await rm(directory, { recursive: true, force: true }); });
+  await ctx.plugin(LlmRuntime);
+  for (const name of ['session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop'])
+    await ctx.plugin((await load(`@deepseek-ai/dsh-${name}`)).default, name === 'agent-loop' ? { agents: [] } : undefined);
+  await ctx.plugin(await loadRolePackage('core/tool-executor-native', '@deepseek-ai/dsh-tool-executor-native'));
+  await ctx.plugin((await loadRolePackage('llm/token-meter', '@deepseek-ai/dsh-token-meter')).default);
+  await installRoleHost(ctx);
+  await ctx.plugin(await loadRolePackage('session/session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'), { root: join(directory, 'sessions'), compression: 'none' });
+  ctx.provide('sessionQuery', {
+    readSession: async id => ({ events: ctx.sessions.get(id).snapshotEvents() }),
+    async observeSession() { return null; },
+  });
+  const model = { providerId: 'fixture', modelId: 'exact-model' };
+  await store.updateConfig({ models: [model], workerModels: [model] });
+  const policy = await readAssessmentPolicy(store);
+  let requests = 0, currentGoal, changedRequest, task;
+  const reply = answer => [{ type: 'block-start', index: 0, blockType: 'text' }, { type: 'text-delta', index: 0, text: answer },
+    { type: 'block-end', index: 0, block: { type: 'text', text: answer } }, { type: 'finish', reason: { kind: 'stop' } }];
+  class Adapter extends LlmAdapter {
+    async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: 131072 } }; }
+    async *stream(request) {
+      assert.notEqual(request.purpose, 'superagent-assessment');
+      const message = request.messages.findLast(message => message.role === 'user')?.content[0]?.text;
+      if (requests === 1 && message?.includes('改搜范冰冰') && message.includes('New instruction for this Task')) {
+        requests++;
+        const { triggerId } = JSON.parse(message.slice(message.indexOf('\n') + 1));
+        assert.equal(database.getTask(task.id).target, '搜索吴亦凡公开资料');
+        const args = { triggerId, target: '搜索范冰冰公开资料', title: '搜索范冰冰资料', reason: '按已确认的变更执行' };
+        yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'adopt', name: 'benchgo_adopt_task_message', arguments: JSON.stringify(args) } };
+        yield { type: 'finish', reason: { kind: 'tool-calls' } };
+        return;
+      }
+      if (++requests === 1) {
+        assert.match(JSON.stringify(request.messages), /继续/);
+        firstRequest.resolve();
+        await release.promise;
+      } else {
+        currentGoal = database.getTask(task.id).target;
+        changedRequest = JSON.stringify(request.messages);
+      }
+      yield* reply(requests === 1 ? '旧回合收尾' : '范冰冰资料已整理');
+    }
+  }
+  ctx.llm.registerAdapter(['fixture'], new Adapter());
+  const text = (id, value) => ({ id, source: { kind: 'user' }, content: [{ type: 'text', text: value }] });
+  const origin = recordDesktopTrigger(database, { sessionId: 'router', message: text('original', '搜索吴亦凡') }).trigger;
+  task = database.createTask({ threadId: origin.threadId, title: '搜索吴亦凡', target: '搜索吴亦凡公开资料', mandate: { actorId: 'desktop-owner',
+    source: origin.source, policyVersion: policy.desktopVersion, admission: 'desktop-approved-delegation', instruction: origin.content,
+    controlledActions: 'require-current-policy-and-harness-approval' } });
+  database.createAssignment(task.id, { executor: 'harness', model });
+  const [initial] = database.claimAssignments('original-worker', { validateMandate: () => true });
+  const ownership = { owner: initial.owner, fence: initial.fence };
+  const sessionId = 'worker-original';
+  const run = database.prepareRun(initial.id, { ...ownership, sessionId, directory });
+  database.freezeWorkerModelRoute({ assignmentId: initial.id, runId: run.id, ...ownership, models: [model], index: 0 });
+  warm = await ctx.agents.create({ sessionId, meta: { cwd: directory } });
+  warm.agent.session.append('turn/start', { turn: 1 });
+  warm.agent.session.append('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'disposed' } } });
+  database.updateRun(run.id, { ...ownership, state: 'submitted' });
+  database.updateRun(run.id, { ...ownership, state: 'uncertain' });
+  database.renewAssignment(initial.id, { ...ownership, validateMandate: () => false });
+  const routerEvents = [{ type: 'turn/start' }, { type: 'user/message', data: text('continue', '继续') }];
+  let router = { id: 'router', status: 'running', session: { header: {}, snapshotEvents: () => routerEvents } };
+  const routerCtx = { agents: { get: () => router, currentInitiator: () => router, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } };
+  const control = createDesktopTaskControl({ database, ctx: routerCtx });
+  const send = async text => control.control({ id: task.id, operation: 'supplement', text }, { agent: router }, { ownerAgent: router,
+    managementScope: await desktopTaskManagementScope({ ctx: routerCtx, agent: router, store: { getState: () => ({ mainSessionId: router.id }) } }) });
+  assert.equal((await send()).duplicate, false);
+  assert.equal(database.interruptedWorkerMessages()[0].id, initial.id);
+  const changedTitles = [], notification = Promise.withResolvers();
+  runtime = createOrchestrationRuntime({ ctx, store, intervalMs: 25,
+    notifyTaskResult: delivery => {
+      const reply = taskReplySignal(database, delivery);
+      if (reply?.kind === 'result') notification.resolve(reply);
+      return { status: 'accepted', messageId: 'router-inbox' };
+    },
+    onTaskTitleChanged: id => changedTitles.push(database.getTask(id).title) });
+  await runtime.start();
+  const signal = AbortSignal.timeout(12000);
+  const deadline = new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  try {
+    await Promise.race([firstRequest.promise, deadline]);
+    assert.equal(ctx.agents.get(sessionId), warm.agent);
+    router = { ...router, id: 'new-router-session' };
+    routerEvents[1].data = text('change', '按刚才说的改');
+    const sent = await send('不搜吴亦凡了，改搜范冰冰');
+    assert.equal(sent.duplicate, false);
+    assert.equal(database.getTrigger(sent.triggerId).content, '按刚才说的改');
+    assert.equal((await send('不搜吴亦凡了，改搜范冰冰')).duplicate, true);
+    assert.equal(database.getTask(task.id).title, '搜索吴亦凡');
+  } finally { release.resolve(); }
+  const delivered = await Promise.race([notification.promise, deadline]);
+  const result = database.results(task.id).at(-1);
+  assert.equal(result.sessionId, sessionId);
+  assert.equal(result.runId, run.id);
+  assert.equal(result.summary, '范冰冰资料已整理');
+  assert.equal(delivered.source.sessionId, 'new-router-session');
+  assert.equal(delivered.source.messageId, 'change');
+  assert.equal(delivered.text, result.summary);
+  assert.equal(currentGoal, '搜索范冰冰公开资料');
+  assert.match(changedRequest, /不搜吴亦凡了，改搜范冰冰/);
+  assert.match(changedRequest, /搜索范冰冰公开资料/);
+  assert.deepEqual(changedTitles, ['搜索范冰冰资料']);
+  assert.equal(database.taskInputs(task.id).filter(input => input.state === 'applied').length, 2);
+  assert.equal(database.pendingSubscriptionMessages(task.id).length, 0);
+  assert.ok(executionEvidence({ events: warm.agent.session.snapshotEvents() }).transcript.lastSeq > 2);
 });

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { taskCleanupNoticeSource } from './chat-publication.mjs';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { readModelFallbacks } from './model-fallback.mjs';
 import { readQuestionReply, readBoundQuestionReply } from './question-reply.mjs';
@@ -196,9 +197,9 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
       onChange({ type: 'inbox', threadId, requestId, status: row.status });
       return { ...receipt(row), ...(duplicate ? { duplicate: true } : {}) };
     },
-    async enqueue({ threadId = 'main', text, requestId = randomUUID(), replyContext, hostExecutionInput }) {
+    async enqueue({ threadId = 'main', text, requestId = randomUUID(), replyContext, hostCleanupNotice }) {
       const context = replySnapshot(replyContext);
-      const digest = fingerprint(threadId, text, hostExecutionInput ? { executionInput: hostExecutionInput } : context);
+      const digest = fingerprint(threadId, text, hostCleanupNotice ? { executionInput: hostCleanupNotice } : context);
       let duplicate = false;
       await updateState(state => {
         const previous = (state.requests || []).find(row => row.requestId === requestId);
@@ -207,12 +208,12 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
           duplicate = true;
           return {};
         }
-        const message = createUserMessage({ content: [{ type: 'text', text }], source: hostExecutionInput
-          ? { kind: 'benchgo-execution-input', ...hostExecutionInput }
+        const message = createUserMessage({ content: [{ type: 'text', text }], source: hostCleanupNotice
+          ? { kind: taskCleanupNoticeSource, ...hostCleanupNotice }
           : { kind: 'user', requestId, rpcId: requestId,
           ...(context ? { replyContext: context } : {}) } });
         const row = { requestId, threadId, sessionId: getAgent?.(threadId)?.id ?? null, messageId: message.id, message,
-          ...(hostExecutionInput ? { executionInput: hostExecutionInput } : {}), fingerprint: digest, status: 'queued', createdAt: new Date(now()).toISOString() };
+          ...(hostCleanupNotice ? { executionInput: hostCleanupNotice } : {}), fingerprint: digest, status: 'queued', createdAt: new Date(now()).toISOString() };
         return { requests: [...(state.requests || []), row] };
       });
       await drain(threadId);

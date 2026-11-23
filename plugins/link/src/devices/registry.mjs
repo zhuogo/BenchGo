@@ -84,7 +84,7 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
     const groupEnabled = group?.enabled();
     const members = group?.members() ?? [];
     if (groupEnabled) for (const member of members) {
-      if (member.removed || member.id === group.localId) continue;
+      if (member.removed || member.id === group.localId || member.deviceType === 'mobile') continue;
       const routes = group.routes?.(member) ?? member.routes;
       const route = routes[0];
       const registration = stored.get(member.id);

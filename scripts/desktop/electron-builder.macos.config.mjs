@@ -10,6 +10,7 @@ import { verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyStartupBundle } from './prepare-startup.mjs';
 import { verifyWorkbenchLoadingBundle } from './prepare-workbench-loading.mjs';
 import { verifyBackgroundBundle } from './prepare-background.mjs';
+import { verifyBrowserStorageBundle } from './prepare-browser-storage.mjs';
 import { verifyUpdateBridgeBundle } from './prepare-update-bridge.mjs';
 import { assertSidebarPayload, DESKTOP_ELECTRON_LANGUAGES, inspectPluginPayload } from './payload-policy.mjs';
 
@@ -96,9 +97,11 @@ export async function verifyMacOSPackage(resources, enrollment) {
   const require = createRequire(new URL('../../deepseek-harness/apps/desktop/package.json', import.meta.url));
   const { extractFile } = createRequire(require.resolve('app-builder-lib'))('@electron/asar');
   const bundle = extractFile(join(resources, 'app.asar'), 'lib/main.js').toString('utf8');
+  const preload = extractFile(join(resources, 'app.asar'), 'lib/preload-app.cjs').toString('utf8');
   for (const verify of [verifyTrayBundle, verifyStartupBundle, verifyWorkbenchLoadingBundle, verifyBackgroundBundle]) verify(bundle);
   verifyUpdateBridgeBundle(bundle);
-  verifyUpdateBridgeBundle(extractFile(join(resources, 'app.asar'), 'lib/preload-app.cjs').toString('utf8'), true);
+  verifyUpdateBridgeBundle(preload, true);
+  verifyBrowserStorageBundle(bundle, preload);
   const artwork = startupArtwork(await readFile(join(root, 'assets/brand/benchgo-mark.svg'), 'utf8'));
   for (const name of ['welcome.html', 'splash.html']) {
     if (!extractFile(join(resources, 'app.asar'), `renderer/${name}`).toString('utf8').includes(artwork)) throw new Error(`Packaged BenchGo startup artwork mismatch: ${name}`);

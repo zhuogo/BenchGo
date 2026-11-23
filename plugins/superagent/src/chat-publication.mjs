@@ -4,21 +4,25 @@ import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { fallbackRequestIds, readModelFallbacks, modelFallbackType } from './model-fallback.mjs';
 import { questionBatch, questionAnswers, questionReplyText, readQuestionReply } from './question-reply.mjs';
 import { approvalChatBinding } from './approval-chat-binding.mjs';
+import { routerRecoveryRequests, routerRecoverySource } from './router-recovery.mjs';
 
 export const chatPublicationType = 'plugin:benchgo-plugin/chat-publication';
-export const executionInputSource = 'benchgo-execution-input';
+export const taskCleanupNoticeSource = 'benchgo-execution-input';
 const fail = message => Object.assign(new Error(message), { code: 'CHAT_PUBLICATION_REJECTED' });
 const userEvent = (event, events) => event.type === 'user/message' && (event.data?.source?.kind === 'user' || readQuestionReply(event.data, events));
 const internalReply = isHostReplyRequest;
 const conversationalReply = request => !internalReply(request) || isTaskResultReplyRequest(request);
-const executionReply = request => request?.source?.kind === executionInputSource;
-const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && (internalReply(event.data) || executionReply(event.data));
+const cleanupReply = request => request?.source?.kind === taskCleanupNoticeSource;
+const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && (internalReply(event.data) || cleanupReply(event.data));
 const isRetryEvent = event => event.type === 'user/message' && event.data.source?.kind === 'retry' && event.data.content?.length === 0;
 // Resolve internal notices to their original identity so they cannot
 // accidentally become a reply to the preceding human message.
 const replyContinuations = events => {
   const result = fallbackRequestIds(events);
-  const states = new Set(events.filter(event => event.type === 'user/message' && (internalReply(event.data) || executionReply(event.data))).map(event => event.data.id));
+  if (events.some(event => event.type === 'user/message' && event.data?.source?.kind === routerRecoverySource)) {
+    for (const [noticeId, requestId] of routerRecoveryRequests(events, result).requests) result.set(noticeId, requestId);
+  }
+  const states = new Set(events.filter(event => event.type === 'user/message' && (internalReply(event.data) || cleanupReply(event.data))).map(event => event.data.id));
   for (const plan of readModelFallbacks(events).values()) {
     if (!plan.cancelled && states.has(plan.requestId)
       && events.some(event => event.type === 'user/message' && event.data?.id === plan.message.id
@@ -95,7 +99,7 @@ export function projectChatMessages(events, { approvalForRequest } = {}) {
   };
   const asked = new Map(), answered = new Set();
   const finishRequestParts = () => {
-    if (request?.id && !internalReply(request) && !executionReply(request)
+    if (request?.id && !internalReply(request) && !cleanupReply(request)
       && !explicit.has(request.id) && !published.has(request.id)) appendParts(request.id);
     publicParts = [];
   };
@@ -120,7 +124,7 @@ export function projectChatMessages(events, { approvalForRequest } = {}) {
       users.add(event.data.id);
       request = event.data;
       lastAssistant = undefined; publicParts = [];
-      if (internalReply(request) || executionReply(request)) continue;
+      if (internalReply(request) || cleanupReply(request)) continue;
       const question = readQuestionReply(event.data, events);
       if (question) {
         const row = { seq: event.seq, id: event.data.id, role: 'user', kind: 'question-reply', ...question,
@@ -176,7 +180,7 @@ export function projectChatMessages(events, { approvalForRequest } = {}) {
       if (text.trim()) publicParts.push(event);
     } else if (event.type === 'turn/end') {
       if (turn !== undefined && event.data?.turn === turn && event.data?.reason?.kind === 'completed'
-        && request?.id && conversationalReply(request) && !executionReply(request) && !explicit.has(request.id) && !published.has(request.id)) {
+        && request?.id && conversationalReply(request) && !cleanupReply(request) && !explicit.has(request.id) && !published.has(request.id)) {
         if (publicParts.length) {
           published.add(request.id);
           appendParts(request.id);
@@ -205,7 +209,7 @@ export function chatNotificationIdentities(events, event) {
 
 /** Only the owner Router can publish; Worker/tool output has no publication authority. */
 export function installChatPublication(scope, agent, { onPublish, canPublish, appendRecord = appendPluginRecord } = {}) {
-  const permitted = request => !(internalReply(request) || executionReply(request)) || (canPublish ? canPublish(request) : false);
+  const permitted = request => !(internalReply(request) || cleanupReply(request)) || (canPublish ? canPublish(request) : false);
   scope.on?.('agent/turn-stopping', async ({ agent: subject, turn, signal }) => {
     if (subject !== agent) return;
     const events = agent.session.snapshotEvents(), active = activeChatReply(events, { includeInternal: true });
@@ -219,7 +223,7 @@ export function installChatPublication(scope, agent, { onPublish, canPublish, ap
       }
       return;
     }
-    if (executionReply(request)) {
+    if (cleanupReply(request)) {
       if (active.turn !== turn || events.some(event => event.type === chatPublicationType && event.data?.kind === 'final' && event.data.requestId === request.id)) return;
       const last = events.findLast(event => event.type === 'assistant/message' && event.data?.turn === turn)?.data?.message;
       if (last?.source?.kind !== 'model' || last.content?.some(block => block.type === 'tool-call')) return;

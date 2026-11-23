@@ -432,6 +432,7 @@ export function UpdateLauncher({ host, wide = true }) {
     <Tooltip label={status ? `下载 · ${status}` : '下载'} side="top" gap={10} delayMs={450} portal>
       <button type="button" className={`cmd-update-launcher ${wide ? '' : 'cmd-update-launcher-rail'}`} data-update-available={updateAvailable || restart} aria-label={status ? `下载，${status}` : '下载'} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
         <UIIcon name="computer" size={16} />
+        {updateAvailable && !restart && <span className="cmd-update-dot" aria-hidden="true" />}
         {wide && <><span>下载</span>{status && <small data-ready={restart}>{status}</small>}</>}
       </button>
     </Tooltip>

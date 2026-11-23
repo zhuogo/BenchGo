@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile, copyFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { prepareTrayInput, prepareApplicationMenuInput, trayLabelsPlugin, prepareDesktopTray, verifyTrayBundle } from './prepare-tray.mjs';
 import { verifyUpdateBridgeBundle } from './prepare-update-bridge.mjs';
+import { verifyBrowserStorageBundle } from './prepare-browser-storage.mjs';
 import config, { verifyPackagedEnrollment } from './electron-builder.config.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -120,9 +122,35 @@ test('the actual main bundle preserves show, quit, relabel and disposal through 
   const require = createRequire(join(engine, 'apps/desktop/package.json'));
   const { createPackage, extractFile } = createRequire(require.resolve('app-builder-lib'))('@electron/asar');
   await createPackage(app, join(output, 'app.asar'));
-  verifyTrayBundle(extractFile(join(output, 'app.asar'), 'lib/main.js').toString('utf8'));
-  verifyUpdateBridgeBundle(extractFile(join(output, 'app.asar'), 'lib/main.js').toString('utf8'));
-  verifyUpdateBridgeBundle(extractFile(join(output, 'app.asar'), 'lib/preload-app.cjs').toString('utf8'), true);
+  const packedMain = extractFile(join(output, 'app.asar'), 'lib/main.js').toString('utf8');
+  const packedPreload = extractFile(join(output, 'app.asar'), 'lib/preload-app.cjs').toString('utf8');
+  verifyTrayBundle(packedMain);
+  verifyUpdateBridgeBundle(packedMain);
+  verifyUpdateBridgeBundle(packedPreload, true);
+  verifyBrowserStorageBundle(packedMain, packedPreload);
+  const browserSection = packedMain.match(/[/][/]#region [^\n]*lib[/]types[/]browser-guests\.js\n([\s\S]*?)[/][/]#endregion/)[1];
+  const configuredPartitions = [];
+  const DesktopBrowserGuests = runInNewContext(browserSection + '\nDesktopBrowserGuests;', {
+    randomUUID,
+    session: { fromPartition: partition => {
+      configuredPartitions.push(partition);
+      return {
+        setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDevicePermissionHandler() {},
+        setDisplayMediaRequestHandler() {}, on() {}, webRequest: { onBeforeRequest() {} },
+      };
+    } },
+  });
+  const browser = new DesktopBrowserGuests(() => undefined);
+  const owner = {};
+  const first = browser.acquire(owner);
+  await browser.release(owner, first.lease);
+  const second = browser.acquire({});
+  const afterRestart = new DesktopBrowserGuests(() => undefined).acquire({});
+  assert.notEqual(first.lease, second.lease);
+  assert.match(first.partition, /^persist:benchgo-sidebar-browser$/);
+  assert.equal(second.partition, first.partition);
+  assert.equal(afterRestart.partition, first.partition);
+  assert.deepEqual(configuredPartitions, [first.partition, first.partition]);
   assert.throws(() => verifyTrayBundle(code.replace('label: id === "zh-CN" ? "主窗口" : "Main Window"', 'label: messages.openApplication')), /missing localized/);
   assert.throws(() => verifyTrayBundle(code.replace('setToolTip("BenchGo")', 'setToolTip(messages.aboutProduct)')), /missing localized/);
 });

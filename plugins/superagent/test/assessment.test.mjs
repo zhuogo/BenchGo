@@ -11,7 +11,7 @@ test('daily assessment supports bounded answers and clarification without weaken
     assert.match(prompt, /This assessment is read-only/);
     assert.match(prompt, /Use accept when the user clearly asks you to do work/);
     assert.match(prompt, /For daily work that needs no project, omit projectId/);
-    assert.match(prompt, /The host forwards the original message and its trigger reference/);
+    assert.match(prompt, /The host preserves the original user message and its source/);
     assert.match(prompt, /Omit acceptance unless the user states a condition the result must meet/);
     assert.match(prompt, /A hypothetical preference, a discussion, or an unresolved choice does not establish work/);
     assert.match(prompt, /Similar subjects alone do not establish a continuation/);

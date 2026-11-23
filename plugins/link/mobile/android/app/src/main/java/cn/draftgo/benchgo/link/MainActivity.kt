@@ -42,6 +42,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var appearance: NativeAppearance
     private lateinit var deviceNavigation: NativeDeviceNavigation
     private var workbenchIdentity: Identity? = null
+    private val leaseRefresh = object : Runnable {
+        override fun run() {
+            workbenchIdentity?.takeIf { it.assetOwner.isNotEmpty() }?.let { bridge.renewWorkbench(it, webView, reload = false) }
+            devicesButton.postDelayed(this, 45_000)
+        }
+    }
     private var microphoneRequest: android.webkit.PermissionRequest? = null
     private var uploadCallback: android.webkit.ValueCallback<Array<android.net.Uri>>? = null
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -125,9 +131,11 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (::appearance.isInitialized) appearance.resume()
         if (::loadingView.isInitialized) loadingView.setResumed(true)
+        if (::devicesButton.isInitialized) devicesButton.post(leaseRefresh)
     }
 
     override fun onPause() {
+        if (::devicesButton.isInitialized) devicesButton.removeCallbacks(leaseRefresh)
         if (::loadingView.isInitialized) loadingView.setResumed(false)
         if (::appearance.isInitialized) appearance.pause()
         super.onPause()
@@ -375,6 +383,9 @@ class MainActivity : AppCompatActivity() {
 
 class LinkBridge(private val context: MainActivity, private val onIdentity: (String) -> Unit) {
     private val store = IdentityStore(context)
+    private val groupClient by lazy { DeviceGroupClient() }
+    private val directoryRefresh = java.util.concurrent.atomic.AtomicBoolean()
+    @Volatile private var nextDirectoryRefresh = 0L
     private val executor = Executors.newFixedThreadPool(3)
     private val clients = ConcurrentHashMap<String, OkHttpClient>()
     private val pairs = ConcurrentHashMap<String, NativePair>()
@@ -385,7 +396,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
     private val connectionGeneration = java.util.concurrent.atomic.AtomicLong()
     private val servers = SshServerManager(context) { identity -> store.write(identity, false) }
     private val appUpdates = AppUpdates(context)
-    private data class NativePair(val identity: Identity, val pollToken: String, val expiresAt: Long)
+    private data class NativePair(val identity: Identity, val pollToken: String, val expiresAt: Long, val deviceGroup: Boolean)
     private fun existingDevice(identity: Identity) = store.all().firstOrNull {
         it.hostKey == identity.hostKey ||
             identity.relayTarget.isNotEmpty() && it.url == identity.url && it.pin.isEmpty() && it.hostId == identity.relayTarget
@@ -428,7 +439,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
     @JavascriptInterface
     fun openWorkbench(): String {
         val identity = store.read() ?: return errorJson("请先配对工作台")
-        if (identity.token.isEmpty()) return errorJson("请先在电脑上允许连接")
+        if (identity.token.isEmpty() && identity.groupId.isEmpty()) return errorJson("请先在电脑上允许连接")
         if (!canOpenAnother(identity.id)) return errorJson("已保留 4 个工作台，请先关闭暂不用的设备页面")
         val generation = connectionGeneration.get()
         context.workbenchLoading(true)
@@ -442,8 +453,21 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
         return JSONObject().put("ok", true).toString()
     }
 
+    private fun authorization(identity: Identity): String {
+        if (identity.groupId.isEmpty()) return identity.token
+        val group = store.group()?.takeIf { it.optString("groupId") == identity.groupId } ?: error("设备组授权已失效")
+        return groupClient.token(group, identity.hostId)
+    }
+
     private fun workbenchCookie(identity: Identity, client: OkHttpClient = clientFor(identity)): String {
-        val request = Request.Builder().url(identity.url + "/link/api/workbench").header("Authorization", "Bearer ${identity.token}").post("{}".toRequestBody("application/json".toMediaType())).build()
+        if (identity.assetOwner.isNotEmpty()) {
+            val (target, cookie) = assetWorkspace(identity)
+            require(target.hostId == identity.hostId && orderedDeviceRoutes(target).any {
+                it.url == identity.url && it.pin == identity.pin && it.relayTarget == identity.relayTarget
+            }) { "工作台路线已更新，请重新打开设备" }
+            return cookie
+        }
+        val request = Request.Builder().url(identity.url + "/link/api/workbench").header("Authorization", "Bearer ${authorization(identity)}").post("{}".toRequestBody("application/json".toMediaType())).build()
         return client.newCall(request).execute().use { result ->
             if (!result.isSuccessful) {
                 val message = runCatching { JSONObject(result.body?.string() ?: "{}").optString("error") }.getOrDefault("")
@@ -457,6 +481,21 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
     }
 
     private fun connectWorkbench(identity: Identity, isCurrent: () -> Boolean): Pair<Identity, String> {
+        if (identity.assetOwner.isNotEmpty()) {
+            val (target, cookie) = assetWorkspace(identity)
+            return connectOnDeviceRoute(orderedDeviceRoutes(target), { false }, {}) { route ->
+                check(isCurrent()) { "连接已取消" }
+                val candidate = target.copy(url = route.url, pin = route.pin, relayTarget = route.relayTarget)
+                val client = clientFor(candidate).newBuilder().connectTimeout(2, TimeUnit.SECONDS)
+                    .callTimeout(5, TimeUnit.SECONDS).retryOnConnectionFailure(false).build()
+                val entry = Request.Builder().url(candidate.url + "/link/workbench/").head()
+                    .header("Cookie", cookie.substringBefore(';')).build()
+                client.newCall(entry).execute().use { response ->
+                    if (!response.isSuccessful) throw RouteHttpFailure(response.code, "工作台暂不可用（HTTP ${response.code}）")
+                }
+                candidate to cookie
+            }
+        }
         if (identity.kind != "computer") return identity to workbenchCookie(identity)
         val candidates = orderedDeviceRoutes(identity)
         val cooldowns = routeCooldowns.getOrPut(identity.id) { ConcurrentHashMap() }
@@ -468,7 +507,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
             val client = clientFor(candidate).newBuilder().connectTimeout(2, TimeUnit.SECONDS)
                 .readTimeout(5, TimeUnit.SECONDS).callTimeout(6, TimeUnit.SECONDS).retryOnConnectionFailure(false).build()
             val request = Request.Builder().url(candidate.url + "/link/api/info")
-                .header("Authorization", "Bearer ${identity.token}").get().build()
+                .header("Authorization", "Bearer ${authorization(candidate)}").get().build()
             val info = client.newCall(request).execute().use { result ->
                 if (!result.isSuccessful) throw RouteHttpFailure(result.code, "连接探测失败（HTTP ${result.code}）")
                 JSONObject(result.body?.string() ?: "{}")
@@ -502,17 +541,89 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
         }
     }
 
-    fun renewWorkbench(identity: Identity, view: WebView) {
+    private fun groupRpc(host: Identity, input: JSONObject, directory: JSONObject = store.group() ?: error("设备组授权已失效")): JSONObject {
+        val sync = input.optString("operation") == "clientDirectory"
+        val token = groupClient.token(directory, host.hostId, sync)
+        input.put("action", "deviceGroup")
+        val select = { route: DeviceRoute ->
+            val target = host.copy(url = route.url, pin = route.pin, relayTarget = route.relayTarget)
+            val client = clientFor(target).newBuilder().connectTimeout(1, TimeUnit.SECONDS)
+                .callTimeout(if (sync) 2 else 20, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(false).build()
+            target to client
+        }
+        val routes = orderedDeviceRoutes(host)
+        if (sync) return connectOnDeviceRoute(routes, { false }, {}) { route ->
+            val (target, client) = select(route)
+            post(target, "/link/api/rpc", input, token, client)
+        }
+        val (target, client) = connectOnDeviceRoute(routes, { false }, {}) { route ->
+            val (candidate, transport) = select(route)
+            val request = Request.Builder().url(candidate.url + "/link/api/info")
+                .header("Authorization", "Bearer $token").get().build()
+            transport.newBuilder().callTimeout(2, TimeUnit.SECONDS).build().newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw RouteHttpFailure(response.code, "登记主机连接失败（HTTP ${response.code}）")
+                if (JSONObject(response.body?.string() ?: "{}").optString("hostId") != host.hostId) throw HostIdentityFailure()
+            }
+            candidate to transport
+        }
+        return post(target, "/link/api/rpc", input, token, client)
+    }
+
+    private fun refreshGroup() {
+        val previous = store.group() ?: return
+        if (System.currentTimeMillis() < nextDirectoryRefresh) return
+        if (!directoryRefresh.compareAndSet(false, true)) return
+        nextDirectoryRefresh = System.currentTimeMillis() + 4_000
+        executor.execute {
+            try {
+                for (host in groupHosts(previous)) {
+                    val current = runCatching { groupRpc(host, JSONObject().put("operation", "clientDirectory"), previous) }.getOrNull() ?: continue
+                    if (current.optString("groupId") != previous.optString("groupId")) continue
+                    val next = current.takeUnless { it.optBoolean("revoked") }
+                    if (next != null) {
+                        if (next.optJSONObject("self")?.optString("generation") != previous.optJSONObject("self")?.optString("generation")) continue
+                        if (runCatching { groupClient.verifyDirectory(next) }.isFailure) continue
+                        previous.optJSONObject("entry")?.let { next.put("entry", it) }
+                    }
+                    val removed = runCatching { store.saveGroup(next, previous) }.getOrNull() ?: break
+                    removed.forEach(context::forgetDevice)
+                    if (store.group() === next) context.runOnUiThread {
+                        context.deliverResult("window.dispatchEvent(new Event('link:device-directory'));")
+                    }
+                    break
+                }
+            } finally {
+                directoryRefresh.set(false)
+            }
+        }
+    }
+
+    private fun assetWorkspace(identity: Identity): Pair<Identity, String> {
+        val owner = store.get(identity.assetOwner) ?: error("登记主机已退出设备组")
+        val value = groupRpc(owner, JSONObject().put("operation", "asset").put("command", "workspace").put("assetId", identity.id))
+        val hostId = value.getString("hostId")
+        if (identity.hostId.isNotEmpty() && hostId != identity.hostId) throw HostIdentityFailure()
+        val target = Identity.parse(value.put("groupId", identity.groupId).put("id", identity.id).put("name", identity.name))
+            .copy(assetOwner = owner.id)
+        if (target.pin.isNotEmpty() && target.pin != hostPin(hostId) || target.relayTarget.isNotEmpty() && target.relayTarget != hostId) throw HostIdentityFailure()
+        val cookie = value.getString("cookie")
+        require(cookie.startsWith("dsh_link_workbench=") && cookie.contains("Path=/link/workbench/", true) && cookie.contains("HttpOnly", true))
+        return target to cookie
+    }
+
+    fun renewWorkbench(identity: Identity, view: WebView, reload: Boolean = true) {
         val generation = connectionGeneration.get()
         executor.execute {
             runCatching {
                 val saved = store.get(identity.id) ?: error("设备已移除")
-                require(saved.token == identity.token) { "设备授权已更改" }
+                require(saved.token == identity.token && saved.groupId == identity.groupId) { "设备授权已更改" }
                 val cookie = workbenchCookie(identity)
                 context.runOnUiThread {
                     if (generation != connectionGeneration.get() || store.selectedId() != identity.id) return@runOnUiThread
                     context.setWorkbenchCookies(identity, cookie, { generation == connectionGeneration.get() && store.selectedId() == identity.id }) { accepted ->
-                        if (accepted) view.reload() else context.workbenchFailed("无法恢复设备会话，请重试")
+                        if (accepted && reload) view.reload()
+                        else if (!accepted) context.workbenchFailed("无法恢复设备会话，请重试")
                     }
                 }
             }.onFailure { if (generation == connectionGeneration.get()) context.workbenchFailed(connectionFailureMessage(it, identity.url, identity.pin.isNotEmpty())) }
@@ -538,15 +649,37 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
             "appUpdateConfigure" -> appUpdates.configure(input)
             "appUpdateCheck" -> appUpdates.check()
             "appUpdateOpen" -> appUpdates.open()
-            "list" -> JSONObject().put("devices", org.json.JSONArray(listOf(localDevice()) + store.all().map {
-                it.publicJson(if (it.kind == "ssh") servers.status(it.id) else "unknown").apply {
-                    activeRoutes[it.id]?.let { route ->
-                        put("currentPath", route.kind)
-                        if (route.kind == "relay") put("currentRelayUrl", route.url)
-                        if (route.relayId.isNotEmpty()) put("currentRelayId", route.relayId)
-                    }
+            "list" -> {
+                refreshGroup()
+                val group = store.group()
+                val hosts = store.all()
+                val assets = group?.optJSONArray("assets")
+                val shared = (0 until (assets?.length() ?: 0)).map { assets!!.getJSONObject(it) }
+                val hostIds = hosts.map { it.hostId }.filter { it.isNotEmpty() }.toSet()
+                val members = group?.optJSONArray("members")
+                val self = group?.optJSONObject("self")?.optString("id")
+                val additional = (0 until (members?.length() ?: 0)).map { members!!.getJSONObject(it) }.mapNotNull { member ->
+                    val id = member.getString("id")
+                    if (id == self || id in hostIds) return@mapNotNull null
+                    JSONObject().put("id", id).put("name", member.getString("name")).put("hostId", id)
+                        .put("deviceType", member.optString("deviceType")).put("kind", "paired")
+                        .put("groupMember", true).put("status", "unknown")
                 }
-            })).put("activeId", store.selectedId()).put("capabilities", capabilities())
+                val devices = listOf(localDevice()) + hosts.map { host ->
+                    host.publicJson(if (host.kind == "ssh") servers.status(host.id) else "unknown").apply {
+                        activeRoutes[host.id]?.let { route ->
+                            put("currentPath", route.kind)
+                            if (route.kind == "relay") put("currentRelayUrl", route.url)
+                            if (route.relayId.isNotEmpty()) put("currentRelayId", route.relayId)
+                        }
+                        shared.firstOrNull { host.hostId.isNotEmpty() && it.optString("hostId") == host.hostId && it.optBoolean("sharedTerminal") }?.let {
+                            put("sharedTerminal", true).put("terminalAssetId", it.getString("id"))
+                        }
+                    }
+                } + additional + shared.filter { it.optString("hostId") !in hostIds }
+                JSONObject().put("devices", org.json.JSONArray(devices)).put("activeId", store.selectedId()).put("capabilities", capabilities())
+                    .apply { if (group != null) put("group", JSONObject().put("enabled", true).put("members", org.json.JSONArray())) }
+            }
             "select" -> {
                 val identity = store.get(targetId) ?: error("设备不存在")
                 require(identity.kind != "ssh" || servers.status(identity.id) == "connected") { "SSH 隧道已断开，请重新连接" }
@@ -581,9 +714,11 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
                 val existing = pairs.entries.firstOrNull { samePairing(it.value.identity, identity) }
                 if (existing != null) return@synchronized pairingRequest(existing.key, existing.value)
                 require(pairs.size < 16) { "待批准连接过多" }
-                val pair = post(identity, "/link/api/pair", JSONObject().put("code", identity.code).put("name", store.localName()).put("deviceType", "mobile"))
+                val pair = post(identity, "/link/api/pair", JSONObject().put("code", identity.code).put("name", store.localName())
+                    .put("deviceType", "mobile").put("groupClientKey", groupClient.publicKey())
+                    .put("groupId", store.group()?.optString("groupId")))
                 val id = pair.getString("requestId")
-                val pending = NativePair(identity, pair.getString("pollToken"), pair.optLong("expiresAt", System.currentTimeMillis() + 300000))
+                val pending = NativePair(identity, pair.getString("pollToken"), pair.optLong("expiresAt", System.currentTimeMillis() + 300000), pair.optBoolean("deviceGroup"))
                 pairs[id] = pending
                 pairingRequest(id, pending)
             }
@@ -595,6 +730,20 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
                     val pin = hostPin(hostId)
                     if (pin.isNotEmpty() && pair.identity.pin.isNotEmpty() && pin != pair.identity.pin) throw HostIdentityFailure()
                     if (pair.identity.relayTarget.isNotEmpty() && pair.identity.relayTarget != hostId) throw HostIdentityFailure()
+                    if (pair.deviceGroup) {
+                        require(hostId.isNotEmpty()) { "设备组邀请缺少主机身份" }
+                        val directory = post(pair.identity, "/link/api/rpc", JSONObject()
+                            .put("action", "deviceGroup").put("operation", "admitClient")
+                            .put("groupId", store.group()?.optString("groupId"))
+                            .put("proof", groupClient.invitationProof(hostId, result.getString("deviceId"))), result.getString("token"))
+                        groupClient.verifyDirectory(directory)
+                        directory.put("entry", JSONObject().put("hostId", hostId).put("url", pair.identity.url)
+                            .put("pin", pair.identity.pin).put("relayTarget", pair.identity.relayTarget))
+                        store.saveGroup(directory).forEach(context::forgetDevice)
+                        val device = store.get(hostId) ?: error("已加入设备组，登记主机没有可用路线")
+                        forgetPair(id, pair)
+                        return JSONObject().put("status", "approved").put("device", device.publicJson()).put("direction", "group")
+                    }
                     val previous = existingDevice(pair.identity)
                     val device = pair.identity.copy(name = result.optString("hostName").ifBlank { result.optString("name").ifBlank { pair.identity.name.ifBlank { "设备-" + pair.identity.id.take(5).uppercase() } } }, token = result.getString("token"), code = "", id = previous?.id ?: pair.identity.id, routes = trustedRoutes(result.optJSONArray("routes"), hostId), alias = previous?.alias.orEmpty(), hostId = hostId)
                     routeCooldowns.remove(device.id); activeRoutes.remove(device.id)
@@ -611,6 +760,17 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
                 servers.connect(input, identity)
             }
             "serverAction" -> servers.manage(input, store.get(targetId) ?: error("设备不存在"))
+            "serverTerminal", "serverTerminalRead", "serverTerminalWrite", "serverTerminalResize", "serverTerminalClose" -> {
+                val group = store.group() ?: error("设备组授权已失效")
+                val assets = group.getJSONArray("assets")
+                val asset = (0 until assets.length()).map { assets.getJSONObject(it) }
+                    .firstOrNull { it.optString("id") == targetId && it.optBoolean("sharedTerminal") } ?: error("共享 SSH 资产不存在")
+                val owner = store.get(asset.getString("ownerId")) ?: error("登记主机暂时没有可用路线")
+                val payload = JSONObject().put("operation", "asset").put("command", input.getString("action")).put("assetId", targetId)
+                if (input.has("operationId")) payload.put("id", input.get("operationId"))
+                for (field in listOf("offset", "data", "cols", "rows")) if (input.has(field)) payload.put(field, input.get(field))
+                groupRpc(owner, payload, group)
+            }
             else -> error("不支持的设备操作")
         }
     }
@@ -627,11 +787,13 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
         pendingIdentity.get()?.let { if (samePairing(it, pair.identity)) pendingIdentity.compareAndSet(it, null) }
     }
 
-    private fun post(identity: Identity, path: String, body: JSONObject): JSONObject {
-        val request = Request.Builder().url(identity.url + path).post(body.toString().toRequestBody("application/json".toMediaType())).build()
-        return clientFor(identity).newCall(request).execute().use { response ->
+    private fun post(identity: Identity, path: String, body: JSONObject, token: String = "", client: OkHttpClient = clientFor(identity)): JSONObject {
+        val request = Request.Builder().url(identity.url + path).post(body.toString().toRequestBody("application/json".toMediaType()))
+        if (token.isNotEmpty()) request.header("Authorization", "Bearer $token")
+        return client.newCall(request.build()).execute().use { response ->
             val value = JSONObject(response.body?.string() ?: "{}")
-            require(response.isSuccessful) { value.optString("error", "连接失败（HTTP " + response.code + "）") }; value
+            if (!response.isSuccessful) throw RouteHttpFailure(response.code, value.optString("error", "连接失败（HTTP " + response.code + "）"))
+            value
         }
     }
 

@@ -40,6 +40,7 @@ export async function openDeviceGroup(directory, identity, localDetails, onChang
     normalizeRoutes(row.routes);
     if (row.routes.some(route => route.kind === 'direct' && 'sha256:' + route.pin !== row.id || route.relayTarget && route.relayTarget !== row.id)) throw fail('设备组连接地址与身份不一致');
     if (row.publicUrl) normalizeTarget({ url: row.publicUrl });
+    if (row.deviceType !== undefined && (row.deviceType !== 'mobile' || row.routes.length || row.publicUrl)) throw fail('客户端成员不能发布主机路线');
     return row;
   };
   const validateBaseline = snapshot => {
@@ -166,7 +167,7 @@ export async function openDeviceGroup(directory, identity, localDetails, onChang
     if (manifest && manifest.id !== next.id && !enabled()) {
       const former = previous.find(row => row.id === localId);
       const removal = former && removals.get(removalKey(localId, generationOf(former)));
-      const waiting = previous.filter(row => !row.removed).map(row => row.id);
+      const waiting = previous.filter(row => !row.removed && row.id !== localId && row.deviceType !== 'mobile').map(row => row.id);
       if (removal && waiting.length) nextDepartures = [...departures, { manifest, removals: [...removals.values()], waiting }];
     }
     await persist(next, entries, nextDepartures);
@@ -194,7 +195,7 @@ export async function openDeviceGroup(directory, identity, localDetails, onChang
     localId, member, enabled, description,
     authorityMember() {
       if (!enabled()) return undefined;
-      return member(hostIdOf(readKey(manifest.baseline.authority))) ?? members().filter(row => !row.removed).sort((a, b) => a.id < b.id ? -1 : 1)[0];
+      return member(hostIdOf(readKey(manifest.baseline.authority))) ?? members().filter(row => !row.removed && row.deviceType !== 'mobile').sort((a, b) => a.id < b.id ? -1 : 1)[0];
     },
     offer(groupId) {
       const row = description();
@@ -206,12 +207,17 @@ export async function openDeviceGroup(directory, identity, localDetails, onChang
         throw fail('设备组入组请求签名无效');
       return row;
     },
+    verifyClient(key, id, invitationId, proof) {
+      const publicKey = readKey(key);
+      if (id !== hostIdOf(publicKey) || !verified(publicKey, ['benchgo-group-client-v1', localId, invitationId], proof))
+        throw fail('设备组客户端签名无效');
+    },
     snapshot: () => manifest,
     members,
     removals: () => [...removals.values()],
     status: () => ({
       enabled: enabled(), id: enabled() ? manifest.id : null, manageable: enabled(), canInvite: enabled(),
-      members: members().map(({ id, name, removed }) => ({ id, name, local: id === localId, removed, online: id === localId && !removed })),
+      members: members().map(({ id, name, removed, deviceType }) => ({ id, name, local: id === localId, removed, online: id === localId && !removed, ...(deviceType ? { deviceType } : {}) })),
     }),
     departures: () => departures.flatMap(record => record.waiting.map(id => ({
       manifest: record.manifest, removals: record.removals, row: record.manifest.members.find(row => row.id === id),
@@ -317,7 +323,7 @@ export async function openDeviceGroup(directory, identity, localDetails, onChang
     principal(id) {
       const row = enabled() && member(id);
       if (row) return { id: row.id, tokenHash: createHash('sha256').update(encode([manifest.id, row.id, generationOf(row)])).digest('hex'),
-        name: row.name, deviceType: 'computer', groupMember: true, capabilities: [...PAIRED_DEVICE_CAPABILITIES] };
+        name: row.name, deviceType: row.deviceType ?? 'computer', groupMember: true, capabilities: [...PAIRED_DEVICE_CAPABILITIES] };
     },
     flush: () => changes,
   };

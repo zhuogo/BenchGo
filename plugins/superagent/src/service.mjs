@@ -178,7 +178,7 @@ export async function mountAssistant(ctx, commander, providers) {
     onApprovalPending: input => engine?.notifyApprovalPending(input) }));
   orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels,
     maintainTasks: () => { void workerArchive?.tick(); return cleanupContinuations?.tick(); },
-    notifyExecutionInput: input => engine.notifyExecutionInput(input),
+    onTaskTitleChanged: taskId => { void executionSessionTitles?.syncTask(taskId); },
     notifyTaskResult: async notice => {
       const receipt = await engine.notifyTaskResult(notice);
       const payload = notice?.payload;
@@ -213,7 +213,7 @@ export async function mountAssistant(ctx, commander, providers) {
   // The owner's current instruction is the authorization; the receipt only versions the exact difference.
   const taskChanges = createTaskRevisionService({ ctx, store, requestExpansion: async ({ trigger }) =>
     ({ approved: true, id: randomUUID(), triggerId: trigger.id, actorId: trigger.actor.id }) });
-  const taskControl = createDesktopTaskControl({ ctx, database: store.orchestration });
+  const taskControl = createDesktopTaskControl({ ctx, database: store.orchestration, wake: () => orchestrationRuntime.tick() });
   goals = createGoalChecklist({ database });
   executionSessionTitles = createExecutionSessionTitles({ ctx, database: store.orchestration, metadata: database });
   const taskManagement = createTaskManagement({ database, orchestration: store.orchestration, goals,
@@ -223,7 +223,7 @@ export async function mountAssistant(ctx, commander, providers) {
   ctx.provide('benchgoWorkerArchive', workerArchive);
   cleanupContinuations = createTaskCleanupContinuation({ database, orchestration: store.orchestration, taskManagement, signal: shutdown.signal,
     onUpdate: update => engine.notifyTaskCleanup(update) });
-  const desktopTasks = createDesktopTaskAccess(store.orchestration, taskManagement);
+  const desktopTasks = createDesktopTaskAccess(store.orchestration, taskManagement, orchestrationRuntime.taskProgress);
   const projectTasks = rows => taskManagement.project('task', rows).map(row => {
     const summary = store.orchestration.executionSummary(row.id);
     const current = summary?.instructionRevision === row.instructionRevision

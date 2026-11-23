@@ -8,19 +8,22 @@ import java.security.MessageDigest
 import java.util.Base64
 
 data class Identity(val url: String, val pin: String, val code: String, val name: String, val token: String,
-    val id: String = stableId(url, pin), val kind: String = "computer", val ssh: JSONObject? = null, val warning: String = "", val routes: JSONArray? = null, val alias: String = "", val hostId: String = "", val relayTarget: String = "") {
+    val id: String = stableId(url, pin), val kind: String = "computer", val ssh: JSONObject? = null, val warning: String = "", val routes: JSONArray? = null, val alias: String = "", val hostId: String = "", val relayTarget: String = "", val groupId: String = "", val assetOwner: String = "") {
     val hostKey: String get() = if (relayTarget.isEmpty()) "$url|$pin" else "$url|$pin|$relayTarget"
     fun toJson() = JSONObject().apply {
         put("url", url); put("pin", pin); put("code", code); put("name", name); put("token", token)
         if (routes != null) put("routes", routes)
         if (hostId.isNotEmpty()) put("hostId", hostId)
         if (relayTarget.isNotEmpty()) put("relayTarget", relayTarget)
+        if (groupId.isNotEmpty()) put("groupId", groupId)
         if (alias.isNotBlank()) put("alias", alias)
         put("id", id); put("kind", kind); if (ssh != null) put("ssh", ssh); if (warning.isNotBlank()) put("warning", warning)
     }
     fun publicJson(status: String = "unknown") = JSONObject().apply {
         put("id", id); put("name", alias.ifBlank { name.ifBlank { if (kind == "ssh") ssh?.optString("host") ?: "服务器" else URI(url).host } })
         if (warning.isNotBlank()) put("warning", warning)
+        if (hostId.isNotEmpty()) put("hostId", hostId)
+        if (groupId.isNotEmpty()) put("groupMember", assetOwner.isEmpty())
         put("kind", kind); put("url", if (kind == "ssh") "ssh://" + ssh?.optString("host") else url); put("status", status)
     }
     companion object {
@@ -34,8 +37,9 @@ data class Identity(val url: String, val pin: String, val code: String, val name
             val token = json.optString("token").trim()
             val relayTarget = validateRelayTarget(json.optString("relayTarget"), pin)
             require(code.length <= 256 && token.length <= 4096) { "设备凭据无效" }
-            require(code.isNotEmpty() || token.isNotEmpty()) { "缺少配对码或设备令牌" }
-            return Identity(url, pin, code, json.optString("name").take(128), token, json.optString("id").ifBlank { stableId(url, pin, relayTarget) }, json.optString("kind", "computer"), json.optJSONObject("ssh"), json.optString("warning"), json.optJSONArray("routes"), json.optString("alias").take(128), json.optString("hostId"), relayTarget)
+            val groupId = json.optString("groupId")
+            require(code.isNotEmpty() || token.isNotEmpty() || groupId.isNotEmpty()) { "缺少配对码或设备令牌" }
+            return Identity(url, pin, code, json.optString("name").take(128), token, json.optString("id").ifBlank { stableId(url, pin, relayTarget) }, json.optString("kind", "computer"), json.optJSONObject("ssh"), json.optString("warning"), json.optJSONArray("routes"), json.optString("alias").take(128), json.optString("hostId"), relayTarget, groupId)
         }
     }
 }
@@ -50,6 +54,8 @@ internal class IdentityStore(context: Context) {
     private val prefs = context.getSharedPreferences("link_identity", Context.MODE_PRIVATE)
     private val alias = "benchgo-link-identity"
     private val devices = linkedMapOf<String, Identity>()
+    private var group: JSONObject? = null
+    private var members = emptyList<Identity>()
     private var activeId = ""
     private var unreadable = false
     @Synchronized fun localName(): String {
@@ -73,13 +79,51 @@ internal class IdentityStore(context: Context) {
                     val list = value.getJSONArray("devices")
                     for (i in 0 until list.length()) { val device = Identity.parse(list.getJSONObject(i)); devices[device.id] = device }
                     activeId = value.optString("activeId")
+                    group = value.optJSONObject("group")
+                    members = group?.let(::groupHosts).orEmpty()
                 } else { val legacy = Identity.parse(value); devices[legacy.id] = legacy; activeId = legacy.id; persist() }
             } catch (_: Exception) { unreadable = true }
         }
     }
-    @Synchronized fun read(): Identity? = devices[activeId]
-    @Synchronized fun get(id: String): Identity? = devices[id]
-    @Synchronized fun all(): List<Identity> = devices.values.toList()
+    @Synchronized fun read(): Identity? = get(activeId)
+    @Synchronized fun get(id: String): Identity? = members.find { it.id == id } ?: groupAsset(id) ?: devices[id]
+    @Synchronized fun all(): List<Identity> = members + devices.values.filter { saved -> members.none { it.hostId == saved.hostId } }
+    @Synchronized fun group(): JSONObject? = group
+    @Synchronized fun groupAsset(id: String): Identity? {
+        if (!id.startsWith("asset-")) return null
+        val assets = group?.optJSONArray("assets") ?: return null
+        for (index in 0 until assets.length()) {
+            val row = assets.getJSONObject(index)
+            if (row.getString("id") == id && (row.getString("kind") == "computer" || !row.isNull("hostId"))) {
+                val owner = members.find { it.id == row.getString("ownerId") } ?: return null
+                return owner.copy(id = id, name = row.getString("name"), assetOwner = owner.id,
+                    hostId = if (row.isNull("hostId")) "" else row.getString("hostId"))
+            }
+        }
+        return null
+    }
+    @Synchronized fun saveGroup(value: JSONObject?, expected: JSONObject? = group): List<String> {
+        if (expected !== group) return emptyList()
+        require(!unreadable) { "设备凭据无法解密，已保留原有数据" }
+        if (value?.toString() == group?.toString()) return emptyList()
+        val previous = group
+        val previousMembers = members
+        val previousActive = activeId
+        val nextMembers = value?.let(::groupHosts).orEmpty()
+        val before = previousMembers.map { it.id } + assetIds(previous)
+        group = value
+        members = nextMembers
+        val removed = before - (members.map { it.id } + assetIds(group)).toSet()
+        if (activeId in removed) activeId = ""
+        try { persist() } catch (error: Exception) {
+            group = previous; members = previousMembers; activeId = previousActive; throw error
+        }
+        return removed
+    }
+    private fun assetIds(directory: JSONObject?): List<String> {
+        val assets = directory?.optJSONArray("assets") ?: return emptyList()
+        return (0 until assets.length()).map { assets.getJSONObject(it).getString("id") }
+    }
     @Synchronized fun selectedId(): String = activeId
     @Synchronized fun refreshConnection(identity: Identity, name: String, routes: JSONArray?, hostId: String) {
         val saved = devices[identity.id] ?: return
@@ -97,7 +141,7 @@ internal class IdentityStore(context: Context) {
     }
     @Synchronized fun select(id: String): Identity {
         require(!unreadable) { "设备凭据无法解密；已保留原有数据" }
-        val device = devices[id] ?: error("设备不存在")
+        val device = get(id) ?: error("设备不存在")
         val before = activeId; activeId = id
         try { persist() } catch (error: Exception) { activeId = before; throw error }; return device
     }
@@ -123,6 +167,7 @@ internal class IdentityStore(context: Context) {
     }
     private fun persist() {
         val value = JSONObject().put("version", 2).put("activeId", activeId).put("devices", JSONArray(devices.values.map { it.toJson() }))
+        if (group != null) value.put("group", group)
         val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding").apply { init(javax.crypto.Cipher.ENCRYPT_MODE, key(true)) }
         val encoded = Base64.getEncoder().encodeToString(cipher.iv + cipher.doFinal(value.toString().toByteArray()))
         check(prefs.edit().putString("value", encoded).commit()) { "无法保存设备连接" }

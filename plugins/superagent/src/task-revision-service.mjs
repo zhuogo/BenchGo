@@ -4,6 +4,9 @@ import { readAssessmentPolicy, validateTaskMandate } from './assessment-policy.m
 import { ownsDesktopTask } from './desktop-task-owner.mjs';
 import { taskMandateDifference, isTaskMandateNarrowing } from './task-revisions.mjs';
 import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
+import { normalizeTaskTitle } from './task-title.mjs';
+import { taskExecutionBlocked, taskStopped } from './task-lifecycle.mjs';
+import { usesLocalOfficialWorker } from './worker-model-route.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex');
@@ -37,6 +40,9 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
       if (digest(previous.requestPayload) !== digest(requestPayload)) throw Object.assign(new Error('请求标识已用于不同的任务变更'), { code: 'IDEMPOTENCY_CONFLICT' });
       return previous.task;
     }
+    if (options.router && input.operation === 'revise' && task.status !== 'completed' && !taskStopped(task)
+      && (input.projectId === undefined || input.projectId === task.mandate.project?.id) && usesLocalOfficialWorker(database, task))
+      throw Object.assign(new Error('请通过 assistant_task_control supplement 把明确的要求发给原工单'), { code: 'USE_WORKER_MESSAGE' });
     const target = input.target === undefined ? task.target : text(input.target, '任务要求');
     const acceptance = input.acceptance ?? task.acceptance;
     if (typeof acceptance !== 'string' || acceptance.length > 100000) throw new Error('无效验收条件');
@@ -93,28 +99,40 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
   }
   return {
     change: (input, exec, options) => change(input, exec, options),
-    async changeExecutionInput({ triggerId, assignmentId, runId, sessionId, owner, fence, decision, policy }) {
-      const assignment = database.getAssignment(assignmentId), run = assignment && database.runs(assignmentId).find(row => row.id === runId);
-      const trigger = database.getTrigger(triggerId), task = assignment && database.getTask(assignment.taskId);
-      if (!assignment || assignment.state !== 'claimed' || assignment.owner !== owner || assignment.fence !== fence || assignment.leaseUntil <= Date.now()
-        || !run || run.owner !== owner || run.fence !== fence || run.sessionId !== sessionId
-        || trigger?.actor.kind !== 'human' || trigger.actor.id !== 'desktop-owner' || trigger.source?.channel !== 'desktop'
-        || trigger.source.executionSessionId !== sessionId || trigger.source.sessionId !== sessionId || !trigger.source.executionMessageId
-        || trigger.source.messageId !== trigger.source.executionMessageId) throw Object.assign(new Error('执行输入不属于当前真实执行'), { code: 'FENCING_CONFLICT' });
-      if (decision.outcome !== 'revise' || decision.withinMandate !== true || decision.taskId !== task.id
-        || decision.projectId !== undefined && decision.projectId !== task.mandate.project?.id) throw Object.assign(new Error('执行输入需要 Router 核实授权范围'), { code: 'MANDATE_EXPANSION_REQUIRED' });
-      const current = await readPolicy();
-      if (current.desktopVersion !== policy.desktopVersion || current.version !== policy.version
-        || !validateTaskMandate(database.currentTaskMandate(task.id, task.mandate), { policy: current })) throw Object.assign(new Error('执行输入分诊期间授权规则已变化'), { code: 'MANDATE_REVOKED' });
-      // No await between this final fence check and the synchronous transaction.
-      const live = database.getAssignment(assignmentId);
-      if (live.state !== 'claimed' || live.owner !== owner || live.fence !== fence || live.leaseUntil <= Date.now()) throw Object.assign(new Error('执行输入已失去当前执行归属'), { code: 'FENCING_CONFLICT' });
-      const mandate = { ...database.currentTaskMandate(task.id, task.mandate), actorId: trigger.actor.id, source: trigger.source,
-        instruction: trigger.content, policyVersion: current.desktopVersion, admission: 'desktop-approved-delegation' };
-      return database.changeTask(task.id, { operation: 'revise', expectedInstructionRevision: decision.expectedInstructionRevision,
-        target: decision.target ?? task.target, acceptance: decision.acceptance ?? task.acceptance, reason: decision.reason,
-        requestKey: `execution-input:${triggerId}`, triggerId, mandate, model: assignment.model,
-        validateMandate: value => validateTaskMandate(value, { policy: current }) });
+    async adoptWorkerMessage({ triggerId, target, acceptance, title, reason }, { assignment, run, sessionId, signal }) {
+      const policy = await readPolicy();
+      signal?.throwIfAborted();
+      const live = database.getAssignment(assignment.id);
+      const activeRun = database.runs(assignment.id).find(row => row.id === run.id);
+      const task = database.getTask(assignment.taskId);
+      const input = database.taskInputs(assignment.taskId).find(row => row.triggerId === triggerId);
+      const receipt = input?.application;
+      const trigger = database.getTrigger(triggerId);
+      if (live?.state !== 'claimed' || live.owner !== assignment.owner || live.fence !== assignment.fence || live.leaseUntil <= Date.now()
+        || activeRun?.sessionId !== sessionId || activeRun.owner !== live.owner || activeRun.fence !== live.fence
+        || input?.state !== 'applied' || !(input.snapshot?.workerMessage === true || trigger?.source?.executionSessionId === sessionId) || !receipt?.messageId
+        || receipt.assignmentId !== live.id || receipt.runId !== activeRun.id || receipt.fence !== live.fence || receipt.sessionId !== sessionId
+        || trigger?.actor.kind !== 'human' || trigger.actor.id !== 'desktop-owner' || trigger.source?.channel !== 'desktop')
+        throw Object.assign(new Error('?????? Worker ????????'), { code: 'WORKER_MESSAGE_NOT_RECEIVED' });
+      if (taskExecutionBlocked(task)) throw Object.assign(new Error('???????????'), { code: 'TASK_STOPPED' });
+      const mandate = database.currentTaskMandate(task.id, task.mandate);
+      if (!validateTaskMandate(mandate, { policy })) throw Object.assign(new Error('???????'), { code: 'MANDATE_REVOKED' });
+      const snapshot = database.appliedTaskSnapshot(assignment.id);
+      const changes = { target: text(target, '????'), acceptance: acceptance ?? snapshot.acceptance,
+        title: normalizeTaskTitle(text(title, '????', 200)), reason: text(reason, '????', 10000) };
+      const requestKey = `worker-adopt:${task.id}:${triggerId}`;
+      const previous = database.taskRevisionRequest(requestKey);
+      if (previous) {
+        if (digest(previous.requestPayload) !== digest(changes)) throw Object.assign(new Error('??????????????'), { code: 'IDEMPOTENCY_CONFLICT' });
+        return task;
+      }
+      if (changes.target === task.target && changes.acceptance === task.acceptance) return task;
+      const frozen = database.getWorkerExecutionState(run.id);
+      return database.changeTask(task.id, { operation: 'revise', expectedInstructionRevision: snapshot.instructionRevision, ...changes,
+        requestKey, requestPayload: changes, triggerId, confirmWorkerMessage: true,
+        mandate: { ...mandate, actorId: trigger.actor.id, source: trigger.source, instruction: trigger.content },
+        model: frozen?.models[frozen.index] || live.model,
+        validateMandate: () => true });
     },
     submitForm(input, options) {
       text(input.requestId, '表单请求标识', 200);

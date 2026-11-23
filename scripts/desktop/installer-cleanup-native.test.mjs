@@ -82,6 +82,7 @@ SetCompress off
 !include "LogicLib.nsh"
 !define INSTALL_REGISTRY_KEY "BenchGo fixture never reads registry"
 !include "${quote(officialTransactions)}"
+!include "${quote(join(dirname(officialTransactions), 'restart-banner.nsh'))}"
 
 !macro dshOfficialCustomInit
 !macroend

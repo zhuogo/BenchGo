@@ -43,7 +43,7 @@ async function body(req) {
   const input = JSON.parse(Buffer.concat(chunks).toString());
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('请求必须是对象'); return input;
 }
-export async function createDeviceCenter({ directory, webRoot, managerFactory = createServerManager, hostAdmin, localName, localDispatch, publicOrigin, workbenchOrigin, registerProxy, pairing, signSource, group, credentials }) {
+export async function createDeviceCenter({ directory, webRoot, managerFactory = createServerManager, hostAdmin, localName, localDispatch, publicOrigin, workbenchOrigin, registerProxy, pairing, signSource, group, groupAssets, credentials }) {
   let renamedLocal;
   const registry = await openDeviceRegistry(directory, { localName: () => localName?.() || renamedLocal || '本机', group }), pending = new Map(), proxies = new Map(), tickets = new Map(), sessions = new Map(), parents = new Set(), sockets = new Set();
   let origin, closed = false;
@@ -99,14 +99,33 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   await manager?.ready;
   const serverManagement = !publicOrigin && typeof manager?.sshTarget === 'function';
   const decorate = device => ({ ...device, ...(serverManagement ? manager.state(device.id) : undefined) });
+  const localAssets = () => registry.list().devices
+    .filter(row => row.kind === 'ssh' || row.kind !== 'local' && !registry.isGroup(row.id))
+    .map(({ id, name, kind, hostId, status }) => ({ id, name, kind, hostId, status }));
+  const sharedAssets = () => groupAssets?.directory(localAssets(), { remoteOnly: true }) ?? [];
+  const withSharedAssets = rows => {
+    const assets = sharedAssets();
+    const hosts = new Set(rows.map(row => row.hostId).filter(Boolean));
+    return rows.map(row => {
+      const terminal = row.hostId && !row.sshManaged && assets.find(asset => asset.hostId === row.hostId && asset.sharedTerminal);
+      return terminal ? { ...row, terminalAssetId: terminal.id, sharedTerminal: true } : row;
+    }).concat(assets.filter(row => !hosts.has(row.hostId)));
+  };
+  const otherMembers = devices => {
+    if (!group?.enabled()) return [];
+    const shown = new Set(devices.map(row => row.hostId));
+    return group.members().filter(row => !row.removed && !shown.has(row.id))
+      .map(({ id, name, deviceType }) => ({ id, name, hostId: id, kind: 'paired',
+        deviceType: deviceType ?? 'computer', groupMember: true, status: 'unknown' }));
+  };
   const devices = () => {
     const data = resources.devices();
     const groupEnabled = group?.enabled();
-    return { ...data, devices: data.devices.map(device => ({
+    return { ...data, devices: withSharedAssets(data.devices.map(device => ({
       ...decorate(device),
       ...(groupEnabled && device.kind === 'local' ? { hostId: group.localId, groupMember: true } : {}),
       ...(groupEnabled && registry.isGroup(device.id) ? { groupMember: true } : {}),
-    })), ...(groupEnabled ? { groupEnabled: true } : {}) };
+    }))), ...(groupEnabled ? { groupEnabled: true } : {}) };
   };
   const savePairing = async input => {
     const device = await registry.upsert({ ...input, kind: 'computer' });
@@ -201,6 +220,25 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   const api = async input => {
     if (closed) throw fail('设备中心已关闭', 503);
     let id = idOf(input);
+    const asset = id?.startsWith('asset-') && sharedAssets().find(row => row.id === id);
+    if (asset && /^serverTerminal(?:Read|Write|Resize|Close)?$/.test(input.action)) return groupAssets.call(asset, input.action, input);
+    if (asset && input.action === 'select') {
+      if (asset.kind === 'ssh' && !asset.hostId) throw fail('请从设备卡片打开 SSH 终端', 409);
+      if (publicOrigin && !workbenchOrigin) throw fail('请先配置独立 HTTPS 工作台域名', 409);
+      let proxy = proxies.get(id);
+      if (!proxy) {
+        const lease = await groupAssets.call(asset, 'workspace');
+        const published = publicOrigin ? registerProxy() : null;
+        proxy = await createDeviceProxy(lease, { webRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}),
+          parentOrigin: [origin, publicOrigin, ...parents].filter(Boolean).join(' '),
+          workbenchLease: () => groupAssets.call(asset, 'workspace') });
+        const previous = proxies.get(id);
+        if (previous) await proxy.close();
+        else { published?.attach(proxy); proxies.set(id, proxy); }
+        proxy = previous ?? proxy;
+      }
+      return { device: asset, url: await proxy.enter({ verifyPage: true }) };
+    }
     if (input.action === 'resources') return resources.resources(input);
     if (input.action === 'callDevice') return resources.callDevice(input);
     if (input.action === 'sessionAction') {
@@ -222,7 +260,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     if (input.action === 'groupLeave' && group) { await group.remove(group.localId); return group.status(); }
     if (input.action === 'resourceScope') return { scope: registry.scope() };
     if (input.action === 'setResourceScope') return { scope: await registry.setScope(input.scope) };
-    if (input.action === 'list') { const data = registry.list(); return { ...data, devices: data.devices.map(decorate), ...(group ? { group: group.status() } : {}), relayJob: manager?.activeRelayJob?.() ?? null, capabilities: { ssh: Boolean(manager), serverManagement, sshAgent: serverManagement && await manager.agentAvailable(), serverTerminalResize: serverManagement, relayDeploy: Boolean(manager?.deployRelay) && typeof hostAdmin === 'function', hostAdmin: typeof hostAdmin === 'function' } }; }
+    if (input.action === 'list') { const data = devices(); return { ...data, devices: data.devices.concat(otherMembers(data.devices)), ...(group ? { group: group.status() } : {}), relayJob: manager?.activeRelayJob?.() ?? null, capabilities: { ssh: Boolean(manager), serverManagement, sshAgent: serverManagement && await manager.agentAvailable(), serverTerminalResize: serverManagement, relayDeploy: Boolean(manager?.deployRelay) && typeof hostAdmin === 'function', hostAdmin: typeof hostAdmin === 'function' } }; }
     const hostActions = { hostRelayTest: 'relay-test', hostRelayPoolConfigure: 'relay-pool-configure', hostStatus: 'status', hostConfigure: 'configure', hostPairing: 'pairing', hostConfirm: 'confirm', hostReject: 'reject', hostRevoke: 'revoke', hostRenameDevice: 'rename-device' };
     if (Object.hasOwn(hostActions, input.action)) {
       if (typeof hostAdmin !== 'function') throw fail('此客户端不支持本机连接管理，请更新应用');
@@ -331,6 +369,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       id = registry.get(id).id;
       await manager?.disconnect?.(id);
       await registry.remove(id);
+      if (!publicOrigin) await groupAssets?.removeLocal(id);
       resources.invalidate(id);
       const proxy = proxies.get(id);
       proxies.delete(id);
@@ -411,8 +450,11 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   origin = 'http://127.0.0.1:' + server.address().port;
   return {
     origin, api, groupResourceApi, ...resources, devices, acceptReturn,
+    localAssets,
+    assetTarget(id) { return workbenchRoute(registry.get(id)); },
     async invalidateGroup(hostIds) {
-      const ids = new Set(hostIds.flatMap(hostId => [hostId, registry.findByHostId(hostId)?.id].filter(Boolean)));
+      const ids = new Set([...hostIds.flatMap(hostId => [hostId, registry.findByHostId(hostId)?.id].filter(Boolean)),
+        ...[...proxies.keys()].filter(id => id.startsWith('asset-') && !sharedAssets().some(row => row.id === id))]);
       await Promise.allSettled([...ids].map(async id => {
         resources.invalidate(id);
         const proxy = proxies.get(id);

@@ -47,23 +47,28 @@ export function verifyInterruptedTranscript(events, saved) {
   }
 }
 
-/** Lock the original official session, inspect it, then queue the same run; no Agent executes here. */
+/** Inspect the original session under the live writer or a cold write handle. */
 export async function requestInterruptedContinuation({ ctx, database, assignmentId, fence, instructionRevision, readPolicy, signal, now = Date.now() }) {
   signal.throwIfAborted();
   const assignment = database.getAssignment(assignmentId), task = assignment && database.getTask(assignment.taskId);
   const run = database.runs(assignmentId).find(item => item.fence === fence);
-  if (!assignment || assignment.state !== 'uncertain' || assignment.fence !== fence || !run || run.state !== 'uncertain'
+  if (!assignment || !['uncertain', 'failed'].includes(assignment.state) || assignment.fence !== fence || !run || !['uncertain', 'verifying', 'failed'].includes(run.state)
     || assignment.stopRequest || !task || taskExecutionBlocked(task)) throw fail('FENCING_CONFLICT', 'Original execution is not available for continuation');
-  if (task.instructionRevision !== instructionRevision || assignment.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Original execution requirements changed');
+  if (task.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Original execution requirements changed');
   if (!database.getWorkerExecutionState(run.id)?.models?.length) throw fail('WORKER_MODEL_ROUTE', 'Original frozen Worker model is unavailable');
   if (database.attentions(task.id).some(row => row.state === 'waiting')) throw fail('EXECUTION_PAUSE_UNVERIFIED', 'Original execution is waiting for a user answer');
   const persistence = recoveryStorage(ctx);
   if (!persistence?.open || !ctx.agents?.get || !ctx.agents?.resume) throw fail('SESSION_UNAVAILABLE', 'Official session recovery is unavailable');
-  if (ctx.agents.get(run.sessionId)) throw fail('SESSION_STILL_LIVE', 'Original execution still owns its session');
-  const handle = await persistence.open(run.sessionId, 'write', { signal });
+  const live = ctx.agents.get(run.sessionId);
+  const idle = () => live?.status === 'idle' && live.session?.id === run.sessionId && ctx.agents.get(run.sessionId) === live;
+  if (live && (!idle() || !live.session.snapshotEvents || !ctx.sessions?.flush))
+    throw fail('SESSION_STILL_LIVE', 'Original execution has not reached an idle boundary');
+  const handle = live ? null : await persistence.open(run.sessionId, 'write', { signal });
   try {
-    if (handle.id !== run.sessionId || handle.access !== 'write') throw fail('SESSION_UNAVAILABLE', 'Original session writer ownership could not be verified');
-    const log = await handle.read(0, undefined, { signal });
+    if (handle && (handle.id !== run.sessionId || handle.access !== 'write')) throw fail('SESSION_UNAVAILABLE', 'Original session writer ownership could not be verified');
+    if (live && await ctx.sessions.flush(live.session) === false) throw fail('SESSION_UNAVAILABLE', 'Original session could not be flushed');
+    if (live && !idle()) throw fail('SESSION_STILL_LIVE', 'Original execution has not reached an idle boundary');
+    const log = live ? { events: live.session.snapshotEvents() } : await handle.read(0, undefined, { signal });
     const events = log.events || [], last = events.at(-1);
     if (!events.some(event => event.type === 'turn/start') || !Number.isSafeInteger(last?.seq)) throw fail('EVIDENCE_MISMATCH', 'Original execution has no verifiable turn');
     const executionEffects = assertInterruptedToolsSettled(events);
@@ -78,8 +83,10 @@ export async function requestInterruptedContinuation({ ctx, database, assignment
       ...(run.environment ? { environment: run.environment } : {}), runId: run.id, sessionId: run.sessionId, interrupted: true };
     const policy = await readPolicy();
     signal.throwIfAborted();
+    if (live && (!idle() || executionEvidence({ events: live.session.snapshotEvents() }).transcript.hash !== evidence.transcript.hash))
+      throw fail('SESSION_STILL_LIVE', 'Original execution changed during continuation admission');
     const result = database.queueInterruptedContinuation(assignmentId, { fence, runId: run.id, instructionRevision,
       evidence, now, mandate: task.mandate, validateMandate: mandate => validateTaskMandate(mandate, { policy }) });
     return { state: 'queued', assignment: result };
-  } finally { await handle.close(); }
+  } finally { await handle?.close(); }
 }

@@ -101,6 +101,9 @@ test('installer defers only post-commit old-tree cleanup and queues it before en
   assert.match(install, /\$dshOldMoved == "1"[\s\S]*StrCpy \$benchgoRetiredDirectory \$dshOldDirectory\n\s*StrCpy \$dshOldMoved ""/);
   assert.ok(install.indexOf('StrCpy $dshOldMoved ""') < install.indexOf('!insertmacro dshOfficialCustomInstall'));
   assert.ok(install.indexOf('!insertmacro dshOfficialCustomInstall') < install.indexOf('nsExec::ExecToStack'));
+  assert.match(install, /Push \$RestartStatusJob\n\s*StrCpy \$RestartStatusJob 0\n\s*!insertmacro dshOfficialCustomInstall\n\s*Pop \$RestartStatusJob/);
+  assert.ok(install.indexOf('nsExec::ExecToStack') < install.indexOf('kernel32::CloseHandle(p $RestartStatusJob)'));
+  assert.ok(install.indexOf('kernel32::CloseHandle(p $RestartStatusJob)') < install.indexOf('MessageBox'));
   assert.match(install, /--retired-directory "\$benchgoRetiredDirectory"/);
   assert.doesNotMatch(install, /StrCpy \$dshOldMoved "1"|RMDir|dshNewMoved/);
   const native = (await readFile(new URL('../../deepseek-harness/apps/desktop/scripts/installer-directories.nsh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');

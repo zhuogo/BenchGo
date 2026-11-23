@@ -6,11 +6,21 @@ import { randomBytes, createHash } from 'node:crypto';
 import { remoteAgent, remoteJson, relayTargetHeaders, upstreamOrigin } from './remote.mjs';
 const secret = () => randomBytes(32).toString('base64url');
 /** Each host has its own origin. Remote scripts cannot read the device centre. */
-export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuccess, webRoot, publicOrigin, publicPrefix = '' } = {}) {
+export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuccess, webRoot, publicOrigin, publicPrefix = '', workbenchLease } = {}) {
   const agent = remoteAgent(target), tickets = new Map(), sessions = new Set(), sockets = new Set();
   const remoteOrigin = upstreamOrigin(target);
-  let origin, remoteCookie, closed = false;
+  let origin, remoteCookie, closed = false, leaseUntil = 0, renewing;
   const upstream = async () => {
+    if (workbenchLease) {
+      if (leaseUntil > Date.now()) return;
+      renewing ??= Promise.resolve(remoteCookie ? workbenchLease() : target).then(lease => {
+        if (lease.url !== target.url || lease.pin !== target.pin || lease.relayTarget !== target.relayTarget || lease.hostId !== target.hostId)
+          throw new Error('共享工作台路线已更新，请重新连接');
+        remoteCookie = lease.cookie.split(';')[0];
+        leaseUntil = Date.now() + 55_000;
+      }).finally(() => { renewing = undefined; });
+      return renewing;
+    }
     const { headers } = await remoteJson(target, '/link/api/workbench', {}, { agent });
     const cookie = headers['set-cookie']?.find(value => value.startsWith('dsh_link_workbench='))?.split(';')[0];
     if (!cookie) throw new Error('主机未签发工作台授权');
@@ -49,6 +59,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
       if (url.pathname === '/local-proxy.js' && req.method === 'GET') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end('globalThis.__DSH_LINK_LOCAL_PROXY__=true;'); return; }
       if (webRoot && url.pathname === '/link/workbench/workbench.js' && req.method === 'GET') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end(await readFile(new URL('workbench.js', webRoot))); return; }
       if (!url.pathname.startsWith('/link/workbench/') || !['GET', 'HEAD', 'POST'].includes(req.method)) throw Object.assign(new Error('路径未授权'), { status: 403 });
+      if (workbenchLease) await upstream();
       const headers = {};
       for (const [key, value] of Object.entries(req.headers)) if (value !== undefined && !['cookie','authorization','host','origin','referer','connection','upgrade','sec-websocket-key','sec-websocket-version','x-benchgo-relay-target'].includes(key)) headers[key] = value;
       Object.assign(headers, relayTargetHeaders(target));

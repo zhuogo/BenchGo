@@ -42,6 +42,15 @@ test('sidebar reads private Router identities through the optional assistant ser
   assert.deepEqual((await api({ action: 'state' })).privateSessionIds, ['main-router', 'old-side-router']);
 });
 
+test('sidebar state includes the host workspace modification time with its membership', async t => {
+  const { ctx, api } = await setup(t);
+  const workspace = ctx.workspaceRegistry.get('shared');
+  workspace.updatedAt = '2026-11-23T03:14:20.000Z';
+  const [project] = (await api({ action: 'state' })).projects;
+  assert.equal(project.updatedAt, workspace.updatedAt);
+  assert.deepEqual(project.sessionIds, workspace.sessionIds);
+});
+
 test('project API registers a real host absolute path and remembers it across sidebar reloads', async t => {
   const { route, dir, api, ctx } = await setup(t);
   const path = `${dir}/../${dir.split(/[\\/]/).at(-1)}`;

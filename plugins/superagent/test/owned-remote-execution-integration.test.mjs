@@ -88,16 +88,20 @@ async function fixture(t, { external = false } = {}) {
       return runtime ||= createOrchestrationRuntime({ ctx, store, execute: async () => assert.fail('Remote work must use B') });
     },
     manage(text, operation) {
-      const human = { id: operation, content: [{ type: 'text', text }], source: { kind: 'user' } };
+      return this.routerTool(text, 'assistant_execution_manage', { taskId: task.id, operation });
+    },
+    routerTool(text, name, args) {
+      const human = { id: name, content: [{ type: 'text', text }], source: { kind: 'user' } };
       const agent = { id: source.sessionId, status: 'running', session: { header: { origin: 'main' },
         snapshotEvents: () => [{ type: 'turn/start' }, { type: 'user/message', data: human }] } };
       const tools = new Map();
+      const orchestrationRuntime = this.scheduler();
       createRouterTools({ ctx: { ...ctx, agents: { get: id => id === agent.id ? agent : undefined,
         currentInitiator: () => agent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } },
         store: { getState: async () => ({ mainSessionId: agent.id }) }, database, shutdown: new AbortController(),
-        desktopTasks: createDesktopTaskAccess(database), orchestrationRuntime: this.scheduler() })(
+        desktopTasks: createDesktopTaskAccess(database, undefined, orchestrationRuntime.taskProgress), orchestrationRuntime })(
         { tools: { register(definition) { tools.set(definition.name, definition); } }, systemPrompt: { section() {}, context() {} } }, { agent, threadId: 'main' });
-      return tools.get('assistant_execution_manage').execute({ taskId: task.id, operation }, { agent });
+      return tools.get(name).execute(args, { agent });
     },
     revise(revision) {
       const trigger = human(`owner revision ${revision}`, `revision-${revision}`);
@@ -233,6 +237,8 @@ test('official peer progress reaches the owner timeline and catches up after a d
   const app = await fixture(t), instance = app.official.instances[0];
   const runtime = app.scheduler();
   const read = () => runtime.state({ taskId: app.task.id })[0];
+  const readRouter = async () => (await app.routerTool('他做到哪了？', 'assistant_tasks',
+    { op: 'get', id: app.task.id, section: 'progress' })).task;
   const report = text => instance.append('assistant/message', { message: {
     role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text }],
   } });
@@ -246,6 +252,12 @@ test('official peer progress reaches the owner timeline and catches up after a d
   assert.equal(first.execution.worker.activitySource, 'report');
   assert.equal(first.execution.uncertainty, null);
   assert.equal(first.liveSummary?.blocker || '', '');
+  const running = await readRouter();
+  assert.equal(running.resultVersion, 0);
+  assert.equal(running.progress.worker.activity, '核对原始执行记录');
+  assert.equal(running.progress.worker.activitySource, 'report');
+  assert.ok(running.progress.worker.recent[0].time);
+  assert.equal(running.progress.appliedInstructionRevision, 1);
   const facts = runtime.executionFacts.page({ after: cursor });
   assert.ok(facts.entries.some(row => row.taskId === app.task.id));
 
@@ -256,6 +268,11 @@ test('official peer progress reaches the owner timeline and catches up after a d
   const disconnected = read();
   assert.ok(disconnected.execution.uncertainty);
   assert.ok(disconnected.execution.worker.history.some(row => row.activity === '核对原始执行记录'));
+  const stale = (await readRouter()).progress;
+  assert.equal(stale.phase, 'unknown');
+  assert.equal(stale.observed, false);
+  assert.equal(stale.worker.historical, true);
+  assert.ok(stale.worker.recent.some(row => row.activity === '核对原始执行记录'));
 
   await app.restartOwner();
   app.offline(false);

@@ -69,7 +69,10 @@ internal fun orderedDeviceRoutes(identity: Identity): List<DeviceRoute> {
         val relayTarget = route.optString("relayTarget").ifBlank { if (kind == "relay" && url == identity.url) identity.relayTarget else "" }
         DeviceRoute(url, route.getString("pin"), kind, route.optString("relayId"), route.optInt("priority", index), relayTarget)
     }
-    return orderDeviceRouteCandidates(candidates, identity.url)
+    val ordered = orderDeviceRouteCandidates(candidates, identity.url)
+    if (identity.groupId.isEmpty() || ordered.any { it.url == identity.url && it.pin == identity.pin && it.relayTarget == identity.relayTarget }) return ordered
+    val admitted = DeviceRoute(identity.url, identity.pin, if (identity.pin.isEmpty()) "public" else "direct", relayTarget = identity.relayTarget)
+    return if (admitted.kind == "direct") listOf(admitted) + ordered else ordered + admitted
 }
 
 internal fun orderDeviceRouteCandidates(candidates: List<DeviceRoute>, admittedUrl: String): List<DeviceRoute> =

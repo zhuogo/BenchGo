@@ -19,7 +19,8 @@ function fixture(t) {
     return row;
   }
   const service = createDesktopTaskControl({ ctx, database });
-  return { database, events, ctx, ownerAgent, task, control: (id, operation = 'supplement', options = {}) => service.control({ id, operation }, { agent: ownerAgent }, { ownerAgent, ...options }) };
+  return { database, events, ctx, ownerAgent, task, control: (id, operation = 'supplement', options = {}, messageOptions = {}) =>
+    service.control({ id, operation, ...messageOptions }, { agent: ownerAgent }, { ownerAgent, ...options }) };
 }
 
 for (const subscribed of [true, false]) test(`supplement selects one task with subscribed=${subscribed}, preserves the input and deduplicates`, t => {
@@ -98,15 +99,22 @@ for (const threadId of ['main', 'side']) test(`trusted local ${threadId} manages
     const args = { threadId, managementScope };
     assert.equal(access.read(row.id, managementScope).id, row.id);
     assert.ok(access.query(managementScope).tasks.some(item => item.id === row.id));
-    assert.throws(() => f.control(row.id, 'supplement', args), /不属于当前会话/);
+    const message = f.control(row.id, 'supplement', args);
+    assert.equal(message.taskId, row.id);
+    assert.equal(f.database.taskInputs(row.id)[0].snapshot.workerMessage, true);
+    f.events[1].data.id = `pause-${index}`;
     const paused = f.control(row.id, 'pause', args);
     assert.equal(paused.task.executionControl.paused, true);
-    const resumed = f.control(row.id, 'resume', args);
-    assert.deepEqual(resumed.task.executionControl, {});
+    f.events[1].data.id = `resume-${index}`;
+    f.events[1].data.content[0].text = '继续';
+    const resumed = f.control(row.id, 'supplement', args, { text: '继续执行原工单', resume: true });
+    assert.equal(resumed.operation, 'supplement');
+    assert.equal(f.database.getTrigger(resumed.triggerId).content, '继续');
+    assert.deepEqual(f.database.getTask(row.id).executionControl, {});
     f.events[1].data.id = `cancel-${index}`;
     assert.equal(f.control(row.id, 'cancel', args).task.executionControl.stopped, true);
     assert.deepEqual(f.database.getTask(row.id).mandate, row.mandate);
-    assert.throws(() => f.control(row.id, 'resume', args), { code: 'TASK_STOPPED' });
+    assert.throws(() => f.control(row.id, 'supplement', args, { resume: true }), /已完成或停止/);
   }
 });
 
@@ -115,6 +123,22 @@ test('model-shaped global scope cannot bypass task ownership', t => {
   const managementScope = { owner: 'desktop-owner', mode: 'global' };
   assert.throws(() => f.control(row.id, 'cancel', { managementScope }), /不属于当前会话/);
   assert.throws(() => createDesktopTaskAccess(f.database).read(row.id, managementScope), /无效任务归属范围/);
+});
+
+test('a message is saved during pause and a later continue request waits for the original Worker', t => {
+  const f = fixture(t), task = f.task();
+  f.database.createAssignment(task.id, {});
+  f.database.claimAssignments('worker', { validateMandate: () => true });
+  f.control(task.id, 'pause');
+  f.events[1].data.id = 'add-while-pausing';
+  f.control(task.id, 'supplement', {}, { text: '完成后附上出处' });
+  assert.deepEqual(f.database.getTask(task.id).executionControl, { pauseRequested: true, paused: false });
+  f.events[1].data.id = 'continue-while-pausing';
+  const receipt = f.control(task.id, 'supplement', {}, { text: '现在继续', resume: true });
+  assert.equal(receipt.duplicate, false);
+  assert.equal(f.control(task.id, 'supplement', {}, { text: '现在继续', resume: true }).duplicate, true);
+  assert.deepEqual(f.database.getTask(task.id).executionControl, { pauseRequested: true, paused: false, resumeAfterPause: true });
+  assert.deepEqual(f.database.pendingTaskInputs(task.id).map(input => input.snapshot.text), ['完成后附上出处', '现在继续']);
 });
 
 for (const operation of ['pause', 'cancel']) test(`one explicit owner message can ${operation} multiple selected tasks without input collisions`, async t => {

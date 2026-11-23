@@ -226,7 +226,7 @@ export function createRemoteAssignmentExecutor({ ctx, database, readPolicy, comm
       if (database.remoteCommand(assignment.id, requestKey(remote.executionId, 'input', `context:${input.id}`))) continue;
       const trigger = database.getTrigger(input.triggerId);
       if (trigger?.content?.trim()) command(assignment, 'input', { kind: 'context', instructionRevision: task.instructionRevision,
-        text: trigger.content, triggerIds: [input.triggerId] }, `context:${input.id}`);
+        text: input.snapshot?.text ?? trigger.content, triggerIds: [input.triggerId] }, `context:${input.id}`);
     }
   }
   async function reconcile(assignment, requestSignal) {

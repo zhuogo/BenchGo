@@ -92,7 +92,7 @@ export function ServerTerminal({ runtime, device, allowResize, onReconnect }) {
     {failure && <p className="dc-error" role="alert">{failure.message}</p>}
     {closed && <div className="dc-actions">
       {!failure && <p className="dc-note" role="status">终端已关闭</p>}
-      {failure?.code === 'SSH_AUTH_REQUIRED'
+      {failure?.code === 'SSH_AUTH_REQUIRED' && onReconnect
         ? <button type="button" className="dc-button dc-primary" onClick={onReconnect}>重新认证 SSH</button>
         : <button type="button" className="dc-button" onClick={() => setAttempt(value => value + 1)}>重新连接终端</button>}
     </div>}

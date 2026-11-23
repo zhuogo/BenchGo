@@ -9,7 +9,7 @@ import { installWorkerSubagents } from './worker-subagents.mjs';
 import { installWorkerProgressPrompt } from './worker-progress.mjs';
 import { installWorkerVault } from './worker-vault.mjs';
 import { installSubscriptionInbox } from './subscription-inbox.mjs';
-import { createExecutionTaskInputService } from './execution-task-input.mjs';
+import { createTaskRevisionService } from './task-revision-service.mjs';
 import { continueWorkerContext } from './worker-context-continuation.mjs';
 import { installProjectRules } from './project-rules.mjs';
 import { executionEvidence, executionCompletion } from './execution-evidence.mjs';
@@ -24,16 +24,17 @@ import { attachExecutionSession } from './execution-session.mjs';
 import { modelFallbackSource, fallbackCallSignature as toolSignature } from './model-fallback.mjs';
 import { createSessionRoleAssembly } from './session-role-assembly.mjs';
 import { executeExternalWorker } from './external-worker.mjs';
+import { atSessionBoundary } from './router-session-attachment.mjs';
 
 const executionBindings = new WeakMap();
 export const workerExecutionBinding = agent => executionBindings.get(agent);
 
 /** Uses the host agent lifecycle and transcript; no separate model/tool loop. */
-export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readSourceContext, notifyExecutionInput }) {
+export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPolicy, authorizeAction, readSourceContext, onTaskTitleChanged }) {
   if (!ctx?.agents?.create || !ctx?.sessionQuery?.readSession) throw new Error('Harness execution services unavailable');
   if (typeof authorizeAction !== 'function') throw new Error('Worker requires a current action authorizer');
   const root = resolve(workspaceRoot);
-  const processExecutionInput = createExecutionTaskInputService({ ctx, database, readPolicy, notifyRouter: notifyExecutionInput });
+  const revisions = createTaskRevisionService({ ctx, database, readPolicy });
   return async (assignment, { task, signal, renew, onReady }) => {
     signal.throwIfAborted();
     const previous = database.runs(assignment.id);
@@ -52,7 +53,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
     const run = resumed || database.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence,
       sessionId, directory, workingDirectory: project?.path || directory });
     const ownership = { owner: assignment.owner, fence: assignment.fence };
-    let handle, settle, reject, attention, subagents, convergence, primaryFailure, waitingPause = false, started = false;
+    let handle, attached, settle, reject, attention, subagents, convergence, primaryFailure, waitingPause = false, started = false;
     let executionPhase = 'setup', producedResult;
     const toolReceipts = new Map(Object.entries(resumed?.evidence?.toolReceipts || {}));
     const effectsOf = log => executionEffects(log, toolReceipts);
@@ -159,7 +160,24 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         installWorkerProgressPrompt(scope);
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are a BenchGo task worker.' });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
-        const inbox = installSubscriptionInbox(scope, agent, { database, assignment, run, processExecutionInput, signal });
+        const inbox = installSubscriptionInbox(scope, agent, { database, assignment, run, onTaskTitleChanged });
+        scope.tools?.register?.({
+          name: 'benchgo_adopt_task_message',
+          description: 'When adopting a delivered message that changes the goal or acceptance, record the full updated target, a short title for the actual goal, and the triggerId from that message. Preserve unaffected requirements. Use ordinary replies for questions and continuation, and the existing approval flow for changes to authority.',
+          parameters: { type: 'object', additionalProperties: false, properties: {
+            triggerId: { type: 'string' }, target: { type: 'string' }, acceptance: { type: 'string' },
+            title: { type: 'string' }, reason: { type: 'string' },
+          }, required: ['triggerId', 'target', 'title', 'reason'] },
+          output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+          async execute(args, exec) {
+            exec.signal.throwIfAborted();
+            if (exec.agent !== agent) throw new Error('当前工具仅供此工单的 Worker 使用');
+            const previousTitle = database.getTask(task.id).title;
+            const saved = await revisions.adoptWorkerMessage(args, { assignment, run, sessionId, signal: exec.signal });
+            if (saved.title !== previousTitle) onTaskTitleChanged?.(task.id);
+            return { title: saved.title, instructionRevision: saved.instructionRevision };
+          },
+        });
         if (inbox.inputGateInstalled) executionBindings.set(agent, Object.freeze({ taskId: task.id,
           assignmentId: assignment.id, runId: run.id, sessionId, owner: assignment.owner, fence: assignment.fence }));
         const currentSnapshot = () => inbox.currentSnapshot?.() || { target: task.target, acceptance: task.acceptance, mandate: task.mandate, context: [], instructionRevision: task.instructionRevision };
@@ -223,7 +241,16 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         scope.on('agent/error', ({ error }) => { if (!pendingFallback) reject(error); });
       };
       executionPhase = resumed ? 'resume' : 'create';
-      handle = resumed
+      const live = assignment.interruptedContinuation && ctx.agents.get?.(sessionId);
+      if (live) {
+        if (workerExecutionBinding(live)) throw Object.assign(new Error('Original Worker is still attached'), { code: 'SESSION_STILL_LIVE' });
+        handle = await atSessionBoundary(live, { signal, current: () => ctx.agents.get(sessionId) === live }, async () => {
+          attached = live.ctx.plugin({ name: 'benchgo-worker-session', apply: scope => setup(scope, live) });
+          await attached;
+          return { agent: live, dispose: () => attached.dispose() };
+        });
+        if (!handle) throw Object.assign(new Error('Original Worker session changed during continuation'), { code: 'SESSION_STILL_LIVE' });
+      } else handle = resumed
         ? await ctx.agents.resume({ resumeSessionId: sessionId, signal, setup })
         : await ctx.agents.create({ sessionId, meta: { cwd: workingDirectory, agentPreset: role.expected.agentPreset }, setup });
       await role.reconcile();
@@ -346,7 +373,8 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
       if (handle?.agent) executionBindings.delete(handle.agent);
       try {
         await subagents?.drain?.();
-        await handle?.dispose();
+        if (handle) await handle.dispose();
+        else await attached?.dispose();
         database.confirmExecutionStopped(assignment.id, ownership);
       } catch (cleanupError) {
         if (!primaryFailure) throw cleanupError;

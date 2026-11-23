@@ -43,7 +43,7 @@ test('duplicate pending IDs are acknowledged and mismatched content is rejected'
 
 test('a durable execution notice retains internal source identity, hides from the human queue and reconciles without replay', async () => {
   const f = fixture();
-  const args = { text: 'PRIVATE HOST INPUT', requestId: 'execution-input:native', hostExecutionInput: { taskId: 'task', triggerId: 'native' } };
+  const args = { text: 'PRIVATE HOST INPUT', requestId: 'execution-input:native', hostCleanupNotice: { taskId: 'task', triggerId: 'native' } };
   await f.inbox.enqueue(args);
   assert.equal(f.sent[0].source.kind, 'benchgo-execution-input');
   assert.deepEqual(await f.inbox.state(), []);
