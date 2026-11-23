@@ -27,7 +27,7 @@ class PairingLinkTest {
         val encoded = java.net.URLEncoder.encode(target, "UTF-8")
         val expected = PairingLink("https://relay.example", "", "one-time-code", "", target)
         assertEquals(expected, parsePairingLink("https://relay.example/link/?relayTarget=$encoded#code=one-time-code"))
-        assertEquals(expected, parsePairingLink("benchgo://pair?url=https%3A%2F%2Frelay.example&code=one-time-code&relayTarget=$encoded"))
+        assertEquals(expected, parsePairingLink("benchgo://pair?url=https%3A%2F%2Frelay.example&pin=&code=one-time-code&relayTarget=$encoded"))
         assertTrue(runCatching { parsePairingLink("https://relay.example/link/?relayTarget=unknown#code=one-time-code") }.isFailure)
     }
 
