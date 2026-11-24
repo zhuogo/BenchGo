@@ -1,8 +1,9 @@
-import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_UPDATE_CONFIG, normalizeUpdateConfig, fetchVerifiedRelease, fetchUpdateArtifact, fetchLatestDownloadCatalog, compareVersions, isNewerVersion, resolveUpdateUrl } from '../shared/update-feed.mjs';
+import { DEFAULT_UPDATE_CONFIG, normalizeUpdateConfig, fetchVerifiedRelease, fetchVerifiedDownloadCatalog, fetchReleaseArtifact, fetchUpdateArtifact, fetchLatestDownloadCatalog, compareVersions, isNewerVersion, resolveUpdateUrl } from '../shared/update-feed.mjs';
 import { prepareRelease, activateRelease, getInstallState } from '../shared/plugin-install.mjs';
+import { extractServerUpdateSeed, selectServerArtifact } from '../shared/server-resources.mjs';
 import { assertSameOrigin } from '../shared/http.mjs';
 import { readLimited } from '../shared/http.mjs';
 
@@ -23,11 +24,17 @@ export async function desktopApplicationVersion(executable = process.execPath, r
 
 /** Each immutable release is staged before one profile manifest switch; loaded code stays intact. */
 export async function createUpdates({ directory, profile, runtime, version, releaseVersion, engineVersion, appVersion, isBusy = () => false,
-  installation = 'desktop', fetcher = globalThis.fetch, publicKey, install = { prepareRelease, activateRelease, getInstallState } }) {
+  installation = 'desktop', platform = process.platform, arch = process.arch, fetcher = globalThis.fetch, publicKey,
+  install = { prepareRelease, activateRelease, getInstallState } }) {
   const configFile = join(directory, 'updates.json');
   const lifetime = new AbortController();
   const updateFetch = (url, options = {}) => fetcher(url, { ...options, signal: AbortSignal.any([lifetime.signal, ...(options.signal ? [options.signal] : [])]) });
-  let config = { ...DEFAULT_UPDATE_CONFIG }, phase = 'idle', release = null, error = '', checkedAt = null, task = null, lastAction = null, closed = false, progress = null, staged = null;
+  let config = { ...DEFAULT_UPDATE_CONFIG }, phase = 'idle', release = null, serverArtifact = null, error = '', checkedAt = null, task = null, lastAction = null, closed = false, progress = null, staged = null;
+  const windowsTarget = platform === 'win32' && arch === 'x64';
+  const windowsDesktop = windowsTarget && installation === 'desktop';
+  const linuxServer = installation === 'server' && platform === 'linux' && arch === 'x64';
+  const deploymentReason = installation === 'server' ? '请通过设备中心或服务器部署入口更新此主机' : '请使用适配当前主机系统和架构的安装包更新';
+  const pluginArtifact = () => linuxServer ? serverArtifact : windowsTarget ? release?.plugin : null;
   let confirmedReleaseVersion = releaseVersion;
   let downloads, downloadsRead, downloadsExpiresAt = 0;
   const readDownloads = () => {
@@ -46,11 +53,11 @@ export async function createUpdates({ directory, profile, runtime, version, rele
     if (!release) return { currentApp, engineCompatible, appCompatible, compatible: false, reason: '请先检查更新', needsApp };
     if (!engineVersion) reason = '无法识别当前引擎版本，暂不能安装插件';
     else if (compareVersions(engineVersion, release.engine.min) < 0) {
-      needsApp = installation === 'desktop';
+      needsApp = windowsDesktop;
       reason = needsApp ? '当前引擎版本过旧，请先升级应用' : '当前引擎版本过旧，请由维护者升级服务器引擎';
     } else if (release.engine.max && compareVersions(engineVersion, release.engine.max) > 0) reason = '此插件尚不支持当前较新的引擎，请等待兼容版本';
     else engineCompatible = true;
-    if (installation === 'desktop' && release.minAppVersion) {
+    if (windowsDesktop && release.minAppVersion) {
       appCompatible = !!currentApp && compareVersions(currentApp, release.minAppVersion) >= 0;
       if (!appCompatible && !reason) {
         needsApp = !!currentApp;
@@ -66,12 +73,12 @@ export async function createUpdates({ directory, profile, runtime, version, rele
     // A source-deployed host has no desktop application to compare. Unknown is
     // not an older version, including desktop profiles without app metadata.
     const pluginAvailable = !!release && !restartRequired && isNewerVersion(release.plugin.version, version);
-    const appAvailable = !!release?.app && !!currentApp && isNewerVersion(release.app.version, currentApp);
+    const appAvailable = windowsDesktop && !!release?.app && !!currentApp && isNewerVersion(release.app.version, currentApp);
     const unavailable = closed || !!task;
     // App-only and notes-only releases may reuse an older feature archive.
     // Its embedded identity is a baseline; only a successful signed check and
     // satisfied host components can confirm a newer public release identity.
-    const knownApp = installation !== 'desktop' || !release?.app || !!currentApp;
+    const knownApp = !windowsDesktop || !release?.app || !!currentApp;
     if (release?.releaseVersion && checkedAt && phase === 'idle' && !unavailable && !restartRequired
       && compatible && knownApp && !pluginAvailable && !appAvailable
       && (!confirmedReleaseVersion || isNewerVersion(release.releaseVersion, confirmedReleaseVersion))) confirmedReleaseVersion = release.releaseVersion;
@@ -82,13 +89,14 @@ export async function createUpdates({ directory, profile, runtime, version, rele
     else if (task) decision = decide('check', pluginAvailable || appAvailable, false, phase === 'downloading' ? '正在准备更新' : '正在检查更新');
     else if (phase === 'error' && lastAction === 'check') decision = decide('check', pluginAvailable || appAvailable, true, error || '更新检查失败，请重试');
     else if (!release) decision = decide('check', false, true, error || (phase === 'unpublished' ? '更新通道尚未就绪' : '检查可用更新'));
-    else if (pluginAvailable && installation === 'server' && !state.managed) decision = decide('deployment', true, false, '此主机由服务器部署管理，请由维护者更新', release.plugin.version);
+    else if (pluginAvailable && installation === 'server' && !state.managed) decision = decide('deployment', true, false, deploymentReason, release.plugin.version);
     else if (pluginAvailable && !compatible) {
       const appResolvesMinimum = !release.minAppVersion || release.app && compareVersions(release.app.version, release.minAppVersion) >= 0;
       decision = needsApp && appAvailable && appResolvesMinimum
         ? decide('app', true, !busy, busyReason || reason, release.app.version)
         : decide('blocked', true, false, reason, release.plugin.version);
-    } else if (pluginAvailable && !state.managed) decision = appAvailable
+    } else if (pluginAvailable && !pluginArtifact()) decision = decide('deployment', true, false, deploymentReason, release.plugin.version);
+    else if (pluginAvailable && !state.managed) decision = appAvailable
       ? decide('app', true, !busy, busyReason || '当前安装方式需要先升级应用，才能独立更新插件', release.app.version)
       : decide('blocked', true, false, '当前安装方式不支持独立更新，请先安装支持插件更新的新版应用', release.plugin.version);
     else if (pluginAvailable) decision = decide('plugin', true, !busy, busyReason, release.plugin.version);
@@ -104,8 +112,8 @@ export async function createUpdates({ directory, profile, runtime, version, rele
       managed: !!state.managed, busy, restartRequired, checkedAt, error, progress,
       decision,
       canInstall: decision.action === 'plugin' && decision.enabled,
-      release: release ? { ...release, plugin: { ...release.plugin, available: pluginAvailable, compatible, engineCompatible, appCompatible, reason: compatible ? undefined : reason },
-        ...(release.app ? { app: { ...release.app, available: appAvailable, url: resolveUpdateUrl(release.app.url, config) } } : {}),
+      release: release ? { ...release, plugin: { ...(windowsTarget ? release.plugin : { version: release.plugin.version }), available: pluginAvailable, compatible, engineCompatible, appCompatible, reason: compatible ? undefined : reason },
+        ...(windowsDesktop && release.app ? { app: { ...release.app, available: appAvailable, url: resolveUpdateUrl(release.app.url, config) } } : { app: undefined }),
         ...(release.android ? { android: { ...release.android, url: resolveUpdateUrl(release.android.url, config) } } : {}) } : null,
     };
   };
@@ -113,7 +121,7 @@ export async function createUpdates({ directory, profile, runtime, version, rele
     lastAction = action;
     error = '';
     task = Promise.resolve().then(work).catch(failure => {
-      if (failure.code === 'UPDATE_UNPUBLISHED') { release = null; error = ''; phase = 'unpublished'; }
+      if (failure.code === 'UPDATE_UNPUBLISHED') { release = null; serverArtifact = null; error = ''; phase = 'unpublished'; }
       else { error = failure.message; phase = 'error'; }
     }).finally(() => { task = null; });
   };
@@ -144,14 +152,27 @@ export async function createUpdates({ directory, profile, runtime, version, rele
           const temporary = `${configFile}.${randomUUID()}.tmp`;
           try { await writeFile(temporary, JSON.stringify(next), { mode: 0o600 }); await rename(temporary, configFile); }
           finally { await rm(temporary, { force: true }); }
-          config = next; release = null; error = ''; phase = 'idle'; checkedAt = null; progress = null;
+          config = next; release = null; serverArtifact = null; error = ''; phase = 'idle'; checkedAt = null; progress = null;
           break;
         }
         case 'check': {
           phase = 'checking'; progress = null;
           start('check', async () => {
             const next = await fetchVerifiedRelease({ config, fetcher: updateFetch, publicKey });
+            let artifact = null;
+            if (linuxServer && next.releaseVersion && next.sourceSha && engineVersion === next.engine.min && isNewerVersion(next.plugin.version, version) && (await installed()).managed) {
+              const { catalog } = await fetchVerifiedDownloadCatalog({ releaseVersion: next.releaseVersion, config, fetcher: updateFetch, publicKey }).catch(failure => {
+                if (failure.code === 'UPDATE_UNPUBLISHED') throw new Error('当前发行尚未提供服务器下载目录，请稍后重新检查', { cause: failure });
+                throw failure;
+              });
+              const declaredPlugin = catalog.files.find(file => file.target === 'plugin');
+              if (catalog.sourceSha !== next.sourceSha || !declaredPlugin
+                || ['version', 'url', 'size', 'sha256'].some(key => declaredPlugin[key] !== next.plugin[key]))
+                throw new Error('服务器下载目录与已验签的更新清单不一致');
+              artifact = selectServerArtifact(catalog);
+            }
             release = next;
+            serverArtifact = artifact;
             checkedAt = new Date().toISOString(); phase = 'idle';
           });
           break;
@@ -162,31 +183,39 @@ export async function createUpdates({ directory, profile, runtime, version, rele
           const compatible = compatibility(state);
           if (!release || !compatible.compatible) throw conflict(compatible.reason);
           if (!isNewerVersion(release.plugin.version, version)) throw conflict('插件已是最新版本');
-          const selected = release;
+          const artifact = pluginArtifact();
+          if (!artifact) throw conflict(deploymentReason);
+          const targetVersion = release.plugin.version;
           phase = 'downloading'; progress = null;
           start('install', async () => {
-            const archive = join(state.root, `.download-${randomUUID()}.tar.gz`);
-            const stage = name => { progress = { stage: name, total: selected.plugin.size, transferred: selected.plugin.size, bytesPerSecond: 0, updatedAt: new Date().toISOString() }; };
+            let temporary;
+            const stage = name => { progress = { stage: name, total: artifact.size, transferred: artifact.size, bytesPerSecond: 0, updatedAt: new Date().toISOString() }; };
             try {
               await mkdir(state.root, { recursive: true, mode: 0o700 });
               let prepared;
-              if (staged?.root === state.root && staged.version === selected.plugin.version && staged.sha256 === selected.plugin.sha256 && staged.size === selected.plugin.size) {
+              if (staged?.root === state.root && staged.version === targetVersion && staged.sha256 === artifact.sha256 && staged.size === artifact.size) {
                 stage('verifying');
-                try { prepared = await install.prepareRelease({ root: state.root, version: selected.plugin.version, runtime }); }
+                try { prepared = await install.prepareRelease({ root: state.root, version: targetVersion, runtime }); }
                 catch (failure) { staged = null; throw failure; }
               } else {
-                await fetchUpdateArtifact(selected.plugin, { file: archive, config, fetcher: updateFetch, signal: lifetime.signal, onProgress: value => { progress = value; } });
+                temporary = await mkdtemp(join(state.root, '.download-'));
+                const archive = join(temporary, 'update.tar.gz');
+                const transport = { file: archive, config, fetcher: updateFetch, signal: lifetime.signal, onProgress: value => { progress = value; } };
+                if (linuxServer) await fetchReleaseArtifact(artifact, { ...transport, maxBytes: 512 * 1024 * 1024 });
+                else await fetchUpdateArtifact(artifact, transport);
                 if (closed) throw new Error('更新已取消');
                 stage('extracting');
-                prepared = await install.prepareRelease({ archive, root: state.root, version: selected.plugin.version, runtime });
-                staged = { root: state.root, version: selected.plugin.version, sha256: selected.plugin.sha256, size: selected.plugin.size };
+                const payload = linuxServer ? await extractServerUpdateSeed({ archive, directory: join(temporary, 'server'),
+                  artifact, pluginVersion: targetVersion, harnessVersion: engineVersion, signal: lifetime.signal }) : archive;
+                prepared = await install.prepareRelease({ archive: payload, root: state.root, version: targetVersion, runtime });
+                staged = { root: state.root, version: targetVersion, sha256: artifact.sha256, size: artifact.size };
               }
               if (closed) throw new Error('更新已取消');
               if (await isBusy()) throw conflict('下载期间有新任务开始，结束后再点更新');
               stage('activating');
               await install.activateRelease({ profile, runtime, release: prepared });
               phase = 'ready';
-            } finally { await rm(archive, { force: true }); }
+            } finally { if (temporary) await rm(temporary, { recursive: true, force: true }); }
           });
           break;
         }

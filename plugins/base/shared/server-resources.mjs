@@ -38,7 +38,7 @@ export function validateServerResourceDescriptor(value) {
   return value;
 }
 
-function selectServerArtifact(catalog) {
+export function selectServerArtifact(catalog) {
   const matches = catalog.files.filter(item => item.target === 'linux-server');
   if (matches.length !== 1) throw new Error('匹配发行未提供唯一 Linux 服务器部署包');
   const artifact = matches[0];
@@ -110,11 +110,12 @@ async function inspectArchive(archive, artifact, expected, signal) {
   const source = JSON.parse(captures.get('release-source.json'));
   if (source.schemaVersion !== 1 || !/^[a-f0-9]{40}$/.test(source.sourceSha) || source.version !== artifact.version
     || source.platform !== 'linux' || source.arch !== 'x64' || source.kind !== 'server' || source.pluginVersion !== expected.pluginVersion
-    || source.engine?.version !== expected.harnessVersion || source.engine?.commit !== expected.harnessCommit)
+    || source.engine?.version !== expected.harnessVersion || !/^[a-f0-9]{40}$/.test(source.engine?.commit)
+    || expected.harnessCommit !== undefined && source.engine.commit !== expected.harnessCommit)
     throw new Error('已签名服务器归档与当前插件或引擎不兼容');
   const manifest = JSON.parse(captures.get('manifest.json'));
   if (manifest.schemaVersion !== 1 || manifest.pluginVersion !== expected.pluginVersion || manifest.harnessVersion !== expected.harnessVersion
-    || manifest.harnessCommit !== expected.harnessCommit || manifest.sha256 !== hashes['server-seed.tar.gz']) throw new Error('已签名服务器部署种子身份或校验值不一致');
+    || manifest.harnessCommit !== source.engine.commit || manifest.sha256 !== hashes['server-seed.tar.gz']) throw new Error('已签名服务器部署种子身份或校验值不一致');
   return { hashes, manifest };
 }
 
@@ -123,6 +124,11 @@ async function safeExtract(archive, directory, artifact, expected, signal) {
   await mkdir(directory, { mode: 0o700 });
   await pipeline(createReadStream(archive), tar.x({ cwd: directory, strict: true, strip: 1, preservePaths: false, noMtime: true, noChmod: true }), { signal });
   return signed.manifest;
+}
+
+export async function extractServerUpdateSeed({ archive, directory, artifact, pluginVersion, harnessVersion, signal }) {
+  await safeExtract(archive, directory, artifact, { pluginVersion, harnessVersion }, signal);
+  return join(directory, 'server-seed.tar.gz');
 }
 
 function processAlive(pid) {

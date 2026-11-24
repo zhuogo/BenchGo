@@ -18,6 +18,37 @@ async function fixture(t, options = {}) {
   if (options.appVersionInFeed) manifest.app = { version: options.appVersionInFeed, url: `https://github.com/zhuogo/BenchGo/releases/download/v${options.appVersionInFeed}/benchgo-setup.exe` };
   if (options.minAppVersion !== undefined) manifest.minAppVersion = options.minAppVersion;
   if (options.releaseVersion !== undefined) manifest.releaseVersion = options.releaseVersion;
+  let server;
+  if (options.serverCatalog) {
+    manifest.releaseVersion = '0.1.9';
+    manifest.sourceSha = 'a'.repeat(40);
+    manifest.plugin.url = `https://github.com/zhuogo/BenchGo/releases/download/v${manifest.releaseVersion}/benchgo-${manifest.version}-plugin.tar.gz`;
+    const archiveRoot = 'benchgo-0.1.9-linux-server';
+    const source = join(directory, archiveRoot);
+    const commit = 'b'.repeat(40);
+    await mkdir(source);
+    await Promise.all([
+      writeFile(join(source, 'bootstrap.sh'), 'fixture'),
+      writeFile(join(source, 'bootstrap.mjs'), 'fixture'),
+      writeFile(join(source, 'server-seed.tar.gz'), artifact),
+      writeFile(join(source, 'manifest.json'), JSON.stringify({ schemaVersion: 1, pluginVersion: manifest.version,
+        harnessVersion: manifest.engine.min, harnessCommit: commit, sha256: manifest.plugin.sha256 })),
+      writeFile(join(source, 'release-source.json'), JSON.stringify({ schemaVersion: 1, sourceSha: manifest.sourceSha,
+        version: manifest.releaseVersion, pluginVersion: manifest.version, platform: 'linux', arch: 'x64', kind: 'server',
+        engine: { version: manifest.engine.min, commit } })),
+    ]);
+    const archive = join(directory, 'server.tar.gz');
+    await tar.c({ cwd: directory, file: archive, gzip: true }, [archiveRoot]);
+    const payload = await readFile(archive);
+    const target = { target: 'linux-server', kind: 'server', arch: 'x64', version: manifest.releaseVersion,
+      url: `https://github.com/zhuogo/BenchGo/releases/download/v${manifest.releaseVersion}/${archiveRoot}.tar.gz`,
+      size: payload.length, sha256: createHash('sha256').update(payload).digest('hex') };
+    const catalog = { schemaVersion: 1, releaseVersion: manifest.releaseVersion, sourceSha: manifest.sourceSha,
+      files: [{ ...manifest.plugin, target: 'plugin' }, target] };
+    options.serverCatalog(catalog);
+    const bytes = Buffer.from(JSON.stringify(catalog));
+    server = { payload, target, bytes, signature: sign(null, bytes, privateKey).toString('base64') };
+  }
   const bytes = Buffer.from(JSON.stringify(manifest)), signature = sign(null, bytes, privateKey).toString('base64');
   const state = { managed: true, root: join(directory, 'releases'), version: '0.1.2', appVersion: '0.1.2', ...options.state };
   let activated = 0, busy = false, downloads = 0, prepared = 0, preparedVersion, httpStatus = options.httpStatus;
@@ -35,13 +66,19 @@ async function fixture(t, options = {}) {
   };
   const fetcher = async url => {
     if (httpStatus) return new Response(null, { status: httpStatus });
+    if (url.endsWith('/downloads.json.sig')) return server ? new Response(server.signature) : new Response(null, { status: 404 });
+    if (url.endsWith('/downloads.json')) return server ? new Response(server.bytes) : new Response(null, { status: 404 });
     if (url.endsWith('.sig')) return new Response(signature);
     if (url.endsWith('.json')) return new Response(bytes);
     downloads++;
     if (options.beforeDownload) await options.beforeDownload(() => { busy = true; });
+    if (options.platform === 'linux') {
+      assert.ok(server && url.endsWith(server.target.url), 'Linux must request the Linux distribution');
+      return new Response(server.payload);
+    }
     return options.downloadResponse ? options.downloadResponse(artifact) : new Response(options.corrupt ? 'wrong bytes' : artifact);
   };
-  const service = await createUpdates({ directory, profile: directory, runtime: directory, version: options.currentVersion || '0.1.2', releaseVersion: options.currentReleaseVersion, engineVersion: Object.hasOwn(options, 'engineVersion') ? options.engineVersion : '1.2.3', appVersion: options.appVersion, publicKey: publicKey.export({ type: 'spki', format: 'pem' }), fetcher, install, installation: options.installation || 'desktop', isBusy: () => busy });
+  const service = await createUpdates({ directory, profile: directory, runtime: directory, version: options.currentVersion || '0.1.2', releaseVersion: options.currentReleaseVersion, engineVersion: Object.hasOwn(options, 'engineVersion') ? options.engineVersion : '1.2.3', appVersion: options.appVersion, publicKey: publicKey.export({ type: 'spki', format: 'pem' }), fetcher, install, installation: options.installation || 'desktop', platform: options.platform ?? 'win32', arch: options.arch ?? 'x64', isBusy: () => busy });
   t.after(() => service.close());
   return { service, directory, state, setBusy: value => { busy = value; }, setHttpStatus: value => { httpStatus = value; }, activated: () => activated, downloads: () => downloads, prepared: () => prepared };
 }
@@ -142,7 +179,7 @@ test('a current server plugin and unknown desktop version do not become an appli
   const status = await f.service.status();
   assert.equal(status.current.app, undefined);
   assert.equal(status.release.plugin.available, false);
-  assert.equal(status.release.app.available, false);
+  assert.equal(status.release.app, undefined);
   assert.equal(status.restartRequired, false);
   assert.equal(status.canInstall, false);
 });
@@ -157,14 +194,37 @@ test('application updates require a known installed desktop version and a strict
   }
 });
 
-test('server deployment ignores desktop markers while retaining real plugin updates', async t => {
-  const f = await fixture(t, { appVersion: '0.1.1', appVersionInFeed: '0.1.6', installation: 'server', state: { appVersion: '0.1.1' } });
+test('a managed Linux host installs the signed Linux seed through the normal plugin update action', async t => {
+  const f = await fixture(t, { appVersion: '0.1.1', appVersionInFeed: '0.1.6', installation: 'server', platform: 'linux',
+    state: { appVersion: '0.1.1' }, serverCatalog() {} });
   await f.service.dispatch({ action: 'check' }); await f.service.settled();
   const status = await f.service.status();
   assert.equal(status.current.app, undefined);
-  assert.equal(status.release.app.available, false);
+  assert.equal(status.release.app, undefined);
+  assert.equal(status.release.plugin.url, undefined);
   assert.equal(status.release.plugin.available, true);
   assert.equal(status.canInstall, true);
+  assert.equal(f.downloads(), 0);
+  await f.service.dispatch({ action: 'install' }); await f.service.settled();
+  assert.equal(f.downloads(), 1); assert.equal(f.activated(), 1);
+  assert.equal((await f.service.status()).restartRequired, true);
+});
+
+test('Linux refuses mismatched signed release metadata and unsupported architectures before downloading', async t => {
+  for (const [options, message] of [
+    [{ serverCatalog: catalog => { catalog.sourceSha = 'c'.repeat(40); } }, /不一致/],
+    [{ serverCatalog: catalog => { catalog.files[1].arch = 'arm64'; } }, /平台/],
+    [{ arch: 'arm64', serverCatalog() {} }, /部署入口/],
+    [{}, /部署入口/],
+  ]) {
+    const f = await fixture(t, { installation: 'server', platform: 'linux', ...options });
+    await f.service.dispatch({ action: 'check' }); await f.service.settled();
+    const status = await f.service.status();
+    assert.equal(status.canInstall, false);
+    assert.match(status.error || status.decision.reason, message);
+    await assert.rejects(f.service.dispatch({ action: 'install' }));
+    assert.equal(f.downloads(), 0);
+  }
 });
 
 test('loading the prepared plugin after a restart clears the staged update', async t => {
@@ -247,7 +307,7 @@ test('packaged mount revalidates a busy-blocked signed release and installs thro
   };
   let busy = false, downloads = 0, preparations = 0;
   const service = await mountUpdates(ctx, { store: { directory: profile }, list: () => busy ? [{ status: 'running' }] : [] }, {
-    version: '0.1.2', publicKey: publicKey.export({ type: 'spki', format: 'pem' }),
+    version: '0.1.2', platform: 'win32', arch: 'x64', publicKey: publicKey.export({ type: 'spki', format: 'pem' }),
     fetcher: async url => {
       if (url.endsWith('.sig')) return new Response(signature);
       if (url.endsWith('.json')) return new Response(bytes);
