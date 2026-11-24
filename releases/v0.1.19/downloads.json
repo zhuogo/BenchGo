@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "releaseVersion": "0.1.19",
+  "sourceSha": "7abce899b442e95e40c5f661fb24dbd3884cd332",
+  "files": [
+    {
+      "target": "windows-x64",
+      "version": "0.1.11",
+      "url": "https://github.com/zhuogo/BenchGo/releases/download/v0.1.17/benchgo-0.1.11-win-x64-setup.exe",
+      "sha256": "9a083e09fd6935b79ffc5a9ae2e9ce7f5b2e8f395e116c13d4d1c897adeaf5bc",
+      "size": 427345909
+    },
+    {
+      "target": "android",
+      "version": "0.1.11",
+      "url": "https://github.com/zhuogo/BenchGo/releases/download/v0.1.18/benchgo-0.1.11-android.apk",
+      "sha256": "3d8f905ca585b736c71df4a81b5c3cdb020d85cd35abb7d3a403faa003e7142f",
+      "size": 47273911,
+      "versionCode": 23
+    },
+    {
+      "target": "plugin",
+      "version": "0.1.14",
+      "url": "https://github.com/zhuogo/BenchGo/releases/download/v0.1.19/benchgo-0.1.14-plugin.tar.gz",
+      "sha256": "a4e563d3a060e0ac5ac304bae26e5760b116c0ef5d7a2434cc3826c7788829d0",
+      "size": 140845741
+    },
+    {
+      "target": "mac-arm64",
+      "version": "0.1.19",
+      "url": "https://github.com/zhuogo/BenchGo/releases/download/v0.1.19/benchgo-0.1.19-mac-arm64.dmg",
+      "size": 448818864,
+      "sha256": "de7f313600b9b5fd6b24c1d27b2a7221a4fc2331f6b484a72188656285aad762",
+      "signing": "ad-hoc",
+      "notarized": false
+    },
+    {
+      "target": "mac-arm64",
+      "version": "0.1.19",
+      "url": "https://github.com/zhuogo/BenchGo/releases/download/v0.1.19/benchgo-0.1.19-mac-arm64.zip",
+      "size": 453819752,
+      "sha256": "61907641c2bca3a6764502d4c663a885df9e2e9a6521eaef8055de989934f175",
+      "signing": "ad-hoc",
+      "notarized": false
+    },
+    {
+      "target": "mac-x64",
+      "version": "0.1.19",
+      "url": "https://github.com/zhuogo/BenchGo/releases/download/v0.1.19/benchgo-0.1.19-mac-x64.dmg",
+      "size": 462484097,
+      "sha256": "ad81a801d8a7e84716ad9d9d7dc3dbf46312d34856b09fa39f22f9421d68c0e0",
+      "signing": "ad-hoc",
+      "notarized": false
+    },
+    {
+      "target": "mac-x64",
+      "version": "0.1.19",
+      "url": "https://github.com/zhuogo/BenchGo/releases/download/v0.1.19/benchgo-0.1.19-mac-x64.zip",
+      "size": 467526641,
+      "sha256": "f5758dc90b06c481c9fc3fab242fbb5f5c0e73806a4c21f18c2dd12c274ffcce",
+      "signing": "ad-hoc",
+      "notarized": false
+    },
+    {
+      "target": "linux-server",
+      "version": "0.1.19",
+      "url": "https://github.com/zhuogo/BenchGo/releases/download/v0.1.19/benchgo-0.1.19-linux-server.tar.gz",
+      "size": 39606259,
+      "sha256": "f6e64bd98c572f05ec351e630461018ac0d6772e3c149d7420192c9420e5c58a",
+      "kind": "server",
+      "arch": "x64",
+      "systems": [
+        "Ubuntu",
+        "Debian"
+      ]
+    }
+  ]
+}
