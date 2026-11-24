@@ -59,7 +59,7 @@ test('production runtime dispatches Worker files without backup or rollback serv
           transcript.push({ seq: transcript.length, type: 'turn/start', data: { turn: 1 } });
           handlers.get('agent/status')({ status: 'running' });
           void handlers.get('agent/pre-step')({ turn: 1, messages: [message] }, async () => ({ kind: 'enter', messages: [] }))
-            .then(() => handlers.get('tools/execute')({ name: 'opaque/write-tool', callId: 'call-1', agent, signal: new AbortController().signal }, () => writeFile(file, 'agent content')))
+            .then(() => handlers.get('tools/pre-execute')({ name: 'opaque/write-tool', agent }, () => writeFile(file, 'agent content')))
             .then(async () => {
               assert.equal(await readFile(file, 'utf8'), 'agent content');
               transcript.push({ seq: transcript.length, type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: 'Created artifact' }] } } });

@@ -29,14 +29,14 @@ test('approval origin comes only from the owned active Worker, including its ori
   assert.equal(f.origins({ ownerScope: { threadId: 'side', sessionIds: ['router-side'] }, ownerSessionId: 'router-side' }).length, 1);
 });
 
-test('inactive tasks, expired leases, stale fences and policy/tool revocation remove presentation links', () => {
+test('inactive tasks, expired leases, stale fences and revoked mandates remove presentation links', () => {
   for (const change of [f => { f.task.executionControl = { stopRequested: true }; }, f => { f.task.executionControl = { stopped: true }; },
     f => { f.task.executionControl = { pauseRequested: true }; }, f => { f.task.executionControl = { paused: true }; },
     f => { f.task.status = 'completed'; }, f => { f.task.status = 'unknown'; },
     f => { f.assignment.state = 'uncertain'; }, f => { f.assignment.leaseUntil = 100; },
     f => { f.assignment.leaseUntil = undefined; }, f => { f.assignment.leaseUntil = NaN; },
     f => { f.run.fence++; }, f => { f.run.owner = 'another-worker'; }, f => { f.run.state = 'cancelled'; },
-    f => { f.task.mandate.policyVersion = 'revoked-version'; }, f => { f.task.mandate.toolScope = ['read']; },
+    f => { f.task.mandate.policyVersion = 'revoked-version'; },
     f => { f.database.appliedTaskSnapshot = () => ({ mandate: { ...mandate(), policyVersion: 'old-version' } }); }]) {
     const f = fixture(); change(f); assert.deepEqual(f.origins(), []);
   }
@@ -55,7 +55,7 @@ test('profile-scoped owner API rejects remote principals, archived threads and s
     { sessionId: 'unknown-worker' }]) assert.deepEqual(await resolveApprovalOrigins({ ...dependencies, input }), { origins: [] });
 });
 
-test('review inbox lists existing Router and Worker sessions; decisions recheck the actual tool scope', async () => {
+test('review inbox routes to the owned session despite legacy tool scope', async () => {
   const f = fixture(); f.assignment.leaseUntil = Date.now() + 60000;
   f.task.mandate.toolScope = ['ops_read'];
   const state = { mainSessionId: 'router-main', threads: [] };
@@ -66,7 +66,7 @@ test('review inbox lists existing Router and Worker sessions; decisions recheck 
   assert.equal(list.origins[1].sourceTitle, '主聊天');
   const read = input => resolveApprovalOrigins({ ...dependencies, input });
   assert.equal((await read({ sessionId: 'worker-session', toolName: 'ops_read' })).origins.length, 1);
-  assert.deepEqual(await read({ sessionId: 'worker-session', toolName: 'assistant_external_action' }), { origins: [] });
+  assert.equal((await read({ sessionId: 'worker-session', toolName: 'assistant_external_action' })).origins.length, 1);
   for (const input of [{ toolName: 'ops_read' }, { sessionId: '' }, { sessionId: 'worker-session', toolName: '' }])
     await assert.rejects(read(input), { status: 400 });
   f.task.status = 'waiting'; f.task.executionControl = { paused: true };

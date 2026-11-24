@@ -23,7 +23,7 @@ async function fixture(t, { approve } = {}) {
   const ctx = { get: key => key === 'benchgoVault' ? vault : key === 'approval' ? approval : undefined };
   const scope = { get: ctx.get, tools: { register: tool => tools.set(tool.name, tool) } };
   const f = { database, assignment, run, task, agent, entry, vault, tools, ctx, scope, policy: () => policy, setPolicy: value => { policy = value; }, sends: () => sends, approvals: () => approvals };
-  installWorkerVault(scope, agent, { ctx, database, assignment, run, readPolicy: async () => policy, authorizeAction: async () => ({ allowed: true }) });
+  installWorkerVault(scope, agent, { ctx, database, assignment, run, readPolicy: async () => policy });
   f.exec = (callId = 'call-1') => ({ agent, callId, signal: new AbortController().signal });
   f.input = { handle: entry.handle, revision: entry.revision, body: { task: 'approved' } };
   return f;

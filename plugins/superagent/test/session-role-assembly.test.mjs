@@ -259,7 +259,7 @@ test('official spawn inherits Worker Full, model and native tools without BenchG
     await role.mount(scope, agent);
     installWorkerSubagents(scope, agent, { ctx, database, assignment, parentRole: role,
       models: [{ providerId: 'role-test', modelId: 'Opaque Worker/7' }], currentModel: () => ({ providerId: 'role-test', modelId: 'Opaque Worker/7' }),
-      readPolicy: async () => ({ desktopVersion: 'one' }), authorizeAction: async () => ({ allowed: true }) });
+      readPolicy: async () => ({ desktopVersion: 'one' }) });
   } });
   ctx.on('agent/pre-step', ({ agent }, next) => agent === parent.agent ? { kind: 'reject' } : next());
   t.after(() => release());

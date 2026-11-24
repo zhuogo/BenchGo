@@ -176,6 +176,43 @@ test('policy binds disk rules and channel revision; revoked ownership cannot ope
   assert.deepEqual(revoked.model, { providerId: 'opaque-provider', modelId: 'opaque/model' });
 });
 
+test('desktop worker authority survives preference edits and still rejects changes to written rules', async () => {
+  const before = { revision: 1, hash: 'before', content: '# 工作约定\n\n## rule: scope\nRead project files', status: 'committed' };
+  const preference = { revision: 2, hash: 'preference', content: '# 工作约定\n仅在明确指示时做截图校验。\n\n## rule: scope\nRead project files', status: 'committed' };
+  const updated = { revision: 3, hash: 'updated', content: '## rule: scope\nRead public sources only', status: 'committed' };
+  let document = before, history = [before];
+  const connection = { config: {} };
+  const store = { getConfig: async () => ({}), connections: { read: () => connection, list: () => [] },
+    documents: { read: async () => document, versions: async () => history } };
+  let projects = [{ id: 'project', path: '/original' }];
+  const registry = { list: () => projects };
+  const policy = await readAssessmentPolicy(store, registry);
+  const mandate = { actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'session', messageId: 'message' },
+    admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval', project: projects[0] };
+  const versions = [policy.desktopVersion, policy.legacyDesktopVersions[0]];
+  const direct = { ...mandate, policyVersion: policy.desktopDelegationVersion };
+  document = preference; history = [preference, before];
+  const afterPreference = await readAssessmentPolicy(store, registry);
+  assert.equal(afterPreference.desktopVersion, policy.desktopVersion);
+  assert.notEqual(afterPreference.version, policy.version);
+  for (const policyVersion of versions) assert.equal(validateTaskMandate({ ...mandate, policyVersion }, { policy: afterPreference }), true);
+  assert.equal(validateTaskMandate(direct, { policy: afterPreference }), true);
+  projects = [mandate.project, { id: 'unrelated', path: '/new' }];
+  assert.equal(validateTaskMandate(direct, { policy: await readAssessmentPolicy(store, registry) }), true);
+  projects = [{ id: 'project', path: '/replacement' }];
+  const afterProject = await readAssessmentPolicy(store, registry);
+  for (const policyVersion of versions) assert.equal(validateTaskMandate({ ...mandate, policyVersion }, { policy: afterProject }), false);
+  assert.equal(validateTaskMandate(direct, { policy: afterProject }), false);
+  projects = [mandate.project]; document = updated; history = [updated, preference, before];
+  const afterRule = await readAssessmentPolicy(store, registry);
+  for (const policyVersion of versions) assert.equal(validateTaskMandate({ ...mandate, policyVersion }, { policy: afterRule }), false);
+  assert.equal(validateTaskMandate(direct, { policy: afterRule }), true);
+  document = { revision: 4, hash: 'duplicate', content: '## rule: same\nFirst\n## rule: same\nSecond' };
+  const malformed = await readAssessmentPolicy(store, registry);
+  assert.equal(malformed.ruleDocumentValid, false);
+  assert.equal(validateTaskMandate(direct, { policy: malformed }), true);
+});
+
 test('machine admission requires auto mode and every enabled written rule; revocation fences its mandate', async () => {
   let revision = 1;
   const connection = { enabled: true, appId: 'app', chatIds: ['chat'], ownerOpenIds: ['owner'], machineOpenIds: ['ci'], admissionMode: 'auto', enabledRuleIds: ['opaque/rule'] };
@@ -188,6 +225,7 @@ test('machine admission requires auto mode and every enabled written rule; revoc
   const mandate = { ...permission.mandate, policyVersion: policy.version };
   assert.equal(mandate.admission, 'enabled-rules');
   assert.equal(validateTaskMandate(mandate, { policy }), true);
+  assert.equal(validateTaskMandate(mandate, { policy: { ...policy, ruleVersions: { 'opaque/rule': 'updated' } } }), false);
   for (const ruleIds of [[], ['unknown'], ['opaque/rule', 'unknown'], ['opaque/rule', 'opaque/rule']]) assert.equal(authorizeAssessment({ ...input, decision: { outcome: 'accept', ruleIds } }).allowed, false);
   for (const outcome of ['attach', 'stop']) assert.equal(authorizeAssessment({ ...input, decision: { outcome, ruleIds: ['opaque/rule'], taskId: 'owner-task' } }).allowed, false);
   assert.equal(authorizeAssessment({ ...input, decision: { outcome: 'ignore' } }).allowed, true);

@@ -1,4 +1,3 @@
-import { workerAppliedTask } from './worker-permissions.mjs';
 import { taskExecutionBlocked } from './task-lifecycle.mjs';
 
 const object = value => {
@@ -14,7 +13,6 @@ function liveWorker(database, identity, now) {
   const run = database.runs(assignment.id).find(row => row.id === identity.runId);
   if (!run || run.sessionId !== identity.sessionId || !['submitted', 'running'].includes(run.state)
     || run.owner !== assignment.owner || run.fence !== assignment.fence) return null;
-  try { workerAppliedTask(database, assignment, { name: 'assistant_external_action' }); } catch { return null; }
   return { assignment, task, run };
 }
 

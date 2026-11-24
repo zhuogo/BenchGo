@@ -18,7 +18,7 @@ import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 import { readAssessmentPolicy } from '../src/assessment-policy.mjs';
 import { taskReplySignal } from '../src/task-reply.mjs';
 
-test('human conversation continuation atomically reclaims the original completed run and preserves its task', async t => {
+test('human conversation continuation reclaims the original run with an unknown tool outcome', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-native-resume-'));
   const database = createAssistantOrchestrationStore({ directory });
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -29,10 +29,9 @@ test('human conversation continuation atomically reclaims the original completed
   const run = database.prepareRun(initial.id, { owner: initial.owner, fence: initial.fence, sessionId: 'original-session', directory: '/original', now: 100 });
   assert.throws(() => database.resumeWorkerConversation('original-session', { owner: 'second', now: 150, validateMandate: () => true }), /active execution owner/);
   const raw = new DatabaseSync(database.path);
-  raw.prepare("UPDATE sa_assignments SET state='completed',owner=NULL,lease_until=NULL WHERE id=?").run(initial.id);
-  raw.prepare("UPDATE sa_tasks SET status='completed' WHERE id=?").run(task.id);
-  assert.throws(() => database.resumeWorkerConversation('original-session', { owner: 'second', now: 201, validateMandate: () => true }), /verified effects/);
-  raw.prepare("UPDATE sa_runs SET state='completed',payload=json_set(payload,'$.evidence',json(?)) WHERE id=?")
+  raw.prepare("UPDATE sa_assignments SET state='uncertain',owner=NULL,lease_until=NULL WHERE id=?").run(initial.id);
+  raw.prepare("UPDATE sa_tasks SET status='waiting' WHERE id=?").run(task.id);
+  raw.prepare("UPDATE sa_runs SET state='uncertain',payload=json_set(payload,'$.evidence',json(?)) WHERE id=?")
     .run(JSON.stringify({ transcript: { hash: 'saved-hash', lastSeq: 7 }, executionEffects: { effectsVerified: false } }), run.id);
   raw.close();
   assert.throws(() => database.resumeWorkerConversation('original-session', { owner: 'second', now: 201, validateMandate: () => false }), /authorization changed/);
@@ -59,8 +58,8 @@ test('two completed official Workers accept concurrent native prompts without cr
   const { Context } = await load('@deepseek-ai/cordis');
   const { default: LlmRuntime, LlmAdapter, createUserMessage } = await load('@deepseek-ai/dsh-llm');
   const ctx = new Context(), reached = new Set(), bothRunning = Promise.withResolvers(), release = Promise.withResolvers();
-  let worker, engine;
-  t.after(async () => { release.resolve(); await worker?.stop(); await engine?.dispose(); await ctx.fiber.dispose(); await store.close(); await rm(directory, { recursive: true, force: true }); });
+  let worker, engine, warm;
+  t.after(async () => { release.resolve(); await worker?.stop(); await engine?.dispose(); await warm?.dispose(); await ctx.fiber.dispose(); await store.close(); await rm(directory, { recursive: true, force: true }); });
   await ctx.plugin(LlmRuntime);
   for (const name of ['session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop'])
     await ctx.plugin((await load(`@deepseek-ai/dsh-${name}`)).default, name === 'agent-loop' ? { agents: [] } : undefined);
@@ -105,7 +104,7 @@ test('two completed official Workers accept concurrent native prompts without cr
   const tasks = ['A', 'B'].map(label => database.createTask({ threadId: 'thread', target: `TASK_ONLY_${label}`, mandate: {} }));
   tasks.forEach(task => database.createAssignment(task.id, {}));
   const assignments = database.claimAssignments('initial', { limit: 2, validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => policy, authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => policy });
   const initial = await Promise.all(assignments.map(async assignment => {
     const result = await executor(assignment, { task: database.getTask(assignment.taskId), signal: AbortSignal.timeout(15000), renew: async () => {} });
     database.commitResult(assignment.taskId, { assignment, result, uniqueKey: `initial:${assignment.id}` });
@@ -113,6 +112,7 @@ test('two completed official Workers accept concurrent native prompts without cr
     return result;
   }));
   const completed = Promise.withResolvers(); let commits = 0;
+  warm = await ctx.agents.resume({ resumeSessionId: initial[0].sessionId });
   worker = createAssistantAssignmentWorker({ database, execute: executor, readPolicy: async () => policy, validateMandate: () => true,
     onResult: async (result, context) => {
       await context.beforeCommit();
@@ -124,6 +124,7 @@ test('two completed official Workers accept concurrent native prompts without cr
     request: { sessionId: original.sessionId, requestId: `native-${index}`, mode: 'followup', content: [{ type: 'text', text: `FOLLOWUP_ONLY_${index}` }] },
     signal: AbortSignal.timeout(15000), dispatch: async () => {
       const agent = ctx.agents.get(original.sessionId);
+      if (index === 0) assert.equal(agent, warm.agent);
       assert.equal(workerExecutionBinding(agent).runId, original.runId);
       agent.followup(createUserMessage({ source: { kind: 'user', rpcId: `native-${index}` }, content: [{ type: 'text', text: `FOLLOWUP_ONLY_${index}` }] }));
       return { requestId: `native-${index}` };
@@ -223,12 +224,16 @@ test('Router messages recover and redirect the same official Worker without an e
   database.updateRun(run.id, { ...ownership, state: 'submitted' });
   database.updateRun(run.id, { ...ownership, state: 'uncertain' });
   database.renewAssignment(initial.id, { ...ownership, validateMandate: () => false });
-  const routerEvents = [{ type: 'turn/start' }, { type: 'user/message', data: text('continue', '继续') }];
+  const routerEvents = [{ type: 'turn/start' }, { type: 'user/message', data: text('historical', '旧消息') }];
   let router = { id: 'router', status: 'running', session: { header: {}, snapshotEvents: () => routerEvents } };
   const routerCtx = { agents: { get: () => router, currentInitiator: () => router, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } };
   const control = createDesktopTaskControl({ database, ctx: routerCtx });
   const send = async text => control.control({ id: task.id, operation: 'supplement', text }, { agent: router }, { ownerAgent: router,
     managementScope: await desktopTaskManagementScope({ ctx: routerCtx, agent: router, store: { getState: () => ({ mainSessionId: router.id }) } }) });
+  assert.equal((await send()).duplicate, false);
+  database.markWorkerMessageBlocked(task.id, { code: 'EXECUTION_EFFECTS_UNKNOWN', reason: 'Legacy effects gate', now: Date.now() - 60000 });
+  assert.deepEqual(database.interruptedWorkerMessages(), []);
+  routerEvents[1].data = text('continue', '继续');
   assert.equal((await send()).duplicate, false);
   assert.equal(database.interruptedWorkerMessages()[0].id, initial.id);
   const changedTitles = [], notification = Promise.withResolvers();
@@ -265,7 +270,7 @@ test('Router messages recover and redirect the same official Worker without an e
   assert.match(changedRequest, /不搜吴亦凡了，改搜范冰冰/);
   assert.match(changedRequest, /搜索范冰冰公开资料/);
   assert.deepEqual(changedTitles, ['搜索范冰冰资料']);
-  assert.equal(database.taskInputs(task.id).filter(input => input.state === 'applied').length, 2);
+  assert.equal(database.taskInputs(task.id).filter(input => input.state === 'applied').length, 3);
   assert.equal(database.pendingSubscriptionMessages(task.id).length, 0);
   assert.ok(executionEvidence({ events: warm.agent.session.snapshotEvents() }).transcript.lastSeq > 2);
 });

@@ -410,8 +410,8 @@ test('official execution works without SuperAgent, freezes exact config, and req
   assert.match(execution.contexts.get('benchgo-task-time'), /"timeZoneSource":"execution-host","originalRequestTime":null/);
   assert.deepEqual(f.modelCalls[0], { provider: 'exact-provider', model: 'opaque-model/1' });
   assert.deepEqual(await execution.requestModel(), { provider: 'exact-provider', model: 'opaque-model/1', temperature: 0.3, tools: [] });
-  assert.equal((await execution.tool('read')).kind, 'allow'); assert.equal((await execution.tool('write')).kind, 'deny');
-  assert.equal((await execution.tool('assistant_task_start')).kind, 'deny');
+  assert.equal((await execution.tool('read')).kind, 'allow'); assert.equal((await execution.tool('write')).kind, 'allow');
+  assert.equal((await execution.tool('subagent_spawn')).kind, 'allow');
   await execution.finish();
   const result = await waitFor(() => execution.disposed && true);
   assert.equal(result, true);

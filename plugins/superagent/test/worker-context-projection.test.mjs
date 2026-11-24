@@ -69,7 +69,7 @@ test('official Worker requests carry context once in the applied task package, i
   const models = [{ providerId: 'context-test', modelId: 'opaque-worker' }];
   await store.updateConfig({ models, workerModels: models });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: models[0], workerModels: models }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: models[0], workerModels: models }) });
   const result = await executor(assignment, { task: database.getTask(task.id), signal: AbortSignal.timeout(15000), renew: async () => {} });
   assert.equal(result.summary, 'Completed revised task');
   assert.equal(result.completion.kind, 'completed');

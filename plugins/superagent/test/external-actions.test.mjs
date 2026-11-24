@@ -106,7 +106,7 @@ test('scoped host tool combines actual Worker, current mandate, official card an
     assert.ok(asks > reminders.length, 'the official approval request starts before a reminder callback');
     reminders.push(input); throw Object.assign(new Error('PRIVATE REMINDER FAILURE'), { code: 'TEST_REMINDER_FAILED' });
   } }).installWorker(scope, agent, {
-    database, assignment: { id: 'assignment', taskId: 'task', owner: 'worker', fence: 1 }, run: { id: 'run', sessionId: 'session' }, readPolicy: async () => ({ desktopVersion: 'p1' }), authorizeAction: async () => ({ allowed: true }),
+    database, assignment: { id: 'assignment', taskId: 'task', owner: 'worker', fence: 1 }, run: { id: 'run', sessionId: 'session' }, readPolicy: async () => ({ desktopVersion: 'p1' }),
   });
   const tool = tools.get('assistant_external_action'), execution = { agent, name: tool.name, signal: new AbortController().signal, callId: 'call', authorized: true };
   const first = await tool.execute({ operation: 'prepare', adapterId: 'channel:test:send', input: { targetTriggerId: 'real-trigger', text: '完整正文' }, requestId: 'first' }, execution);

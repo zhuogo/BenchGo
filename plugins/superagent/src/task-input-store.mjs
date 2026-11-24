@@ -30,7 +30,7 @@ export function installTaskInputStore({ db, tx, api }) {
     const row = saved || task, mandate = structuredClone(row.mandate);
     return { instructionRevision: revision, authorizationVersion: row.authorizationVersion ?? mandate.authorizationVersion ?? 1,
       target: row.target, acceptance: row.acceptance, mandate,
-      context: structuredClone(row.context || []), toolScope: structuredClone(row.toolScope ?? mandate.scope?.toolNames ?? mandate.toolScope ?? null) };
+      context: structuredClone(row.context || []) };
   };
   function record(input) {
     const task = db.prepare('SELECT * FROM sa_tasks WHERE id=?').get(input.taskId), trigger = api.getTrigger(input.triggerId);

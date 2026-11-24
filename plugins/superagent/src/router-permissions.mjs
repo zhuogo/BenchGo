@@ -99,3 +99,38 @@ export function installRouterPermissionGate(scope, { agent, inherited, controlle
     return next();
   });
 }
+
+/** Stop a repeated shared prerequisite failure at the official step boundary.
+ * Argument errors remain correctable; successful work or new instructions resets the streak.
+ */
+export function installRouterFailureConvergence(scope, agent, onStop) {
+  const immediate = new Set(['PROFILE_CONFIG_DIRECT_WRITE', 'PROFILE_CONFIG_RESTORED', 'MANDATE_REVOKED']);
+  const structural = new Set(['ENOSPC', 'EDQUOT', 'EROFS',
+    'ROLE_SERVICES_UNAVAILABLE', 'ROLE_PRESET_UNAVAILABLE', 'SESSION_ROLE_STORE_UNAVAILABLE',
+    'MANAGEMENT_OWNER_REQUIRED', 'MANAGEMENT_APPROVAL_UNAVAILABLE', 'MANAGEMENT_APPROVAL_DENIED', 'APPROVAL_POLICY_NEVER', 'SETTINGS_UNAVAILABLE', 'CLEANUP_UNAVAILABLE']);
+  let prior, stopped;
+  const admittedUsers = new Set(), failures = new Map();
+  scope.on('tools/execute', async (execution, next) => {
+    try { return await next(); }
+    catch (error) { if (execution.agent === agent && error?.code) failures.set(execution.callId, error.code); throw error; }
+  });
+  scope.on('tools/result', (execution, result) => {
+    if (execution.agent !== agent) return;
+    const failure = failures.get(execution.callId);
+    failures.delete(execution.callId);
+    const message = result.error?.message || (result.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
+    const code = result.error?.info?.code ?? result.error?.code ?? failure ?? /^([A-Z_]+): /.exec(message)?.[1];
+    if (!result.isError || (!structural.has(code) && !immediate.has(code))) { prior = undefined; return; }
+    if (immediate.has(code)) stopped = { code, message, toolName: execution.name, callId: execution.callId };
+    else if (prior?.code === code && prior.message === message) stopped = prior;
+    else prior = { code, message, toolName: execution.name, callId: execution.callId };
+  });
+  scope.on('agent/pre-step', (payload, next) => {
+    if (payload.agent !== agent) return next();
+    for (const message of payload.messages || []) if (message.source?.kind === 'user' && !admittedUsers.has(message.id)) {
+      admittedUsers.add(message.id); stopped = undefined; prior = undefined;
+    }
+    if (stopped) { onStop(stopped); return { kind: 'reject' }; }
+    return next();
+  });
+}

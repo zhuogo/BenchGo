@@ -4,6 +4,9 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createAssistantEngine, readBuiltinLayer } from '../src/engine.mjs';
 import { projectReplyStream } from '../client/reply-stream.mjs';
+import { quietChatRows } from '../client/quiet-chat.mjs';
+import { createAssistantDispatch } from '../src/assistant-dispatch.mjs';
+import { questionAnswers, readAdmittedQuestionReply } from '../../base/shared/question-reply.mjs';
 import { createNotificationFactGate } from '../client/notification-sound.mjs';
 import { createChannelSessionHost, registerChannelSessionProjection } from '../src/channel-session.mjs';
 import { channelSessionKey } from '../src/channel-policy.mjs';
@@ -537,7 +540,7 @@ test('official skill invocation and Worker loading persist usage while Router to
     { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'load-skill', name: 'skill', arguments: '{"name":"verify-work"}' } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ] : text('Checked'), { async install(ctx) {
-    ctx.provide('workingDirectory', { ensure: async () => directory });
+    ctx.provide('workingDirectory', { get: () => directory, ensure: async () => directory });
     await ctx.plugin((await loadPackage('skill/skill', '@deepseek-ai/dsh-skill')).default);
     await ctx.plugin(await loadPackage('skill/tool-skill', '@deepseek-ai/dsh-tool-skill'));
     provider = registerOwnedSkillProvider({ ctx, skills: ctx.skills, database: skills.providerDatabase });
@@ -582,7 +585,7 @@ test('official timed Worker question waits for Router triage and self/default an
   const task = database.createTask({ threadId: 'thread', target: '完成输出', mandate: { instruction: '使用简体中文。若需选择格式，你可自行决定，采用默认列表。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'main' } } });
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'Worker/opaque' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }], models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }], models: [{ providerId: 'test', modelId: 'Router/opaque' }] }) });
   const result = await executor(assignment, { task, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.equal(result.waitingAttention, undefined);
   assert.equal(result.summary, '简体中文列表交付完成');
@@ -610,7 +613,7 @@ test('official user question resumes the same live Worker from its exact source 
   const task = database.createTask({ threadId: 'thread', target: 'Ask where to save', mandate: { actorId: 'owner', source } });
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const execution = executor(assignment, { task, signal: AbortSignal.timeout(10000), renew: async () => {} });
   execution.catch(() => {});
   const until = Date.now() + 5000;
@@ -654,7 +657,7 @@ for (const [restart, tamper] of [[false, false], [true, false], [true, true]]) t
   const task = database.createTask({ threadId: 'thread', target: 'Ask', mandate: { instruction: '使用简体中文，所需资料由用户补充。', actorId: 'owner', source: { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: 'original' } } });
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const makeExecutor = (ctx = f.ctx) => createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }], models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const makeExecutor = (ctx = f.ctx) => createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }], models: [{ providerId: 'test', modelId: 'Router/opaque' }] }) });
   const result = await makeExecutor()(assignment, { task, signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(result.waitingAttention.callIds[0], 'timed-question');
   database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result });
@@ -691,23 +694,27 @@ for (const [restart, tamper] of [[false, false], [true, false], [true, true]]) t
   assert.equal(database.runs(assignment.id).length, 1);
 });
 
-for (const knownFirst of [false, true]) test(`desktop timed Attention resumes without action backups (knownFirst=${knownFirst})`, async t => {
+for (const [knownFirst, timeout] of [[false, 1], [true, 1], [false, -1]]) test(`desktop Worker question appears in order and resumes the same Run (knownFirst=${knownFirst}, timeout=${timeout})`, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'worker-desktop-sequential-'));
+  const database = createAssistantOrchestrationStore({ directory });
+  const notifications = createAssistantRuntimeStore({ directory });
   let workerCalls = 0, reads = 0;
   const call = (id, question) => [
     { type: 'block-start', index: 0, blockType: 'tool-call' },
-    { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'ask_user_question', arguments: JSON.stringify({ questions: [question], timeout: 1 }) } },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'ask_user_question', arguments: JSON.stringify({ questions: [question], timeout }) } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ];
   const known = { id: 'Q-known', question: '交付语言使用简体中文还是英文？' };
   const question = { id: 'Q-user', question: '最终展示采用列表还是短句？', options: [{ label: '列表' }, { label: '短句' }] };
   const f = await fixture(t, request => {
     if (request.purpose === 'attention-triage') {
+      assert.equal(request.model, 'Router/opaque');
       const first = JSON.stringify(request.messages).includes('Q-known');
       return text(JSON.stringify({ decisions: [first
         ? { questionId: 'Q-known', route: 'self', basis: '原文已指定', evidence: '简体中文' }
         : { questionId: 'Q-user', route: 'user', basis: '用户决定格式' }] }));
     }
+    if (request.model === 'first') return text('已收到你的任务。');
     workerCalls++;
     if (workerCalls === 1) return [
       { type: 'block-start', index: 0, blockType: 'tool-call' },
@@ -716,33 +723,86 @@ for (const knownFirst of [false, true]) test(`desktop timed Attention resumes wi
     ];
     if (knownFirst && workerCalls === 2) return call('known-call', known);
     if (workerCalls === (knownFirst ? 3 : 2)) return call('user-call', question);
-    return text('已按列表交付');
+    const answers = timeout === -1
+      ? questionAnswers([question], request.messages.findLast(message => message.role === 'tool' && message.toolCallId === 'user-call'))
+      : readAdmittedQuestionReply(request.messages.findLast(message => message.source?.callId === 'user-call'
+        && message.source.kind === 'user-question-reply'))?.answers;
+    assert.deepEqual(answers, [{ id: 'Q-user', selected: ['短句'] }]);
+    return text('短句：合计 3。');
   }, { persistenceRoot: join(directory, 'sessions'), async install(ctx) {
     await ctx.plugin((await loadPackage('interaction/user-questions', '@deepseek-ai/dsh-user-questions')).default);
     await ctx.plugin(await loadPackage('interaction/tool-ask-user', '@deepseek-ai/dsh-tool-ask-user'), { mode: 'timed', timeout: 1 });
     ctx.tools.register({ name: 'fixture_read', description: 'Read fixture facts', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { reads++; return 'Alpha 1, Beta 2, total 3'; } });
   } });
-  const database = createAssistantOrchestrationStore({ directory });
-  t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
-  database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
-  const task = database.createTask({ threadId: 'thread', target: '读取事实并询问格式', mandate: { instruction: '使用简体中文，展示格式由用户选择。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'owner' } } });
+  t.after(async () => { notifications.close(); database.close(); await rm(directory, { recursive: true, force: true }); });
+  const owner = await f.engine.ensureSession();
+  await f.engine.send({ text: '读取事实并询问格式' });
+  await owner.whenIdle();
+  const threadId = `desktop:${owner.id}`;
+  database.createThread({ id: threadId, source: { type: 'desktop', id: owner.id } });
+  const task = database.createTask({ threadId, target: '读取事实并询问格式', mandate: { instruction: '使用简体中文，展示格式由用户选择。', actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: owner.id, threadId: 'main' } } });
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const execute = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }], models: [{ providerId: 'test', modelId: 'Router/opaque' }] }), authorizeAction: async () => ({ allowed: true }) });
-  const result = await execute(assignment, { task, signal: AbortSignal.timeout(10000), renew: async () => {} });
-  assert.deepEqual(result.waitingAttention.callIds, ['user-call']);
+  const execute = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'Worker/opaque' }], models: [{ providerId: 'test', modelId: 'Router/opaque' }] }) });
+  const waitSignal = AbortSignal.timeout(10000);
+  const execution = execute(assignment, { task, signal: waitSignal, renew: async () => {} });
+  execution.catch(() => {});
+  if (timeout === -1) {
+    while (!database.attentions(task.id).length) {
+      waitSignal.throwIfAborted();
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(database.getAssignment(assignment.id).state, 'claimed');
+  } else {
+    const parked = await execution;
+    assert.deepEqual(parked.waitingAttention.callIds, ['user-call']);
+    database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result: parked });
+  }
+  const [originalRun] = database.runs(assignment.id);
+  assert.equal(database.getTask(task.id).status, 'waiting');
+  assert.equal(database.getTask(task.id).liveSummary.blocker, '等待答复');
+  assert.deepEqual(database.listTasks({ status: 'waiting' }).map(row => row.id), [task.id]);
+  assert.equal(database.listTasks({ status: 'running' }).length, 0);
   assert.deepEqual(database.attentionResolutions(task.id).map(row => row.questionId), knownFirst ? ['Q-known', 'Q-user'] : ['Q-user']);
-  database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result });
   const [attention] = database.attentions(task.id);
-  database.answerDesktopAttention({ taskId: task.id, attentionId: attention.id, instructionRevision: 1, requestId: 'answer', answer: { selected: [], custom: '我选择列表' } });
-  assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 1);
-  const [continued] = database.claimAssignments('worker', { validateMandate: () => true });
-  assert.equal(continued.fence, assignment.fence + 1);
-  const completed = await execute(continued, { task: database.getTask(task.id), signal: AbortSignal.timeout(10000), renew: async () => {} });
-  assert.equal(completed.sessionId, result.sessionId);
-  assert.equal(completed.runId, result.runId);
+  const [delivery] = database.claimOutbox('desktop');
+  assert.equal(delivery.payload.type, 'task.attention');
+  const event = notifications.notify({ id: task.id, threadId: 'main' }, delivery.payload.type,
+    { ...delivery.payload, title: task.title, status: 'waiting' }, `task-delivery:${delivery.uniqueKey}`);
+  database.finishOutbox(delivery.id, { owner: 'desktop', sent: true, receipt: { messageId: event.id } });
+  const dispatch = createAssistantDispatch({ ctx: f.ctx, engine: f.engine, store: { orchestration: database },
+    database: notifications, projectSchedules: async () => {}, shutdown: new AbortController() });
+  const history = await dispatch({ action: 'history', threadId: 'main' });
+  assert(history.messages.some(message => message.seq > event.seq && new Date(message.time) < new Date(event.createdAt)), JSON.stringify(history.messages.map(({seq,time,role}) => ({seq,time,role}))));
+  const card = quietChatRows(history).at(-1);
+  assert.equal(card?.attention?.id, attention.id);
+  assert.equal(card?.taskId, task.id);
+  assert.equal(card.taskStatus, 'waiting');
+  assert.deepEqual(card.attention.question.options.map(option => option.label), ['列表', '短句']);
+  assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 0);
+  await dispatch({ action: 'taskAnswer', taskId: card.taskId, attentionId: card.attention.id,
+    instructionRevision: card.attention.instructionRevision, requestId: 'answer', answer: { selected: ['短句'] } });
+  let completed;
+  if (timeout === -1) {
+    assert.equal(database.getTask(task.id).status, 'running');
+    assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 0);
+    completed = await execution;
+    assert.equal(database.getAssignment(assignment.id).fence, assignment.fence);
+  } else {
+    assert.equal(database.queueAnsweredAttention({ validateMandate: () => true }), 1);
+    const [continued] = database.claimAssignments('worker', { validateMandate: () => true });
+    assert.equal(continued.fence, assignment.fence + 1);
+    completed = await execute(continued, { task: database.getTask(task.id), signal: AbortSignal.timeout(10000), renew: async () => {} });
+  }
+  assert.equal(completed.sessionId, originalRun.sessionId);
+  assert.equal(completed.runId, originalRun.id);
   assert.equal(database.runs(assignment.id).length, 1);
-  assert.match(JSON.stringify(f.requests.at(-1).messages), /我选择列表/);
+  assert.equal(completed.summary, '短句：合计 3。');
+  const answer = database.attentions(task.id)[0];
+  assert.deepEqual(database.getTrigger(answer.answerTriggerId).source.answer, { selected: ['短句'] });
+  const applied = database.taskInputs(task.id).find(input => input.triggerId === answer.answerTriggerId);
+  assert.equal(applied.application.runId, originalRun.id);
+  assert.equal(applied.application.sessionId, originalRun.sessionId);
   assert.equal(workerCalls, knownFirst ? 4 : 3);
   assert.equal(reads, 1);
 });
@@ -769,12 +829,10 @@ test('assignment executor uses the real Harness writer and current permission ho
   };
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  let authorized = 0;
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ version: 'current', workerModels: [{ providerId: 'test', modelId: 'first' }] }),
-    authorizeAction: async () => { authorized++; return { allowed: true }; } });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ version: 'current', workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const result = await executor(assignment, { task, signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(result.summary, 'Verified host result');
-  assert.equal(executed, 1); assert.equal(authorized, 1);
+  assert.equal(executed, 1);
   assert.equal(database.pendingSubscriptionMessages(task.id).length, 0);
   assert.match(JSON.stringify(f.requests[1].messages), /补充原始资料/);
   assert.match(JSON.stringify(f.requests[1].messages), /not new authorization/);
@@ -804,7 +862,7 @@ test('late context after the final Worker request continues the same official se
   let saved;
   const readSession = f.ctx.sessionQuery.readSession;
   f.ctx.sessionQuery.readSession = async id => { saved = await readSession(id); return saved; };
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const result = await executor(assignment, { task, signal: AbortSignal.timeout(5000), renew: async () => {} });
   assert.equal(result.summary, 'Result includes late context');
   assert.equal(f.requests.length, 2);
@@ -827,7 +885,7 @@ test('late context retains the original draft without completing outdated work o
   database.subscribe(task.id, 'thread');
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const context = { task, signal: AbortSignal.timeout(30000), renew: async () => {} };
   const original = await executor(assignment, context);
   const { trigger } = database.ingest({ dedupeKey: 'late-context', thread: { id: 'thread', source: { type: 'desktop', id: 'main' } }, source: { messageId: 'late' }, actor: { id: 'other' }, content: 'late-source-marker', mode: 'group', gate: { allowed: false } });
@@ -922,8 +980,8 @@ for (const cwdMode of ['root', 'child', 'outside']) test(`project worker uses an
   const task = database.createTask({ threadId: 'thread', target: 'Check project', mandate: { project, actorId: 'owner', source } });
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, '.agents', 'workers'),
-    readPolicy: async () => ({ projects: [project], workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, '.agents', 'workers'),
+    readPolicy: async () => ({ projects: [project], workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const paused = await executor(assignment, { task, signal: AbortSignal.timeout(30000), renew: async () => {} });
   database.parkAttention(assignment.id, { owner: assignment.owner, fence: assignment.fence, result: paused });
   const [delivery] = database.claimOutbox('sender');
@@ -981,8 +1039,8 @@ test('reopened orchestration accepts saved completion once under the real persis
     source: { channel: 'feishu', sourceType: 'group', connectionId: 'feishu', conversationId: 'chat', appId: 'app', chatId: 'chat', messageId: 'original' }, controlledActions: 'require-current-policy-and-harness-approval' } });
   db.createAssignment(task.id, { model: policy.model });
   const [assignment] = db.claimAssignments('old-worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database: db, workspaceRoot: join(store.paths.workspace, 'workers'),
-    readPolicy: () => readAssessmentPolicy(store), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database: db, workspaceRoot: join(store.paths.workspace, 'workers'),
+    readPolicy: () => readAssessmentPolicy(store) });
   const result = await executor(assignment, { task, signal: AbortSignal.timeout(10000), renew: async () => {} });
   db.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, validateMandate: () => false });
   store.close();
@@ -2548,7 +2606,7 @@ for (const recover of [false, true]) for (const tamper of [false, true]) test(`e
   } });
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'exact' } });
   const [first] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const paused = await executor(first, { task, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.equal(paused.waitingPause, true);
   assert.equal(effects, 1);
@@ -2587,8 +2645,8 @@ for (const denied of [false, true]) test(`Worker uses its work-role queue and ${
   const task = database.createTask({ threadId: 'thread', target: 'Inspect', mandate: { actorId: 'owner' } });
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'Explicit/opaque' } });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({ workerModels: ['second', 'third'].map(modelId => ({ providerId: 'test', modelId })), routingConfig: { keyPools: [{ providerId: 'test', candidates: ['hidden'] }] } }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
+    readPolicy: async () => ({ workerModels: ['second', 'third'].map(modelId => ({ providerId: 'test', modelId })), routingConfig: { keyPools: [{ providerId: 'test', candidates: ['hidden'] }] } }) });
   const result = executor(assignment, { task, signal: AbortSignal.timeout(10000), renew: async () => {} });
   if (denied) await assert.rejects(result); else assert.equal((await result).summary, 'Worker completed');
   assert.deepEqual(f.requests.map(request => request.model), denied ? ['second'] : ['second', 'third']);
@@ -2630,8 +2688,8 @@ test('a long-running Worker is never paused by elapsed execution time', async t 
   database.createAssignment(task.id, { model: { providerId: 'test', modelId: 'first' } });
   const [assignment] = database.claimAssignments('long-worker', { validateMandate: () => true });
   // The removed gate paused at this deadline (150ms); the option is now ignored.
-  const executor = createAssignmentExecutor({ appendRecord: modules[0].appendPluginRecord, ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 150 });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
+    readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const started = Date.now();
   const result = await executor(assignment, { task, signal: AbortSignal.timeout(10000), renew: async () => {} });
   assert.ok(Date.now() - started >= 800);
@@ -3435,7 +3493,7 @@ test('Router timing uses committed lifecycle and model first text without anothe
   database.createAssignment(task.id, {});
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   const policy = { model: { providerId: 'test', modelId: 'first' }, workerModels: [{ providerId: 'test', modelId: 'first' }] };
-  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => policy, authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => policy });
   const signal = AbortSignal.timeout(15000);
   const original = await executor(assignment, { task, signal, renew: async () => {} });
   database.commitResult(task.id, { assignment, result: original, uniqueKey: 'initial-native-result' });
@@ -3503,7 +3561,7 @@ test('Router hides execution guidance only when its real callable tools are abse
   tasks.forEach(task => database.createAssignment(task.id, {}));
   const assignments = database.claimAssignments('worker', { limit: 2, validateMandate: () => true });
   const executor = createAssignmentExecutor({ ctx: f.ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }), authorizeAction: async () => ({ allowed: true }) });
+    readPolicy: async () => ({ workerModels: [{ providerId: 'test', modelId: 'first' }] }) });
   const results = await Promise.all(assignments.map(async assignment => {
     const task = database.getTask(assignment.taskId);
     const result = await executor(assignment, { task, signal: AbortSignal.timeout(15000), renew: async () => {} });

@@ -1,10 +1,19 @@
 import { actionHash, HIGH_RISK_ACTION_CATEGORIES, SITE_ACTION_CATEGORIES, canonicalAction } from './external-action-store.mjs';
 import { validateTaskMandate } from './assessment-policy.mjs';
-import { workerAppliedTask } from './worker-permissions.mjs';
+import { taskExecutionBlocked } from './task-lifecycle.mjs';
 import { requestExternalActionApproval } from './approval.mjs';
 import { channelExternalSendInputSchema } from './channel-policy.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
+/** The task snapshot used by BenchGo's own action and approval services. */
+export function externalActionTask(database, assignment) {
+  const current = database.getTask(assignment.taskId);
+  if (!current) throw new Error('Worker 任务不存在');
+  if (taskExecutionBlocked(current)) throw fail('WORKER_TASK_INACTIVE', '任务已暂停、停止或结束');
+  return { ...current, ...database.appliedTaskSnapshot(assignment.id), status: current.status, executionControl: current.executionControl,
+    liveAuthorizationVersion: current.mandate?.authorizationVersion ?? 1 };
+}
+
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
 const publicAction = ({ submission: _submission, binding, ...action }) => ({ ...action, taskId: binding.taskId });
 const publicReceipt = receipt => {
@@ -133,21 +142,23 @@ export function installExternalActionTools(scope, agent, { service }) {
 export function createExternalActionHost({ ctx, store, registry, onApprovalPending }) {
   return {
     registry,
-    installWorker(scope, agent, { database, assignment, run, readPolicy, authorizeAction, leaseMs = 60000 }) {
+    installWorker(scope, agent, { database, assignment, run, readPolicy, leaseMs = 60000 }) {
       const getContext = async exec => {
         exec.signal.throwIfAborted();
         if (exec.agent !== agent || String(agent.id) !== run.sessionId || String(agent.session?.id) !== run.sessionId) throw fail('ACTION_WORKER_MISMATCH', '动作只能由当前拥有任务的 Worker 发起');
-        const task = workerAppliedTask(database, assignment, { name: 'assistant_external_action' });
+        const task = externalActionTask(database, assignment);
         const current = database.getAssignment(assignment.id), active = database.runs(assignment.id).find(item => item.id === run.id);
         if (!current || current.state !== 'claimed' || current.owner !== assignment.owner || current.fence !== assignment.fence || !active || active.owner !== assignment.owner || active.fence !== assignment.fence
           || active.sessionId !== run.sessionId || !['submitted', 'running'].includes(active.state)) throw fail('ACTION_WORKER_STALE', '动作的任务、运行或租约已失效');
         const policy = await readPolicy();
-        if (!validateTaskMandate(task.mandate, { policy }) || (await authorizeAction({ policy, mandate: task.mandate, task, execution: exec }))?.allowed !== true) throw fail('ACTION_MANDATE_REVOKED', '当前任务授权不允许此动作');
-        const finalPolicy = await readPolicy(), latest = workerAppliedTask(database, assignment, { name: 'assistant_external_action' });
+        if (!validateTaskMandate(task.mandate, { policy })) throw fail('ACTION_MANDATE_REVOKED', '当前任务授权不允许此动作');
+        const finalPolicy = await readPolicy(), latest = externalActionTask(database, assignment);
         const versionKey = task.mandate.source?.channel === 'desktop' ? 'desktopVersion' : 'version';
         const renewed = database.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, leaseMs,
-          validateMandate: mandate => finalPolicy[versionKey] === policy[versionKey] && validateTaskMandate(mandate, { policy: finalPolicy }) });
-        if (!renewed.allowed || latest.authorizationVersion !== task.authorizationVersion) throw fail('ACTION_MANDATE_REVOKED', '动作提交前授权已变化');
+          validateMandate: mandate => validateTaskMandate(mandate, { policy: finalPolicy }) });
+        if (!renewed.allowed || finalPolicy[versionKey] !== policy[versionKey] || !validateTaskMandate(latest.mandate, { policy: finalPolicy })
+          || latest.authorizationVersion !== task.authorizationVersion || latest.liveAuthorizationVersion !== task.liveAuthorizationVersion)
+          throw fail('ACTION_MANDATE_REVOKED', '动作提交前授权已变化');
         exec.signal.throwIfAborted();
         return { profileId: store.profileId, actorId: task.mandate.actorId, taskId: task.id, assignmentId: assignment.id, runId: run.id,
           authorizationVersion: String(task.authorizationVersion ?? task.mandate.authorizationVersion ?? 1), policyVersion: policy[versionKey],

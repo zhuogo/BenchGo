@@ -3,16 +3,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import { installTaskInputStore } from './task-input-store.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
-const names = value => value.scope?.toolNames ?? value.toolScope;
-const scope = value => JSON.stringify([value.project ?? null, value.scope ?? null, value.toolScope ?? null, value.execution ?? null]);
+const binding = ({ project, scope, execution }) => {
+  // Ignore tool names on Mandates stored by older versions.
+  const { toolNames: _legacy, ...otherScope } = scope ?? {};
+  return { project: project ?? null, scope: Array.isArray(scope) ? scope : Object.keys(otherScope).length ? otherScope : null,
+    execution: execution ?? null };
+};
 export function taskMandateDifference(previous, requested) {
-  return scope(previous) === scope(requested) ? null : { previous: JSON.parse(scope(previous)), requested: JSON.parse(scope(requested)) };
-}
-export function isTaskMandateNarrowing(previous, requested) {
-  const withoutNames = value => { const result = structuredClone(value.scope ?? null); if (result) delete result.toolNames; return JSON.stringify([value.project ?? null, result && Object.keys(result).length ? result : null, value.execution ?? null]); };
-  const oldNames = names(previous), nextNames = names(requested);
-  return withoutNames(requested) === withoutNames(previous) && Array.isArray(nextNames)
-    && nextNames.every(name => typeof name === 'string' && (!Array.isArray(oldNames) || oldNames.includes(name)));
+  const oldBinding = binding(previous), newBinding = binding(requested);
+  return JSON.stringify(oldBinding) === JSON.stringify(newBinding) ? null : { previous: oldBinding, requested: newBinding };
 }
 
 /** Immutable authorization snapshots; the original Task Mandate is never overwritten. */
@@ -80,21 +79,18 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
         // immutable source Mandate; structured authority changes require a host receipt.
         const currentMandate = api.currentTaskMandate(task.id, task.mandate);
         let appliedMandate = adjustment ? { ...mandate, triggerId: trigger.id } : { ...currentMandate };
-        if (taskMandateDifference(currentMandate, mandate)) {
-          if (isTaskMandateNarrowing(currentMandate, mandate)) appliedMandate = { ...appliedMandate, ...(mandate.scope ? { scope: mandate.scope } : {}), ...(mandate.toolScope ? { toolScope: mandate.toolScope } : {}) };
-          else {
-            const difference = taskMandateDifference(currentMandate, mandate);
-            const approval = typeof authorizeExpansion === 'function' && authorizeExpansion({ task, trigger, mandate, difference });
-            if (!approval || approval.approved !== true || approval.triggerId !== trigger.id || approval.actorId !== trigger.actor.id
-              || typeof approval.id !== 'string' || !approval.id) throw fail('MANDATE_EXPANSION_REQUIRED', '结构化授权范围发生变化，需要真实用户确认具体差异');
-            const approvalFingerprint = createHash('sha256').update(JSON.stringify([taskId, currentMandate.authorizationVersion ?? 1, trigger.id, trigger.source, trigger.actor, difference])).digest('hex');
-            const prior = db.prepare('SELECT fingerprint FROM sa_task_authorization_approvals WHERE approval_id=?').get(approval.id);
-            if (prior && prior.fingerprint !== approvalFingerprint) throw fail('AUTHORIZATION_APPROVAL_CONFLICT', '授权回执已经绑定另一份范围差异');
-            db.prepare('INSERT OR IGNORE INTO sa_task_authorization_approvals VALUES (?,?,?,?)').run(approval.id, taskId, approvalFingerprint,
-              JSON.stringify({ triggerId: trigger.id, actorId: trigger.actor.id, source: trigger.source, difference }));
-            appliedMandate = { ...mandate, triggerId: trigger.id, authorizationVersion: (currentMandate.authorizationVersion ?? 1) + 1,
-              authorizationApproval: { id: approval.id, triggerId: trigger.id, actorId: trigger.actor.id, difference } };
-          }
+        const difference = taskMandateDifference(currentMandate, mandate);
+        if (difference) {
+          const approval = typeof authorizeExpansion === 'function' && authorizeExpansion({ task, trigger, mandate, difference });
+          if (!approval || approval.approved !== true || approval.triggerId !== trigger.id || approval.actorId !== trigger.actor.id
+            || typeof approval.id !== 'string' || !approval.id) throw fail('MANDATE_EXPANSION_REQUIRED', '结构化授权范围发生变化，需要真实用户确认具体差异');
+          const approvalFingerprint = createHash('sha256').update(JSON.stringify([taskId, currentMandate.authorizationVersion ?? 1, trigger.id, trigger.source, trigger.actor, difference])).digest('hex');
+          const prior = db.prepare('SELECT fingerprint FROM sa_task_authorization_approvals WHERE approval_id=?').get(approval.id);
+          if (prior && prior.fingerprint !== approvalFingerprint) throw fail('AUTHORIZATION_APPROVAL_CONFLICT', '授权回执已经绑定另一份范围差异');
+          db.prepare('INSERT OR IGNORE INTO sa_task_authorization_approvals VALUES (?,?,?,?)').run(approval.id, taskId, approvalFingerprint,
+            JSON.stringify({ triggerId: trigger.id, actorId: trigger.actor.id, source: trigger.source, difference }));
+          appliedMandate = { ...mandate, triggerId: trigger.id, authorizationVersion: (currentMandate.authorizationVersion ?? 1) + 1,
+            authorizationApproval: { id: approval.id, triggerId: trigger.id, actorId: trigger.actor.id, difference } };
         }
         if (adjustment) {
           if (db.prepare('SELECT 1 FROM sa_task_triggers WHERE task_id=? AND trigger_id=?').get(taskId, triggerId)) throw fail('TRIGGER_ALREADY_ASSIGNED', '关联调整需要新的用户指令');
@@ -116,8 +112,7 @@ export function installTaskRevisions({ db, tx, api, insertTask }) {
         const priorSnapshot = JSON.parse(db.prepare('SELECT snapshot FROM sa_task_revisions WHERE task_id=? ORDER BY revision DESC LIMIT 1').get(taskId).snapshot);
         const completeSnapshot = { target, acceptance, ...(title && target !== task.target ? { title } : {}), mandate: appliedMandate, reason, triggerId,
           authorizationVersion: appliedMandate.authorizationVersion ?? 1,
-          context: [...(priorSnapshot.context || []), { triggerId, source: trigger.source, actor: trigger.actor, text: trigger.content }],
-          toolScope: appliedMandate.scope?.toolNames ?? appliedMandate.toolScope ?? null };
+          context: [...(priorSnapshot.context || []), { triggerId, source: trigger.source, actor: trigger.actor, text: trigger.content }] };
         db.prepare('INSERT INTO sa_task_revisions VALUES (?,?,?,?,?)').run(taskId, revision, operation,
           JSON.stringify(completeSnapshot), at);
         db.prepare('UPDATE sa_tasks SET target=?,acceptance=?,instruction_revision=?,updated_at=? WHERE id=?').run(target, acceptance, revision, at, taskId);

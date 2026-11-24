@@ -58,13 +58,12 @@ test('PTC-dispatched Worker submissions retain the same official audit identity'
   assert.equal(approvalReminderSignal(f.database, identity, [call, f.asked], 1000).approvalId, 'official-ask');
 });
 
-for (const change of ['stopped', 'expired', 'fence', 'session', 'toolScope', 'channel', 'actor']) test(`approval reminder fails closed for ${change}`, () => {
+for (const change of ['stopped', 'expired', 'fence', 'session', 'channel', 'actor']) test(`approval reminder fails closed for ${change}`, () => {
   const f = fixture();
   if (change === 'stopped') f.task.executionControl = { stopped: true };
   if (change === 'expired') f.assignment.leaseUntil = 1000;
   if (change === 'fence') f.run.fence++;
   if (change === 'session') f.run.sessionId = 'other-worker';
-  if (change === 'toolScope') f.task.mandate.toolScope = ['read'];
   if (change === 'channel') f.task.mandate.source.channel = 'feishu';
   if (change === 'actor') f.task.mandate.actorId = 'other';
   assert.equal(approvalReminderSignal(f.database, identity, f.events, 1000), null);

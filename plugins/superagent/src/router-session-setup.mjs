@@ -1,4 +1,3 @@
-import { installWorkerFailureConvergence } from './worker-permissions.mjs';
 import { createContextRedactor } from './context-privacy.mjs';
 import { installProjectRules } from './project-rules.mjs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -7,11 +6,11 @@ import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
 import { canFallback } from './routing.mjs';
 import { validateAssistantModels } from './store.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
-import { captureRouterTools, installRouterPermissionGate } from './router-permissions.mjs';
+import { captureRouterTools, installRouterFailureConvergence, installRouterPermissionGate } from './router-permissions.mjs';
 import { activeChatReply, taskCleanupNoticeSource, installChatPublication } from './chat-publication.mjs';
 import { modelFallbackType, modelFallbackSource, modelRouteType, readModelFallbacks, fallbackCallSignature, requestExecutionEvents, dispatchedCallSignatures, isRouterQuery } from './model-fallback.mjs';
 import { routerRecoverySource } from './router-recovery.mjs';
-import { executionEffects, isReadOnlyWorkerTool } from './execution-effects.mjs';
+import { executionEffects, isReadOnlyTool } from './execution-effects.mjs';
 import { isChatUserMessage } from './question-reply.mjs';
 import { installRouterQuestions } from './router-questions.mjs';
 import { isHostReplyRequest } from '../../base/shared/public-chat-record.mjs';
@@ -37,12 +36,12 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
     return true;
   };
   const setup = async (scope, agent) => {
-    installWorkerFailureConvergence(scope, agent, { revision: () => threadId, onStop: failure => {
+    installRouterFailureConvergence(scope, agent, failure => {
       const message = failure.message;
       errors.set(threadId, message);
       emit({ type: 'error', threadId, message });
       throw Object.assign(new Error(message), { code: failure.code });
-    } });
+    });
     const select = model => agent.model.select({ provider: model.providerId, model: model.modelId,
       ...(model.options?.reasoningEffort === undefined ? {} : { reasoningEffort: model.options.reasoningEffort }) });
     const routes = () => agent.session.snapshotEvents().filter(event => event.type === modelRouteType && event.ignorable === true);
@@ -159,7 +158,7 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
     };
     scope.on('tools/pre-execute', (execution, next) => {
       execution.signal.throwIfAborted();
-      if (execution.agent === agent && !isReadOnlyWorkerTool(execution.name)
+      if (execution.agent === agent && !isReadOnlyTool(execution.name)
         && !isRouterQuery(execution.name, execution.arguments)
         && replayCalls.has(fallbackCallSignature(execution.name, execution.arguments))) {
         return { kind: 'deny', reason: '模型切换不得重复已经派发的动作；请读取已有任务或结果',

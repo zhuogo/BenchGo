@@ -1,7 +1,7 @@
 import { taskExecutionBlocked } from './task-lifecycle.mjs';
 import { ownsDesktopTask } from './desktop-task-owner.mjs';
 import { validateTaskMandate } from './assessment-policy.mjs';
-import { workerAppliedTask } from './worker-permissions.mjs';
+import { externalActionTask } from './external-actions.mjs';
 import { channelSessionKey } from './channel-policy.mjs';
 
 // Historical or incomplete records are not an identity. Skip only that source;
@@ -17,7 +17,7 @@ function sourceStillMatches(thread) {
 }
 
 /** Read-only presentation links. The official Worker request remains the only approval. */
-export function executionApprovalOrigins({ database, ownerScope, ownerSessionId, policy, now = Date.now(), toolName = 'assistant_external_action', channelSource }) {
+export function executionApprovalOrigins({ database, ownerScope, ownerSessionId, policy, now = Date.now(), channelSource }) {
   if (!ownerSessionId || !ownerScope?.threadId || !ownerScope.sessionIds?.includes(ownerSessionId)) return [];
   const channelKey = channelSource ? verifiedChannelKey(channelSource) : null;
   if (channelSource && !channelKey) return [];
@@ -34,10 +34,7 @@ export function executionApprovalOrigins({ database, ownerScope, ownerSessionId,
         if (assignment.state !== 'claimed' || !assignment.owner || !Number.isFinite(assignment.leaseUntil) || assignment.leaseUntil <= now) continue;
         let applied;
         try {
-          // Listing candidate sessions never grants a tool. At decision time the
-          // actual PendingApproval tool name must pass the live capability gate.
-          applied = toolName === null ? { ...task, ...database.appliedTaskSnapshot(assignment.id) }
-            : workerAppliedTask(database, assignment, { name: toolName });
+          applied = externalActionTask(database, assignment);
         }
         catch { continue; }
         if (!validateTaskMandate(applied.mandate, { policy })) continue;
@@ -74,7 +71,7 @@ export async function resolveApprovalOrigins({ store, engine, input = {}, peer, 
       sourceTitle, sessionId: source.sessionId, ownerSessionId: source.sessionId, ownerThreadId: source.id });
     const ownerScope = await engine.taskOwnerScope(source.id);
     const workers = executionApprovalOrigins({ database: store.orchestration, ownerScope,
-      ownerSessionId: source.sessionId, policy: await readPolicy(source.id), toolName: input.toolName ?? null,
+      ownerSessionId: source.sessionId, policy: await readPolicy(source.id),
       ...(source.sourceKey ? { channelSource: source.source } : {}) });
     for (const worker of workers) if (!input.sessionId || input.sessionId === worker.sessionId)
       origins.push({ ...worker, kind: 'worker', sourceTitle });

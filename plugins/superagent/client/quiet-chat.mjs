@@ -19,7 +19,8 @@ const compareRows = (a, b) => {
   // Pending input follows settled conversation and retains the official inbox
   // order. Its browser echo may disappear or use a different clock.
   if (a.submissionState || b.submissionState) return Number(!!a.submissionState) - Number(!!b.submissionState);
-  if (Number.isFinite(a.seq) && Number.isFinite(b.seq)) return a.seq - b.seq;
+  // Notification seq belongs to the notification store, never to the Harness Session.
+  if (!!a.notification === !!b.notification && Number.isFinite(a.seq) && Number.isFinite(b.seq)) return a.seq - b.seq;
   return messageTime(a) - messageTime(b);
 };
 function conversationalNotification(row) {

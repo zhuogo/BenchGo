@@ -32,7 +32,7 @@ export function createAssistantAssignmentWorker({
         const result = database.renewAssignment(assignment.id, {
           ...ownership, validateMandate: (mandate, context) => validateMandate(mandate, { ...context, policy }) === true,
         });
-        if (!result.allowed) throw new Error('Assignment authorization revoked');
+        if (!result.allowed) throw Object.assign(new Error('当前任务授权已失效，Worker 已停止执行'), { code: 'MANDATE_REVOKED' });
         return result.assignment;
       })();
       return renewal.finally(() => { renewal = null; });
@@ -40,7 +40,9 @@ export function createAssistantAssignmentWorker({
     try {
       await renew();
       heartbeat = setInterval(() => {
-        renew().catch(error => controller.abort(error));
+        renew().catch(error => controller.abort(Object.assign(new Error(String(error?.message || error), { cause: error }), {
+          code: error?.code || 'WORKER_RENEWAL_FAILED', workerInterrupted: true,
+        })));
       }, Math.max(100, Math.floor(leaseMs / 3)));
       heartbeat.unref?.();
       const task = database.getTask(assignment.taskId);

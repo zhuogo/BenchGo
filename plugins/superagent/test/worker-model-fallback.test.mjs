@@ -61,7 +61,7 @@ async function fixture(t, script, { install, models = [primary, backup], persist
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   let configured = models;
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({ workerModels: configured }), authorizeAction: async () => ({ allowed: true }) });
+    readPolicy: async () => ({ workerModels: configured }) });
   const context = { task, signal: AbortSignal.timeout(15000), renew: async () => {} };
   return { ctx, database, task, assignment, executor, context, requests, selections, logs, setModels: value => { configured = value; } };
 }
@@ -79,7 +79,7 @@ test('Worker retains literal owner constraints in its Task package beside the as
   const system = f.requests[0].messages.map(message => message.content.map(block => block.text || '').join('\n')).join('\n');
   assert.ok(system.includes(JSON.stringify({ instruction }).slice(1, -1)));
   assert.ok(system.includes(JSON.stringify({ executionScope: target }).slice(1, -1)));
-  assert.match(system, /mandate\.instruction supplies the original parent context and applicable explicit constraints, including required steps, tool interactions, quantities, verification and collaboration/);
+  assert.match(system, /Use that wording for context and explicit constraints that apply to your portion/);
   assert.match(system, /Carry out those explicit requirements with evidence/);
 });
 
@@ -98,7 +98,7 @@ test('Worker keeps an explicit assignment scope when the owner instruction inclu
   assert.match(system, /Sibling assignments and Router dispatch already performed are outside your scope/);
 });
 
-test('Worker fallback clears effort, rebuilds model tools and prompt, and never replays a completed action', async t => {
+test('Worker fallback keeps the same conversation and lets Harness handle repeated tool calls', async t => {
   let effects = 0;
   const f = await fixture(t, (_request, count) => count === 1 ? tool('original', 'effect_once') : count === 2 ? failure() : count === 3 ? tool('repeat', 'effect_once') : text('Complete from saved evidence'), {
     install(ctx) {
@@ -113,7 +113,7 @@ test('Worker fallback clears effort, rebuilds model tools and prompt, and never 
   assert.equal(f.requests[0].reasoningEffort, 'high');
   assert.equal(f.requests[2].reasoningEffort, undefined);
   assert.equal(f.requests[2].maxTokens, undefined);
-  assert.equal(effects, 1);
+  assert.equal(effects, 2);
   assert.ok(f.requests.every(request => request.sessionId === result.sessionId), 'all requests belong to the same Worker, never a Router expression');
   assert.equal(result.executionEffects.effectsVerified, true);
   assert.ok(!f.requests[0].tools.some(tool => tool.name === 'backup_only'));
@@ -123,7 +123,7 @@ test('Worker fallback clears effort, rebuilds model tools and prompt, and never 
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'benchgo-worker-instruction').length, 1);
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === modelFallbackSource).length, 1);
   assert.equal(f.database.getWorkerExecutionState(result.runId).fallbackPlan.index, 1);
-  assert.ok(events.some(event => event.type === 'tool/result' && JSON.stringify(event.data).includes('prior model already dispatched')));
+  assert.ok(events.some(event => event.type === 'tool/result' && event.data.message?.toolCallId === 'repeat' && !event.data.message.isError));
   assert.ok(f.selections.some(selection => selection.model === backup.modelId && selection.reasoningEffort === undefined));
 });
 
@@ -146,19 +146,20 @@ test('Worker preparation failure re-admits the original unlogged identity once a
   assert.equal(plan.requestId, users[0].data.id);
 });
 
-test('Worker never falls back while a dispatched action has an unknown external outcome', async t => {
+test('Worker falls back in the same session with the failed tool result in context', async t => {
   let effects = 0;
-  const f = await fixture(t, (_request, count) => count === 1 ? tool('unknown-action', 'unknown_effect') : failure(), {
+  const f = await fixture(t, (_request, count) => count === 1 ? tool('unknown-action', 'unknown_effect') : count === 2 ? failure() : text('Continued with the tool error in context'), {
     install(ctx) {
       ctx.tools.register({ name: 'unknown_effect', description: 'Uncertain effect', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => {
         effects++; throw new Error('Connection lost after dispatch');
       } });
     },
   });
-  await assert.rejects(f.executor(f.assignment, f.context));
+  const result = await f.executor(f.assignment, f.context);
   assert.equal(effects, 1);
-  assert.deepEqual(f.requests.map(request => request.model), [primary.modelId, primary.modelId]);
-  assert.equal(f.database.runs(f.assignment.id)[0].state, 'uncertain');
+  assert.deepEqual(f.requests.map(request => request.model), [primary.modelId, primary.modelId, backup.modelId]);
+  assert.ok(f.requests.every(request => request.sessionId === result.sessionId));
+  assert.match(JSON.stringify(f.requests[2].messages), /Connection lost after dispatch/);
 });
 
 for (const denied of [false, true]) test(`Worker ${denied ? 'permission denial' : 'explicit cancellation'} never starts its fallback`, async t => {

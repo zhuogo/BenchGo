@@ -17,7 +17,7 @@ for (const harness of ['codex', 'claude']) test(`local ${harness} Worker uses th
   t.after(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
   const task = database.createTask({ threadId: 'thread', target: 'Inspect the local project',
-    mandate: { actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'main' } } });
+    mandate: { actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'main' }, toolScope: ['read'] } });
   const model = { harness, providerId: 'Opaque Provider', modelId: 'opaque/model', options: { reasoningEffort: 'low' } };
   database.createAssignment(task.id, { model });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
@@ -63,8 +63,7 @@ for (const harness of ['codex', 'claude']) test(`local ${harness} Worker uses th
   const ctx = { agents: { create() { assert.fail('External execution cannot start an official Agent'); } },
     sessionQuery: { readSession() {} }, get: name => name === 'commander' ? commander : undefined };
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({ workerHarness: 'official', workerModels: [{ providerId: 'new-policy', modelId: 'new-model' }] }),
-    authorizeAction: async () => ({ allowed: true }) });
+    readPolicy: async () => ({ workerHarness: 'official', workerModels: [{ providerId: 'new-policy', modelId: 'new-model' }] }) });
   const result = await executor(assignment, { task, signal: new AbortController().signal, renew: async () => {} });
   const [run] = database.runs(assignment.id);
   assert.deepEqual(database.getWorkerExecutionState(run.id).models, [model]);
@@ -111,7 +110,7 @@ for (const confirmed of [true, false]) test(`local external Worker stop ${confir
   const ctx = { agents: { create() { assert.fail('External execution cannot start an official Agent'); } },
     sessionQuery: { readSession() {} }, get: name => name === 'commander' ? commander : undefined };
   const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'),
-    readPolicy: async () => ({}), authorizeAction: async () => ({ allowed: true }) });
+    readPolicy: async () => ({}) });
   await assert.rejects(executor(assignment, { task, signal: new AbortController().signal, renew: async () => {} }), error => {
     assert.equal(error.code, 'NATIVE_WORKER_STOP_REQUESTED');
     assert.equal(error.cleanupFailure, confirmed ? undefined : 'Native stop has not been confirmed');
@@ -190,7 +189,7 @@ for (const selection of ['worker', 'explicit', 'inherit']) test(`Worker uses the
     } },
   };
   await installExecutionRoleHost(t, ctx);
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: router, models: [router, routerBackup], workerModels: workers }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ model: router, models: [router, routerBackup], workerModels: workers }) });
   await executor(assignment, { task, signal, renew: async () => {} });
   assert.deepEqual(seen, expected.map(model => [model.providerId, model.modelId, model.options.maxTokens, model.options.reasoningEffort]));
   assert.equal(selected[0].provider, expected[0].providerId);
@@ -226,7 +225,8 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
       const agent = { id: input.sessionId, session: { snapshotEvents: () => transcript }, async followup() {
         assert.equal(database.runs(assignment.id)[0].state, 'submitted');
         submitted = true;
-        await events.get('tools/execute')({ agent, name: 'write', arguments: {}, callId: 'project-write', signal: new AbortController().signal }, async () => 'written');
+        const dispatch = events.get('tools/pre-execute')({ agent, name: 'write' }, () => 'written');
+        assert.equal(dispatch, 'written');
         if (ending === 'paused') {
           database.pauseTask(task.id);
           await events.get('agent/pre-step')({ messages: [] }, async () => ({ kind: 'enter', messages: [] }));
@@ -242,7 +242,7 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
     } },
   };
   await installExecutionRoleHost(t, ctx);
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readSourceContext: async () => ({ status: 'available', messages: [{ text: 'Earlier discussion' }] }), readPolicy: async () => ({ version: 'p1', projects: [project], workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readSourceContext: async () => ({ status: 'available', messages: [{ text: 'Earlier discussion' }] }), readPolicy: async () => ({ version: 'p1', projects: [project], workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }) });
   const signal = new AbortController().signal;
   if (ending === 'max-tokens') {
     await assert.rejects(executor(assignment, { task, signal, renew: async () => {} }), error => error.code === 'WORKER_TURN_INCOMPLETE' && error.executionPhase === 'evidence');
@@ -269,7 +269,7 @@ for (const [projectMode, ending] of [[false, 'completed'], [true, 'completed'], 
   assert.equal(result.environment, undefined);
   assert.equal(database.runs(assignment.id)[0].environment, undefined);
   assert.equal(database.runs(assignment.id)[0].state, 'verifying');
-  assert.equal(typeof events.get('tools/execute'), 'function');
+  assert.equal(events.has('tools/execute'), false);
   const request = await events.get('agent/request')({ signal }, async () => ({ temperature: 0.2, provider: 'inherited', model: 'inherited' }));
   assert.equal(request.temperature, undefined);
   assert.equal(request.provider, 'provider');
@@ -297,7 +297,7 @@ for (const hostStop of [false, true]) test(`elapsed time never interrupts execut
     } },
   };
   await installExecutionRoleHost(t, ctx);
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }), executionTimeoutMs: 20, executionPauseGraceMs: 20 });
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }) });
   const controller = new AbortController();
   const execution = executor(assignment, { task, signal: controller.signal, renew: async () => {} });
   execution.catch(() => {});
@@ -330,7 +330,7 @@ for (const cleanupFails of [false, true]) test(`cancel waits for confirmed host 
     return { agent, dispose: async () => { disposing(); await cleanup; if (cleanupFails) throw new Error('cleanup failed'); } };
   } } };
   await installExecutionRoleHost(t, ctx);
-  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }), authorizeAction: async () => ({ allowed: true }) });
+  const executor = createAssignmentExecutor({ ctx, database, workspaceRoot: join(directory, 'workers'), readPolicy: async () => ({ workerModels: [{ providerId: 'provider', modelId: 'opaque/model' }] }) });
   const controller = new AbortController();
   const work = executor(assignment, { task, signal: controller.signal, renew: async () => {} });
   const rejected = assert.rejects(work, error => error.message === 'requested stop' && (!cleanupFails || error.cleanupFailure === 'cleanup failed'));

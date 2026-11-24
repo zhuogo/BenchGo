@@ -160,9 +160,6 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
     return { error: { code: 'EXECUTION_WORKER_UNAVAILABLE', message: '目标设备已配置 Worker，但其 Harness、模型或参数当前均不可用，请检查目标设备的工作模型设置' } };
   };
   const checkConfig = async input => {
-    const { mandate, toolScope } = input.requirements;
-    if (['codex', 'claude'].includes(input.config?.harness) && [toolScope, mandate.toolScope, mandate.scope?.toolNames].some(scope => scope != null))
-      throw executionError('NATIVE_WORKER_SCOPE_UNSUPPORTED', '外部 Harness 当前无法落实此工单的工具范围，请选择官方 Harness', 422);
     const binding = await checkModel(input.config, await modelCatalog());
     const project = input.projectId === undefined ? null : projects().find(item => item.id === input.projectId);
     if (input.projectId !== undefined && !project) throw executionError('EXECUTION_PROJECT_UNAVAILABLE', '执行工作区不在设备真实目录中', 422);
@@ -511,12 +508,8 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
         scope.on('tools/pre-execute', (execution, next) => {
           if (execution.agent !== agent) return next();
           row = store.get(id);
-          const applied = row.appliedRequirements || row.requirements;
-          const scopes = [applied.toolScope, applied.mandate?.toolScope, applied.mandate?.scope?.toolNames,
-            row.requirements.toolScope, row.requirements.mandate?.toolScope, row.requirements.mandate?.scope?.toolNames].filter(value => value != null);
-          if (closed || executionTerminal(row.phase) || row.cancelRequested || row.pauseRequested || /^assistant_|^commander_|^subagent(?:_|$)/.test(execution.name)
-            || ['spawn_agent', 'fork_agent', 'workflow', 'schedule', 'create_goal'].includes(execution.name)
-            || scopes.some(names => !Array.isArray(names) || !names.includes(execution.name))) return { kind: 'deny', reason: '执行已停止、暂停或超出冻结授权的远端 Worker 工具边界', info: { code: 'ABORTED_BEFORE_DISPATCH' } };
+          if (!row || closed || executionTerminal(row.phase) || row.cancelRequested || row.pauseRequested)
+            return { kind: 'deny', reason: '远端执行已停止或暂停', info: { code: 'ABORTED_BEFORE_DISPATCH' } };
           store.assertFence(row); return next();
         }, { prepend: true });
         scope.on('agent/request', async (_payload, next) => {
@@ -885,8 +878,6 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
         }
         if (row.config.harness !== 'official') {
           if (!row.appliedInstructionRevision) throw executionError('EXECUTION_REVISION_PENDING', '原生会话尚未确认初始要求，请保留请求 ID 稍后重试');
-          if (input.requirements && (input.requirements.toolScope != null || input.requirements.mandate.toolScope != null || input.requirements.mandate.scope?.toolNames != null))
-            throw executionError('EXECUTION_SCOPE_UNSUPPORTED', '外部 Harness 无法落实指定工具范围', 422);
           store.tx(() => {
             if (input.kind === 'revision') { row.requirements = structuredClone(input.requirements); row.receivedInstructionRevision = input.instructionRevision; }
             row.pendingCommands.push({ requestId: input.requestId, kind: input.kind, ...(input.kind === 'context' ? { text: input.text } : {}) });

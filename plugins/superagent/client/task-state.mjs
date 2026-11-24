@@ -100,6 +100,7 @@ export function taskWaiting(task) {
   else if (control.paused && !uncertain && !control.stopRequested && !control.stopped) actions.push({ kind: 'resume', label: '继续任务', input: { taskId: task.id } });
   if (failed || control.stopped || snapshot.assignment?.state === 'blocked') actions.push({ kind: 'tasks', label: '调整要求' });
   actions.push({ kind: 'refresh', label: '刷新记录' });
-  return { status, label: taskLabels.waiting, reason, actions, executionNotice,
-    attention: uncertain || control.stopRequested || control.stopped ? null : attention };
+  const answerable = uncertain || control.stopRequested || control.stopped ? null : attention;
+  return { status, label: answerable && !control.paused && !control.pauseRequested ? '等待答复' : taskLabels.waiting,
+    reason, actions, executionNotice, attention: answerable };
 }

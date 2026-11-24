@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { interruptedTurnClosers } from '@deepseek-ai/dsh-session';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
-import { requestInterruptedContinuation, assertInterruptedToolsSettled, verifyInterruptedTranscript } from '../src/interrupted-continuation.mjs';
+import { requestInterruptedContinuation, verifyInterruptedTranscript } from '../src/interrupted-continuation.mjs';
 import { executionEvidence } from '../src/execution-evidence.mjs';
 import { executionEffects } from '../src/execution-effects.mjs';
 import { createAssignmentExecutor } from '../src/assignment-executor.mjs';
@@ -96,18 +96,15 @@ test('official writer inspection queues the original run and freezes its identit
   assert.throws(() => verifyInterruptedTranscript([...repaired, { type: 'user/message', seq: repaired.length, data: {} }], run.evidence), { code: 'EVIDENCE_MISMATCH' });
 });
 
-for (const problem of ['live', 'pending-read', 'unknown-send', 'pending-ptc', 'revoked', 'paused', 'stopped', 'completed', 'user-aborted', 'revision']) {
+for (const problem of ['live', 'revoked', 'paused', 'stopped', 'completed', 'revision']) {
   test(`interrupted continuation refuses ${problem} without dispatch or a new run`, async t => {
     const f = await fixture(t);
     if (problem === 'live') f.ctx.agents.get = () => ({});
-    if (problem === 'pending-read') f.log.events.pop();
-    if (problem === 'pending-ptc') f.log.events.push({ seq: 4, type: 'tool/ptc-dispatch-start', data: { subCallId: 'nested', name: 'read', arguments: {} } });
-    if (problem === 'unknown-send') f.log.events.push({ ...call('send', 'assistant_external_action', { operation: 'submit' }), seq: 4 }, { ...result('send', '{"state":"submitted"}'), seq: 5 });
     if (problem === 'revoked') f.policy.desktopVersion = 'd2';
     if (problem === 'paused') f.database.pauseTask(f.task.id);
     if (problem === 'stopped') f.database.cancelTask(f.task.id);
-    if (problem === 'completed' || problem === 'user-aborted') {
-      const closing = interruptedTurnClosers(f.log.events); closing.at(-1).data.reason = problem === 'completed' ? { kind: 'completed' } : { kind: 'aborted', reason: { kind: 'user' } };
+    if (problem === 'completed') {
+      const closing = interruptedTurnClosers(f.log.events); closing.at(-1).data.reason = { kind: 'completed' };
       f.log.events.push(...closing);
     }
     if (problem === 'revision') f.input.instructionRevision = 2;
@@ -125,10 +122,14 @@ test('authorization is rechecked after session inspection and before queuing', a
   assert.equal(f.closed(), 1);
 });
 
-test('tool evidence rejects orphan receipts, duplicate identities and unknown nested effects', () => {
-  assert.throws(() => assertInterruptedToolsSettled([{ ...result(), seq: 0 }]), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
-  assert.throws(() => assertInterruptedToolsSettled([call(), result(), call()]), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
-  assert.throws(() => assertInterruptedToolsSettled([{ type: 'tool/ptc-dispatch-start', data: { subCallId: '1', name: 'send' } }, { type: 'tool/ptc-dispatch', data: { subCallId: '1', name: 'send', isError: true } }]), { code: 'EXECUTION_EFFECTS_UNKNOWN' });
+test('a submitted action with an unknown receipt is retained as context in the same run', async t => {
+  const f = await fixture(t);
+  f.log.events.push({ ...call('send', 'assistant_external_action', { operation: 'submit' }), seq: 4 }, { ...result('send', '{"state":"submitted"}'), seq: 5 });
+  await requestInterruptedContinuation(f.input);
+  const [assignment] = f.database.claimAssignments('continued-owner', { validateMandate: () => true });
+  const [run] = f.database.runs(assignment.id);
+  assert.equal(run.id, f.run.id);
+  assert.equal(run.evidence.executionEffects.effectsVerified, false);
 });
 
 test('a changed transcript cannot borrow the inspected continuation boundary', () => {
@@ -137,12 +138,15 @@ test('a changed transcript cannot borrow the inspected continuation boundary', (
   assert.throws(() => verifyInterruptedTranscript([...changed, ...interruptedTurnClosers(changed)], saved), { code: 'EVIDENCE_MISMATCH' });
 });
 
-for (const ending of ['interrupted', 'disposed']) test(`executor resumes ${ending} in the original official session and model`, async t => {
+for (const ending of ['interrupted', 'disposed', 'user']) test(`executor resumes ${ending} in the original official session and model`, async t => {
   const f = await fixture(t, { failed: ending === 'disposed' });
-  if (ending === 'disposed') {
+  if (ending === 'interrupted') f.log.events.pop();
+  else {
     const closing = interruptedTurnClosers(f.log.events);
-    closing.at(-1).data.reason = { kind: 'aborted', reason: { kind: 'disposed' } };
+    closing.at(-1).data.reason = { kind: 'aborted', reason: { kind: ending } };
     f.log.events.push(...closing);
+  }
+  if (ending === 'disposed') {
     assert.equal(f.database.getAssignment(f.assignment.id).executionStopped.fence, f.assignment.fence);
     assert.equal(f.database.getTask(f.task.id).continuationWait.code, 'EXECUTION_FAILED');
   }
@@ -156,6 +160,7 @@ for (const ending of ['interrupted', 'disposed']) test(`executor resumes ${endin
   const large = await open(join(f.work, 'unrelated-build.tar'), 'w');
   try { await large.truncate(600 * 1024 * 1024); } finally { await large.close(); }
   const transcript = [...f.log.events, ...interruptedTurnClosers(f.log.events)];
+  if (ending === 'interrupted') assert.ok(transcript.slice(f.log.events.length).some(event => event.type === 'tool/result'));
   const hooks = new Map(), tools = new Map(), selected = []; let message, disposed = false;
   f.ctx.on = () => () => {};
   f.ctx.sessionQuery = { readSession: async () => ({ events: transcript }) };
@@ -176,7 +181,7 @@ for (const ending of ['interrupted', 'disposed']) test(`executor resumes ${endin
     return { agent, dispose: async () => { disposed = true; } };
   };
   await installContinuationRoleHost(t, f.ctx);
-  const execute = createAssignmentExecutor({ ctx: f.ctx, database: f.database, workspaceRoot: f.directory, readPolicy: f.input.readPolicy, authorizeAction: async () => ({ allowed: true }) });
+  const execute = createAssignmentExecutor({ ctx: f.ctx, database: f.database, workspaceRoot: f.directory, readPolicy: f.input.readPolicy });
   const result = await execute(assignment, { task: f.database.getTask(f.task.id), signal: f.input.signal, renew: async () => {} });
   assert.equal(message.source.kind, 'benchgo-interrupted-continuation');
   assert.equal(selected[0].provider, 'ExactProvider'); assert.equal(selected[0].model, 'Exact/Original');
@@ -199,7 +204,7 @@ test('working directory identity changes still prevent official continuation', a
     assert.fail('changed working directory must never start followup');
   };
   await installContinuationRoleHost(t, f.ctx);
-  const execute = createAssignmentExecutor({ ctx: f.ctx, database: f.database, workspaceRoot: f.directory, readPolicy: f.input.readPolicy, authorizeAction: async () => ({ allowed: true }) });
+  const execute = createAssignmentExecutor({ ctx: f.ctx, database: f.database, workspaceRoot: f.directory, readPolicy: f.input.readPolicy });
   await assert.rejects(execute(assignment, { task: f.database.getTask(f.task.id), signal: f.input.signal, renew: async () => {} }), /working directory changed/);
   assert.equal(f.database.runs(assignment.id)[0].state, 'prepared');
 });

@@ -82,8 +82,6 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   }
   const executeTask = execute || createAssignmentExecutor({ ctx, database, workspaceRoot: join(store.paths.workspace, 'workers'), readPolicy,
     onTaskTitleChanged,
-    authorizeAction: async ({ policy, mandate }) => ({ allowed: validateTaskMandate(mandate, { policy }) }),
-    readContext: sessionId => store.getSessionContext(sessionId), memory: store.memory,
     readSourceContext: input => input.source?.channel === 'feishu' ? feishu?.readContext?.(input) : undefined,
   });
   const remoteExecutor = createRemoteAssignmentExecutor({ ctx, database, readPolicy, commitResult, signal: shutdown.signal, now });
@@ -184,7 +182,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
         await requestInterruptedContinuation({ ctx, database, assignmentId: assignment.id, fence: assignment.fence,
           instructionRevision: task.instructionRevision, readPolicy, signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(1500)]), now: now() });
       } catch (error) {
-        // Keep the original input pending if the previous owner or its tools are still settling.
+        // Keep the original input pending while its session is unavailable.
         if (!shutdown.signal.aborted && !['FENCING_CONFLICT', 'SESSION_STILL_LIVE'].includes(error.code))
           database.markWorkerMessageBlocked(assignment.taskId, { code: error.code, reason: error.message, now: now() });
       }
@@ -544,7 +542,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       if (execution && gate?.runId === execution.run.id && gate?.assignmentId === execution.assignment.id
         && gate?.owner === execution.assignment.owner && gate?.fence === execution.assignment.fence
         && execution.assignment.state === 'claimed' && execution.assignment.leaseUntil > Date.now()) return Promise.resolve(agent);
-      throw new Error('Worker conversation is already open without its current execution inbox');
+      if (gate || agent.status !== 'idle') throw Object.assign(new Error('原执行会话仍在运行或释放中'), { code: 'SESSION_STILL_LIVE' });
     }
     return worker.resumeExecutionSession(input);
   };

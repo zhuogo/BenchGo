@@ -372,21 +372,16 @@ test('explicit continuation checks the recovered official ending before reportin
     // original-session continuation coverage.
     app.db.claimAssignments = () => [];
     const input = { taskId: app.task.id, assignmentId: assignment.id, fence: assignment.fence, instructionRevision: 1, operation: 'resume' };
-    if (ending === 'user') {
-      await assert.rejects(app.runtime.manageExecution(input), { code: 'EXECUTION_PAUSE_UNVERIFIED' });
-      assert.equal(app.db.getAssignment(assignment.id).state, 'uncertain');
+    const receipt = await app.runtime.manageExecution(input);
+    if (ending === 'completed') {
+      assert.equal(receipt.status, 'completed');
+      assert.equal(app.db.getTask(app.task.id).status, 'completed');
     } else {
-      const receipt = await app.runtime.manageExecution(input);
-      if (ending === 'completed') {
-        assert.equal(receipt.status, 'completed');
-        assert.equal(app.db.getTask(app.task.id).status, 'completed');
-      } else {
-        assert.equal(receipt.state, 'queued');
-        assert.equal(receipt.status, undefined);
-        assert.equal(app.db.getAssignment(assignment.id).state, 'queued');
-        assert.equal(app.db.getTask(app.task.id).continuationWait, null);
-        assert.equal(app.db.runs(assignment.id)[0].id, run.id);
-      }
+      assert.equal(receipt.state, 'queued');
+      assert.equal(receipt.status, undefined);
+      assert.equal(app.db.getAssignment(assignment.id).state, 'queued');
+      assert.equal(app.db.getTask(app.task.id).continuationWait, null);
+      assert.equal(app.db.runs(assignment.id)[0].id, run.id);
     }
     assert.equal(app.db.results(app.task.id).at(-1).completion.kind, reason.kind);
     assert.equal(app.counts().executions, 0);

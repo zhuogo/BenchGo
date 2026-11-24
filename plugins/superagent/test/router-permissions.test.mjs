@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { captureRouterTools, installRouterPermissionGate } from '../src/router-permissions.mjs';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { captureRouterTools, installRouterPermissionGate, installRouterFailureConvergence } from '../src/router-permissions.mjs';
 import { recordDesktopTrigger } from '../src/desktop-trigger.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { isRouterQuery } from '../src/model-fallback.mjs';
@@ -147,4 +149,65 @@ test('Router leaves another agent’s calls to that agent’s own gate', async (
   // The gate leaves diagnostic results to the official executor and Router;
   // it does not turn one denied call into a hard chat failure.
   assert.deepEqual(listeners, ['system-prompt/assemble', 'tools/execute']);
+});
+
+for (const code of ['PROFILE_CONFIG_DIRECT_WRITE', 'PROFILE_CONFIG_RESTORED']) test(`configuration guard failure stops the Router immediately (${code})`, () => {
+  const listeners = new Map(), agent = {}; let stopped;
+  installRouterFailureConvergence({ on: (event, fn) => listeners.set(event, fn) }, agent, value => { stopped = value; });
+  listeners.get('tools/result')({ agent, callId: 'config-write', name: 'shell' }, {
+    isError: true, error: { code }, content: [{ type: 'text', text: `${code}: direct profile configuration is blocked` }],
+  });
+  const step = listeners.get('agent/pre-step');
+  const next = () => ({ kind: 'accept' });
+  assert.deepEqual(step({ agent: {}, messages: [] }, next), { kind: 'accept' });
+  assert.equal(stopped, undefined);
+  assert.deepEqual(step({ agent, messages: [] }, next), { kind: 'reject' });
+  assert.equal(stopped.code, code);
+  assert.equal(stopped.callId, 'config-write');
+});
+
+test('official Router loop stops repeated shared structural failures across tools without another model request', { timeout: 15000 }, async t => {
+  const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
+  const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
+  const { Context } = await load('@deepseek-ai/cordis');
+  const { default: LlmRuntime, LlmAdapter, createUserMessage, HarnessError } = await load('@deepseek-ai/dsh-llm');
+  const ctx = new Context(); t.after(() => ctx.fiber.dispose());
+  await ctx.plugin(LlmRuntime);
+  for (const name of ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-agent-loop']) {
+    await ctx.plugin((await load(name)).default, name === '@deepseek-ai/dsh-agent-loop' ? { agents: [] } : undefined);
+  }
+  const requireNative = createRequire(new URL('../../../deepseek-harness/packages/core/tool-executor-native/package.json', import.meta.url));
+  await ctx.plugin(await import(pathToFileURL(requireNative.resolve('@deepseek-ai/dsh-tool-executor-native')).href));
+  const requests = [];
+  class Adapter extends LlmAdapter {
+    async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 } }; }
+    async *stream(request) {
+      requests.push(request);
+      assert.ok(requests.length <= 2, 'shared structural failure must stop at the next official boundary');
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: `failure-${requests.length}`, name: requests.length === 1 ? 'first' : 'alternate', arguments: '{}' } };
+      yield { type: 'finish', reason: { kind: 'tool-calls' } };
+    }
+  }
+  ctx.llm.registerAdapter(['convergence-test'], new Adapter());
+  const sessionId = 'convergence-same-session';
+  let created = 0, stopped;
+  ctx.on('agent/created', () => { created++; });
+  const handle = await ctx.agents.create({ sessionId, setup: async (scope, agent) => {
+    installRouterFailureConvergence(scope, agent, value => { stopped = value; });
+    for (const name of ['first', 'alternate']) scope.tools.register({ name, description: 'test', parameters: { type: 'object', properties: {} },
+      output: { schema: { type: 'object' }, render: () => [] },
+      execute() { throw new HarnessError('Disk quota exhausted before dispatch', 'ENOSPC'); } });
+  } });
+  t.after(() => handle.dispose());
+  handle.agent.model.select({ provider: 'convergence-test', model: 'opaque-model' });
+  handle.agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'Continue the task' }] }));
+  await handle.agent.whenIdle();
+  const events = handle.agent.session.snapshotEvents();
+  assert.equal(created, 1); assert.equal(handle.agent.id, sessionId);
+  assert.equal(requests.length, 2);
+  assert.equal(events.filter(event => event.type === 'tool/result').length, 2);
+  assert.equal(stopped.code, 'ENOSPC');
+  assert.equal(stopped.callId, 'failure-1');
+  assert.equal(events.findLast(event => event.type === 'turn/end').data.reason.kind, 'blocked');
 });

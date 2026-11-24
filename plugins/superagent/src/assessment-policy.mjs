@@ -4,6 +4,32 @@ import { createHash } from 'node:crypto';
 import { isScheduledTrigger } from './schedule-bridge.mjs';
 import { assessChannelAdmission, validateChannelMandate } from './channel-policy.mjs';
 
+const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const desktopHistory = new WeakMap();
+const desktopOwnerDelegationVersion = digest(['desktop-owner-delegation', 1]);
+
+export const desktopDelegationVersion = policy => policy.desktopDelegationVersion ?? policy.desktopVersion;
+
+async function desktopDocumentHashes(documents, document, rules) {
+  if (!documents.versions) return [document.hash];
+  const cached = desktopHistory.get(documents);
+  if (cached?.hash === document.hash && cached.revision === document.revision) return cached.hashes;
+  const hashes = [document.hash];
+  for (const prior of await documents.versions('AGENTS.md')) {
+    if (prior.status !== 'committed' || prior.revision >= document.revision) continue;
+    try { if (JSON.stringify(readAdmissionRules(prior.content)) !== rules) break; }
+    catch { break; }
+    hashes.push(prior.hash);
+  }
+  desktopHistory.set(documents, { hash: document.hash, revision: document.revision, hashes });
+  return hashes;
+}
+
+export function desktopPolicyMatches(policy, version) {
+  return typeof version === 'string' && !!version
+    && (policy.desktopVersion === version || policy.legacyDesktopVersions?.includes(version) === true);
+}
+
 export async function readAssessmentPolicy(store, workspaceRegistry, threadId) {
   const connection = store.connections.read();
   const [config, document] = await Promise.all([store.getConfig(), store.documents.read('AGENTS.md')]);
@@ -11,13 +37,24 @@ export async function readAssessmentPolicy(store, workspaceRegistry, threadId) {
   const projects = (workspaceRegistry?.list() || []).map(({ id, path, title }) => ({ id, path, title }));
   const bindings = projects.map(({ id, path }) => [id, path]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   const connections = store.connections.list();
-  const version = createHash('sha256').update(JSON.stringify([document.hash, bindings])).digest('hex');
-  const desktopVersion = createHash('sha256').update(JSON.stringify(['desktop', document.hash, bindings])).digest('hex');
+  let admissionRules = [], ruleDocumentValid = true;
+  try { admissionRules = readAdmissionRules(document.content); }
+  catch (error) {
+    if (error.code !== 'DUPLICATE_ADMISSION_RULE') throw error;
+    ruleDocumentValid = false;
+  }
+  const rules = JSON.stringify(admissionRules);
+  const version = digest([document.hash, bindings]);
+  const desktopVersion = digest(['desktop-admission-rules', rules]);
+  const legacyDesktopVersions = ruleDocumentValid
+    ? (await desktopDocumentHashes(store.documents, document, rules)).map(hash => digest(['desktop', hash, bindings])) : [];
   const channel = threadId ? store.orchestration.getThread(threadId)?.source?.type : 'feishu';
   const selected = connections.find(row => row.channel === channel) || connection;
   const enabled = new Set(selected.config.enabledRuleIds || []);
-  const writtenRules = readAdmissionRules(document.content).filter(rule => enabled.has(rule.id));
-  return { version, desktopVersion, connections: Object.fromEntries(connections.map(row => [row.channel, { ...row, enabledRuleIds: readAdmissionRules(document.content).filter(rule => (row.config.enabledRuleIds || []).includes(rule.id)).map(rule => rule.id) }])), projects, model: roleModels(undefined, config, 'router')[0], models: roleModels(undefined, config, 'router'), workerHarness: config.workerHarness, workerModels: config.workerModels, routingConfig: { revision: config.revision, auxiliary: config.auxiliary, models: config.models, workerHarness: config.workerHarness, workerModels: config.workerModels }, rules: document.content + '\nEnabled admission rules (exact IDs):\n' + JSON.stringify(writtenRules), connection: connection.config, mode: selected.config.admissionMode || 'manual', enabledRuleIds: writtenRules.map(rule => rule.id) };
+  const writtenRules = admissionRules.filter(rule => enabled.has(rule.id));
+  return { version, desktopVersion, legacyDesktopVersions, desktopDelegationVersion: desktopOwnerDelegationVersion, ruleDocumentValid,
+    ruleVersions: Object.fromEntries(admissionRules.map(rule => [rule.id, digest(rule.instruction)])),
+    connections: Object.fromEntries(connections.map(row => [row.channel, { ...row, enabledRuleIds: admissionRules.filter(rule => (row.config.enabledRuleIds || []).includes(rule.id)).map(rule => rule.id) }])), projects, model: roleModels(undefined, config, 'router')[0], models: roleModels(undefined, config, 'router'), workerHarness: config.workerHarness, workerModels: config.workerModels, routingConfig: { revision: config.revision, auxiliary: config.auxiliary, models: config.models, workerHarness: config.workerHarness, workerModels: config.workerModels }, rules: document.content + '\nEnabled admission rules (exact IDs):\n' + JSON.stringify(writtenRules), connection: connection.config, mode: selected.config.admissionMode || 'manual', enabledRuleIds: writtenRules.map(rule => rule.id) };
 }
 
 /** Admission records a trusted instruction; it does not preapprove controlled actions. */
@@ -29,7 +66,7 @@ export function authorizeAssessment({ policy, candidate, trigger, decision, task
   // Resolve remote projects in the target's catalog after source admission.
   const remote = decision.outcome === 'accept' && typeof decision.deviceId === 'string' && !!decision.deviceId && decision.deviceId !== 'local';
   if (isScheduledTrigger(trigger)) {
-    if (candidate.gate.strength !== 'explicit' || candidate.gate.evidence?.desktopPolicyVersion !== policy.desktopVersion) return { allowed: false, reason: 'schedule-policy-changed' };
+    if (policy.ruleDocumentValid === false || candidate.gate.strength !== 'explicit' || !desktopPolicyMatches(policy, candidate.gate.evidence?.desktopPolicyVersion)) return { allowed: false, reason: 'schedule-policy-changed' };
     const project = remote || decision.projectId === undefined ? undefined : policy.projects?.find(item => item.id === decision.projectId);
     if (!remote && decision.projectId !== undefined && !project) return { allowed: false, reason: 'unknown-project' };
     if (decision.outcome === 'answer') return { allowed: true, reason: 'scheduled-notification' };
@@ -55,11 +92,12 @@ export function authorizeAssessment({ policy, candidate, trigger, decision, task
   if (!remote && !previous && decision.projectId !== undefined && !project) return { allowed: false, reason: 'unknown-project' };
   return { allowed: true, reason: admission.reason, mandate: {
     ...admission.mandate,
+    ...(admission.mandate.ruleIds && policy.ruleVersions ? { ruleVersions: admission.mandate.ruleIds.map(id => policy.ruleVersions[id]) } : {}),
     actorId: trigger.actor.id, source: trigger.source, instruction: trigger.content,
     controlledActions: 'require-current-policy-and-harness-approval',
     ...(project ? { project: { id: project.id, path: project.path } } : {}),
     ...(previous ? { execution: previous.execution, ...(previous.project ? { project: previous.project } : {}),
-      ...(previous.scope ? { scope: previous.scope } : {}), ...(previous.toolScope ? { toolScope: previous.toolScope } : {}) } : {}),
+      ...(previous.scope ? { scope: previous.scope } : {}) } : {}),
   } };
 }
 
@@ -72,7 +110,8 @@ export function validateTaskMandate(mandate, { policy }) {
   // Desktop mandates pin the desktop policy version; channel mandates are revalidated
   // against their own adapter's current policy.
   const scheduled = mandate.admission === 'desktop-schedule';
-  if (desktop && !scheduled && mandate.policyVersion !== policy.desktopVersion) return false;
+  if (desktop && !scheduled && !(typeof mandate.policyVersion === 'string' && !!mandate.policyVersion
+    && (mandate.policyVersion === desktopDelegationVersion(policy) || desktopPolicyMatches(policy, mandate.policyVersion)))) return false;
   // Remote execution is not tied to the desktop conversation: any source admitted below may use a paired device.
   if (mandate.execution) {
     const { deviceId, hostId, authorizationId, config, protocolVersion } = mandate.execution;
@@ -86,10 +125,15 @@ export function validateTaskMandate(mandate, { policy }) {
     || mandate.project.deviceId && mandate.project.deviceId !== 'local')) return false;
   const source = mandate.source;
   if (scheduled) return isScheduledTrigger({ actor: { id: mandate.actorId, kind: mandate.actorKind }, source })
-    && mandate.policyVersion === policy.version && mandate.desktopPolicyVersion === policy.desktopVersion
+    && policy.ruleDocumentValid !== false && typeof mandate.policyVersion === 'string' && !!mandate.policyVersion
+    && desktopPolicyMatches(policy, mandate.desktopPolicyVersion)
+    && (policy.desktopDelegationVersion || mandate.policyVersion === policy.version)
     && mandate.controlledActions === 'require-current-policy-and-harness-approval';
   if (desktop) return typeof mandate.actorId === 'string' && !!mandate.actorId && mandate.admission === 'desktop-approved-delegation'
     && typeof source.sessionId === 'string' && !!source.sessionId && typeof source.messageId === 'string' && !!source.messageId
     && mandate.controlledActions === 'require-current-policy-and-harness-approval';
+  if (mandate.admission === 'enabled-rules' && mandate.ruleVersions !== undefined
+    && (!Array.isArray(mandate.ruleIds) || !Array.isArray(mandate.ruleVersions) || mandate.ruleIds.length !== mandate.ruleVersions.length
+      || !mandate.ruleIds.every((id, i) => Object.hasOwn(policy.ruleVersions || {}, id) && policy.ruleVersions[id] === mandate.ruleVersions[i]))) return false;
   return validateChannelMandate(mandate, policy);
 }

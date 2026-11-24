@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { readAssessmentPolicy } from './assessment-policy.mjs';
+import { desktopDelegationVersion, readAssessmentPolicy, validateTaskMandate } from './assessment-policy.mjs';
 import { assertSpecificTaskDescription, normalizeTaskTitle } from './task-title.mjs';
 import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
 import { readQuestionReply } from './question-reply.mjs';
 import { readRemoteExecutionCatalog, selectRemoteExecution } from './execution-catalog.mjs';
-import { assertExternalWorkerModel, assertExternalWorkerTask } from './external-worker.mjs';
+import { assertExternalWorkerModel } from './external-worker.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 import { fallbackRequestIds, modelFallbackSource } from './model-fallback.mjs';
 import { routerRecoveryRequests, routerRecoverySource } from './router-recovery.mjs';
@@ -121,7 +121,6 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       const trigger = recoveredTrigger ?? database.ingest({ dedupeKey: `desktop-message:${digest([sessionId, source.messageId])}`, thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source, actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' }).trigger;
       const selectedModel = remote ? remote.model : configuredWorkModel(policy);
       if (!remote && selectedModel.harness && selectedModel.harness !== 'official') {
-        assertExternalWorkerTask({ target, acceptance: taskAcceptance });
         await assertExternalWorkerModel(ctx, selectedModel, exec.signal);
       } else if (!remote) {
         const { providerId, modelId } = selectedModel;
@@ -138,10 +137,11 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       exec.signal?.throwIfAborted();
       const latest = readInstruction();
       if (!latest || digest(latest) !== instructionFingerprint) throw new Error('安排任务期间当前用户指令已变化，请重试');
-      if (current.desktopVersion !== policy.desktopVersion || (!remote && project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('安排任务期间项目或授权规则已变化，请重试');
+      if (desktopDelegationVersion(current) !== desktopDelegationVersion(policy) || (!remote && project && !current.projects.some(item => item.id === projectId && item.path === project.path))) throw new Error('安排任务期间项目或授权规则已变化，请重试');
       if (!remote && digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('安排任务期间工作角色模型已变化，请重试');
-      const task = database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, duplicateOfTaskId, model: selectedModel, mandate: {
-        actorId: 'desktop-owner', source, triggerId: trigger.id, instruction: original, policyVersion: policy.desktopVersion,
+      const task = database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, duplicateOfTaskId, model: selectedModel,
+        validateExistingMandate: mandate => validateTaskMandate(mandate, { policy: current }), mandate: {
+        actorId: 'desktop-owner', source, triggerId: trigger.id, instruction: original, policyVersion: desktopDelegationVersion(policy),
         target, acceptance: taskAcceptance, requestTime: desktopRequestTime(ownerAgent, message, trigger.createdAt),
         admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval',
         ...(project ? { project: remote ? project : { id: project.id, path: project.path } } : {}),

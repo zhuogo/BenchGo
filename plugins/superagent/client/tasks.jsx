@@ -172,7 +172,7 @@ export function Tasks({ api, onDirtyChange, onDetailChange, onSchedule, onOpenEx
       const waiting = taskWaiting(row);
       const deliveryLabel = delivery?.receipt?.status === 'suppressed' ? '回复已取消' : delivery?.state === 'sent' ? '已送达'
         : delivery?.state === 'uncertain' ? '发送待核实' : delivery?.payload?.replyState === 'pending' ? '待生成回复' : '待送达';
-      const stateLabel = status === 'completed' ? `执行完成${delivery ? ` · ${deliveryLabel}` : ''}` : taskLabels[status] || '等待';
+      const stateLabel = status === 'completed' ? `执行完成${delivery ? ` · ${deliveryLabel}` : ''}` : waiting?.label || taskLabels[status] || '等待';
       const control = row.executionControl || {};
       const uncertain = row.assignments?.some(item => assignmentExecutionUncertain(item));
       const changeBlocked = safetyWait || control.pauseRequested || control.stopRequested || uncertain;

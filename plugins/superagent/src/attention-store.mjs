@@ -26,6 +26,8 @@ export function installAttentionStore({ db, tx, api, ownedAssignment }) {
     instruction_revision INTEGER NOT NULL, question TEXT NOT NULL, resolution TEXT NOT NULL, created_at TEXT NOT NULL);`);
   if (!db.prepare("SELECT 1 FROM pragma_table_info('sa_attentions') WHERE name='superseded_at'").get())
     db.exec('ALTER TABLE sa_attentions ADD COLUMN superseded_at TEXT');
+  db.exec(`CREATE INDEX IF NOT EXISTS sa_attention_pending_task ON sa_attentions(task_id,instruction_revision)
+    WHERE answer_trigger_id IS NULL AND superseded_at IS NULL;`);
   const resolutionValue = row => ({ assignmentId: row.assignment_id, taskId: row.task_id, sessionId: row.session_id,
     callId: row.call_id, instructionRevision: row.instruction_revision, question: JSON.parse(row.question),
     ...JSON.parse(row.resolution), createdAt: row.created_at });

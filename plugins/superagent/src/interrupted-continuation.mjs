@@ -6,38 +6,12 @@ import { taskExecutionBlocked } from './task-lifecycle.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
-/** A read-only tool with no receipt is also unfinished; effects alone are insufficient. */
-export function assertInterruptedToolsSettled(events) {
-  const pending = new Set(), seen = new Set();
-  const add = (kind, id) => {
-    const key = `${kind}:${id}`;
-    if (!id || seen.has(key)) throw fail('EXECUTION_EFFECTS_UNKNOWN', 'Tool identity is missing or duplicated');
-    seen.add(key); pending.add(key);
-  };
-  const settle = (kind, id) => {
-    if (!pending.delete(`${kind}:${id}`)) throw fail('EXECUTION_EFFECTS_UNKNOWN', 'Tool receipt has no matching call');
-  };
-  for (const event of events) {
-    if (event.type === 'assistant/message') for (const block of event.data?.message?.content || []) {
-      if (block.type === 'tool-call') add('tool', block.id);
-    }
-    if (event.type === 'tool/result') settle('tool', event.data?.message?.toolCallId ?? event.data?.message?.source?.callId);
-    if (event.type === 'tool/ptc-dispatch-start') add('ptc', event.data?.subCallId);
-    if (event.type === 'tool/ptc-dispatch') settle('ptc', event.data?.subCallId);
-  }
-  if (pending.size) throw fail('EXECUTION_EFFECTS_UNKNOWN', 'Interrupted execution still has unanswered tools');
-  const effects = executionEffects({ events });
-  if (!effects.effectsVerified) throw fail('EXECUTION_EFFECTS_UNKNOWN', 'External effects must be reconciled before continuation');
-  return effects;
-}
-
 /** Validate only the official crash-repair suffix; never generate or append log events. */
 export function verifyInterruptedTranscript(events, saved) {
   const prefix = events.filter(event => event.seq <= saved?.transcript?.lastSeq);
   const suffix = events.filter(event => event.seq > saved?.transcript?.lastSeq);
   const observed = executionEvidence({ events: prefix });
-  if (observed.transcript.hash !== saved?.transcript?.hash || observed.transcript.lastSeq !== saved.transcript.lastSeq
-    || JSON.stringify(assertInterruptedToolsSettled(prefix)) !== JSON.stringify(saved.executionEffects)) {
+  if (observed.transcript.hash !== saved?.transcript?.hash || observed.transcript.lastSeq !== saved.transcript.lastSeq) {
     throw fail('EVIDENCE_MISMATCH', 'Interrupted execution transcript changed');
   }
   const expected = interruptedTurnClosers(prefix);
@@ -71,15 +45,16 @@ export async function requestInterruptedContinuation({ ctx, database, assignment
     const log = live ? { events: live.session.snapshotEvents() } : await handle.read(0, undefined, { signal });
     const events = log.events || [], last = events.at(-1);
     if (!events.some(event => event.type === 'turn/start') || !Number.isSafeInteger(last?.seq)) throw fail('EVIDENCE_MISMATCH', 'Original execution has no verifiable turn');
-    const executionEffects = assertInterruptedToolsSettled(events);
+    const toolReceipts = run.evidence?.toolReceipts || {};
     const closers = interruptedTurnClosers(events);
     const terminal = closers.at(-1) || [...events].reverse().find(event => event.type === 'turn/end');
-    // Host disposal is an interruption, not a user cancellation. All writer,
-    // tool, effect and authorization checks still apply to its original run.
+    // A cancelled turn can accept a new instruction. The Task's own stop
+    // request is checked separately before reclaiming the original Run.
     const ending = terminal?.data?.reason;
-    const resumable = ['interrupted', 'error'].includes(ending?.kind) || ending?.kind === 'aborted' && ending.reason?.kind === 'disposed';
-    if (!resumable || closers.some(event => event.type === 'tool/result')) throw fail('EXECUTION_PAUSE_UNVERIFIED', 'Execution has no safely resumable interrupted ending');
-    const evidence = { ...executionEvidence(log), executionEffects, directory: run.directory,
+    const resumable = ['interrupted', 'error'].includes(ending?.kind)
+      || ending?.kind === 'aborted' && ['disposed', 'user'].includes(ending.reason?.kind);
+    if (!resumable) throw fail('EXECUTION_PAUSE_UNVERIFIED', 'Execution has no resumable interrupted ending');
+    const evidence = { ...executionEvidence(log), executionEffects: executionEffects(log, new Map(Object.entries(toolReceipts))), toolReceipts, directory: run.directory,
       ...(run.environment ? { environment: run.environment } : {}), runId: run.id, sessionId: run.sessionId, interrupted: true };
     const policy = await readPolicy();
     signal.throwIfAborted();

@@ -5,7 +5,7 @@ export function readAdmissionRules(content) {
   const finish = () => {
     if (!active) return;
     const instruction = active.lines.join('\n').trim();
-    if (seen.has(active.id)) throw new Error(`Duplicate written rule ID: ${active.id}`);
+    if (seen.has(active.id)) throw Object.assign(new Error(`Duplicate written rule ID: ${active.id}`), { code: 'DUPLICATE_ADMISSION_RULE' });
     seen.add(active.id);
     if (instruction) rules.push({ id: active.id, instruction });
     active = null;

@@ -14,13 +14,6 @@ function resultText(text) {
   return text.split('\n').filter(line => !scanWorkerProgressLine(line, scan)).join('\n').trim();
 }
 
-export function assertExternalWorkerTask(task, assignment = {}) {
-  const mandate = task.mandate || {};
-  if ([task.toolScope, mandate.toolScope, mandate.scope?.toolNames, assignment.appliedSnapshot?.toolScope].some(scope => scope != null)) {
-    throw fail('NATIVE_WORKER_SCOPE_UNSUPPORTED', '外部 Harness 当前无法落实此工单的工具范围，请选择官方 Harness');
-  }
-}
-
 export async function assertExternalWorkerModel(ctx, { harness, providerId, modelId, options }, signal) {
   signal?.throwIfAborted();
   if (!['codex', 'claude'].includes(harness)) throw fail('WORKER_MODEL_ROUTE', '外部 Worker Harness 未接入');
@@ -45,7 +38,6 @@ export async function assertExternalWorkerModel(ctx, { harness, providerId, mode
 export async function executeExternalWorker({ ctx, database, assignment, task, signal, renew, run, directory, workingDirectory, model, resumed, sourceReference }) {
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   let snapshot = database.appliedTaskSnapshot(assignment.id);
-  assertExternalWorkerTask({ ...task, ...snapshot }, assignment);
   const { commander, advancedConfig } = resumed ? { commander: ctx.get?.('commander') } : await assertExternalWorkerModel(ctx, model, signal);
   const prior = resumed && commander?.executionSession(run.id);
   if (resumed && (!prior?.nativeId || prior.id !== run.sessionId
@@ -60,7 +52,7 @@ export async function executeExternalWorker({ ctx, database, assignment, task, s
   } } : undefined);
   let instructionRevision = snapshot?.instructionRevision ?? assignment.instructionRevision;
   const prompt = (continuing, messages) => (continuing ? 'Continue the original execution from its saved history. Preserve completed actions.\n' : '')
-    + 'Execute this BenchGo task in the bound project. Follow its current mandate. Ask the user for missing information through the native question tool. Leave approvals and product configuration to the Router. Preserve existing work and report results and unresolved issues from observed evidence.\n'
+    + 'Execute this BenchGo task in the bound project. Follow its current requirements. Ask the user for missing information through the native question tool. Preserve existing work and report results and unresolved issues from observed evidence.\n'
     + workerProgressInstruction + '\n'
     + workerTimeContext(task.mandate.requestTime, task.createdAt) + '\n'
     + JSON.stringify({ target: snapshot?.target ?? task.target, acceptance: snapshot?.acceptance ?? task.acceptance,
@@ -133,7 +125,6 @@ export async function executeExternalWorker({ ctx, database, assignment, task, s
     for (;;) {
       inspect();
       const liveTask = database.getTask(task.id);
-      assertExternalWorkerTask(liveTask);
       const next = database.taskRevisions(task.id).findLast(row => row.instructionRevision === liveTask.instructionRevision);
       if (next && next.instructionRevision > instructionRevision) {
         snapshot = { ...next, executionScope: assignment.wholeTaskScope === false ? assignment.text : next.target };

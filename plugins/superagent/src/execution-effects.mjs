@@ -1,14 +1,16 @@
 const readOnlyTools = new Set(['web_search', 'web_fetch', 'read', 'read_image', 'glob', 'grep']);
 
 /** Only host-known official identities establish read-only behavior. */
-export const isReadOnlyWorkerTool = name => readOnlyTools.has(name);
+export const isReadOnlyTool = name => readOnlyTools.has(name);
 
 const object = value => {
   try { value = typeof value === 'string' ? JSON.parse(value) : value; } catch { return null; }
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 };
 const beforeDispatchCodes = new Set(['ABORTED_BEFORE_DISPATCH', 'FS_SANDBOX_DENIED', 'UNKNOWN_TOOL', 'INVALID_TOOL_ARGS', 'INVALID_ARGUMENTS',
-  'ACTION_TARGET_NOT_FOUND', 'WORKER_TOOL_SCOPE', 'WORKER_AUTHORIZATION_CHANGED', 'WORKER_TASK_INACTIVE',
+  'ACTION_TARGET_NOT_FOUND', 'WORKER_TASK_INACTIVE', 'MANDATE_REVOKED',
+  // Earlier SuperAgent versions persisted these outcomes in official logs.
+  'WORKER_TOOL_SCOPE', 'WORKER_TOOL_DENIED', 'WORKER_AUTHORIZATION_CHANGED',
   'MANAGEMENT_OWNER_REQUIRED', 'MANAGEMENT_APPROVAL_UNAVAILABLE', 'MANAGEMENT_APPROVAL_DENIED', 'SETTINGS_UNAVAILABLE', 'CLEANUP_UNAVAILABLE']);
 const unknownFailure = result => result?.failed && !beforeDispatchCodes.has(result.code);
 const output = content => object((content || []).filter(block => block.type === 'text').map(block => block.text).join('\n'));
@@ -67,7 +69,7 @@ export function executionEffects(log, receipts = new Map()) {
   }
   const unknownCallIds = [...new Set(calls.filter(call => {
     const { name, result } = call;
-    if (isReadOnlyWorkerTool(name)) return false;
+    if (isReadOnlyTool(name)) return false;
     if (name === 'assistant_external_action') return externalActionUnknown(call);
     return !result || unknownFailure(result);
   }).map(({ id }) => id))];

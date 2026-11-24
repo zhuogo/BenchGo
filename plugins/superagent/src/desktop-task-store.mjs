@@ -14,7 +14,8 @@ export function installDesktopTaskStore({ db, tx, api, insertTask }) {
       const task = api.getTask(row.task_id);
       return { fingerprint: row.fingerprint, task, source: row.trigger_id ? api.getTrigger(row.trigger_id)?.source : task?.mandate.source };
     },
-    acceptDesktop({ triggerId, requestKey, fingerprint, target, title, acceptance = '', mandate, model, duplicateOfTaskId }) {
+    acceptDesktop({ triggerId, requestKey, fingerprint, target, title, acceptance = '', mandate, model, duplicateOfTaskId,
+      validateExistingMandate = existing => existing.policyVersion === mandate.policyVersion }) {
       if (!requestKey || !fingerprint || !target?.trim() || (model !== undefined && (!model?.providerId || !model?.modelId))) throw new Error('桌面任务缺少请求、目标或有效模型');
       return tx(() => {
         const prior = api.desktopRequest(requestKey);
@@ -31,7 +32,7 @@ export function installDesktopTaskStore({ db, tx, api, insertTask }) {
           const existing = api.getTask(duplicateOfTaskId), source = existing?.mandate.source;
           if (!existing || (existing.status === 'completed' || taskStopped(existing))
             || source?.channel !== 'desktop' || source.sessionId !== trigger.source.sessionId || (source.threadId || 'main') !== (trigger.source.threadId || 'main')
-            || existing.mandate.actorId !== mandate.actorId || existing.mandate.policyVersion !== mandate.policyVersion
+            || existing.mandate.actorId !== mandate.actorId || !validateExistingMandate(existing.mandate)
             || JSON.stringify(existing.mandate.project) !== JSON.stringify(mandate.project)
             || JSON.stringify(existing.mandate.execution) !== JSON.stringify(mandate.execution)
             || existing.target !== target || existing.acceptance !== acceptance) {

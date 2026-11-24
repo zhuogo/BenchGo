@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { currentHumanInstruction, desktopRequestTime } from './desktop-delegation-service.mjs';
-import { readAssessmentPolicy, validateTaskMandate } from './assessment-policy.mjs';
+import { desktopDelegationVersion, readAssessmentPolicy, validateTaskMandate } from './assessment-policy.mjs';
 import { ownsDesktopTask } from './desktop-task-owner.mjs';
-import { taskMandateDifference, isTaskMandateNarrowing } from './task-revisions.mjs';
+import { taskMandateDifference } from './task-revisions.mjs';
 import { configuredWorkModel, rejectModelOverride } from './work-role-policy.mjs';
 import { normalizeTaskTitle } from './task-title.mjs';
 import { taskExecutionBlocked, taskStopped } from './task-lifecycle.mjs';
@@ -61,12 +61,12 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
     // structured authority expansion enters the trusted host approval flow.
     exec?.signal?.throwIfAborted();
     const current = structuredClone(await readPolicy());
-    if (current.desktopVersion !== policy.desktopVersion || digest(form || currentHumanInstruction(ctx, options.ownerAgent)) !== instructionHash) throw new Error('变更期间主人指令或授权规则已变化');
+    if (desktopDelegationVersion(current) !== desktopDelegationVersion(policy) || digest(form || currentHumanInstruction(ctx, options.ownerAgent)) !== instructionHash) throw new Error('变更期间主人指令或授权规则已变化');
     const sessionId = options.ownerAgent.id;
     const source = { channel: 'desktop', sessionId, messageId: instruction.message.id, threadId: options.threadId || 'main' };
     // A local resource change is a new desktop authorization, including when the original
     // Task came from a channel. The original channel authority remains in revision history.
-    const mandate = { ...currentMandate, actorId: 'desktop-owner', source, instruction: original, policyVersion: current.desktopVersion,
+    const mandate = { ...currentMandate, actorId: 'desktop-owner', source, instruction: original, policyVersion: desktopDelegationVersion(current),
       admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval',
       ...(project ? { project: remote ? project : { id: project.id, path: project.path } } : {}) };
     const { trigger } = database.ingest({ dedupeKey: `task-change:${digest([sessionId, instruction.message.id])}`,
@@ -75,7 +75,7 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
     if (input.operation === 'adjustment') mandate.requestTime = desktopRequestTime(options.ownerAgent, instruction.message, trigger.createdAt);
     const difference = taskMandateDifference(currentMandate, mandate);
     let approval;
-    if (difference && !isTaskMandateNarrowing(currentMandate, mandate)) {
+    if (difference) {
       if (!(task.status === 'completed' || task.executionControl?.stopped === true)
         && digest(mandate.project ?? null) !== digest(task.mandate.project ?? null)
         && database.assignments(task.id).some(row => database.runs(row.id).length)) throw Object.assign(new Error('已有真实执行会话不能原地切换工作区；请停止原任务后创建关联调整'), { code: 'PROJECT_REQUIRES_ADJUSTMENT' });
@@ -88,7 +88,7 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
     }
     const finalPolicy = structuredClone(await readPolicy()), finalTask = database.getTask(task.id);
     exec?.signal?.throwIfAborted();
-    if (finalPolicy.desktopVersion !== current.desktopVersion || digest(form || currentHumanInstruction(ctx, options.ownerAgent)) !== instructionHash
+    if (desktopDelegationVersion(finalPolicy) !== desktopDelegationVersion(current) || digest(form || currentHumanInstruction(ctx, options.ownerAgent)) !== instructionHash
       || finalTask.instructionRevision !== task.instructionRevision || finalTask.status !== task.status
       || digest(finalTask.executionControl) !== digest(task.executionControl)
       || digest(finalTask.mandate) !== digest(task.mandate)) throw Object.assign(new Error('确认期间原指令、任务或授权规则已变化'), { code: 'TASK_CHANGE_STALE' });
@@ -114,17 +114,17 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
         || input?.state !== 'applied' || !(input.snapshot?.workerMessage === true || trigger?.source?.executionSessionId === sessionId) || !receipt?.messageId
         || receipt.assignmentId !== live.id || receipt.runId !== activeRun.id || receipt.fence !== live.fence || receipt.sessionId !== sessionId
         || trigger?.actor.kind !== 'human' || trigger.actor.id !== 'desktop-owner' || trigger.source?.channel !== 'desktop')
-        throw Object.assign(new Error('?????? Worker ????????'), { code: 'WORKER_MESSAGE_NOT_RECEIVED' });
-      if (taskExecutionBlocked(task)) throw Object.assign(new Error('???????????'), { code: 'TASK_STOPPED' });
+        throw Object.assign(new Error('原 Worker 会话尚未收到这条工单消息'), { code: 'WORKER_MESSAGE_NOT_RECEIVED' });
+      if (taskExecutionBlocked(task)) throw Object.assign(new Error('任务已暂停、停止或结束'), { code: 'TASK_STOPPED' });
       const mandate = database.currentTaskMandate(task.id, task.mandate);
-      if (!validateTaskMandate(mandate, { policy })) throw Object.assign(new Error('???????'), { code: 'MANDATE_REVOKED' });
+      if (!validateTaskMandate(mandate, { policy })) throw Object.assign(new Error('工单来源授权已失效'), { code: 'MANDATE_REVOKED' });
       const snapshot = database.appliedTaskSnapshot(assignment.id);
-      const changes = { target: text(target, '????'), acceptance: acceptance ?? snapshot.acceptance,
-        title: normalizeTaskTitle(text(title, '????', 200)), reason: text(reason, '????', 10000) };
+      const changes = { target: text(target, '任务要求'), acceptance: acceptance ?? snapshot.acceptance,
+        title: normalizeTaskTitle(text(title, '工单标题', 200)), reason: text(reason, '变更原因', 10000) };
       const requestKey = `worker-adopt:${task.id}:${triggerId}`;
       const previous = database.taskRevisionRequest(requestKey);
       if (previous) {
-        if (digest(previous.requestPayload) !== digest(changes)) throw Object.assign(new Error('??????????????'), { code: 'IDEMPOTENCY_CONFLICT' });
+        if (digest(previous.requestPayload) !== digest(changes)) throw Object.assign(new Error('请求标识已用于不同的任务变更'), { code: 'IDEMPOTENCY_CONFLICT' });
         return task;
       }
       if (changes.target === task.target && changes.acceptance === task.acceptance) return task;

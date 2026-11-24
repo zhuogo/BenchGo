@@ -249,13 +249,16 @@ test('structured expansion needs a trusted approval and increments authority sep
   assert.equal(f.db.taskInputs(f.task.id)[0].authorizationVersion, 2);
 });
 
-test('a structured tool restriction becomes the current hard boundary without waiting for ordinary revision application', async t => {
+test('legacy tool lists do not create a restriction or request authority approval', async t => {
   const f = await fixture(t), [assignment] = f.db.claimAssignments('worker', { validateMandate: () => true });
   const run = f.db.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId: 'worker-session', directory: f.directory });
   const first = f.db.applyTaskRevision(assignment.id, { owner: assignment.owner, fence: assignment.fence, runId: run.id, boundaryId: 'in-flight' });
-  const changed = f.db.changeTask(f.task.id, { ...f.input, mandate: { ...f.input.mandate, scope: { toolNames: ['read_file'] } } });
+  const changed = f.db.changeTask(f.task.id, { ...f.input, mandate: { ...f.input.mandate, scope: { toolNames: ['read_file'] }, toolScope: ['read_file'] } });
   assert.equal(changed.mandate.authorizationVersion ?? 1, 1);
-  assert.deepEqual(changed.mandate.scope.toolNames, ['read_file']);
+  assert.equal(changed.instructionRevision, 2);
+  assert.equal(changed.mandate.scope, undefined);
+  assert.equal(changed.mandate.toolScope, undefined);
+  assert.equal(f.db.taskInputs(f.task.id)[0].snapshot.toolScope, undefined);
   assert.deepEqual(f.db.appliedTaskSnapshot(assignment.id), first);
 });
 
@@ -263,7 +266,7 @@ test('host scope expansion awaits the real approval once and binds the receipt t
   const f = await fixture(t); let approvals = 0;
   const host = hostRevision(f, async ({ trigger, mandate, difference, ownerAgent }) => {
     approvals++; assert.equal(ownerAgent.id, 'owner');
-    assert.equal(mandate.project.id, 'project'); assert.equal(difference.requested[0].id, 'project');
+    assert.equal(mandate.project.id, 'project'); assert.equal(difference.requested.project.id, 'project');
     return { approved: true, id: 'host-approval', triggerId: trigger.id, actorId: trigger.actor.id };
   });
   const changed = await host.change();

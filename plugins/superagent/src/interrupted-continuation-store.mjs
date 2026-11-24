@@ -15,8 +15,8 @@ export function installInterruptedContinuationStore({ db, tx, api }) {
         if (task.instructionRevision !== instructionRevision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Interrupted execution requirements changed');
         if (!api.getWorkerExecutionState(runId)?.models?.length || evidence?.interrupted !== true
           || evidence.runId !== runId || evidence.sessionId !== run.sessionId || evidence.directory !== run.directory
-          || !evidence.transcript?.hash || !Number.isSafeInteger(evidence.transcript.lastSeq)
-          || evidence.executionEffects?.effectsVerified !== true) throw fail('EVIDENCE_MISMATCH', 'Safe interrupted execution evidence is unavailable');
+          || !evidence.transcript?.hash || !Number.isSafeInteger(evidence.transcript.lastSeq))
+          throw fail('EVIDENCE_MISMATCH', 'Interrupted execution transcript is unavailable');
         const row = db.prepare('SELECT payload FROM sa_assignments WHERE id=?').get(assignmentId), payload = JSON.parse(row.payload);
         for (const key of ['nativeContinuation', 'contextContinuation', 'attentionContinuation', 'pauseContinuation', 'executionStopped', 'stopRequest']) delete payload[key];
         payload.interruptedContinuation = { runId, instructionRevision, observation: evidence.transcript, at: new Date(now).toISOString() };

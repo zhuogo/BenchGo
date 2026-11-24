@@ -275,7 +275,7 @@ export function installRemoteExecutionStore({ db, tx, api, ownedAssignment }) {
         if (!source) throw fail('REVISION_SNAPSHOT_MISSING', 'Remote acknowledged requirements snapshot is missing');
         const snapshot = { instructionRevision, authorizationVersion: source.authorizationVersion ?? source.mandate.authorizationVersion ?? 1,
           target: source.target, acceptance: source.acceptance, mandate: structuredClone(source.mandate),
-          context: structuredClone(source.context || []), toolScope: structuredClone(source.toolScope ?? source.mandate.scope?.toolNames ?? source.mandate.toolScope ?? null) };
+          context: structuredClone(source.context || []) };
         const previousSnapshot = payload.appliedSnapshot;
         const wholeTask = payload.wholeTaskScope ?? (!payload.text?.trim() || payload.text === (previousSnapshot?.target ?? api.appliedTaskSnapshot(assignmentId).target));
         snapshot.executionScope = wholeTask ? snapshot.target : payload.text;

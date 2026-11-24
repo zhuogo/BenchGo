@@ -47,7 +47,7 @@ export function installSubscriptionInbox(scope, agent, { database, assignment, r
       if (input?.kind === 'revision') {
         body = 'The host applied this input in the current task snapshot.\n' + JSON.stringify({ triggerId: message.id });
       } else if (input?.snapshot?.workerMessage === true || message.source?.executionSessionId === agent.id) {
-        body = 'New instruction for this Task within its existing authority. Answer questions and continuation directly. When adopting a changed goal or acceptance, call benchgo_adopt_task_message before carrying out or reporting the changed work.\n'
+        body = 'New instruction for this Task. If it changes the goal or acceptance, record the updated requirements with benchgo_adopt_task_message so the Task reflects the conversation.\n'
           + JSON.stringify({ triggerId: message.id, text });
       }
       return createUserMessage({ source: { kind: 'benchgo-subscription', taskId: assignment.taskId, triggerId: message.id },
