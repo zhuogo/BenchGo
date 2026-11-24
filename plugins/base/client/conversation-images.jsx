@@ -17,7 +17,7 @@ function LoadAttachment({ attachment, loadImage, report, attempt }) {
   return null;
 }
 
-function MessageGallery({ images, loadImage, align }) {
+export function MessageGallery({ images, loadImage, align }) {
   useFeedbackStyle('benchgo-conversation-images-styles', css);
   const [results, setResults] = useState(() => new Map());
   const [attempt, setAttempt] = useState(0);

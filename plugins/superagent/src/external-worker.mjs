@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { askNativeQuestion } from '../../base/src/questions.mjs';
 import { scanWorkerProgressLine, workerProgressInstruction } from '../../base/shared/worker-progress.mjs';
+import { workerTimeContext } from '../../base/shared/worker-time.mjs';
+import { nativeModelConfig } from '../../base/shared/runtime-setting-fields.mjs';
 import { nativeExecutionProgress } from '../../harness/src/remote-execution-progress.mjs';
 import { attentionBatchAnswers } from './worker-attention.mjs';
 
@@ -22,22 +24,29 @@ export function assertExternalWorkerTask(task, assignment = {}) {
 export async function assertExternalWorkerModel(ctx, { harness, providerId, modelId, options }, signal) {
   signal?.throwIfAborted();
   if (!['codex', 'claude'].includes(harness)) throw fail('WORKER_MODEL_ROUTE', '外部 Worker Harness 未接入');
-  if (Object.keys(options ?? {}).length) throw fail('WORKER_MODEL_ROUTE', '外部 Worker 的运行参数在 Harness 高级设置中配置');
   const commander = ctx.get?.('commander');
   if (!commander?.prepareExecution || !commander?.registerExecutionHandler || !commander?.stopExecution)
     throw fail('WORKER_MODEL_ROUTE', '外部 Harness 执行服务不可用');
   const catalog = await commander.pickerCatalog?.list();
   signal?.throwIfAborted();
-  if (!catalog?.routes?.some(route => route.tool === harness && route.providerId === providerId && route.nativeModelId === modelId))
+  const route = catalog?.routes?.find(route => route.tool === harness && route.providerId === providerId && route.nativeModelId === modelId);
+  if (!route)
     throw fail('WORKER_MODEL_ROUTE', '此 Harness、供应商和模型组合当前不可用');
-  return commander;
+  try {
+    const defaults = await commander.routeService?.defaultConfig?.(harness, providerId, modelId);
+    signal?.throwIfAborted();
+    return { commander, advancedConfig: nativeModelConfig(harness, defaults, route.reasoning, options) };
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw fail('WORKER_MODEL_ROUTE', error.message);
+  }
 }
 
 export async function executeExternalWorker({ ctx, database, assignment, task, signal, renew, run, directory, workingDirectory, model, resumed, sourceReference }) {
   const ownership = { owner: assignment.owner, fence: assignment.fence };
   let snapshot = database.appliedTaskSnapshot(assignment.id);
   assertExternalWorkerTask({ ...task, ...snapshot }, assignment);
-  const commander = resumed ? ctx.get?.('commander') : await assertExternalWorkerModel(ctx, model, signal);
+  const { commander, advancedConfig } = resumed ? { commander: ctx.get?.('commander') } : await assertExternalWorkerModel(ctx, model, signal);
   const prior = resumed && commander?.executionSession(run.id);
   if (resumed && (!prior?.nativeId || prior.id !== run.sessionId
     || (!assignment.contextContinuation && !assignment.pauseContinuation))) {
@@ -53,6 +62,7 @@ export async function executeExternalWorker({ ctx, database, assignment, task, s
   const prompt = (continuing, messages) => (continuing ? 'Continue the original execution from its saved history. Preserve completed actions.\n' : '')
     + 'Execute this BenchGo task in the bound project. Follow its current mandate. Ask the user for missing information through the native question tool. Leave approvals and product configuration to the Router. Preserve existing work and report results and unresolved issues from observed evidence.\n'
     + workerProgressInstruction + '\n'
+    + workerTimeContext(task.mandate.requestTime, task.createdAt) + '\n'
     + JSON.stringify({ target: snapshot?.target ?? task.target, acceptance: snapshot?.acceptance ?? task.acceptance,
       executionScope: snapshot?.executionScope || assignment.text, mandate: snapshot?.mandate ?? task.mandate,
       context: snapshot?.context, ownerMessages: messages.map(({ content }) => content), sourceReference });
@@ -84,7 +94,7 @@ export async function executeExternalWorker({ ctx, database, assignment, task, s
   try {
     inspect();
     session = await commander.prepareExecution({ executionId: run.id, sessionId, provider: model.harness, cwd: workingDirectory,
-      route: prior?.route || { providerId: model.providerId, model: model.modelId }, projectId: task.mandate?.project?.id, title: task.title,
+      route: prior?.route || { providerId: model.providerId, model: model.modelId }, advancedConfig, projectId: task.mandate?.project?.id, title: task.title,
       metadata: { taskId: task.id, assignmentId: assignment.id, runId: run.id, instructionRevision } });
     inspect();
     releaseHandler = commander.registerExecutionHandler(session.id, (request, requestSignal) => {

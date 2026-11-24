@@ -9,8 +9,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
-import { createRuntimeSettings } from '../../base/src/runtime-settings.mjs';
-import { createSessionRoutes } from '../../base/src/session-routes.mjs';
+import { mountTooling } from '../../base/src/tooling.mjs';
+import { nativeModelConfig } from '../../base/shared/runtime-setting-fields.mjs';
 import { ToolInstaller } from '../../base/src/tool-install.mjs';
 
 const runFile = promisify(execFile);
@@ -29,7 +29,7 @@ const routes = {
     basePath: '/codex-gateway/v1',
     requestPath: '/codex-gateway/v1/responses',
     effort: 'xhigh',
-    advancedConfig: { config: { model_reasoning_effort: 'xhigh' } },
+    nextEffort: 'low',
   },
   claude: {
     model: 'Vendor/claude-opus-4-8-Route_Probe',
@@ -38,7 +38,7 @@ const routes = {
     basePath: '/claude-gateway',
     requestPath: '/claude-gateway/v1/messages',
     effort: 'low',
-    advancedConfig: { settings: { effortLevel: 'low', alwaysThinkingEnabled: true } },
+    nextEffort: 'high',
   },
 };
 
@@ -153,12 +153,11 @@ test(`installed native CLI requests through BenchGo (${target})`, { timeout: 120
     await isolateEnvironment(directory, loopback.origin);
     const cwd = join(directory, 'project');
     await mkdir(cwd);
-    const runtimeSettings = createRuntimeSettings({ directory });
     const providers = { resolve: async tool => {
       const { basePath, apiKey, protocol } = routes[tool];
       return { baseURL: loopback.origin + basePath, apiKey, protocol };
     } };
-    const routeService = createSessionRoutes({ directory, providers, runtimeSettings });
+    const { routeService } = await mountTooling({ effect() {} }, undefined, providers, { directory, installer: {} });
     for (const [tool, expected] of Object.entries(routes)) {
       await t.test(tool, { timeout: 50_000 }, async subtest => {
         const previousRequests = loopback.requests.length;
@@ -175,11 +174,13 @@ test(`installed native CLI requests through BenchGo (${target})`, { timeout: 120
           const version = await runFile(launch.command, [...launch.args, '--version'], { cwd, timeout: 8000, windowsHide: true });
           subtest.diagnostic(version.stdout.trim());
 
-          await runtimeSettings.save(tool, expected.advancedConfig);
+          const reasoning = { efforts: [expected.effort, expected.nextEffort].map(id => ({ id })) };
+          const defaults = await routeService.defaultConfig(tool, tool, expected.model);
+          const firstConfig = nativeModelConfig(tool, defaults, reasoning, { reasoningEffort: expected.effort });
           commander = await openCommander();
-          const session = await commander.prepareExecution({ executionId: `${tool}-loopback`, sessionId: randomUUID(), provider: tool, cwd, route: { providerId: tool, model: expected.model } });
+          const session = await commander.prepareExecution({ executionId: `${tool}-loopback`, sessionId: randomUUID(), provider: tool, cwd, route: { providerId: tool, model: expected.model }, advancedConfig: firstConfig });
           assert.equal(session.status, 'idle');
-          assert.deepEqual(session.route.advancedConfig, expected.advancedConfig);
+          assert.deepEqual(session.route.advancedConfig, firstConfig);
           let nativeQuestion;
           const release = commander.registerExecutionHandler(session.id, request => {
             nativeQuestion = request;
@@ -233,6 +234,19 @@ test(`installed native CLI requests through BenchGo (${target})`, { timeout: 120
           assert.equal(resumedRequest?.body.model, expected.model);
           assert.ok(JSON.stringify(resumedRequest.body).includes(resumedPrompt));
           assert.ok(JSON.stringify(resumedRequest.body).includes(prompt), 'The resumed request must carry the original turn');
+          const advancedConfig = nativeModelConfig(tool, restored.route.advancedConfig, reasoning, { reasoningEffort: expected.nextEffort });
+          const nextRoute = await routeService.capture({ tool, providerId: tool, model: expected.model, advancedConfig });
+          await commander.disconnect(restored.id);
+          commander.get(restored.id).route = nextRoute;
+          await commander.persist();
+          await commander.connect(restored.id);
+          const beforeSwitch = loopback.requests.length;
+          await commander.submit(restored.id, resumedPrompt, { requestId: 'loopback-switch-effort' });
+          const switched = await commander.wait(restored.id, { timeout: 25_000 });
+          assert.equal(switched.status, 'idle');
+          assert.equal(switched.nativeId, result.nativeId);
+          const switchedRequest = loopback.requests.slice(beforeSwitch).find(row => row.pathname === expected.requestPath);
+          assert.equal(tool === 'codex' ? switchedRequest?.body.reasoning?.effort : switchedRequest?.body.output_config?.effort, expected.nextEffort);
           subtest.diagnostic(JSON.stringify({ resumed: true, answerReturned: tool === 'claude' }));
         } finally {
           await commander?.close();

@@ -47,10 +47,13 @@ function remoteFixture(f) {
 
 test('remote delegation creates only an A-owned Task and freezes exact B execution resources', async t => {
   const f = await fixture(t), b = remoteFixture(f);
+  f.events[1].time = Date.parse('2026-11-23T16:05:00.000Z');
+  f.events[1].data.source.clientTimeZone = 'Asia/Shanghai';
   const task = await f.service.delegate(b.input, f.exec, f.options);
   assert.equal(f.database.listTasks().length, 1);
   assert.equal(task.mandate.source.channel, 'desktop');
   assert.equal(task.mandate.source.sessionId, f.ownerAgent.id);
+  assert.deepEqual(f.database.getTask(task.id).mandate.requestTime, { at: '2026-11-23T16:05:00.000Z', timeZone: 'Asia/Shanghai' });
   assert.deepEqual(task.mandate.execution, { deviceId: b.device.id, hostId: b.device.hostId, authorizationId: b.device.authorizationId, protocolVersion: 2, config: b.input.executionConfig });
   assert.deepEqual(task.mandate.project, { deviceId: b.device.id, hostId: b.device.hostId, id: 'project-b', path: '/workspace/b' });
   assert.deepEqual(f.database.assignments(task.id)[0].model, b.model);

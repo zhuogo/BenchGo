@@ -133,19 +133,33 @@ async function fixture(t, script, options = {}) {
     setConfig: value => { config = value; }, setProfile: value => { profile = value; } };
 }
 
-test('assistant catalog omits providers with no discoverable models and preserves errors for diagnostics', async t => {
+test('assistant catalog resolves exact reasoning options and preserves available models through isolated failures', async t => {
   const f = await fixture(t, () => text('unused'));
+  const reasoning = { efforts: [{ id: 'Vendor/Deep', name: 'Deep' }], defaultEffort: 'Vendor/Deep' };
   class CatalogAdapter extends LlmAdapter {
     async listModels(provider) {
       if (provider === 'unreachable') throw new Error('directory unavailable');
-      return [{ provider, id: 'Exact:/Model', name: 'Exact model' }];
+      return [
+        { provider, id: 'Exact:/Model', name: 'Exact model' },
+        { provider, id: 'Plain:/Model', name: 'Plain model' },
+        { provider, id: 'Unavailable:/Model', name: 'Unavailable capabilities' },
+      ];
+    }
+    async resolveModel(provider, model) {
+      if (model === 'Unavailable:/Model') throw new Error('capabilities unavailable');
+      const info = await super.resolveModel(provider, model);
+      return provider === 'Router/Exact' && model === 'Exact:/Model' ? { ...info, reasoning } : info;
     }
   }
   f.ctx.llm.registerAdapter(['deepseek-account'], new LlmAdapter());
   f.ctx.llm.registerAdapter(['Router/Exact', 'commander-excluded', 'unreachable'], new CatalogAdapter());
   const catalog = await f.engine.catalog();
   assert.deepEqual(catalog.map(provider => provider.id), ['Router/Exact', 'unreachable']);
-  assert.deepEqual(catalog[0].models.map(model => model.id), ['Exact:/Model']);
+  assert.deepEqual(catalog[0].models, [
+    { provider: 'Router/Exact', id: 'Exact:/Model', name: 'Exact model', reasoning },
+    { provider: 'Router/Exact', id: 'Plain:/Model', name: 'Plain model' },
+    { provider: 'Router/Exact', id: 'Unavailable:/Model', name: 'Unavailable capabilities', reasoningUnavailable: true },
+  ]);
   assert.deepEqual({ available: catalog[1].available, error: catalog[1].error }, { available: false, error: 'directory unavailable' });
 });
 
@@ -301,6 +315,48 @@ test('new side chats preserve renamed, pinned and archived drafts', async t => {
   const draft = await f.engine.createThread({ title: '新旁聊' });
   assert.equal(new Set([renamed.id, pinned.id, archived.id, draft.id]).size, 4);
   assert.equal((await f.engine.createThread({ title: '新旁聊' })).id, draft.id);
+});
+
+test('the local side-chat Router saves only its own title through the official tool path', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'side-chat-title-'));
+  const store = await createAssistantStore({ dataDirectory: directory });
+  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'first' }] });
+  const name = 'assistant_rename_thread';
+  const title = 'AITCM项目开发';
+  let setup;
+  const f = await fixture(t, (request, index) => {
+    if (index !== 1) return text('已更新会话标题。');
+    assert.ok(request.tools.some(tool => tool.name === name));
+    return [
+      { type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'rename-side', name, arguments: JSON.stringify({ title }) } },
+      { type: 'finish', reason: { kind: 'tool-calls' } },
+    ];
+  }, { store, setupTools: (...args) => setup(...args) });
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  setup = createRouterTools({ ctx: f.ctx, store, engine: f.engine, shutdown: new AbortController() });
+  const side = await f.engine.createThread({ title: '原话题' });
+  const other = await f.engine.createThread({ title: '另一个话题' });
+  const channel = await f.engine.ensureSourceThread({ sourceKey: 'channel:example', title: '渠道会话', source: { channel: 'feishu' } });
+  const mainAgent = await f.engine.ensureSession();
+  const channelAgent = await f.engine.ensureSession({ threadId: channel.id });
+  const agent = await f.engine.ensureSession({ threadId: side.id });
+  for (const excluded of [mainAgent, channelAgent]) assert.equal(f.ctx.tools.get(name, excluded), undefined);
+  await f.engine.updateThread(side.id, { pinned: true });
+  const request = { sessionId: agent.id, requestId: 'rename-side-request', mode: 'queue',
+    content: [{ type: 'text', text: `把这个会话标题改为 ${title}` }] };
+  await f.engine.nativePrompt({ request, dispatch() {
+    agent.followup(createUserMessage({ content: request.content, source: { kind: 'user', rpcId: request.requestId } }));
+    return { accepted: true };
+  } });
+  await agent.whenIdle();
+  const result = agent.session.snapshotEvents().find(event => event.type === 'tool/result' && event.data.message?.toolCallId === 'rename-side')?.data.message;
+  assert.equal(result?.isError, false, JSON.stringify(result));
+  assert.deepEqual(JSON.parse(result.content[0].text), { threadId: side.id, title });
+  const rejected = await executeTool(f.ctx, { agent, name, arguments: { title: '没有本轮用户消息' }, callId: 'rename-without-user', signal: new AbortController().signal });
+  assert.equal(rejected.isError, true);
+  const { threads } = await store.getState();
+  assert.deepEqual(threads, [{ ...side, title, pinned: true }, other, channel]);
 });
 
 test('new side chats preserve drafts whose transcript cannot be read', async t => {

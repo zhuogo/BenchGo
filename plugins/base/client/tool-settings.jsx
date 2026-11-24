@@ -1,5 +1,4 @@
-import React, { useEffect, useId, useState } from 'react';
-import { IconInspectOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
+import React, { useEffect, useState } from 'react';
 import { Loading } from '../../shared/client/ui/loading.jsx';
 import { Button } from '../../shared/client/ui/button.jsx';
 import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
@@ -7,7 +6,6 @@ import { readJsonResponse } from './http-response.mjs';
 import { invalidateModelCatalogs } from './model-catalog.mjs';
 import { ToolBrandIcon } from './tool-brand-icon.jsx';
 import { UIIcon } from './iconsax.jsx';
-import { ToolConfigPanel, mountToolConfigPanelStyle } from './tool-config-panel.jsx';
 import css from './tool-settings.css';
 
 export function mountToolSettingsStyle(ctx) {
@@ -15,7 +13,6 @@ export function mountToolSettingsStyle(ctx) {
   style.textContent = css;
   document.head.append(style);
   ctx.effect(() => () => style.remove());
-  mountToolConfigPanelStyle(ctx);
 }
 
 async function request(action, fields = {}, signal) {
@@ -48,12 +45,10 @@ const genericJobMessage = {
   cancelled: '已取消',
 };
 
-function ToolCard({ tool, onOperation, onConfig }) {
-  const [expanded, setExpanded] = useState(false);
+function ToolCard({ tool, onOperation }) {
   const [loadingAction, setLoadingAction] = useState('');
   const [operationError, setOperationError] = useState('');
   const [confirm, confirmation] = useConfirmation();
-  const optionsId = useId();
   const operation = tool.job;
   const active = !!operation && !terminal.has(operation.status);
   const blocked = active || !!loadingAction;
@@ -110,7 +105,6 @@ function ToolCard({ tool, onOperation, onConfig }) {
             <Button variant="ghost" size="icon" aria-label="更新" title={busyHint || (!tool.canUpdate && tool.updateReason) || '更新'} disabled={!tool.canUpdate || blocked} onClick={() => start('update')}><UIIcon name="refresh" size={16} /></Button>
             <Button variant="ghost" size="icon" aria-label="卸载" title={busyHint || (!tool.canUninstall && tool.uninstallReason) || '卸载'} disabled={!tool.canUninstall || blocked} onClick={() => start('uninstallPreview')}><UIIcon name="trash" size={16} /></Button>
           </>}
-        {tool.configSupported && <Button variant="ghost" size="icon" aria-label="工具选项" title={active && !expanded ? busyHint : '工具选项'} aria-expanded={expanded} aria-controls={expanded ? optionsId : undefined} disabled={active && !expanded} onClick={() => setExpanded(value => !value)}><IconInspectOutlineRegular size={16} /></Button>}
       </div>
     </header>
     {reason && <p className="cmd-tool-card-note">{reason}</p>}
@@ -126,7 +120,6 @@ function ToolCard({ tool, onOperation, onConfig }) {
       {active && tool.pollError && <p className="cmd-tool-card-note" role="status">暂时无法读取操作进度，正在重试。</p>}
     </div>}
     {confirmation}
-    {expanded && <div id={optionsId} className="cmd-tool-card-options"><ToolConfigPanel tool={tool} onConfig={onConfig} /></div>}
   </article>;
 }
 
@@ -207,7 +200,7 @@ export function ToolSettingsSection() {
     </header>
     {error && <div className="cmd-tool-catalog-error"><p className="cmd-tool-error" role="alert">{error}</p><Button variant="ghost" size="sm" onClick={refresh}>重试</Button></div>}
     {loading && !tools && <Loading label="正在检测 Harness 工具" />}
-    {tools?.length > 0 && <div className="cmd-tool-cards">{tools.map(tool => <ToolCard key={tool.id} tool={tool} onOperation={operate} onConfig={request} />)}</div>}
+    {tools?.length > 0 && <div className="cmd-tool-cards">{tools.map(tool => <ToolCard key={tool.id} tool={tool} onOperation={operate} />)}</div>}
     {tools?.length === 0 && !error && <div className="cmd-tool-empty"><UIIcon name="cpu" size={26} /><strong>没有可管理的 CLI 工具</strong><Button variant="ghost" size="sm" disabled={loading} onClick={refresh}>重新检测</Button></div>}
   </section>;
 }

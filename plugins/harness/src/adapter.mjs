@@ -2,6 +2,7 @@ import { LlmAdapter } from '@deepseek-ai/dsh-llm';
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { singleRequestUsage } from './usage.mjs';
 import { decodeRouteModelId } from '../../base/src/picker-catalog.mjs';
+import { nativeModelConfig, nativeReasoningEffort } from '../../base/shared/runtime-setting-fields.mjs';
 import { mediaResultFile, NATIVE_MEDIA_RESULT } from '../../media/shared/generation-result.mjs';
 
 const providers = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', grok: 'Grok Build', mcode: 'MiniMax Code' };
@@ -39,7 +40,6 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
     async *stream(options) {
       if (disposed) throw new Error('BenchGo adapter is disposed');
       if (options.purpose) throw new Error(`BenchGo native agents do not support auxiliary ${options.purpose} requests`);
-      if (options.reasoningEffort !== undefined) throw new Error('此工具不支持 API 模型的思考档位，请在设置 → Harness 中配置对应工具的推理强度后新建对话');
       options.signal?.throwIfAborted();
       const agent = ctx.agents.requireInitiator();
       const owner = String(agent.session.id);
@@ -81,30 +81,41 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
       try {
         const ownedSessions = commander.list().filter(session => !session.archived && (!session.parentId || session.harnessAdopted) && session.ownerSessionId === owner);
         const existing = ownedSessions.find(session => session.provider === native && session.cwd === directory && session.route?.providerId === binding.providerId);
-        if (existing && (existing.route?.model !== binding.model || existing.model !== nativeModel)) {
+        if (!existing && ownedSessions.length) throw new Error('此对话已绑定其他工具或供应商模型；请新建聊天，已有记录与运行配置不会被修改');
+        const modelChanged = existing && (existing.route?.model !== nativeModel || existing.model !== nativeModel);
+        const previousEffort = nativeReasoningEffort(native, existing?.route?.advancedConfig);
+        const mustCheckRoute = !existing || modelChanged || options.reasoningEffort !== previousEffort;
+        let advancedConfig = existing?.route?.advancedConfig;
+        if (mustCheckRoute) {
+          const available = await commander.pickerCatalog.models(native, { fresh: true });
+          const route = available.find(model => model.id === options.model);
+          if (!route) throw new Error('工具供应商或模型已变更，请重新选择模型');
+          const defaults = !existing || modelChanged ? await commander.routeService.defaultConfig?.(native, binding.providerId, nativeModel) : undefined;
+          advancedConfig = nativeModelConfig(native, defaults ?? advancedConfig, route.reasoning, { reasoningEffort: options.reasoningEffort });
+        }
+        const effortChanged = nativeReasoningEffort(native, advancedConfig) !== previousEffort;
+        if (existing && (modelChanged || effortChanged)) {
           if (['running', 'waiting', 'connecting'].includes(existing.status)) throw new Error('请等待当前轮次完成后再切换模型');
-          if (commander.pickerCatalog) {
-            const available = await commander.pickerCatalog.models(native, { fresh: true });
-            if (!available.some(model => model.id === options.model)) throw new Error('工具供应商或模型已变更，请重新选择模型');
-          }
           const driver = commander.drivers.get(existing.id);
-          if (driver && !driver.setModel) throw new Error(`${native} 当前连接不支持在同一会话中切换模型，请新建聊天`);
-          const nextRoute = await commander.routeService.capture({ tool: native, ...binding, advancedConfig: existing.route?.advancedConfig ?? {} });
+          const previousRoute = existing.route, previousModel = existing.model;
+          const nextRoute = await commander.routeService.capture({ tool: native, ...binding, advancedConfig });
           if (existing.route?.version && !nextRoute.version) throw new Error('会话绑定服务不可用，无法保存模型变更');
           if (existing.route?.version && ['mode', 'baseURL', 'protocol', 'sourceProtocol', 'credentialRef'].some(key => existing.route[key] !== nextRoute[key])) throw new Error('绑定供应商的地址、协议或凭据引用已更改，请新建会话或恢复原配置。');
-          await driver?.setModel(nativeModel);
+          if (driver && (effortChanged || !driver.setModel || JSON.stringify(existing.route?.advancedConfig) !== JSON.stringify(nextRoute.advancedConfig))) await commander.disconnect(existing.id);
+          else if (modelChanged) await driver?.setModel(nativeModel);
           const record = commander.get(existing.id);
           record.model = nativeModel;
           record.route = nextRoute;
-          await commander.persist();
-          commander.event(existing.id, 'model.changed', { providerId: binding.providerId, model: binding.model, nativeModel });
+          try { await commander.persist(); }
+          catch (error) {
+            record.model = previousModel;
+            record.route = previousRoute;
+            if (commander.drivers.has(existing.id)) await commander.disconnect(existing.id).catch(() => {});
+            throw error;
+          }
+          commander.event(existing.id, 'model.changed', { providerId: binding.providerId, model: binding.model, nativeModel, reasoningEffort: nativeReasoningEffort(native, advancedConfig) });
         }
-        if (!existing) {
-          if (ownedSessions.length) throw new Error('此对话已绑定其他工具或供应商模型；请新建聊天，已有记录与运行配置不会被修改');
-          const available = await commander.pickerCatalog.models(native, { fresh: true });
-          if (!available.some(model => model.id === options.model)) throw new Error('工具供应商或模型已变更，请重新选择模型');
-        }
-        const session = existing ?? await commander.create({ provider: native, cwd: directory, route: binding, ownerSessionId: owner, title: human.at(-1).content.map(block => block.text).join('\n').slice(0, 120) });
+        const session = existing ?? await commander.create({ provider: native, cwd: directory, route: { ...binding, ...(Object.keys(advancedConfig ?? {}).length ? { advancedConfig } : {}) }, ownerSessionId: owner, title: human.at(-1).content.map(block => block.text).join('\n').slice(0, 120) });
         id = session.id;
         bindOwner?.(id, agent);
         controller.signal.throwIfAborted();

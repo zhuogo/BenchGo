@@ -42,6 +42,12 @@ export function currentHumanInstruction(ctx, agent, { allowDelegationContinuatio
     && event.data?.source?.kind === 'user' && event.data.id === requestId)?.data;
   return original ? { turn: start, message: original, continuationId: notice.id } : null;
 }
+
+export function desktopRequestTime(agent, message, fallbackTime) {
+  const receivedAt = agent.session?.snapshotEvents().findLast(event => event.type === 'user/message' && event.data.id === message.id)?.time;
+  return { at: Number.isFinite(receivedAt) ? new Date(receivedAt).toISOString() : fallbackTime,
+    timeZone: message.source?.clientTimeZone };
+}
 const required = (value, name, max = 100000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`无效${name}`);
   return value;
@@ -136,7 +142,7 @@ export function createDesktopDelegationService({ ctx, store, database = store.or
       if (!remote && digest(configuredWorkModel(current)) !== digest(selectedModel)) throw new Error('安排任务期间工作角色模型已变化，请重试');
       const task = database.acceptDesktop({ triggerId: trigger.id, requestKey, fingerprint, title, target, acceptance: taskAcceptance, duplicateOfTaskId, model: selectedModel, mandate: {
         actorId: 'desktop-owner', source, triggerId: trigger.id, instruction: original, policyVersion: policy.desktopVersion,
-        target, acceptance: taskAcceptance,
+        target, acceptance: taskAcceptance, requestTime: desktopRequestTime(ownerAgent, message, trigger.createdAt),
         admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval',
         ...(project ? { project: remote ? project : { id: project.id, path: project.path } } : {}),
         ...(remote ? { execution: remote.execution } : {}),

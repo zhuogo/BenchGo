@@ -574,8 +574,9 @@ test('task details lead with real progress, retain summary history and expose ic
     page.setDefaultTimeout(5000);
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.setContent(await fixture());
-    await page.evaluate(()=>{window.renderScenario('dynamic');window.updateSummary('已读取项目说明，确认服务器使用 SSH 连接。');window.updateSummary('已连通目标服务器，正在核对磁盘与关键服务。');});
+    await page.evaluate(()=>{window.renderScenario('dynamic');window.updateSummary('Worker 称已读取项目说明，确认服务器使用 SSH 连接。');window.updateSummary('Worker称已连通目标服务器，正在核对磁盘与关键服务。');});
     await page.getByRole('button',{name:'展开看板',exact:true}).click();
+    await page.locator('[data-task-key="task:running"] .ba-board-summary').getByText('已连通目标服务器，正在核对磁盘与关键服务。',{exact:true}).waitFor();
     await page.locator('[data-task-key="task:running"] .ba-board-task-open').click();
     const detail=page.getByRole('region',{name:'任务详情',exact:true});
     await detail.getByRole('heading',{name:'全执行记录',exact:true}).waitFor();

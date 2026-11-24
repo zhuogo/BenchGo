@@ -19,7 +19,9 @@ async function fixture(t) {
       return { baseURL: 'https://api.example.test', apiKey: 'fixture-secret', protocol: id };
     },
   };
-  const { fetch, routeService } = await mountTooling({ effect() {} }, { store: { directory } }, providers, { installer: {} });
+  const ctx = { effect() {}, settings: { describe: () => [{ ns: 'subagent', value: { maxDepth: 3, maxActiveSubagents: 8 } }] },
+    llm: { async resolveModelInfo() { return { context: { contextWindow: 131072 } }; } } };
+  const { fetch, routeService } = await mountTooling(ctx, { store: { directory } }, providers, { installer: {} });
   const request = input => fetch(new Request('http://test/api/commander/tooling', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
   }));
@@ -28,7 +30,7 @@ async function fixture(t) {
   return { directory, store, codex, claude, routeService, get, save };
 }
 
-test('tool forms preserve legacy options and merge concurrent field edits before binding new sessions', async t => {
+test('legacy options remain readable and new native bindings inherit Harness settings', async t => {
   const { directory, store, codex, claude, routeService, get, save } = await fixture(t);
   assert.deepEqual(await get('codex'), codex);
   assert.deepEqual(await get('claude'), claude);
@@ -61,14 +63,17 @@ test('tool forms preserve legacy options and merge concurrent field edits before
 
   const oldCodex = await routeService.launch({ tool: 'codex', route: originalRoute, sessionId: randomUUID() });
   const newCodex = await routeService.launch({ tool: 'codex', route: await routeService.capture(codexBinding), sessionId: randomUUID() });
-  assert(oldCodex.commandArgs.includes('agents.max_threads=3'));
-  for (const arg of ['agents.max_threads=7', 'agents.max_depth=4', 'features.multi_agent=false', 'model="vendor/Codex-exact"']) assert(newCodex.commandArgs.includes(arg));
+  assert(oldCodex.commandArgs.includes('features.multi_agent=true'));
+  for (const arg of ['features.multi_agent=true', 'agents.max_threads=8', 'agents.max_depth=3', 'model_context_window=131072']) {
+    assert(oldCodex.commandArgs.includes(arg));
+    assert(newCodex.commandArgs.includes(arg));
+  }
   const claudeBinding = { tool: 'claude', providerId: 'anthropic-messages', model: 'vendor/Claude-exact' };
   const newClaude = await routeService.launch({ tool: 'claude', route: await routeService.capture(claudeBinding), sessionId: randomUUID() });
   assert.equal(newClaude.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, '1');
-  assert.equal(newClaude.settings.effortLevel, 'xhigh');
-  assert.equal(newClaude.settings.alwaysThinkingEnabled, false);
-  assert.equal(newClaude.settings.disableAllHooks, true);
+  assert.equal(newClaude.settings.effortLevel, undefined);
+  assert.equal(newClaude.settings.alwaysThinkingEnabled, undefined);
+  assert.equal(newClaude.settings.disableAllHooks, undefined);
   assert.equal(newClaude.settings.model, 'vendor/Claude-exact');
   assert(!Object.hasOwn(newClaude.settings, 'teammateMode'));
 });

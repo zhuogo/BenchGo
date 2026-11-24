@@ -121,6 +121,7 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
   const mainLabel = { idle: '打开主聊天', running: '打开主聊天，正在进行中', waiting: '打开主聊天，等待你的确认', error: '打开主聊天，会话连接异常' }[mainStatus];
   const menuAnchor = useRef(null);
   const refreshRef = useRef(null), selectionRef = useRef(selected);
+  const runningSideSessions = useRef(new Set());
   selectionRef.current = selected;
   const panel = useSyncExternalStore(fn => ctx.layout.panelInfo.subscribe(fn), () => ctx.layout.panelInfo.getSnapshot());
   useEffect(() => {
@@ -166,6 +167,18 @@ export function AssistantSidebarEntry({ ctx, showArchived = false }) {
     document.addEventListener('benchgo:clear-archived-threads', clearArchived);
     return () => { controller.abort(); refreshRef.current = null; clearInterval(timer); clearTimeout(changeTimer); document.removeEventListener('benchgo:assistant-thread', selectedThread); document.removeEventListener('benchgo:assistant-tab', selectedTabChanged); document.removeEventListener('benchgo:assistant-changed', changed); document.removeEventListener('benchgo:clear-archived-threads', clearArchived); document.dispatchEvent(new CustomEvent('benchgo:archived-thread-count', { detail: 0 })); };
   }, [showArchived, imList]);
+  useEffect(() => {
+    const running = new Set();
+    let settled = false;
+    if (!showArchived && !imList) for (const thread of threads) {
+      if (!thread.sessionId || thread.archived || isFixedChannelThread(thread)) continue;
+      const active = statuses.get(thread.sessionId)?.running ?? sessions.byId[thread.sessionId]?.running;
+      if (active === true) running.add(thread.sessionId);
+      else if (active === false && runningSideSessions.current.has(thread.sessionId)) settled = true;
+    }
+    runningSideSessions.current = running;
+    if (settled) void refreshRef.current?.();
+  }, [threads, statuses, sessions, showArchived, imList]);
   const createThread = async () => {
     if (creating) return;
     setCreating(true); setError('');
@@ -540,10 +553,14 @@ function ModelSelection({ open, saved, harness, draft: value, canChangeHarness, 
   const models = harness === 'official'
     ? officialModels.map(model => ({ value: model.id, label: model.name || model.id }))
     : routes.filter(row => !value.providerId || row.providerId === value.providerId).map(row => ({ value: row.nativeModelId, label: row.name || row.nativeModelId }));
-  const { reasoning } = officialModels.find(model => model.id === value.modelId) ?? {};
+  const selectedModel = harness === 'official'
+    ? officialModels.find(model => model.id === value.modelId)
+    : routes.find(route => route.providerId === value.providerId && route.nativeModelId === value.modelId);
+  const { reasoning, reasoningUnavailable } = selectedModel ?? {};
   const efforts = (reasoning?.efforts || []).map(({ id, name }) => ({ id, name: Object.hasOwn(reasoningLevelLabels, id) ? reasoningLevelLabels[id] : name || id }));
   const effort = value.options?.reasoningEffort;
-  const unsupportedEffort = !loading && !errorMessage && harness === 'official' && providerSelected && effort !== undefined && !efforts.some(item => item.id === effort);
+  const showReasoning = !loading && !errorMessage && providerSelected && !!value.modelId;
+  const unsupportedEffort = showReasoning && !reasoningUnavailable && effort !== undefined && !efforts.some(item => item.id === effort);
   const { reasoningEffort: _oldEffort, ...otherOptions } = value.options ?? {};
   const withEffort = (model, reasoningEffort) => {
     const next = { ...model };
@@ -585,7 +602,8 @@ function ModelSelection({ open, saved, harness, draft: value, canChangeHarness, 
       {loading ? <Loading label="正在读取模型目录" compact /> : errorMessage ? <p className="ba-model-feedback" data-error="true" role="alert"><span>模型目录加载失败：{errorMessage}。</span><Button variant="ghost" type="button" onClick={() => harness === 'official' ? assistantModelCatalog.invalidate() : pickerCatalog.invalidate()}>重试</Button></p> : providers.every(provider => provider.disabled) && <p className="ba-model-feedback" role="status"><UIIcon name="server" size={15} /><span>{harness === 'official' ? '目录中还没有供应商，可在模型设置中配置。' : toolCatalog?.tools?.find(tool => tool.id === harness)?.routeReason || '当前 Harness 没有可用的 API 模型组合。'}</span></p>}
       {unsupportedEffort && <p className="ba-model-feedback" data-error="true" role="alert"><span>原档位已不可用（{effort}）</span><Button variant="ghost" type="button" onClick={() => onChange(withEffort(value))}>恢复默认</Button></p>}
       {efforts.length > 0 && <ModelEffortPicker options={effortOptions} value={effort ?? ''} disabled={unavailableCatalog} onCommit={effortId => onChange(withEffort(value, effortId))} />}
-      {!unavailableCatalog && harness !== 'official' && value.modelId && <p className="ba-model-feedback">推理强度使用此 Harness 的高级设置。</p>}
+      {showReasoning && reasoningUnavailable && <p className="ba-model-feedback" data-error="true" role="alert"><span>暂时无法读取推理档位。</span><Button variant="ghost" type="button" onClick={() => assistantModelCatalog.invalidate()}>重试</Button></p>}
+      {showReasoning && !reasoningUnavailable && !unsupportedEffort && !efforts.length && <p className="ba-model-feedback" role="status">模型目录未提供此模型的推理档位。</p>}
       <div className="ba-model-dialog-actions">
         <DialogClose asChild><Button variant="ghost" type="button">取消</Button></DialogClose>
         <Button type="button" disabled={unavailableCatalog || !providerSelected || !value.modelId || unsupportedEffort || (harness !== 'official' && !externalModelAvailable)} onClick={onApply}>应用</Button>

@@ -18,7 +18,7 @@ async function privateDirectory(directory) {
   while (part !== parse(part).root) { try { if ((await lstat(part)).isSymbolicLink()) fail('隔离目录不能经过符号链接'); } catch (error) { if (error.code !== 'ENOENT') throw error; } part = dirname(part); }
   await mkdir(target, { recursive: true, mode: 0o700 }); await chmod(target, 0o700); return target;
 }
-export function createSessionRoutes({ directory, providers, runtimeSettings } = {}) {
+export function createSessionRoutes({ directory, providers, runtimeSettings, harnessDefaults } = {}) {
   if (!directory || !providers?.resolve) throw new TypeError('directory and providers.resolve are required');
   const describe = async providerId => { try { return await (providers.describeRoute ? providers.describeRoute(providerId) : providers.resolve(providerId)); } catch { fail('无法读取绑定供应商，请检查供应商配置。'); } };
   const descriptor = (tool, providerId, model, value) => {
@@ -31,8 +31,10 @@ export function createSessionRoutes({ directory, providers, runtimeSettings } = 
     if (!runtimeSettings?.validate) fail('Harness 高级配置服务不可用。');
     return runtimeSettings.validate(tool, input ?? await runtimeSettings.get(tool));
   };
+  const defaultConfig = async (tool, providerId, model) => harnessDefaults ? harnessDefaults(tool, providerId, model) : await runtimeSettings?.get(tool) ?? {};
   return {
     supports: sessionRouteSupport,
+    defaultConfig,
     async capture({ tool, providerId, model, protocol, advancedConfig } = {}) {
       if (!sessionRouteSupport(tool).supported) fail(sessionRouteSupport(tool).reason);
       providerId = text(providerId, '供应商'); model = text(model, '模型');
@@ -45,7 +47,7 @@ export function createSessionRoutes({ directory, providers, runtimeSettings } = 
         const reason = routerGoModelProtocolReason(tool, rows.get(model));
         if (reason) fail(reason);
       }
-      const settings = await snapshotConfig(tool, advancedConfig);
+      const settings = await snapshotConfig(tool, advancedConfig ?? (harnessDefaults ? await defaultConfig(tool, providerId, model) : undefined));
       if (Object.keys(settings).length) route.advancedConfig = settings;
       return { ...route, revision: randomUUID(), fingerprint: fingerprint(route) };
     },

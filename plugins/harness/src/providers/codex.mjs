@@ -21,6 +21,10 @@ export class CodexProvider {
     let permission = session.permission ? nativePermission(session.permission) : !session.nativeId ? fullNativePermission : undefined;
     const threadPermission = () => permission ? { approvalPolicy: permission.approval === 'ask' ? 'on-request' : 'never', sandbox: permission.sandbox } : {};
     const turnPermission = () => permission ? { approvalPolicy: permission.approval === 'ask' ? 'on-request' : 'never', sandboxPolicy: permission.sandbox === 'danger-full-access' ? { type: 'dangerFullAccess' } : permission.sandbox === 'read-only' ? { type: 'readOnly' } : { type: 'workspaceWrite', writableRoots: [session.cwd, ...(permission.additionalWritableRoots ?? [])] } } : {};
+    const turnModel = () => {
+      const effort = session.route?.advancedConfig?.config?.model_reasoning_effort;
+      return { ...(session.model ? { model: session.model } : {}), ...(effort === undefined ? {} : { effort }) };
+    };
     const media = host.delegation?.media ? host.delegation : undefined;
     const mediaArgs = media ? mediaMcpArguments(media) : [];
     const env = media ? { ...this.config.env, COMMANDER_DELEGATE_URL: media.url, COMMANDER_DELEGATE_TOKEN: media.token } : this.config.env;
@@ -50,12 +54,12 @@ export class CodexProvider {
         }
         const skill = driver.skills?.find(entry => entry.name === name);
         if (!skill?.path) throw new Error(`Unsupported native Codex command: /${name}`);
-        const response = await wire.request('turn/start', { threadId: driver.nativeId, ...turnPermission(), ...(session.model ? { model: session.model } : {}), input: [{ type: 'skill', name: skill.name, path: skill.path }, { type: 'text', text: `$${name}${args ? ` ${args}` : ''}` }] });
+        const response = await wire.request('turn/start', { threadId: driver.nativeId, ...turnPermission(), ...turnModel(), input: [{ type: 'skill', name: skill.name, path: skill.path }, { type: 'text', text: `$${name}${args ? ` ${args}` : ''}` }] });
         driver.turnId = response.turn.id;
       },
       async submit(text) {
         const response = await wire.request('turn/start', {
-          threadId: driver.nativeId, ...turnPermission(), ...(session.model ? { model: session.model } : {}), input: [{ type: 'text', text }],
+          threadId: driver.nativeId, ...turnPermission(), ...turnModel(), input: [{ type: 'text', text }],
         });
         driver.turnId = response.turn.id;
       },

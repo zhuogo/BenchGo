@@ -77,12 +77,12 @@ test('concurrent and repeated selections share route metadata until configuratio
   let calls = 0, id = 'first';
   const catalog = fixture({ providers: [provider('primary', 'responses')], listModels: async () => {
     calls++;
-    return [{ id, reasoning: { efforts: [{ id: 'high' }] } }];
+    return [{ id, reasoning: { efforts: [{ id: 'off' }, { id: 'high' }], defaultEffort: 'off' } }];
   } });
   const [value, models] = await Promise.all([catalog.list(), catalog.models('codex')]);
   assert.equal(calls, 1);
-  assert.equal(value.routes.find(row => row.tool === 'deepseek').reasoning.efforts[0].id, 'high');
-  assert.equal(models[0].reasoning, undefined);
+  assert.equal(value.routes.find(row => row.tool === 'deepseek').reasoning.defaultEffort, 'off');
+  assert.deepEqual(models[0].reasoning, { efforts: [{ id: 'high', name: 'high' }] });
   id = 'second';
   assert.equal((await catalog.models('codex'))[0].nativeModelId, 'first');
   assert.equal(calls, 1);

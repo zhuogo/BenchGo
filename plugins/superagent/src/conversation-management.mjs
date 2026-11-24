@@ -6,7 +6,7 @@ import { requestSettingsApproval } from './approval.mjs';
 const fail = (code, message) => new HarnessError(`${code}: ${message}`, code);
 const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const string = { type: 'string', minLength: 1 };
-const ids = { type: 'array', minItems: 1, maxItems: 1000, uniqueItems: true, items: string };
+const ids = { type: 'array', minItems: 1, maxItems: 1000, items: string, description: 'Exact Task IDs, without duplicates.' };
 const globalScope = Object.freeze({ owner: 'desktop-owner', mode: 'global' });
 function inputFor(input, fields) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('MANAGEMENT_INPUT', 'Management parameters must be an object');
@@ -101,6 +101,8 @@ export function registerConversationManagement({ ctx, scope, agent, register, se
     if (!Object.hasOwn(cleanupFields, input?.op)) throw fail('MANAGEMENT_INPUT', '无效任务清理操作');
     const args = inputFor(input, cleanupFields[input.op]);
     const { stamp, instruction } = await authority(exec);
+    if (Array.isArray(args.ids) && new Set(args.ids).size !== args.ids.length)
+      throw fail('CLEANUP_SCOPE_DENIED', '任务 ID 不能重复');
     if (!taskManagement) throw fail('CLEANUP_UNAVAILABLE', '任务清理服务当前不可用');
     if (['stop-and-archive', 'pending', 'cancel'].includes(input.op)) {
       if (!cleanupContinuations) throw fail('CLEANUP_UNAVAILABLE', '任务停止后归档服务当前不可用');
@@ -123,7 +125,7 @@ export function registerConversationManagement({ ctx, scope, agent, register, se
       if (prepared?.stamp !== stamp || prepared.manifestHash !== preview.manifestHash)
         throw fail('MANAGEMENT_STALE_INSTRUCTION', '请先在本次主人指令下预览任务清单');
       const selected = [...args.ids].sort();
-      if (new Set(selected).size !== selected.length || selected.some(id => !preview.items.some(row => row.id === id))) throw fail('CLEANUP_SCOPE_DENIED', '最终清单必须是已预览任务的不重复子集');
+      if (selected.some(id => !preview.items.some(row => row.id === id))) throw fail('CLEANUP_SCOPE_DENIED', '最终清单必须是已预览任务的子集');
       const requestId = args.requestId || fingerprint([input.op, source, args.previewId, selected]);
       if (preview.consumedBy) {
         const previous = taskManagement.cleanupHistory({ receiptId: preview.consumedBy })[0];

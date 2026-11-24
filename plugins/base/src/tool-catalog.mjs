@@ -1,5 +1,5 @@
 /** Fixed sources audited against CC Switch 51ac86f. */
-const npm = (id, name, packageName, command = id, extra = {}) => ({ id, name, command, packageName, installer: 'npm', platforms: ['linux', 'darwin', 'win32'], configSupported: ['codex', 'claude'].includes(id), chatSupported: true, ...extra });
+const npm = (id, name, packageName, command = id, extra = {}) => ({ id, name, command, packageName, installer: 'npm', platforms: ['linux', 'darwin', 'win32'], chatSupported: true, ...extra });
 export const TOOL_CATALOG = Object.freeze([
   npm('claude', 'Claude Code', '@anthropic-ai/claude-code', 'claude', { installArgs: ['--ignore-scripts=false', '--allow-scripts=@anthropic-ai/claude-code'] }),
   npm('codex', 'Codex', '@openai/codex'),

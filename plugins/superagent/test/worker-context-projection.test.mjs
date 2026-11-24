@@ -33,7 +33,8 @@ test('official Worker requests carry context once in the applied task package, i
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => 'inspected' });
   const database = store.orchestration;
   const source = { channel: 'desktop', sessionId: 'owner', messageId: 'original' };
-  const mandate = { actorId: 'desktop-owner', source, instruction: 'Original explicit user requirements', policyVersion: 'current', admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval' };
+  const mandate = { actorId: 'desktop-owner', source, instruction: 'Original explicit user requirements', policyVersion: 'current', admission: 'desktop-approved-delegation', controlledActions: 'require-current-policy-and-harness-approval',
+    requestTime: { at: '2026-11-23T16:05:00.000Z', timeZone: 'Asia/Shanghai' } };
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
   const task = database.createTask({ threadId: 'thread', target: 'Original target', acceptance: 'Original checks', mandate });
   database.createAssignment(task.id, { text: 'Assigned leaf scope' });
@@ -75,6 +76,8 @@ test('official Worker requests carry context once in the applied task package, i
   assert.equal(requests.length, 2);
   for (const [index, request] of requests.entries()) {
     assert.match(JSON.stringify(request), /benchgo-worker-progress|Keep the task timeline understandable/);
+    const system = request.messages.findLast(message => message.role === 'system' && message.content.length);
+    assert.match(system.content[0].text, /"timeZone":"Asia\/Shanghai","timeZoneSource":"request-client","originalRequestTime":"2026-11-24T00:05:00\+08:00"/);
     const runtime = request.messages.findLast(message => message.source?.kind === 'runtime-context');
     assert.ok(runtime, 'the real request contains an official runtime context snapshot');
     const sections = runtime.source.sections;

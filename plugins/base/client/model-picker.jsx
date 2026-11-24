@@ -329,6 +329,7 @@ function ModelPicker({ sessionId, locked, available, useDirectory, selectionProj
           <strong><em>{effortModel.providerName}</em><i>/</i><b>{effortModel.model.name}</b></strong>
         </div>
         {effortOptions.length > 0 && <ModelEffortPicker key={JSON.stringify([effortModel.group.id, effortModel.model.id])} options={effortOptions} value={activeEffort} disabled={effortUnavailable} saving={busy} onCommit={commitEffort} />}
+        {!catalogLoading && !catalogError && currentTool !== 'deepseek' && !effortUnsupported && !effortOptions.length && <p className="cmd-model-refresh-status" role="status">此模型在当前工具中没有可选推理档位。</p>}
       </section>}
       {effortUnsupported && <div className="cmd-model-footer" role="alert">当前模型不支持已保存的推理档位 {activeEffort}</div>}
       {catalogLoading && catalog && <p className="cmd-model-refresh-status" role="status">正在更新模型目录…</p>}

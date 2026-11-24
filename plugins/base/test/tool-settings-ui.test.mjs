@@ -1,14 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, rmdir } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sharedUiStyles } from '../scripts/shared-ui.mjs';
 import { shellUi } from '../scripts/shell-ui.mjs';
-import { createRuntimeSettings } from '../src/runtime-settings.mjs';
 import { TOOL_CATALOG } from '../src/tool-catalog.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -46,7 +44,7 @@ async function settingsFixture() {
       function App() {
         const [open, setOpen] = useState(false);
         const [activeId, select] = useState('general');
-        const actions = {close: () => setOpen(false), open: () => setOpen(true), select};
+        const actions = {close: () => setOpen(false), open: () => setOpen(true), openSection: id => { select(id); setOpen(true); }, select};
         const renderSlot = (name, props, filter) => {
           if (name === 'settings.header') return t('title');
           if (name === 'settings.close') return t('close');
@@ -56,8 +54,9 @@ async function settingsFixture() {
           if (name === 'settings.section' && filter.only === 'harness-tools') return <ToolSettingsSection ctx={ctx}/>;
           return filter?.fallback ?? null;
         };
+        const renderFactorySlot = (name, {id}) => name === 'settings.section.view' ? renderSlot('settings.section', {}, {only:id}) : null;
         return <><style>{hostCss}{mobileCss}</style><main><h1>BenchGo</h1><SettingsRoot wide
-          renderSlot={renderSlot} t={t} reconnect={() => {}}
+          renderSlot={renderSlot} renderFactorySlot={renderFactorySlot} t={t} reconnect={() => {}}
           useStore={read => read({open, activeId})} actions={actions} useSections={read => read(rows)}
           useConnectionState={read => read('connected')} useOnboardingSteps={read => read([])}
           useSessions={read => read({phase:'ready', byId:{main:{retainedBy:{mainView:1}, blank:false}}})}
@@ -93,17 +92,12 @@ async function settingsFixture() {
     ${css}</style><body><div id="root"></div><script>${js.replaceAll('</script', '<\\/script')}</script></body></html>`;
 }
 
-const codexDefaults = { config: {
-  agents: { max_threads: 3, max_depth: 2 }, features: { multi_agent: true }, model_auto_compact_token_limit: 20_000,
-} };
-const claudeDefaults = { settings: { alwaysThinkingEnabled: true, teammateMode: 'auto' } };
-
 function catalog(installedTools) {
-  return TOOL_CATALOG.map(({ id, name, configSupported }) => {
+  return TOOL_CATALOG.map(({ id, name }) => {
     const installed = installedTools.has(id);
     const available = installed && id !== 'grok';
     return {
-      id, name, configSupported, installed, available,
+      id, name, installed, available,
       version: installed ? '0.169.1' : undefined,
       chatSupported: true, routeSupported: available,
       canInstall: !installed, canUpdate: installed, canUninstall: installed,
@@ -112,23 +106,19 @@ function catalog(installedTools) {
   });
 }
 
-test('Harness settings render four states, show responsive cards and preserve saved settings', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
+test('Harness settings render four states without per-tool model controls', { skip: !executablePath && 'Chromium/Edge required' }, async () => {
   const html = await settingsFixture();
   const screenshots = process.env.BENCHGO_TOOL_SETTINGS_SCREENSHOTS;
   if (screenshots) await mkdir(screenshots, { recursive: true });
-  const directory = await mkdtemp(join(tmpdir(), 'benchgo-tool-settings-ui-'));
-  const settings = createRuntimeSettings({ directory });
   const browser = await chromium.launch({ headless: true, executablePath });
   try {
-    await settings.save('codex', codexDefaults);
-    await settings.save('claude', claudeDefaults);
     const page = await browser.newPage({ viewport: { width: 1280, height: 850 }, colorScheme: 'light' });
     page.setDefaultTimeout(6000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    let mode = 'data', catalogGate, configGate, readFails = false, saveFails = false;
+    let mode = 'data', catalogGate;
     const installedTools = new Set(['codex', 'grok', 'opencode']);
-    const operations = [], saves = [];
+    const operations = [];
     await page.route('http://localhost/**', async route => {
       const url = new URL(route.request().url());
       if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: html });
@@ -140,14 +130,6 @@ test('Harness settings render four states, show responsive cards and preserve sa
           await catalogGate;
           return mode === 'error' ? failure('工具服务暂不可用')
             : route.fulfill({ json: { tools: mode === 'empty' ? [] : catalog(installedTools) } });
-        case 'toolConfig':
-          await configGate;
-          return readFails ? failure('暂时无法读取配置') : route.fulfill({ json: { config: await settings.get(input.tool) } });
-        case 'saveToolConfig':
-          saves.push(input);
-          if (saveFails) return failure('配置目录写入失败');
-          try { return route.fulfill({ json: { config: await settings.save(input.tool, input.config, input.changedFields) } }); }
-          catch (error) { return route.fulfill({ status: 400, json: { error: error.message } }); }
         case 'install':
           operations.push(input);
           installedTools.add(input.tool);
@@ -189,7 +171,6 @@ test('Harness settings render four states, show responsive cards and preserve sa
     const loading = page.getByRole('status', { name: '正在检测 Harness 工具' });
     const codex = card('Codex');
     const claude = card('Claude Code');
-    const configButton = codex.getByRole('button', { name: '工具选项', exact: true });
     const update = codex.getByRole('button', { name: '更新', exact: true });
     const uninstall = codex.getByRole('button', { name: '卸载', exact: true });
     const columns = async expected => {
@@ -220,17 +201,13 @@ test('Harness settings render four states, show responsive cards and preserve sa
 
     await codex.waitFor();
     assert.equal(await cards.count(), TOOL_CATALOG.length);
+    assert.equal(await settingsSection.getByRole('button', { name: '工具选项', exact: true }).count(), 0);
+    assert.equal(await settingsSection.locator('[data-config-field]').count(), 0);
     await columns(3);
     assert.equal((await settingsDialog.boundingBox()).width, 1040, 'wide screens use the shared desktop dialog width');
     await card('Grok Build').getByText('当前安装缺少会话权限').waitFor();
     await shot('desktop-3-columns-light');
-    const dark = await settingsSection.evaluate(section => {
-      const panel = section.closest('[data-shortcut-modal]');
-      const light = getComputedStyle(panel).backgroundColor;
-      document.body.setAttribute('data-ds-dark-theme', '');
-      return [light, getComputedStyle(panel).backgroundColor];
-    });
-    assert.notEqual(...dark);
+    await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
     assert.equal(await codex.locator('.cmd-tool-brand').evaluate(node => getComputedStyle(node).filter), 'none');
     assert.equal(await card('Grok Build').locator('.cmd-tool-brand').evaluate(node => getComputedStyle(node).filter), 'grayscale(1)');
     await shot('desktop-3-columns-dark');
@@ -243,7 +220,7 @@ test('Harness settings render four states, show responsive cards and preserve sa
     }
     await page.setViewportSize({ width: 1280, height: 850 });
 
-    for (const icon of [update, uninstall, configButton]) {
+    for (const icon of [update, uninstall]) {
       assert.equal((await icon.innerText()).trim(), '', 'card actions use icon-only buttons');
       assert.equal(await icon.getAttribute('title'), null);
       const label = await icon.getAttribute('aria-label');
@@ -253,77 +230,10 @@ test('Harness settings render four states, show responsive cards and preserve sa
       await tooltip.waitFor();
       assert.equal(await tooltip.getAttribute('data-portal'), 'true');
       assert.equal(await icon.evaluate(node => node.matches(':focus-visible')), true);
-      if (icon === configButton) await shot('desktop-keyboard-tooltip');
+      if (icon === update) await shot('desktop-keyboard-tooltip');
       await page.keyboard.press('Tab');
       await tooltip.waitFor({ state: 'hidden' });
     }
-    await configButton.hover();
-    await page.getByRole('tooltip').filter({ hasText: '工具选项' }).waitFor();
-    await page.mouse.move(0, 0);
-    await page.getByRole('tooltip').filter({ hasText: '工具选项' }).waitFor({ state: 'hidden' });
-
-    let releaseConfig;
-    configGate = new Promise(resolve => { releaseConfig = resolve; });
-    readFails = true;
-    await configButton.click();
-    await codex.getByRole('status', { name: '正在读取配置' }).waitFor();
-    releaseConfig();
-    await codex.getByRole('alert').filter({ hasText: '暂时无法读取配置' }).waitFor();
-    readFails = false;
-    await codex.getByRole('button', { name: '重试', exact: true }).click();
-    const threads = codex.getByRole('spinbutton', { name: '最大并发代理数' });
-    await threads.waitFor();
-    assert.equal(await threads.inputValue(), '3');
-    assert.equal(await codex.getByRole('spinbutton', { name: '最大委派深度' }).inputValue(), '2');
-    assert.equal(await codex.getByRole('spinbutton', { name: '上下文窗口' }).inputValue(), '');
-    assert.equal(await codex.getByRole('spinbutton', { name: '上下文窗口' }).getAttribute('placeholder'), '工具默认');
-    assert.equal(await codex.locator('textarea').count(), 0);
-    const save = codex.getByRole('button', { name: '保存', exact: true });
-    await shot('desktop-visual-options');
-    await page.setViewportSize({ width: 390, height: 850 });
-    await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
-    await columns(1);
-    await shot('narrow-visual-options-dark');
-    await page.setViewportSize({ width: 1280, height: 850 });
-    await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'));
-    await threads.fill('4');
-    saveFails = true;
-    await save.click();
-    await codex.getByRole('alert').filter({ hasText: '配置目录写入失败' }).waitFor();
-    assert.equal(await threads.inputValue(), '4', 'save errors preserve the draft');
-    assert.deepEqual(await settings.get('codex'), codexDefaults);
-    await shot('desktop-save-error');
-    saveFails = false;
-    await save.click();
-    await codex.getByText('配置已保存', { exact: true }).waitFor();
-    await shot('desktop-visual-options-saved');
-    const expected = structuredClone(codexDefaults);
-    expected.config.agents.max_threads = 4;
-    assert.deepEqual(saves, Array(2).fill({
-      action: 'saveToolConfig', tool: 'codex', config: expected, changedFields: ['config.agents.max_threads'],
-    }));
-    assert.deepEqual(await settings.get('claude'), claudeDefaults);
-    await configButton.click();
-    await threads.waitFor({ state: 'detached' });
-    await openSettings();
-    await configButton.click();
-    await threads.waitFor();
-    assert.equal(await threads.inputValue(), '4', 'loading the setting again uses the persisted value');
-    await configButton.click();
-    await claude.getByRole('button', { name: '工具选项' }).click();
-    const teammateMode = claude.getByRole('combobox', { name: '队友显示方式' });
-    assert.equal(await teammateMode.inputValue(), 'auto');
-    await teammateMode.selectOption('in-process');
-    await claude.getByRole('button', { name: '保存', exact: true }).click();
-    await claude.getByText('配置已保存', { exact: true }).waitFor();
-    assert.deepEqual(saves.at(-1), {
-      action: 'saveToolConfig', tool: 'claude', changedFields: ['settings.teammateMode'],
-      config: { settings: { alwaysThinkingEnabled: true, teammateMode: 'in-process' } },
-    });
-    assert.deepEqual(await settings.get('claude'), saves.at(-1).config);
-    assert.deepEqual(await settings.get('codex'), expected);
-    await claude.getByRole('button', { name: '工具选项' }).click();
-
     await claude.getByRole('button', { name: '安装', exact: true }).click();
     await claude.getByText('安装完成', { exact: true }).waitFor();
     await update.click();
@@ -372,7 +282,5 @@ test('Harness settings render four states, show responsive cards and preserve sa
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
-    await rm(join(directory, 'harness-settings.json'), { force: true });
-    await rmdir(directory);
   }
 });

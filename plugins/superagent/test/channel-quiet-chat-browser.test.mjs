@@ -29,12 +29,20 @@ async function fixture() {
     const nodes=events.map(event=>{const match={...channelMessageDefinition.match(event),event,location:{kind:'session'}};return channelMessageDefinition.start({},match)});
     const messages=nodes.map(node=>({id:'channel:'+node.source.mirrorKey,kind:'channel-message',mirrorKey:node.source.mirrorKey,direction:node.source.direction,
       role:node.source.direction==='inbound'?'user':'assistant',source:node.source,text:node.content[0].text,content:node.content,seq:node.seq,time:node.time}));
-    window.renderScenario=(mode='data')=>{
+    window.renderScenario=async(mode='data',imageCount=0)=>{
       const inputMode=/^(steering|queue|idle)-/.test(mode),idleMode=mode.startsWith('idle-'),stage=mode.split('-')[1],queued=mode.startsWith('queue-');
       const threadId=inputMode||mode.startsWith('main-')?'main':'channel-thread';
       const replyError=mode==='reply-error'||mode==='main-reply-error';
       const placement=idleMode?'transcript':queued?'queued':'steering';
-      const human={id:'human',source:{kind:'user',rpcId:'human-rpc'},content:[{type:'text',text:idleMode?'这是已发送的真实要求':'这是运行中补充的真实要求'}]};
+      const human={id:'human',source:{kind:'user',rpcId:'human-rpc'},content:[{type:'text',text:imageCount===1?'':idleMode?'这是已发送的真实要求':'这是运行中补充的真实要求'}]};
+      const uploads=await Promise.all(Array.from({length:imageCount},async(_,index)=>{
+        const canvas=document.createElement('canvas');canvas.width=320;canvas.height=200;
+        const paint=canvas.getContext('2d');paint.fillStyle=['#218876','#c35930'][index];paint.fillRect(0,0,320,200);
+        const blob=await new Promise(resolve=>canvas.toBlob(resolve));
+        const name='截图 '+(index+1)+'.png',attachmentId='upload-'+index;
+        return {attachment:{attachmentId,name,mediaType:'image/png',bytes:blob.size,width:320,height:200},url:URL.createObjectURL(blob)};
+      }));
+      human.content.push(...uploads.map(({attachment})=>({type:'image',attachment})));
       const ordering=!idleMode&&['mixed','reordered'].includes(stage),second={...human,id:'second',source:{kind:'user',rpcId:'second-rpc'},content:[{type:'text',text:'这是第二条排队要求'}]};
       const inbox=ordering?{'next-turn':stage==='reordered'?[second,human]:[human,second]}:inputMode&&stage==='inbox'?{[queued?'next-turn':'next-step']:[human,{...human,id:'private',source:{kind:'benchgo-task-reply'},content:[{type:'text',text:'PRIVATE_NOTICE'}]}]}:{};
       let Official, ModelSetup, retains=0;
@@ -43,9 +51,13 @@ async function fixture() {
         if(name==='conversation.input.dock')ModelSetup=Component;
         return()=>{};
       }},
-        uiConversation:{binding:()=>({activate:()=>{}})},sessions:{retain:()=>{retains++;if(mode==='error')throw Error('offline');return {binding:{session:{getSnapshot:()=>({openState:mode==='settled-error'&&retains===1?'error':'open'})}},ready:mode==='loading'?new Promise(()=>{}):Promise.resolve(),release(){}}}}};
+        uiConversation:{binding:()=>({activate:()=>{}}),peekImageUrl:()=>undefined,async imageUrl(sessionId,{attachmentId}){
+          if(sessionId!=='feishu-session')throw Error('wrong image session');
+          return uploads.find(item=>item.attachment.attachmentId===attachmentId).url;
+        }},sessions:{retain:()=>{retains++;if(mode==='error')throw Error('offline');return {binding:{session:{getSnapshot:()=>({openState:mode==='settled-error'&&retains===1?'error':'open'})}},ready:mode==='loading'?new Promise(()=>{}):Promise.resolve(),release(){}}}}};
       mountAssistantConversation(ctx);
-      const session={sessionId:'feishu-session',openState:'open',running:inputMode&&!idleMode||mode.startsWith('activity-')||mode==='segments-live',blank:!inputMode,awaitingFirstTurn:!inputMode,pendingSubmissions:inputMode&&stage!=='inbox'?[{requestId:'human-rpc',placement,text:human.content[0].text,time:1794218400100,attachments:[]}]:[]};
+      const session={sessionId:'feishu-session',openState:'open',running:inputMode&&!idleMode||mode.startsWith('activity-')||mode==='segments-live',blank:!inputMode,awaitingFirstTurn:!inputMode,pendingSubmissions:inputMode&&stage!=='inbox'&&(!imageCount||stage!=='history')?[{requestId:'human-rpc',placement,text:human.content[0].text,time:1794218400100,
+        attachments:uploads.map(({attachment,url})=>({type:'image',value:{name:attachment.name,previewUrl:url}}))}]:[]};
       if(ordering)session.pendingSubmissions=[{requestId:'second-rpc',placement:'queued',text:second.content[0].text,time:1,attachments:[]}];
       if(idleMode&&stage==='mixed')session.pendingSubmissions.push({requestId:'second-rpc',placement:'transcript',text:second.content[0].text,time:1794218400200,attachments:[]});
       const chat={legacy:{nodes:inputMode?(stage==='admitted'||idleMode&&stage==='mixed'?[{...human,kind:idleMode?'user':'steering',messageId:'human',seq:7,time:1794218400100}]:[]):['empty','main-model-setup'].includes(mode)?[]:[...nodes,{kind:'context',seq:6,source:{kind:'system'},content:[{type:'text',text:'PRIVATE_CONTEXT'}]}]}};
@@ -61,7 +73,7 @@ async function fixture() {
         return mode==='main-model-setup'?<div className={native.body} data-conversation-content=''><div className={native.scrollBody} data-conversation-scroll=''><View {...hooks}/><div className={native.composerSeat} data-composer-seat=''><div className={native.composerStack}><div data-slot='conversation.input.dock' style={{display:'contents'}}><ModelSetup/></div><div className={input.root}><div className={input.card} data-composer-card=''><textarea aria-label='消息草稿' style={{width:'100%',minHeight:76,padding:10,border:0,background:'transparent',color:'inherit',font:'inherit',resize:'none'}}/></div></div></div></div></div></div>:<View {...hooks}/>;
       };
       const renderSlot=name=>name==='benchgo.assistant.conversation'?<Official {...hooks} renderSlot={()=>null} renderFactorySlot={renderFactorySlot}/>:null;
-      const history={sessionId:'feishu-session',threadId,messages:inputMode&&stage==='history'?[{id:'human',rpcId:'human-rpc',seq:7,role:'user',text:human.content[0].text,time:1794218400100},{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}]:mode==='history'?messages:[],hasMore:false,
+      const history={sessionId:'feishu-session',threadId,messages:inputMode&&stage==='history'?[{id:'human',rpcId:'human-rpc',seq:7,role:'user',text:human.content[0].text,content:human.content,time:1794218400100},{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}]:mode==='history'?messages:[],hasMore:false,
         requests:inputMode?[{threadId:'main',requestId:'internal',status:'failed',text:'PRIVATE_NOTICE',error:'PRIVATE_ERROR',taskReply:{}}]:[]};
       if(ordering)history.messages=[{id:'formal',role:'assistant',kind:'final',text:'正式回复保持可见',time:1794218400200}];
       if(replyError){
@@ -418,6 +430,45 @@ test('running main chat input survives echo, durable inbox, admission and histor
     }
     assert.deepEqual(errors,[]);
   }finally{await browser.close()}
+});
+
+test('Router user images use the shared gallery in echoes, the inbox, admitted turns and reopened history', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {
+  const html = await fixture(), browser = await chromium.launch({ headless: true, executablePath });
+  const screenshots = process.env.BENCHGO_UPLOAD_GALLERY_SCREENSHOTS;
+  if (screenshots) await mkdir(screenshots, { recursive: true });
+  try {
+    const page = await browser.newPage({ reducedMotion: 'reduce' }), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.setDefaultTimeout(6000);
+    await page.route('http://localhost/', route => route.fulfill({ contentType: 'text/html', body: html }));
+    await page.goto('http://localhost/');
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const mode of ['idle-echo', 'queue-inbox', 'idle-admitted', 'idle-history']) {
+        await page.evaluate(mode => window.renderScenario(mode, 2), mode);
+        const gallery = page.locator('[data-role=user] .bg-image-gallery');
+        const trigger = gallery.getByRole('button', { name: '展开 2 张图片' });
+        await trigger.waitFor();
+        await gallery.locator('[data-state=ready]').first().waitFor();
+        assert.equal(await gallery.count(), 1);
+        const { right } = await gallery.boundingBox().then(({ x, width }) => ({ right: x + width }));
+        assert(right <= width);
+        if (screenshots && mode === 'idle-history') await page.screenshot({ path: join(screenshots, `upload-${width}.png`) });
+        await trigger.click();
+        const dialog = page.getByRole('dialog');
+        await dialog.waitFor();
+        await dialog.getByRole('button', { name: '下一张图片' }).click();
+        await dialog.locator('[data-current=true][data-presented=true]').getByRole('img', { name: '截图 2.png' }).waitFor();
+        await page.keyboard.press('Escape');
+        await dialog.waitFor({ state: 'hidden' });
+      }
+      await page.evaluate(() => window.renderScenario('idle-history', 1));
+      const single = page.locator('[data-role=user]');
+      await single.getByRole('button', { name: '放大图片 1：截图 1.png' }).waitFor();
+      assert.equal(await single.locator('.ba-chat-content').count(), 0);
+    }
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
 });
 
 test('idle accepted echoes show waiting only until their own public admission or history handoff', { skip: !executablePath && 'Chromium/Edge is required' }, async () => {

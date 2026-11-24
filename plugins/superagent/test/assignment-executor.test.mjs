@@ -18,15 +18,16 @@ for (const harness of ['codex', 'claude']) test(`local ${harness} Worker uses th
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'main' } });
   const task = database.createTask({ threadId: 'thread', target: 'Inspect the local project',
     mandate: { actorId: 'desktop-owner', source: { channel: 'desktop', sessionId: 'main' } } });
-  const model = { harness, providerId: 'Opaque Provider', modelId: 'opaque/model' };
+  const model = { harness, providerId: 'Opaque Provider', modelId: 'opaque/model', options: { reasoningEffort: 'low' } };
   database.createAssignment(task.id, { model });
   const [assignment] = database.claimAssignments('worker', { validateMandate: () => true });
   let session, released, disconnected, ask;
   const commander = {
-    pickerCatalog: { list: async () => ({ routes: [{ tool: harness, providerId: model.providerId, nativeModelId: model.modelId }] }) },
+    pickerCatalog: { list: async () => ({ routes: [{ tool: harness, providerId: model.providerId, nativeModelId: model.modelId, reasoning: { efforts: [{ id: 'low' }] } }] }) },
     async prepareExecution(input) {
       assert.equal(input.provider, harness);
       assert.deepEqual(input.route, { providerId: model.providerId, model: model.modelId });
+      assert.deepEqual(input.advancedConfig, harness === 'codex' ? { config: { model_reasoning_effort: 'low' } } : { settings: { effortLevel: 'low' } });
       assert.equal(input.executionId, database.runs(assignment.id)[0].id);
       return session = { id: input.sessionId, cursor: 0, nativeId: 'native-handle' };
     },

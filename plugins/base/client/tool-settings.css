@@ -116,7 +116,6 @@ body[data-ds-dark-theme] .cmd-tool-card-mark:is([data-tool="codex"], [data-tool=
 }
 .cmd-tool-card-note,
 .cmd-tool-card-job,
-.cmd-tool-card-options,
 .cmd-tool-catalog-error {
   margin: 10px 0 0;
   overflow-wrap: anywhere;
@@ -129,8 +128,7 @@ body[data-ds-dark-theme] .cmd-tool-card-mark:is([data-tool="codex"], [data-tool=
   font-size: 12px;
   line-height: 1.55;
 }
-.cmd-tool-card-job,
-.cmd-tool-card-options {
+.cmd-tool-card-job {
   padding-top: 10px;
   border-top: 1px solid var(--cmd-tool-border);
 }

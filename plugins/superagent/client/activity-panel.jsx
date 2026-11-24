@@ -1,7 +1,7 @@
 import { TaskDetail, TaskIconButton, TaskStatusGlyph as StatusGlyph, TaskStatusTitle } from './task-list.jsx';
 import { TaskWaiting } from './task-waiting.jsx';
 import { TaskExecution } from './task-execution.jsx';
-import { taskWaiting } from './task-state.mjs';
+import { taskProgressText, taskWaiting } from './task-state.mjs';
 import taskCss from './task-list.css';
 import { Button } from '../../shared/client/ui/button.jsx';
 import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -80,10 +80,11 @@ const BoardRow = React.memo(function BoardRow({ row, onOpen }) {
   const children = row.execution?.children || [];
   const childCounts = row.execution?.childCounts || { total: children.length, completed: children.filter(child => child.status === 'completed').length, failed: children.filter(child => child.status === 'failed').length };
   const hasChildren = childCounts.total > 0;
-  const summary = row.executionNotice?.reasonCode === 'session-interrupted'
+  const progress = row.executionNotice?.reasonCode === 'session-interrupted'
     ? row.execution?.summary?.text || row.execution?.worker?.activity || '执行中断'
     : row.summaryText || (hasChildren && row.progressSummary
-    ? row.execution.worker?.status === 'completed' ? '执行已结束' : row.execution.summary?.text || row.execution.worker?.activity || row.phase : row.progressSummary || row.detail || row.phase);
+    ? row.execution.worker?.status === 'completed' ? '执行已结束' : row.execution.summary?.text || row.execution.worker?.activity || row.phase : row.progressSummary);
+  const summary = taskProgressText(progress) || row.detail || row.phase;
   const childLabel = `${childCounts.total} 个子任务，${childCounts.completed || 0} 个已完成${childCounts.failed ? `，${childCounts.failed} 个失败` : ''}`;
   return <article className="ba-activity-task ba-board-row" data-task-key={row.key}>
     <button type="button" className="ba-board-task-open" aria-label={title} onClick={() => onOpen(row.key)}>

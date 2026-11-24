@@ -93,7 +93,7 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
           }
           return route.fulfill({ json: { tools: [{ id: 'codex' }, { id: 'claude', routeReason: 'Claude Code 尚无 API 模型' }],
             providers: [{ id: 'Provider:API', name: '共享供应商' }],
-            routes: [{ tool: 'codex', providerId: 'Provider:API', nativeModelId: 'Exact:Native/1', name: '共享模型' }] } });
+            routes: [{ tool: 'codex', providerId: 'Provider:API', nativeModelId: 'Exact:Native/1', name: '共享模型', reasoning: { efforts: [{ id: 'high', name: 'High' }] } }] } });
         }
         if (url.endsWith('/api/commander/assistant')) {
           const input = route.request().postDataJSON(); calls.push(input);
@@ -305,13 +305,18 @@ test('Studio preserves drafts and scroll, validates collapsed models, recovers s
       await page.getByRole('option', { name: '共享供应商', exact: true }).click();
       await dialog.getByRole('button', { name: '模型', exact: true }).click();
       await page.getByRole('option', { name: '共享模型', exact: true }).click();
+      const highEffort = dialog.getByRole('radio', { name: '高', exact: true });
+      await highEffort.click();
       await checkLayout('worker-catalog-ready');
       await dialog.getByRole('button', { name: '应用', exact: true }).click();
       await page.getByRole('button', { name: '保存更改', exact: true }).click();
       await page.getByText('已保存', { exact: true }).waitFor();
       assert.deepEqual(calls.filter(call => call.action === 'config').at(-1).patch, {
-        workerHarness: 'codex', workerModels: [{ providerId: 'Provider:API', modelId: 'Exact:Native/1' }],
+        workerHarness: 'codex', workerModels: [{ providerId: 'Provider:API', modelId: 'Exact:Native/1', options: { reasoningEffort: 'high' } }],
       });
+      await chooseModel(worker).click();
+      assert.equal(await highEffort.getAttribute('aria-checked'), 'true');
+      await dialog.getByRole('button', { name: '取消', exact: true }).click();
       await choose('身份');
       assert.equal(await page.getByPlaceholder('未命名（可选）').inputValue(), '保留身份草稿');
       await choose('记忆');
@@ -544,7 +549,7 @@ test('model settings keep controls aligned through loading, errors and data, wit
     for (const width of [1440, 390]) {
       const page = await browser.newPage({ viewport: { width, height: 960 } });
       page.setDefaultTimeout(7000);
-      let releaseCatalog, attempts = 0, connected = true, savedConfig;
+      let releaseCatalog, attempts = 0, connected = true, reasoningAvailable = true, savedConfig;
       const pending = new Promise(resolve => { releaseCatalog = resolve; });
       await page.route('**/*', async route => {
         if (route.request().url() === 'http://localhost/') return route.fulfill({ contentType: 'text/html', body: html });
@@ -556,9 +561,9 @@ test('model settings keep controls aligned through loading, errors and data, wit
               providers: [{ id: 'deepseek-account', name: 'DeepSeek Account', available: true }, { id: 'unreachable', name: '连接失败的供应商', available: false },
                 ...(connected ? [{ id: 'Provider:Exact', name: '精确供应商', available: true }] : [])],
               models: connected ? [
-                { id: 'Model:First/1', name: '首个模型', provider: 'Provider:Exact', reasoning: {
+                { id: 'Model:First/1', name: '首个模型', provider: 'Provider:Exact', ...(reasoningAvailable ? { reasoning: {
                   efforts: ['low', 'medium', 'high'].map(id => ({ id, name: id })), defaultEffort: 'low',
-                } },
+                } } : { reasoningUnavailable: true }) },
                 { id: 'Model:Plain/2', name: '无档位模型', provider: 'Provider:Exact' },
               ] : [],
             } });
@@ -578,7 +583,8 @@ test('model settings keep controls aligned through loading, errors and data, wit
       const trigger = (scope = page) => scope.getByRole('button', { name: '选择工具与模型', exact: true });
       const dialog = page.getByRole('dialog', { name: '工具与模型' });
       const field = name => dialog.getByRole('button', { name, exact: true });
-      const slider = dialog.getByRole('slider', { name: '推理强度档位' });
+      const efforts = dialog.getByRole('radiogroup', { name: '推理强度' });
+      const effort = name => efforts.getByRole('radio', { name, exact: true });
       await trigger().first().click();
       const check = async state => {
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${state}/${width} must fit the viewport`);
@@ -635,7 +641,7 @@ test('model settings keep controls aligned through loading, errors and data, wit
         await trigger(section).click();
         if (section === router) assert.match(await dialog.getByRole('alert').innerText(), /原档位已不可用/);
         assert.equal(await field('关闭').count(), 1, 'only the dialog close button uses this label');
-        await field(label).click();
+        await effort(label).click();
         if (section === worker) await check('efforts');
         await field('应用').click();
       }
@@ -647,22 +653,32 @@ test('model settings keep controls aligned through loading, errors and data, wit
       await page.evaluate(config => window.acceptConfig(config), savedConfig);
       for (const [section, label] of [[router, '高'], [worker, '中'], [auxiliary, '低']]) {
         await trigger(section).click();
-        assert.equal(await slider.getAttribute('aria-valuetext'), label);
+        assert.equal(await effort(label).getAttribute('aria-checked'), 'true');
         await field('取消').click();
       }
       await trigger(worker).click();
-      await slider.press('Home');
-      assert.equal(await slider.getAttribute('aria-valuetext'), '默认');
+      reasoningAvailable = false;
+      await page.evaluate(() => window.invalidateAssistantCatalog());
+      await dialog.getByRole('alert').filter({ hasText: '暂时无法读取推理档位' }).waitFor();
+      assert.equal(await efforts.count(), 0);
+      assert.equal(await field('恢复默认').count(), 0);
+      reasoningAvailable = true;
+      await field('重试').click();
+      await effort('中').waitFor();
+      assert.equal(await effort('中').getAttribute('aria-checked'), 'true');
+      await effort('中').press('Home');
+      assert.equal(await effort('默认').getAttribute('aria-checked'), 'true');
       await field('取消').click();
       assert.equal(await page.getByRole('button', { name: '取消修改', exact: true }).count(), 0);
       await trigger(worker).click();
-      assert.equal(await slider.getAttribute('aria-valuetext'), '中');
-      await slider.press('Home');
+      assert.equal(await effort('中').getAttribute('aria-checked'), 'true');
+      await effort('中').press('Home');
       await field('应用').click();
       await trigger(router).click();
       await field('模型').click();
       await page.getByRole('option', { name: '无档位模型', exact: true }).click();
-      assert.equal(await slider.count(), 0);
+      assert.equal(await efforts.count(), 0);
+      await dialog.getByRole('status').filter({ hasText: '模型目录未提供此模型的推理档位' }).waitFor();
       await field('应用').click();
       await page.getByRole('button', { name: '保存更改', exact: true }).click();
       await page.getByText('已保存', { exact: true }).waitFor();

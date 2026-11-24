@@ -25,8 +25,10 @@ async function fixture() {
     import css from './plugins/superagent/client/style.css';import hostCss from './plugins/base/client/style.css';
     import tokens from './deepseek-harness/packages/client/ui-theme/src/styles/design-platform.css';import themeBase from './deepseek-harness/packages/client/ui-theme/src/styles/base.css';
     installIconSprite({effect:effect=>effect(),on(){}},undefined);
-    const panel={activePanelId:'benchgo-assistant'},sessions={ids:[],byId:{}},statuses=new Map();
-    const ctx={layout:{panelInfo:{getSnapshot:()=>panel,subscribe:()=>()=>{}},selectPanel:id=>window.openedPanels.push(id)},sessions:{list:{getSnapshot:()=>sessions,subscribe:()=>()=>{}}},uiSession:{sessionStatus:{getSnapshot:()=>statuses,subscribe:()=>()=>{}}}};
+    const panel={activePanelId:'benchgo-assistant'},sessions={ids:[],byId:{}},listeners=new Set();
+    let statuses=new Map();
+    const ctx={layout:{panelInfo:{getSnapshot:()=>panel,subscribe:()=>()=>{}},selectPanel:id=>window.openedPanels.push(id)},sessions:{list:{getSnapshot:()=>sessions,subscribe:()=>()=>{}}},uiSession:{sessionStatus:{getSnapshot:()=>statuses,subscribe:listener=>{listeners.add(listener);return ()=>listeners.delete(listener);}}}};
+    window.setSideRunning=running=>{statuses=new Map([['manual-existing',{running}]]);listeners.forEach(listener=>listener());};
     window.openedPanels=[];window.threadEvents=[];
     document.addEventListener('benchgo:assistant-thread',event=>window.threadEvents.push(event.detail));
     createRoot(document.getElementById('root')).render(<><style>{tokens}{themeBase}{hostCss}{css}</style><aside style={{width:208}}><AssistantSidebarEntry ctx={ctx}/></aside><main><textarea aria-label='当前草稿' defaultValue='保留这段草稿'/><div aria-label='全局任务'>所有来源的任务</div></main></>);
@@ -156,6 +158,11 @@ test('sidebar switches only its list, preserves source identities and renders al
     assert.deepEqual(await page.evaluate(() => window.openedPanels), []);
     assert.equal(await page.getByRole('textbox', { name: '当前草稿' }).inputValue(), '保留这段草稿');
     assert.equal(await page.getByLabel('全局任务').textContent(), '所有来源的任务');
+    await page.evaluate(() => window.setSideRunning(true));
+    await page.locator('.ba-thread-status[data-status="running"]').waitFor();
+    threads[0].title = 'AITCM项目开发';
+    await page.evaluate(() => window.setSideRunning(false));
+    await page.getByText('AITCM项目开发', { exact: true }).waitFor({ timeout: 5000 });
     await page.keyboard.press('End');
     await page.getByRole('button', { name: '固定群聊', exact: false }).waitFor();
     await page.getByRole('button', { name: '固定群聊', exact: false }).click();

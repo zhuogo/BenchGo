@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { currentHumanInstruction } from './desktop-delegation-service.mjs';
+import { currentHumanInstruction, desktopRequestTime } from './desktop-delegation-service.mjs';
 import { readAssessmentPolicy, validateTaskMandate } from './assessment-policy.mjs';
 import { ownsDesktopTask } from './desktop-task-owner.mjs';
 import { taskMandateDifference, isTaskMandateNarrowing } from './task-revisions.mjs';
@@ -72,6 +72,7 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
     const { trigger } = database.ingest({ dedupeKey: `task-change:${digest([sessionId, instruction.message.id])}`,
       thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source,
       actor: { kind: 'human', id: 'desktop-owner' }, content: original, mode: 'direct' });
+    if (input.operation === 'adjustment') mandate.requestTime = desktopRequestTime(options.ownerAgent, instruction.message, trigger.createdAt);
     const difference = taskMandateDifference(currentMandate, mandate);
     let approval;
     if (difference && !isTaskMandateNarrowing(currentMandate, mandate)) {

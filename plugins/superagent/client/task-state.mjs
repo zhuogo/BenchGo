@@ -3,6 +3,11 @@ import { assignmentExecutionUncertain, executionStatusText } from '../src/task-l
 export const terminalTaskStates = new Set(['completed']);
 export const taskLabels = Object.freeze({ running: '进行', waiting: '等待', completed: '完成' });
 export const shortTaskText = (value, max = 240) => Array.from(String(value || '').replace(/\s+/g, ' ').trim()).slice(0, max).join('');
+export function taskProgressText(value) {
+  const text = executionStatusText(value);
+  if (typeof text !== 'string') return '';
+  return text.trim().replace(/^Worker\s*(?:报告称|表示|称(?!重|呼|为))\s*[：:，,]?\s*/iu, '') || text.trim();
+}
 export function taskResultSummary(result) {
   return shortTaskText(result?.summary || result?.delivery?.text);
 }

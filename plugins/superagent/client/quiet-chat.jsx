@@ -15,6 +15,7 @@ import { taskSnapshot } from './task-state.mjs';
 import { InlineApproval, useApprovalIndex } from './approval-review.jsx';
 import { approvalReminderNavigation } from './approval-flow.mjs';
 import { sendInteractive } from '../../base/interactive/client/send.mjs';
+import { MessageGallery } from '../../base/client/conversation-images.jsx';
 import { AssistantReply, ReplyDeliverables } from './reply-images.jsx';
 import { ChatNotice } from './chat-notice.jsx';
 
@@ -56,9 +57,24 @@ export function QuestionReply({ row }) {
   })}</div>;
 }
 
+function MessageContent({ row, assistantName, loadImage }) {
+  const attachments = row.role === 'user' ? row.content || [] : [];
+  const files = attachments.filter(block => block.type === 'file');
+  const images = attachments.filter(block => block.type === 'image' && (block.attachment || block.previewUrl))
+    .map(block => block.attachment ? { attachment: block.attachment } : { preview: { url: block.previewUrl, name: block.name } });
+  const questionReply = row.kind === 'question-reply';
+  return <>
+    {(questionReply || row.text || files.length > 0 || !images.length) && <div className="ba-chat-content" aria-label={questionReply ? '你的选择' : row.role === 'user' ? '你' : assistantName || 'BenchGo'}>
+      {questionReply ? <QuestionReply row={row} /> : <div className="ba-chat-user-text">{row.text}</div>}
+      {files.map((block, index) => <span className="ba-chat-attachment" key={index}>{`已附文件${block.name ? `：${block.name}` : ''}`}</span>)}
+    </div>}
+    {images.length > 0 && <MessageGallery images={images} loadImage={loadImage} align="end" />}
+  </>;
+}
+
 // Token updates and history polls re-render the transcript container. Each row
 // renders again only when its own data or controls change.
-const ChatRow = memo(function ChatRow({ row, attention, saved, agentReaction, chosen, approvalIndex, busy, running, assistantName, threadId, api, onRefresh, onRun, onChosen, onSubmit, onOpenFile, SessionProvider, renderSlot }) {
+const ChatRow = memo(function ChatRow({ row, attention, saved, agentReaction, chosen, approvalIndex, busy, running, assistantName, threadId, api, onRefresh, onRun, onChosen, onSubmit, onOpenFile, loadImage, SessionProvider, renderSlot }) {
   if (row.kind === 'generated-media') return <article className="ba-chat-message" data-chat-key={row.key} data-role="assistant">
     <div className="ba-chat-body"><ReplyDeliverables images={row.images} files={row.files} /></div>
   </article>;
@@ -67,10 +83,8 @@ const ChatRow = memo(function ChatRow({ row, attention, saved, agentReaction, ch
   </ChatNotice>;
   return <article className="ba-chat-message" data-approval-event={row.approval?.eventKey} data-approval-request={row.approval ? row.requestId : undefined} tabIndex={row.approval ? -1 : undefined} data-chat-key={row.key} data-role={row.role} data-streaming={row.streaming ? 'true' : undefined}>
     <div className="ba-chat-body">
-    {row.role === 'assistant' && row.kind !== 'channel-message' ? <AssistantReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={running || !!row.provisional} onSubmit={onSubmit} onOpenFile={onOpenFile} fileRequestId={row.requestId} assistantName={assistantName || 'BenchGo'} /> : <div className="ba-chat-content" aria-label={row.kind === 'question-reply' ? '你的选择' : row.role === 'user' ? '你' : assistantName || 'BenchGo'}>
-    {row.kind === 'question-reply' ? <QuestionReply row={row} /> : <div className="ba-chat-user-text">{row.text}</div>}
-    {row.role === 'user' && (row.content || []).filter(block => ['image', 'file'].includes(block.type)).map((block, index) => <span className="ba-chat-attachment" key={index}>{block.type === 'image' ? '已附图片' : `已附文件${block.name ? `：${block.name}` : ''}`}</span>)}
-    </div>}
+    {row.role === 'assistant' && row.kind !== 'channel-message' ? <AssistantReply text={row.text || ''} labels={labels} streaming={!!row.streaming} disabled={running || !!row.provisional} onSubmit={onSubmit} onOpenFile={onOpenFile} fileRequestId={row.requestId} assistantName={assistantName || 'BenchGo'} />
+      : <MessageContent row={row} assistantName={assistantName} loadImage={loadImage} />}
     </div><div className="ba-chat-followup">
     {row.approval && <InlineApproval row={row} index={approvalIndex} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} />}
     {attention && <TaskAttention key={attention.id} api={api} attention={attention} showQuestion={!row.attention} task={{ id: row.taskId, status: row.taskStatus, executionControl: row.currentExecutionControl, instructionRevision: row.currentInstructionRevision ?? row.instructionRevision, resultVersion: row.currentResultVersion ?? row.resultVersion, mandate: { source: { channel: 'desktop' } } }} onAnswered={onRefresh} />}
@@ -80,7 +94,7 @@ const ChatRow = memo(function ChatRow({ row, attention, saved, agentReaction, ch
   </article>;
 });
 
-export function QuietChat({ home, session, chat, inbox, input, continuation, promptAllowed, composerBlocked, onOpenFile, petError }) {
+export function QuietChat({ home, session, chat, inbox, input, continuation, promptAllowed, composerBlocked, onOpenFile, loadImage, petError }) {
   const { history = {}, threadId = 'main', api, onLoadEarlier } = home;
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [chosen, setChosen] = useState({});
   const [retryAttempt, setRetryAttempt] = useState(null), latestRetry = useRef(null);
@@ -220,7 +234,7 @@ export function QuietChat({ home, session, chat, inbox, input, continuation, pro
       return <ChatRow key={row.key} row={row} attention={answerable ? attention : null} saved={history.reactions?.[row.key] || null} agentReaction={row.role === 'user' ? history.assistantReactions?.[row.key] || null : null}
         chosen={row.eventId ? chosen[row.eventId] : undefined} approvalIndex={row.approval ? approvalIndex : undefined}
         busy={(row.role === 'system' || !!row.notification) && busy} running={(row.role === 'assistant' || !!row.notification) && !!session.running} assistantName={home.assistantName} threadId={threadId} api={api} onRefresh={home.onRefresh}
-        onRun={run} onChosen={setChosen} onSubmit={submitInteractive} onOpenFile={onOpenFile} SessionProvider={row.approval ? home.SessionProvider : undefined} renderSlot={row.approval ? home.renderSlot : undefined} />;
+        onRun={run} onChosen={setChosen} onSubmit={submitInteractive} onOpenFile={onOpenFile} loadImage={loadImage} SessionProvider={row.approval ? home.SessionProvider : undefined} renderSlot={row.approval ? home.renderSlot : undefined} />;
     })}
     {(showReplyFailure || failures.length > 0) && <ChatNotice noticeKey={showReplyFailure ? 'notice:reply-failed' : undefined} message={showReplyFailure
       ? home.channel ? '本次回复未完成，对话记录已保留。请重试或检查模型连接。' : '本次回复未完成，对话记录已保留。'

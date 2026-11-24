@@ -163,7 +163,7 @@ function nativeFixture() {
     providers: new Map([['codex', {}], ['claude', {}]]),
     pickerCatalog: { list: async () => ({ routes: [
       { tool: 'deepseek', providerId: 'exact-provider', nativeModelId: 'opaque-model/1', name: 'Official' },
-      { tool: 'codex', providerId: 'b-responses', nativeModelId: 'opaque/model:codex', name: 'Codex' },
+      { tool: 'codex', providerId: 'b-responses', nativeModelId: 'opaque/model:codex', name: 'Codex', reasoning: { efforts: [{ id: 'high' }, { id: 'medium' }], defaultEffort: 'medium' } },
       { tool: 'claude', providerId: 'b-messages', nativeModelId: 'opaque/model:claude', name: 'Claude' },
     ] }) },
     routeService: { capture: async route => ({ ...route, fingerprint: 'B-owned-binding' }) },
@@ -203,12 +203,13 @@ function nativeFixture() {
   };
 }
 
-async function runNative(t, harness) {
+async function runNative(t, harness, params) {
   const native = nativeFixture(), f = fixture(), directory = await temp(t);
   const service = await createRemoteExecutionService({ ctx: f.ctx, directory, commander: native.commander });
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
-  const config = { harness, models: [{ providerId: harness === 'codex' ? 'b-responses' : 'b-messages', modelId: 'opaque/model:' + harness }] };
-  const input = request({ config, requirements: { instructionRevision: 1, target: 'Inspect', mandate: { instruction: 'Inspect' } } });
+  const config = { harness, models: [{ providerId: harness === 'codex' ? 'b-responses' : 'b-messages', modelId: 'opaque/model:' + harness, ...(params ? { params } : {}) }] };
+  const input = request({ config, requirements: { instructionRevision: 1, target: 'Inspect', mandate: { instruction: 'Inspect',
+    requestTime: { at: '2026-11-01T05:30:00.000Z', timeZone: 'America/New_York' } } } });
   const call = value => service.dispatch({ action: 'execution', version: 2, ...value }, { principal });
   await call(input);
   await waitFor(() => native.submitted.length);
@@ -291,12 +292,13 @@ test('native pause supersedes its open question and accepts new context on the o
 });
 
 test('B runs a frozen external API binding, returns native questions, and deduplicates A submission', async t => {
-  const { native, f, input, call, service } = await runNative(t, 'codex');
+  const { native, f, input, call, service } = await runNative(t, 'codex', { reasoningEffort: 'high' });
   assert.match(native.submitted[0].prompt, /bound working directory.*routing already handled by the owner.*cross-device access, transfer or comparison/);
   assert.ok(native.submitted[0].prompt.includes(JSON.stringify(input.requirements.mandate)));
+  assert.match(native.submitted[0].prompt, /"timeZone":"America\/New_York","timeZoneSource":"request-client","originalRequestTime":"2026-11-01T01:30:00-04:00"/);
   assert.deepEqual((await call({ operation: 'catalog' })).models.map(row => row.harness), ['official', 'codex', 'claude']);
   assert.equal(native.prepared[0].route.providerId, 'b-responses');
-  assert.deepEqual(native.prepared[0].route.advancedConfig, { contextWindow: 2048 });
+  assert.deepEqual(native.prepared[0].route.advancedConfig, { contextWindow: 2048, config: { model_reasoning_effort: 'high' } });
   const pending = native.ask(input.sessionId);
   const get = () => call({ operation: 'get', executionId: input.executionId });
   const waiting = await get();
@@ -405,6 +407,7 @@ test('official execution works without SuperAgent, freezes exact config, and req
   const prompt = execution.contexts.get('benchgo-remote-execution')();
   assert.match(prompt, /bound working directory.*routing already handled by the owner.*cross-device access, transfer or comparison/);
   assert.ok(prompt.includes(JSON.stringify(input.requirements.mandate)));
+  assert.match(execution.contexts.get('benchgo-task-time'), /"timeZoneSource":"execution-host","originalRequestTime":null/);
   assert.deepEqual(f.modelCalls[0], { provider: 'exact-provider', model: 'opaque-model/1' });
   assert.deepEqual(await execution.requestModel(), { provider: 'exact-provider', model: 'opaque-model/1', temperature: 0.3, tools: [] });
   assert.equal((await execution.tool('read')).kind, 'allow'); assert.equal((await execution.tool('write')).kind, 'deny');

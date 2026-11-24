@@ -19,7 +19,21 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
   };
   const installer = options.installer ?? new ToolInstaller({ isRunning: busy });
   const runtimeSettings = options.runtimeSettings ?? createRuntimeSettings({ directory });
-  const routeService = createSessionRoutes({ directory, providers, runtimeSettings });
+  const routeService = createSessionRoutes({ directory, providers, runtimeSettings, async harnessDefaults(tool, providerId, model) {
+    if (tool === 'claude') return { settings: { env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' } } };
+    const config = { features: { multi_agent: true } };
+    const subagentSettings = ctx.settings?.describe({ redactSecrets: true }).find(({ ns }) => ns === 'subagent')?.value;
+    const maxDepth = subagentSettings?.maxDepth ?? ctx.get?.('subagents')?.resolveMaxDepth?.();
+    const maxActive = subagentSettings?.maxActiveSubagents;
+    const agents = {};
+    if (Number.isSafeInteger(maxDepth) && maxDepth >= 1 && maxDepth <= 8) agents.max_depth = maxDepth;
+    if (Number.isSafeInteger(maxActive) && maxActive >= 1 && maxActive <= 32) agents.max_threads = maxActive;
+    if (Object.keys(agents).length) config.agents = agents;
+    const info = await ctx.llm?.resolveModelInfo?.(providerId, model).catch(() => undefined);
+    const contextWindow = info?.context?.contextWindow;
+    if (Number.isSafeInteger(contextWindow) && contextWindow >= 1024 && contextWindow <= 10000000) config.model_context_window = contextWindow;
+    return { config };
+  } });
   const pickerCatalog = createPickerCatalog({ commander, installer, providers, routeService, llm: ctx.llm, isHarnessAvailable: () => !!getCommander() });
   for (const event of ['llm/adapters-updated', 'llm/models-updated', 'credentials/record-updated', 'credentials/reference-updated']) {
     ctx.on?.(event, () => pickerCatalog.invalidate());

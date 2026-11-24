@@ -140,7 +140,9 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
     if (!['transcript', 'steering', 'queued'].includes(pending.placement) || admittedRequests.has(pending.requestId)) continue;
     rows.push({ key: `pending:${pending.requestId}`, rpcId: pending.requestId, role: 'user', text: pending.text, time: pending.time,
       ...(pending.placement !== 'transcript' ? { submissionState: pending.placement } : {}),
-      content: (pending.attachments || []).map(block => ({ type: block.type, name: block.value?.name })), provisional: true });
+      content: (pending.attachments || []).map(block => block.type === 'image'
+        ? { type: 'image', name: block.value?.name, previewUrl: block.value?.previewUrl }
+        : { type: block.type, name: block.value?.name }), provisional: true });
   }
   for (const row of history.notifications || []) {
     if (row.threadId !== threadId || !publicText(row) || !conversationalNotification(row)) continue;

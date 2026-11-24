@@ -1,5 +1,6 @@
 import { nativeProviderRoute, providerProtocolReason, routerGoModelProtocolReason } from './provider-access.mjs';
 import { hasTextCapability } from '../shared/model-capabilities.mjs';
+import { nativeModelReasoning } from '../shared/runtime-setting-fields.mjs';
 
 /** Credential-free catalog shared by the official picker and native adapters. */
 const PREFIX = 'dsh-route-v1:';
@@ -101,13 +102,16 @@ export function createPickerCatalog({ commander, installer, providers, routeServ
           continue;
         }
         provider.tools.push(tool.id);
-        for (const model of available) routes.push({
-          tool: tool.id, providerId: provider.id, providerName: provider.name,
-          modelId: tool.id === 'deepseek' ? model.id : encodeRouteModelId(provider.id, model.id),
-          nativeModelId: model.id, name: model.name, protocol: direct?.protocol ?? provider.protocol,
-          ...(model.context ? { context: model.context } : {}),
-          ...(tool.id === 'deepseek' && model.reasoning ? { reasoning: model.reasoning } : {}),
-        });
+        for (const model of available) {
+          const reasoning = tool.id === 'deepseek' ? model.reasoning : nativeModelReasoning(tool.id, model.reasoning);
+          routes.push({
+            tool: tool.id, providerId: provider.id, providerName: provider.name,
+            modelId: tool.id === 'deepseek' ? model.id : encodeRouteModelId(provider.id, model.id),
+            nativeModelId: model.id, name: model.name, protocol: direct?.protocol ?? provider.protocol,
+            ...(model.context ? { context: model.context } : {}),
+            ...(reasoning ? { reasoning } : {}),
+          });
+        }
       }
       provider.tools.sort();
       return provider;

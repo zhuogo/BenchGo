@@ -202,7 +202,7 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
     scope.systemPrompt.section({ name: 'benchgo-assistant-name', order: -90, interpolate: false, text: 'IDENTITY.md defines your name; config.name is only a fallback. To rename on user request, discover the name path with assistant_settings catalog/read and prepare/commit that path.' });
     scope.systemPrompt.section({ name: 'benchgo-assistant-pet', order: -89.5, interpolate: false, text: 'You are one SuperAgent assistant and its pet identity. Appearance, personality and memory are related but distinct. Use assistant_pet only if registered; inspect catalog IDs and preview appearance changes for the user before applying. Use available image tools for generation; report only supported capabilities. Expressions convey mood, not task completion.' });
     const inheritedTools = captureRouterTools(scope.tools, agent);
-    await setupTools?.(scope, { agent, threadId, toolEnabled: expressionToolEnabled });
+    await setupTools?.(scope, { agent, threadId, record, toolEnabled: expressionToolEnabled });
     const routerQuestions = installRouterQuestions(scope, agent, { database: store.orchestration, threadId, getOwnerScope: () => taskOwnerScope(threadId), appendRecord });
     installChatPublication(scope, agent, { appendRecord: appendChatRecord,
       canPublish: request => isHostReplyRequest(request) ? mayReplyToTask(threadId, request.id)

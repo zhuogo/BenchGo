@@ -567,7 +567,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       threadCreationQueue = operation;
       return operation;
     },
-    async updateThread(threadId, patch, { stopActivity = false } = {}) {
+    async updateThread(threadId, patch, { stopActivity = false, beforeSave } = {}) {
       if (threadId === 'main') throw new Error('主聊天不能归档或改为旁聊');
       const record = await thread(threadId);
       if ('models' in patch) throw new Error('旁聊统一使用 SuperAgent 模型设置');
@@ -575,8 +575,13 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       if (patch.archived !== undefined && typeof patch.archived !== 'boolean') throw new Error('无效归档状态');
       if (patch.pinned !== undefined && typeof patch.pinned !== 'boolean') throw new Error('无效置顶状态');
       const allowed = Object.fromEntries(Object.entries(patch).filter(([key]) => ['title', 'archived', 'pinned'].includes(key)));
-      const save = () => updateState(state => ({ threads: state.threads.map(item => item.id === threadId ? { ...item, ...allowed } : item) }));
-      if (allowed.archived === undefined) { await save(); return thread(threadId); }
+      const save = () => updateState(state => {
+        const current = state.threads.find(item => item.id === threadId);
+        if (!current) throw new Error('旁聊不存在');
+        beforeSave?.(current);
+        return { threads: state.threads.map(item => item.id === threadId ? { ...item, ...allowed } : item) };
+      });
+      if (allowed.archived === undefined) return (await save()).threads.find(item => item.id === threadId);
       const activeError = () => Object.assign(new Error('旁聊仍有活动'), { code: 'workspace/session-active', status: 409 });
       if (archivingThreads.has(threadId)) throw Object.assign(new Error('旁聊归档正在提交'), { status: 409 });
       if (stopActivity && allowed.archived) archivingThreads.add(threadId);
@@ -674,7 +679,15 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     async catalog() {
       const providers = await Promise.all(ctx.llm.listProviders().filter(provider => !provider.id.startsWith('commander-')).map(async provider => {
         try {
-          const models = await ctx.llm.listModels(provider.id);
+          const listed = await ctx.llm.listModels(provider.id);
+          const models = await Promise.all(listed.map(async model => {
+            try {
+              const { reasoning } = await ctx.llm.resolveModelInfo(provider.id, model.id);
+              return reasoning ? { ...model, reasoning } : model;
+            } catch {
+              return { ...model, reasoningUnavailable: true };
+            }
+          }));
           return models.length ? { ...provider, models, available: true } : null;
         }
         catch (error) { return { ...provider, models: [], available: false, error: error.message }; }

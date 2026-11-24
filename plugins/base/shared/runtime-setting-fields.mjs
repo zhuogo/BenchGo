@@ -28,6 +28,36 @@ function collectFields(schema, parents = []) {
 
 export const runtimeSettingFields = Object.fromEntries(Object.entries(runtimeSettingSchemas).map(([tool, schema]) => [tool, collectFields(schema)]));
 
+const nativeEffortPaths = { codex: ['config', 'model_reasoning_effort'], claude: ['settings', 'effortLevel'] };
+
+export function nativeModelReasoning(tool, reasoning) {
+  const path = nativeEffortPaths[tool];
+  if (!Array.isArray(path) || !reasoning?.efforts?.length) return undefined;
+  const { choices } = readRuntimeSetting(runtimeSettingSchemas[tool], path);
+  const efforts = reasoning.efforts.filter(({ id }) => Object.hasOwn(choices, id));
+  if (!efforts.length) return undefined;
+  const { defaultEffort } = reasoning;
+  return { efforts, ...(efforts.some(({ id }) => id === defaultEffort) ? { defaultEffort } : {}) };
+}
+
+export function nativeReasoningEffort(tool, config) {
+  const path = nativeEffortPaths[tool];
+  return Array.isArray(path) ? readRuntimeSetting(config, path) : undefined;
+}
+
+export function nativeModelConfig(tool, defaults, reasoning, params = {}) {
+  if (Object.keys(params).some(key => key !== 'reasoningEffort')) throw new Error('外部 Harness 仅支持在模型配置中设置推理强度');
+  const { reasoningEffort } = params;
+  if (reasoningEffort !== undefined && !reasoning?.efforts?.some(({ id }) => id === reasoningEffort)) {
+    throw new Error('所选推理档位不受此模型与 Harness 支持');
+  }
+  const config = structuredClone(defaults ?? {});
+  const path = nativeEffortPaths[tool];
+  const selected = reasoningEffort ?? reasoning?.defaultEffort;
+  if (Array.isArray(path)) writeRuntimeSetting(config, path, selected);
+  return config;
+}
+
 export function readRuntimeSetting(config, path) {
   return path.reduce((value, key) => value?.[key], config);
 }

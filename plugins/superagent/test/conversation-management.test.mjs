@@ -181,6 +181,23 @@ test('cleanup rejects expanded scope, duplicate IDs and a preview not prepared f
   }
 });
 
+test('cleanup projects compatible ID parameters and rejects duplicates before dispatch', async () => {
+  const f = fixture();
+  const { properties } = f.definitions.get('assistant_task_cleanup');
+  assert.equal(Object.hasOwn(properties.ids, 'uniqueItems'), false);
+  for (const input of [
+    { op: 'preview' },
+    { op: 'commit', previewId: 'preview' },
+    { op: 'restore', receiptId: 'receipt' },
+    { op: 'restore', previewId: 'restore-preview' },
+    { op: 'stop-and-archive' },
+    { op: 'cancel', operationId: 'operation' },
+  ]) {
+    await assert.rejects(f.cleanup({ ...input, ids: ['one', 'one'] }), { code: 'CLEANUP_SCOPE_DENIED' });
+  }
+  assert.deepEqual(f.calls, []);
+});
+
 test('cleanup revalidates the human instruction after asynchronous preview reads and before committing', async () => {
   for (const operation of ['preview', 'restore', 'commit']) {
     const f = fixture();

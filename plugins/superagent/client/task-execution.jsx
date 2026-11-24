@@ -5,10 +5,11 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import { LoadingText } from '../../shared/client/ui/loading.jsx';
 import css from './task-execution.css';
 import { executionStatusText } from '../src/task-lifecycle.mjs';
+import { taskProgressText } from './task-state.mjs';
 
 const statusLabels = { running: '运行中', waiting: '当前未执行', completed: '执行结束', failed: '执行失败', cancelled: '已停止', unknown: '状态未知' };
 const legacyActivities = new Map([['已返回父 Worker', '子任务已完成'], ['子 Worker 执行失败', '子任务执行失败'], ['子 Worker 已停止', '子任务已停止'], ['正在协调子 Worker', '正在协调子任务']]);
-const activityText = value => legacyActivities.get(value) || executionStatusText(value);
+const activityText = value => legacyActivities.get(value) || taskProgressText(value);
 const genericActivities = new Set(['正在执行', '执行中', '运行中', '正在处理', '正在处理任务', '正在执行命令', '正在读取文件', '正在修改文件', '正在搜索网页', '正在读取网页', '正在使用工具', '正在协调子任务', '正在协调并行任务', '正在处理子任务', '等待新的执行动态', '执行结束', '执行已结束', '本轮执行已结束', '子任务已完成', '并行任务已完成', '任务执行已完成']);
 export function visibleExecutionActivity(value) {
   const text = activityText(value?.trim()) || '';
@@ -37,8 +38,8 @@ export function TaskExecution({ execution, executionSession, taskStatus, executi
   const inactive = recentOnly || ['preparing', 'waiting', 'unknown', 'finished'].includes(execution?.phase)
     || ['pauseRequested', 'paused', 'stopRequested', 'stopped'].some(key => executionControl?.[key]);
   const summary = execution?.summary;
-  const summaries = (summary?.history || []).filter(row => typeof row.text === 'string' && row.text.trim()).map(row => ({ ...row, text: executionStatusText(row.text.trim()) }));
-  const currentText = executionStatusText(summary?.text?.trim());
+  const summaries = (summary?.history || []).map(row => ({ ...row, text: taskProgressText(row.text) })).filter(row => row.text);
+  const currentText = taskProgressText(summary?.text);
   if (currentText && summaries.at(-1)?.text.trim() !== currentText) summaries.push({ text: currentText, generatedAt: summary.generatedAt || execution.updatedAt, watermark: summary.watermark });
   const rows = [];
   for (const worker of [execution?.worker, ...execution?.children || []].filter(Boolean)) {

@@ -15,12 +15,14 @@ import { serverSshTool } from '../../base/shared/server-ssh-tool.mjs';
 const output = { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] };
 const string = { type: 'string' };
 const object = { type: 'object', additionalProperties: true };
+const isManualSideThread = thread => !!thread && thread.id !== 'main' && !thread.sourceKey
+  && (!thread.source || thread.source.channel === 'desktop');
 
 /** Registers the Router-only tools for one owned conversation. `runtime.engine` is read lazily: the engine is created after this. */
 export function createRouterTools(runtime) {
   const { ctx, commander, store, database, shutdown, historySearch, readLedger, goals, orchestrationRuntime, settings, projectSchedules, pet, desktopDelegation,
     taskChanges, desktopTasks, taskControl, taskManagement, cleanupContinuations, modelActions, mediaTools = [], capabilities, deviceStatus, auxiliary, deviceTools } = runtime;
-  return (scope, { threadId, agent: ownerAgent, toolEnabled = () => true }) => {
+  return (scope, { threadId, record, agent: ownerAgent, toolEnabled = () => true }) => {
     const activeRouterThread = async exec => {
       const state = await store.getState();
       const thread = threadId === 'main' ? { sessionId: state.mainSessionId } : state.threads.find(row => row.id === threadId);
@@ -69,6 +71,19 @@ export function createRouterTools(runtime) {
       }, { when: context => toolEnabled(name) && (!when || when(context)) });
     }
     registerConversationManagement({ ctx, scope, agent: ownerAgent, register, settings, taskManagement, cleanupContinuations, threadId, store });
+    if (isManualSideThread(record)) register('assistant_rename_thread', 'Rename the current BenchGo side chat when the user explicitly asks to change this conversation’s title. Use the requested title as given and call directly, without a Worker or another confirmation. Confirm the saved title only after this tool succeeds.', {
+      title: { type: 'string', minLength: 1, maxLength: 200 },
+    }, ['title'], async ({ title }, exec) => {
+      if (typeof title !== 'string') throw new Error('无效旁聊名称');
+      const { current } = await ownerInstruction(exec);
+      const saved = await runtime.engine.updateThread(threadId, { title: title.trim() }, {
+        beforeSave(thread) {
+          current();
+          if (!isManualSideThread(thread) || thread.archived || thread.sessionId !== ownerAgent.id) throw new Error('只能重命名当前未归档的手动旁聊');
+        },
+      });
+      return { threadId: saved.id, title: saved.title };
+    });
     register('assistant_react', 'React to the user\'s current message with one emoji, shown as a small pill on that message in this local conversation. Use it rarely and mirror the user: if they do not use emoji, almost never react. It suits something funny, good news, thanks, or a moment where a quick 👍 says enough; never use it instead of answering a request and never just to seem friendly. Set endTurn only when the reaction is the whole reply, such as thanks or an okay that needs no words and leaves nothing awaited; otherwise keep going and reply normally. Reacting again replaces your earlier reaction. A reaction is not a reply, approval, instruction or memory.', {
       emoji: { type: 'string', enum: [...reactionEmojis] }, endTurn: { type: 'boolean' },
     }, ['emoji'], async ({ emoji, endTurn = false }, exec) => {

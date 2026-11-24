@@ -247,7 +247,7 @@ export function ImageGallery({ images: source = [], allowBlob = false }) {
       animate: event.detail !== 0 && !reducedMotion(),
     } });
   };
-  return <section className="bg-image-gallery" data-multiple={multiple} data-expanded={!!selection} aria-label={multiple ? `${images.length} 张图片` : '回复图片'}>
+  return <section className="bg-image-gallery" data-multiple={multiple} data-expanded={!!selection} aria-label={`${images.length} 张图片`}>
     <div ref={stack} className="bg-image-gallery-deck">
       <div className="bg-image-gallery-cards">{deck.map((image, i) => <figure className="bg-image-gallery-card" key={image.id || image.url} style={{ zIndex: deck.length - i }} aria-hidden={multiple ? true : undefined}>
         <div className="bg-image-tile"><div ref={i === 0 ? thumbnail : undefined} className="bg-image-thumbnail">{!multiple && <button className="bg-image-open" type="button" aria-label={`放大图片 1：${image.alt}`} onClick={open} />}<GalleryPicture key={image.url} image={image} preview eager={i === 0} interactive={!multiple} /><span className="bg-image-magnify" aria-hidden="true"><UIIcon name="search" size={20} /></span></div>

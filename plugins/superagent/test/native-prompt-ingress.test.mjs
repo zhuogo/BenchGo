@@ -163,7 +163,7 @@ test('real Gateway codec and SessionController admit and deduplicate native prom
     bindPrompt: (_agent, ids, requestId) => ({ commit: () => bindings.push({ ids, requestId }), [Symbol.dispose]() {} }), retirePrompt() {},
   });
   ctx.provide('fs', {});
-  ctx.provide('sessionQuery', { listSessions: async () => [], traceSession: async () => [] });
+  ctx.provide('sessionQuery', { getListMetadata: () => ({ blank: true }), listSessions: async () => [], traceSession: async () => [] });
   ctx.provide('workspaceRegistry', { list: () => [], get: () => undefined, archivedSessionIds: [] });
   await ctx.plugin(Controller.default);
   const session = ctx.sessions.create('session/opaque:原样', { meta: { cwd: process.cwd() } });
@@ -264,6 +264,7 @@ test('real assistant engine admits native attachments and continues failed repli
   ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'native/test', model: 'text/opaque' }) });
   ctx.provide('fs', {});
   ctx.provide('sessionQuery', {
+    getListMetadata: () => ({ blank: true }),
     listSessions: async () => ctx.sessions.list().map(session => ({ header: session.header })),
     readSession: async id => ({ events: ctx.sessions.get(id).snapshotEvents() }), traceSession: async () => [],
   });

@@ -30,6 +30,7 @@ class Native extends EventEmitter {
     this.records.push(record); return record;
   }
   async connect(id) { this.get(id).status = 'idle'; this.drivers.set(id, { setModel: async model => { this.get(id).model = model; } }); }
+  async disconnect(id) { this.get(id).status = 'closed'; this.drivers.delete(id); }
   async persist() {}
   event(id, type, data, turnId) {
     const record = this.get(id);
@@ -90,40 +91,47 @@ test('same tool and supplier can change models on its existing idle native conve
   await assert.rejects(collect(s.adapter.stream({ ...request([human('three', 'other supplier')]), model: encodeRouteModelId('router/b', 'vendor/three') })), /新建聊天/);
   await s.dispose();
 });
-test('changing models retains a complete reconnectable binding and captured native effort', async t => {
+test('changing models and effort retains a complete reconnectable binding on the same native conversation', async t => {
   const s = setup(), directory = await mkdtemp(join(tmpdir(), 'adapter-route-switch-'));
   t.after(async () => { await s.dispose(); await rm(directory, { recursive: true, force: true }); });
   const provider = { baseURL: 'https://router.example/v1', apiKey: 'test-secret', credentialRef: 'router-key', protocol: 'openai-responses' };
   const runtimeSettings = createRuntimeSettings({ directory });
-  const advancedConfig = { config: { model_reasoning_effort: 'high', features: { multi_agent: true } } };
-  const routes = createSessionRoutes({ directory, runtimeSettings, providers: { resolve: async () => provider, describeRoute: async () => provider } });
+  const routes = createSessionRoutes({ directory, runtimeSettings, providers: { resolve: async () => provider, describeRoute: async () => provider },
+    harnessDefaults: () => ({ config: { features: { multi_agent: true } } }) });
   s.native.routeService = routes;
   const create = s.native.create.bind(s.native);
-  s.native.create = async options => create({ ...options, route: await routes.capture({ tool: options.provider, ...options.route, advancedConfig }) });
+  s.native.create = async options => create({ ...options, route: await routes.capture({ tool: options.provider, ...options.route }) });
   const first = encodeRouteModelId('router', 'vendor/one'), second = encodeRouteModelId('router', 'vendor/two');
-  s.native.pickerCatalog = { models: async () => [first, second].map(id => ({ id, provider: 'commander-codex', name: id, inputModalities: ['text'] })) };
+  const reasoning = { defaultEffort: 'low', efforts: ['low', 'high'].map(id => ({ id, name: id })) };
+  s.native.pickerCatalog = { models: async () => [first, second].map(id => ({ id, provider: 'commander-codex', name: id, inputModalities: ['text'], reasoning })) };
   await collect(s.adapter.stream({ ...request([human('one', 'hello')]), model: first }));
   const before = structuredClone(s.native.records[0].route);
-  await collect(s.adapter.stream({ ...request([human('two', 'change')]), model: second }));
+  assert.equal(before.advancedConfig.config.model_reasoning_effort, 'low');
+  await s.native.connect(s.native.records[0].id);
+  await collect(s.adapter.stream({ ...request([human('two', 'change')]), model: second, reasoningEffort: 'high' }));
   const after = s.native.records[0].route;
   assert.equal(after.model, 'vendor/two');
   assert.equal(after.version, 1);
   assert.equal(after.mode, before.mode);
   assert.equal(after.baseURL, before.baseURL);
   assert.equal(after.credentialRef, before.credentialRef);
-  assert.deepEqual(after.advancedConfig, advancedConfig);
+  assert.deepEqual(after.advancedConfig, { config: { features: { multi_agent: true }, model_reasoning_effort: 'high' } });
+  assert.equal(s.native.records.length, 1);
   assert.notEqual(after.fingerprint, before.fingerprint);
   const launch = await routes.launch({ tool: 'codex', route: JSON.parse(JSON.stringify(after)), sessionId: randomUUID() });
   assert(launch.commandArgs.includes('model="vendor/two"'));
   assert(launch.commandArgs.includes('model_reasoning_effort="high"'));
+  await collect(s.adapter.stream({ ...request([human('three', 'change effort only')]), model: second, reasoningEffort: 'low' }));
+  assert.equal(s.native.records[0].route.advancedConfig.config.model_reasoning_effort, 'low');
+  const switched = s.native.records[0].route;
   provider.baseURL = 'https://changed.example/v1';
-  await assert.rejects(collect(s.adapter.stream({ ...request([human('three', 'change back')]), model: first })), /已更改/);
+  await assert.rejects(collect(s.adapter.stream({ ...request([human('four', 'change back')]), model: first })), /已更改/);
   assert.equal(s.native.records[0].model, 'vendor/two');
-  assert.deepEqual(s.native.records[0].route, after);
+  assert.deepEqual(s.native.records[0].route, switched);
 });
 test('native adapters reject API effort IDs instead of silently ignoring a saved selection', async () => {
   const s = setup();
-  await assert.rejects(collect(s.adapter.stream({ ...request([human('one', 'hello')]), reasoningEffort: 'high' })), /设置 → Harness/);
+  await assert.rejects(collect(s.adapter.stream({ ...request([human('one', 'hello')]), reasoningEffort: 'high' })), /不受此模型与 Harness 支持/);
   assert.equal(s.native.records.length, 0);
   assert.equal(s.native.sent.length, 0);
   await s.dispose();
