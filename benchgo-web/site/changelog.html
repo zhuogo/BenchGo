@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>更新日志 · BenchGo</title>
+<meta name="description" content="查看 BenchGo 正式版本的更新内容、发布日期和历史发布说明。">
+<link rel="canonical" href="https://benchgo.cn/changelog">
+<style>
+:root { color-scheme: light; --paper: #fafaf7; --ink: #242621; --muted: #62675b; --line: #e1e3dc; --accent: #ba3d2b; }
+:root[data-theme="dark"] { color-scheme: dark; --paper: #18191a; --ink: #efefec; --muted: #b9bdb3; --line: #3a3e36; --accent: #ff9d89; }
+* { box-sizing: border-box; }
+html { background: var(--paper); color: var(--ink); }
+body { margin: 0; font: 15px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; }
+main { width: min(920px, calc(100% - 64px)); margin: auto; padding: 62px 0; }
+header { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+h1 { margin: 0; font-size: 42px; line-height: 1.2; font-weight: 650; }
+a { color: var(--accent); text-underline-offset: .22em; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+article { display: grid; grid-template-columns: minmax(108px, 150px) minmax(0, 1fr); gap: 16px 32px; border-bottom: 1px solid var(--line); padding: 28px 0 34px; overflow-wrap: anywhere; }
+h2 { margin: 0; font-size: 23px; line-height: 1.35; font-variant-numeric: tabular-nums; }
+time, .source { display: block; margin-top: 5px; font-size: 13px; }
+time, .status { color: var(--muted); }
+.notes { max-width: 70ch; }
+h3 { margin: 20px 0 6px; font-size: 16px; }
+.notes > :first-child { margin-top: 0; }
+.notes > :last-child { margin-bottom: 0; }
+p, ul, ol { margin: 0 0 10px; }
+ul, ol { padding-inline-start: 1.35em; }
+li + li { margin-top: 4px; }
+.status { padding: 25px 0; }
+button { font: inherit; cursor: pointer; color: var(--accent); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; }
+@media (max-width: 640px) {
+  main { width: calc(100% - 40px); padding: 36px 0; }
+  h1 { font-size: 32px; }
+  article { grid-template-columns: minmax(0, 1fr); gap: 12px; padding-block: 22px; }
+  .release { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+  time, .source { margin: 0; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header><h1 id="title">更新日志</h1><a id="download" href="/download" target="_top">下载 BenchGo</a></header>
+  <div class="status" id="status" role="status">正在读取发布记录…</div>
+  <button id="retry" type="button" hidden>重新读取</button>
+  <section id="releases" aria-labelledby="title"></section>
+  <noscript><p><a href="https://github.com/zhuogo/BenchGo/releases" target="_blank" rel="noopener noreferrer">在 GitHub 查看更新日志</a></p></noscript>
+</main>
+<script>
+(() => {
+  const base = 'https://github.com/zhuogo/BenchGo/releases';
+  const feed = 'https://raw.githubusercontent.com/zhuogo/BenchGo/release-metadata/changelog.json';
+  const status = document.getElementById('status');
+  const retry = document.getElementById('retry');
+  const list = document.getElementById('releases');
+  const media = matchMedia('(prefers-color-scheme: dark)');
+  const shell = window.parent !== window ? window.parent : null;
+  const english = String(shell?.App?.lang ?? '').startsWith('en');
+  const copy = english ? {
+    title: 'Changelog', download: 'Download BenchGo', loading: 'Loading releases…', retry: 'Try again',
+    empty: 'No releases yet.', error: 'Could not load releases.', github: 'View on GitHub', noNotes: 'See the GitHub release for details.',
+  } : {
+    title: '更新日志', download: '下载 BenchGo', loading: '正在读取发布记录…', retry: '重新读取',
+    empty: '暂无正式发行记录。', error: '暂时无法读取发布记录。', github: '在 GitHub 查看', noNotes: '详情见 GitHub 发行页。',
+  };
+  const locale = english ? 'en' : 'zh-CN';
+  document.documentElement.lang = locale;
+  document.getElementById('title').textContent = copy.title;
+  document.getElementById('download').textContent = copy.download;
+  retry.textContent = copy.retry;
+  function syncTheme() {
+    document.documentElement.dataset.theme = shell?.document.documentElement.dataset.theme || (media.matches ? 'dark' : 'light');
+  }
+  syncTheme();
+  (shell || media).addEventListener(shell ? 'dg:theme-changed' : 'change', syncTheme);
+  window.addEventListener('pagehide', event => {
+    if (!event.persisted) (shell || media).removeEventListener(shell ? 'dg:theme-changed' : 'change', syncTheme);
+  });
+
+  const date = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'Asia/Shanghai' });
+  function element(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+  function github(tag) {
+    const link = element('a', copy.github, 'source');
+    link.href = tag ? `${base}/tag/${tag}` : base;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    return link;
+  }
+  function releaseNotes(markdown) {
+    const notes = element('div', '', 'notes');
+    let block;
+    for (const row of markdown.trim().split(/\r?\n/)) {
+      const line = row.trim();
+      const heading = /^#{1,6}\s+(.+)$/.exec(line);
+      const item = /^(?:([-*+])|(\d+[.)]))\s+(.+)$/.exec(line);
+      if (item) {
+        const type = item[1] ? 'UL' : 'OL';
+        if (block?.tagName !== type) {
+          block = element(type.toLowerCase());
+          notes.append(block);
+        }
+        block.append(element('li', item[3]));
+      } else {
+        block = undefined;
+        if (heading) notes.append(element('h3', heading[1]));
+        else if (line) notes.append(element('p', line));
+      }
+    }
+    if (!notes.childElementCount) notes.append(element('p', copy.noNotes));
+    return notes;
+  }
+  function release(row) {
+    if (!/^v\d+\.\d+\.\d+$/.test(row?.tag) || typeof row.notes !== 'string' || !Number.isFinite(Date.parse(row.publishedAt))) {
+      throw new Error('Invalid release');
+    }
+    const article = element('article');
+    const summary = element('div', '', 'release');
+    const heading = element('h2', row.tag);
+    const time = element('time', date.format(new Date(row.publishedAt)));
+    article.id = row.tag;
+    article.setAttribute('aria-labelledby', `release-${row.tag}`);
+    heading.id = `release-${row.tag}`;
+    time.dateTime = row.publishedAt;
+    summary.append(heading, time, github(row.tag));
+    article.append(summary, releaseNotes(row.notes));
+    return article;
+  }
+  async function load() {
+    retry.disabled = true;
+    status.hidden = false;
+    status.textContent = copy.loading;
+    list.setAttribute('aria-busy', 'true');
+    try {
+      const response = await fetch(feed, { cache: 'no-cache', signal: AbortSignal.timeout(12000) });
+      if (!response.ok) throw new Error('Release history unavailable');
+      const data = await response.json();
+      if (data.schemaVersion !== 1 || !Array.isArray(data.releases)) throw new Error('Invalid release history');
+      list.replaceChildren(...data.releases.map(release));
+      status.hidden = data.releases.length > 0;
+      status.textContent = copy.empty;
+      if (!status.hidden) status.append(github());
+      retry.hidden = true;
+    } catch {
+      status.textContent = copy.error;
+      status.append(github());
+      retry.hidden = false;
+    } finally {
+      retry.disabled = false;
+      list.removeAttribute('aria-busy');
+    }
+  }
+  retry.addEventListener('click', load);
+  load();
+})();
+</script>
+</body>
+</html>

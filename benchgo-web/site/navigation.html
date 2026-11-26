@@ -1,0 +1,122 @@
+<style>
+#benchgo-nav {
+  --nav-accent: #ba3d2b;
+  --nav-paper: #fafaf7;
+  --nav-ink: #242621;
+  --nav-muted: #62675b;
+  --nav-line: #e1e3dc;
+  color-scheme: light;
+  background: var(--dg-bg-base, var(--nav-paper));
+  color: var(--dg-text-primary, var(--nav-ink));
+  border-bottom: 1px solid var(--dg-border, var(--nav-line));
+  font-family: var(--dg-font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif);
+}
+:root[data-theme="dark"] #benchgo-nav {
+  --nav-accent: #ff9d89;
+  --nav-paper: #18191a;
+  --nav-ink: #efefec;
+  --nav-muted: #b9bdb3;
+  --nav-line: #3a3e36;
+  color-scheme: dark;
+}
+#benchgo-nav * { box-sizing: border-box; }
+#benchgo-nav .inner { width: min(1160px, calc(100% - 80px)); min-height: 80px; margin: auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+#benchgo-nav a { color: inherit; text-decoration: none; touch-action: manipulation; }
+#benchgo-nav .brand { display: flex; align-items: center; font-size: 23px; font-weight: 650; background: transparent; box-shadow: none; }
+#benchgo-nav .brand svg { width: 65px; height: 59px; margin-left: -10px; flex: none; }
+#benchgo-nav .brand-accent { color: var(--nav-accent); }
+#benchgo-nav .links { display: flex; align-items: center; gap: 12px; font-size: 13px; white-space: nowrap; }
+#benchgo-nav .dg-nav-item, #benchgo-nav .github { padding: 12px; }
+#benchgo-nav .dg-nav-item[aria-current="page"], #benchgo-nav .dg-nav-item[data-dg-active="true"] { color: var(--nav-accent); }
+#benchgo-nav :is(a, button):focus-visible { outline: 2px solid var(--nav-accent); outline-offset: 2px; }
+#benchgo-nav button { background: transparent; color: var(--nav-muted); border: 0; cursor: pointer; font: inherit; border-radius: 8px; min-height: 44px; padding: 0 6px; touch-action: manipulation; }
+#benchgo-nav #benchgo-theme { width: 44px; flex: none; }
+#benchgo-nav #benchgo-theme:not([hidden]) { display: grid; place-items: center; }
+#benchgo-nav #benchgo-theme svg { width: 18px; height: 18px; grid-area: 1 / 1; }
+#benchgo-nav #benchgo-theme[aria-pressed="true"] .moon, #benchgo-nav #benchgo-theme[aria-pressed="false"] .sun { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  #benchgo-nav :is(a, button):hover { color: var(--nav-accent); }
+}
+@media (max-width: 640px) {
+  #benchgo-nav .inner { width: calc(100% - 32px); min-height: 70px; gap: 8px; }
+  #benchgo-nav .brand { font-size: 20px; }
+  #benchgo-nav .brand svg { width: 48px; height: 48px; margin-left: -6px; }
+  #benchgo-nav .links { gap: 2px; font-size: 12px; }
+  #benchgo-nav .dg-nav-item { padding: 12px 6px; }
+  #benchgo-nav .github { display: none; }
+}
+@media (max-width: 360px) {
+  #benchgo-nav .inner { width: calc(100% - 24px); flex-wrap: wrap; gap: 0 8px; }
+  #benchgo-nav .links { gap: 0; }
+  #benchgo-nav .dg-nav-item { padding-inline: 5px; }
+}
+#benchgo-nav .links { flex-wrap: wrap; }
+</style>
+<header id="benchgo-nav" data-nav-position="top"><div class="inner"><a class="brand" href="/" data-page-route="/" aria-label="BenchGo 首页"><svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="840" height="760" viewBox="0 0 840 760"><title>BenchGo mark</title><g><g data-part="placement" transform="translate(120 190)"><path data-part="body" d="M95 0H505A95 95 0 0 1 600 95V285A95 95 0 0 1 505 380H95A95 95 0 0 1 0 285V95A95 95 0 0 1 95 0Z" fill="#F3EBDF" /><path data-part="corner" d="M410 380H505A95 95 0 0 0 600 285V190Z" fill="#D44A36" /><g data-part="eyes" fill="#222222"><rect x="123" y="125" width="90" height="130" rx="45" /><rect x="261" y="125" width="90" height="130" rx="45" /></g><g data-part="editor-strip">
+          <rect x="78" y="45" width="128" height="14" rx="7" fill="#D44A36" />
+          <rect x="230" y="45" width="52" height="14" rx="7" fill="#B6B1A7" />
+          <rect x="516" y="40" width="10" height="25" rx="3" fill="#D44A36" />
+          <path d="M49 82H551" fill="none" stroke="#B6B1A7" stroke-width="5" />
+        </g></g></g></svg>
+<span>BenchGo<span class="brand-accent">.</span></span></a><nav class="links" aria-label="BenchGo"><a class="dg-nav-item" href="/" data-page-route="/" data-key="home">首页</a><a class="dg-nav-item" href="/docs" target="_blank" rel="noopener noreferrer" data-key="docs">文档</a><a class="dg-nav-item" href="/download" data-page-route="/download" data-key="download">下载</a><a class="github" href="https://github.com/zhuogo/BenchGo" target="_blank" rel="noopener noreferrer">GitHub ↗</a><button type="button" id="benchgo-language" hidden aria-label="切换语言">EN</button>
+<button type="button" id="benchgo-theme" hidden aria-label="深色模式" aria-pressed="false">
+  <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6.5 6.5 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>
+  <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+</button></nav></div></header>
+<script>
+(() => {
+  const app = window.App;
+  const nav = document.getElementById('benchgo-nav');
+  const language = nav.querySelector('#benchgo-language');
+  const theme = nav.querySelector('#benchgo-theme');
+  const english = String(app?.lang).startsWith('en');
+  if (location.pathname === '/docs' || location.pathname.startsWith('/docs/')) {
+    nav.querySelector('[data-key="docs"]').setAttribute('aria-current', 'page');
+  }
+  const changelog = document.createElement('a');
+  changelog.className = 'dg-nav-item';
+  changelog.href = '/changelog';
+  changelog.dataset.pageRoute = '/changelog';
+  changelog.dataset.key = 'changelog';
+  changelog.textContent = '更新日志';
+  nav.querySelector('[data-key="download"]').after(changelog);
+  if (location.pathname.replace(/\/$/, '') === '/changelog') changelog.setAttribute('aria-current', 'page');
+  if (english) {
+    const labels = { home: 'Home', docs: 'Docs', download: 'Download', changelog: 'Changelog' };
+    nav.querySelectorAll('[data-key]').forEach(link => { link.textContent = labels[link.dataset.key]; });
+    language.setAttribute('aria-label', 'Switch language');
+    theme.setAttribute('aria-label', 'Dark mode');
+  }
+  const locales = Array.isArray(app?.locales) ? app.locales.map(locale => typeof locale === 'string' ? { code: locale } : locale) : [];
+  if (locales.length > 1 && app?.setLang) {
+    language.hidden = false;
+    const next = locales.find(locale => locale.code !== app.lang) || locales[0];
+    language.textContent = next.code.startsWith('en') ? 'EN' : '中文';
+    language.onclick = async () => {
+      language.disabled = true;
+      try { await app.setLang(next.code); }
+      catch (error) { app.showError?.(error.message); }
+      finally { language.disabled = false; }
+    };
+  }
+  function syncTheme() {
+    const dark = document.documentElement.dataset.theme === 'dark';
+    theme.setAttribute('aria-pressed', String(dark));
+    theme.title = english
+      ? (dark ? 'Switch to light mode' : 'Switch to dark mode')
+      : (dark ? '切换到浅色模式' : '切换到深色模式');
+  }
+  if (typeof app?.toggleTheme === 'function') {
+    syncTheme();
+    theme.hidden = false;
+    theme.onclick = () => app.toggleTheme();
+    window.addEventListener('dg:theme-changed', syncTheme);
+  }
+  const host = document.getElementById('nav-container');
+  if (host) host.dgNavigationCleanup = () => {
+    language.onclick = null;
+    theme.onclick = null;
+    window.removeEventListener('dg:theme-changed', syncTheme);
+  };
+})();
+</script>
