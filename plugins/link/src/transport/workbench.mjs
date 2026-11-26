@@ -135,6 +135,7 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
       if ((req.method === 'GET' || req.method === 'HEAD') && (url.pathname === WORKBENCH_PATH || url.pathname === WORKBENCH_PATH + 'index.html')) {
         res.writeHead(303, { ...headers, location: '/link/' }); res.end(); return;
       }
+      res.setHeader('x-benchgo-workbench-session', 'expired');
       throw fail('设备授权已失效，请重新配对', 401);
     }
     const path = url.pathname.slice(WORKBENCH_PATH.length);
@@ -237,7 +238,9 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
         res.writeHead(200, { ...headers, 'content-type': 'application/json; charset=utf-8' }); res.end('{"apps":[]}'); return;
       }
       if (path.startsWith('api/')) {
-        if (path === 'api/commander-devices' && req.method === 'POST' && resourceNavigation) {
+        if (path === 'api/group-resources' || path === 'api/commander-devices' && req.method === 'POST' && resourceNavigation) {
+          if (req.method !== 'POST') throw fail('不支持的方法', 405);
+          if (!resourceNavigation || !device.groupMember) throw fail('当前工作台未获设备组资源授权', 403);
           const value = await resourceNavigation(await json(req), device, { signal, origin: url.origin });
           await sendResponse(Response.json(value)); return;
         }

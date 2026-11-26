@@ -128,7 +128,7 @@ test('the actual base UI belongs to the client owner, independently of optional-
     module, exports: module.exports, URL, AbortController, AbortSignal,
     document: {baseURI: 'https://benchgo.test/', addEventListener() {}, removeEventListener() {}, createElement: () => {const style = {remove() {styles.delete(style);}}; return style;}, head: {append: style => styles.add(style)}},
     fetch: async (_url, options) => {const body = JSON.parse(options.body); requests.push(body.action); return Response.json({workspaceId: 'recent', projects: [], sessions: []});},
-    require: id => id.endsWith('modules.mjs') ? {
+    require: Object.assign(id => id.endsWith('modules.mjs') ? {
       moduleSource: source,
       startModuleLifecycle: (owner, entries) => startModuleLifecycle(owner, entries, {
         source, read: async () => {moduleReads++; if (failure) throw failure; return response(enabled);},
@@ -138,7 +138,10 @@ test('the actual base UI belongs to the client owner, independently of optional-
       : id.endsWith('sidebar-state.mjs') ? {ensureSidebarWorkspace}
       : id.endsWith('http-response.mjs') ? {readJsonResponse}
       : id.endsWith('perf-trace.mjs') ? {perfTrace}
-      : noopExports,
+      : noopExports, { async: async id => {
+        assert.equal(id, './client.fonts.js');
+        return { css: '/* fixture fonts */' };
+      } }),
   });
   const fiber = ctx.plugin({inject: ['slots', 'workspaces', 'sessions'], apply: module.exports.apply});
   try {

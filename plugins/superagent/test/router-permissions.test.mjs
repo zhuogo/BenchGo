@@ -151,22 +151,22 @@ test('Router leaves another agent’s calls to that agent’s own gate', async (
   assert.deepEqual(listeners, ['system-prompt/assemble', 'tools/execute']);
 });
 
-for (const code of ['PROFILE_CONFIG_DIRECT_WRITE', 'PROFILE_CONFIG_RESTORED']) test(`configuration guard failure stops the Router immediately (${code})`, () => {
-  const listeners = new Map(), agent = {}; let stopped;
-  installRouterFailureConvergence({ on: (event, fn) => listeners.set(event, fn) }, agent, value => { stopped = value; });
+for (const code of ['PROFILE_CONFIG_DIRECT_WRITE', 'PROFILE_CONFIG_RESTORED']) test(`configuration guard permits one model reply after stopping tools (${code})`, () => {
+  const listeners = new Map(), agent = {};
+  const replyFacts = installRouterFailureConvergence({ on: (event, fn) => listeners.set(event, fn) }, agent);
   listeners.get('tools/result')({ agent, callId: 'config-write', name: 'shell' }, {
     isError: true, error: { code }, content: [{ type: 'text', text: `${code}: direct profile configuration is blocked` }],
   });
   const step = listeners.get('agent/pre-step');
   const next = () => ({ kind: 'accept' });
   assert.deepEqual(step({ agent: {}, messages: [] }, next), { kind: 'accept' });
-  assert.equal(stopped, undefined);
+  assert.deepEqual(step({ agent, messages: [] }, next), { kind: 'accept' });
   assert.deepEqual(step({ agent, messages: [] }, next), { kind: 'reject' });
-  assert.equal(stopped.code, code);
-  assert.equal(stopped.callId, 'config-write');
+  assert.equal(replyFacts().error.code, code);
+  assert.equal(replyFacts().error.callId, 'config-write');
 });
 
-test('official Router loop stops repeated shared structural failures across tools without another model request', { timeout: 15000 }, async t => {
+for (const scenario of ['structural', 'archive-duplicate', 'archive-varied', 'archive-json', 'archive-corrected-input']) test(`official Router loop handles tool failures (${scenario})`, { timeout: 15000 }, async t => {
   const requireHarness = createRequire(new URL('../../../deepseek-harness/packages/core/agent-loop/package.json', import.meta.url));
   const load = name => import(pathToFileURL(requireHarness.resolve(name)).href);
   const { Context } = await load('@deepseek-ai/cordis');
@@ -179,25 +179,55 @@ test('official Router loop stops repeated shared structural failures across tool
   const requireNative = createRequire(new URL('../../../deepseek-harness/packages/core/tool-executor-native/package.json', import.meta.url));
   await ctx.plugin(await import(pathToFileURL(requireNative.resolve('@deepseek-ai/dsh-tool-executor-native')).href));
   const requests = [];
+  const limit = { structural: 2, 'archive-duplicate': 5, 'archive-varied': 8, 'archive-json': 1, 'archive-corrected-input': 3 }[scenario];
+  const receipt = { archived: 1, alreadyArchived: 0, skipped: 2, failed: 0, partial: 0 };
+  let readArchiveReply, facts;
+  const previewCalls = [];
   class Adapter extends LlmAdapter {
     async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 } }; }
     async *stream(request) {
       requests.push(request);
-      assert.ok(requests.length <= 2, 'shared structural failure must stop at the next official boundary');
+      const step = requests.length;
+      if (step === limit + 1) {
+        facts = readArchiveReply();
+        const text = 'Reply grounded in the tool result';
+        yield { type: 'block-start', index: 0, blockType: 'text' };
+        yield { type: 'block-end', index: 0, block: { type: 'text', text } };
+        yield { type: 'finish', reason: { kind: 'stop' } };
+        return;
+      }
+      assert.ok(step <= limit, 'must stop at the next official boundary');
+      let name, args = {};
+      if (scenario === 'structural') name = step === 1 ? 'first' : 'alternate';
+      else if (scenario === 'archive-duplicate' && step > 2) {
+        name = 'assistant_projects';
+        args = step % 2 ? { scope: 'local', deviceIds: [] } : { deviceIds: [], scope: 'local' };
+      } else {
+        name = scenario === 'archive-duplicate' && step === 2 ? 'assistant_session_archive_apply' : 'assistant_session_archive_preview';
+        args = scenario === 'archive-corrected-input' && step <= 2 ? { before: 'invalid' } : { keepLatest: step };
+      }
       yield { type: 'block-start', index: 0, blockType: 'tool-call' };
-      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: `failure-${requests.length}`, name: requests.length === 1 ? 'first' : 'alternate', arguments: '{}' } };
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: `failure-${step}`, name, arguments: JSON.stringify(args) } };
       yield { type: 'finish', reason: { kind: 'tool-calls' } };
     }
   }
   ctx.llm.registerAdapter(['convergence-test'], new Adapter());
   const sessionId = 'convergence-same-session';
-  let created = 0, stopped;
+  let created = 0;
   ctx.on('agent/created', () => { created++; });
   const handle = await ctx.agents.create({ sessionId, setup: async (scope, agent) => {
-    installRouterFailureConvergence(scope, agent, value => { stopped = value; });
+    readArchiveReply = installRouterFailureConvergence(scope, agent);
     for (const name of ['first', 'alternate']) scope.tools.register({ name, description: 'test', parameters: { type: 'object', properties: {} },
       output: { schema: { type: 'object' }, render: () => [] },
       execute() { throw new HarnessError('Disk quota exhausted before dispatch', 'ENOSPC'); } });
+    for (const name of ['assistant_session_archive_preview', 'assistant_session_archive_apply', 'assistant_projects']) scope.tools.register({ name, description: 'test',
+      parameters: { type: 'object', additionalProperties: true },
+      output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute(args) {
+        if (name === 'assistant_session_archive_preview') previewCalls.push(args);
+        if (args.before === 'invalid') throw new HarnessError('before 必须是带时区的 ISO 时间', 'MANAGEMENT_INPUT');
+        return scenario === 'archive-json' ? { project: undefined } : name === 'assistant_session_archive_apply' ? receipt : { total: 0 };
+      } });
   } });
   t.after(() => handle.dispose());
   handle.agent.model.select({ provider: 'convergence-test', model: 'opaque-model' });
@@ -205,9 +235,18 @@ test('official Router loop stops repeated shared structural failures across tool
   await handle.agent.whenIdle();
   const events = handle.agent.session.snapshotEvents();
   assert.equal(created, 1); assert.equal(handle.agent.id, sessionId);
-  assert.equal(requests.length, 2);
-  assert.equal(events.filter(event => event.type === 'tool/result').length, 2);
-  assert.equal(stopped.code, 'ENOSPC');
-  assert.equal(stopped.callId, 'failure-1');
-  assert.equal(events.findLast(event => event.type === 'turn/end').data.reason.kind, 'blocked');
+  assert.equal(requests.length, limit + 1);
+  const results = events.filter(event => event.type === 'tool/result');
+  assert.equal(results.length, limit);
+  if (scenario === 'structural') assert.equal(facts.error.code, 'ENOSPC');
+  else if (scenario === 'archive-corrected-input') {
+    assert.equal(facts, undefined);
+    assert.deepEqual(previewCalls, [{ before: 'invalid' }, { keepLatest: 3 }]);
+    assert.match(results[1].data.message.content[0].text, /before.+本轮未再次执行/);
+    assert.equal(results[2].data.message.isError, false);
+  }
+  else assert.equal(facts.calls, limit);
+  if (scenario === 'archive-duplicate') assert.deepEqual(facts.receipt, receipt);
+  if (scenario === 'archive-json') assert.equal(facts.error.code, 'INVALID_TOOL_OUTPUT');
+  assert.equal(events.findLast(event => event.type === 'turn/end').data.reason.kind, 'completed');
 });

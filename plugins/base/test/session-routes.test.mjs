@@ -27,7 +27,7 @@ async function fixture(t) {
     ]),
   };
   const runtimeSettings = createRuntimeSettings({ directory });
-  const routes = createSessionRoutes({ directory, providers, runtimeSettings });
+  const routes = createSessionRoutes({ directory, providers, runtimeSettings, resolveModel: async () => ({ inputModalities: ['text', 'image'] }) });
   return { directory, entries, runtimeSettings, routes };
 }
 
@@ -54,8 +54,30 @@ test('route mismatches and missing API config fail before native launch', async 
   await assert.rejects(routes.capture({ tool: 'codex', providerId: 'messages', model: 'm' }), /Responses/);
   await assert.rejects(routes.capture({ tool: 'claude', providerId: 'responses', model: 'm' }), /Messages/);
   await assert.rejects(routes.capture({ tool: 'codex', providerId: 'unconfigured', model: 'm' }), /供应商/);
-  await assert.rejects(routes.capture({ tool: 'pi', providerId: 'responses', model: 'm' }), /隔离 API/);
+  await assert.rejects(routes.capture({ tool: 'grok', providerId: 'responses', model: 'm' }), /隔离 API/);
   await assert.rejects(routes.launch({ tool: 'codex', route: { tool: 'codex', mode: 'subscription' }, sessionId: randomUUID() }), /绑定无效/);
+});
+
+test('Pi and OpenCode isolate managed routes with exact IDs and model metadata', async t => {
+  const { routes } = await fixture(t);
+  const model = 'Vendor/Exact:Build';
+  const pi = await routes.capture({ tool: 'pi', providerId: 'responses', model });
+  const piLaunch = await routes.launch({ tool: 'pi', route: pi, sessionId: randomUUID() });
+  const piConfig = JSON.parse(await readFile(join(piLaunch.env.PI_CODING_AGENT_DIR, 'models.json'), 'utf8'));
+  const piProvider = piConfig.providers[piLaunch.managedProfile.provider];
+  assert.equal(piProvider.api, 'openai-responses');
+  assert.equal(piProvider.apiKey, '$BENCHGO_SESSION_API_KEY');
+  assert.deepEqual(piProvider.models, [{ id: model, input: ['text', 'image'] }]);
+  assert.equal(piLaunch.env.BENCHGO_SESSION_API_KEY, 'secret-responses');
+  const opencode = await routes.capture({ tool: 'opencode', providerId: 'messages', model });
+  const ocLaunch = await routes.launch({ tool: 'opencode', route: opencode, sessionId: randomUUID() });
+  const ocConfig = JSON.parse(ocLaunch.env.OPENCODE_CONFIG_CONTENT);
+  const ocProvider = ocConfig.provider[ocLaunch.managedProfile.provider];
+  assert.equal(ocProvider.npm, '@ai-sdk/anthropic');
+  assert.deepEqual(ocProvider.models[model].modalities.input, ['text', 'image']);
+  assert.equal(ocProvider.options.apiKey, '{env:BENCHGO_SESSION_API_KEY}');
+  assert.equal(ocLaunch.env.BENCHGO_SESSION_API_KEY, 'secret-messages');
+  assert.notEqual(ocLaunch.env.XDG_DATA_HOME, piLaunch.env.PI_CODING_AGENT_DIR);
 });
 
 test('managed RouterGo shares a credential and uses each native tool URL', async t => {

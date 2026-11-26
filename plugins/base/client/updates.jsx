@@ -348,13 +348,16 @@ export function UpdateLauncher({ host, wide = true }) {
     restartAttempted.current = true;
     setUpdatingAll(true); setError('');
     try {
-      const result = await desktopUpdates.apply();
-      if (!mounted.current) return;
-      if (result?.phase === 'error') throw new Error(nativeFailureMessages[result.failure] || '主机应用更新未完成，请重试。');
-      if (result?.phase === 'installing') { setRestarting(true); return; }
-      if (result?.phase !== 'idle') throw new Error('主机应用更新尚未完成，请重试。');
-      if (current?.release?.app?.available) throw new Error('应用更新通道暂未提供本次版本，请稍后重试。');
-      if (current?.restartRequired || current?.phase === 'ready') {
+      const needsRestart = current?.restartRequired || current?.phase === 'ready';
+      if (!needsRestart || current?.decision?.restartOnly !== true) {
+        const result = await desktopUpdates.apply();
+        if (!mounted.current) return;
+        if (result?.phase === 'error') throw new Error(nativeFailureMessages[result.failure] || '主机应用更新未完成，请重试。');
+        if (result?.phase === 'installing') { setRestarting(true); return; }
+        if (result?.phase !== 'idle') throw new Error('主机应用更新尚未完成，请重试。');
+        if (current?.release?.app?.available) throw new Error('应用更新通道暂未提供本次版本，请稍后重试。');
+      }
+      if (needsRestart) {
         setRestarting(true);
         const restarted = await desktopUpdates.restart();
         if (restarted?.phase === 'error') throw new Error(nativeFailureMessages[restarted.failure] || '主机应用未能安全重启，请重试。');

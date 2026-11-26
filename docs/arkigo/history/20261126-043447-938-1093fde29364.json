@@ -1,0 +1,126 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T04:34:47.938Z",
+  "by": "ai",
+  "reason": "记录外部 Harness 附件实现及真实 CLI 与模型验收",
+  "base": "88fe8f46deda",
+  "result": "1093fde29364",
+  "changes": [
+    {
+      "op": "update",
+      "id": "models.commander",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "models.commander",
+        "type": "module",
+        "title": "Commander 与原生协议驱动",
+        "summary": "把创建、连接、发送、打断和归档落到本机已可用的原生 Agent。",
+        "parent": "models",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "原始历史归原生工具。缺句柄或能力不足时明确报告，由调用方决定恢复方式。",
+            "Codex、Claude、Pi、OpenCode 和 ACP 能力各异。远端执行只列出该设备实际支持的组合。"
+          ],
+          "responsibilities": [
+            "验证 workspace、运行时和供应商路由，准备隔离配置。",
+            "以请求标识返回受理回执，持续转发正文、工具事件和审批。",
+            "保存原生句柄和事件索引，恢复时核对原句柄和路由。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/模型与供应商.md",
+            "symbol": "共享 API 配置"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/原生工具与会话.md",
+            "symbol": "调度边界"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "b3419a52ec87ee08d96b6e616654550827ab64ca05c7fba952776ef430accb29",
+              "path": "plugins/harness/src/plugin.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "86f9b5fb699f8f84facfb58a21cbbf9783cc436c1c2a24c45c45cf43ef52a6f0",
+              "path": "plugins/harness/src/runtime.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "39b7eccb88ced408c7c0e789029b86b1f14a6b9c6e0577198bd0586d7597702f",
+              "path": "plugins/harness/src/adapter.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "models.commander.attachments",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "models.commander.attachments",
+        "type": "rule",
+        "title": "外部 Harness 聊天附件",
+        "summary": "Codex、Claude Code、Pi、OpenCode 用工具读取普通文件，按模型能力接收图像输入。",
+        "parent": "models.commander",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "复用官方聊天入口和附件存储。桌面普通文件引用原路径，Web 和 Link 的普通文件使用执行主机的只读副本。当前驱动、供应商协议和模型支持图片时发送图像内容，其他情况保留草稿并返回具体原因。按请求标识和附件身份去重，兼容已有文本回执。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户确认全面落实外部 Harness 附件优化清单"
+          }
+        ]
+      }
+    },
+    {
+      "op": "update",
+      "id": "models.commander.attachments.check",
+      "fields": [
+        "verification"
+      ],
+      "before": {
+        "id": "models.commander.attachments.check",
+        "type": "acceptance",
+        "title": "验收外部 Harness 附件",
+        "summary": "确认实际工具读文件、视觉请求、模型校验和重试。",
+        "parent": "models.commander.attachments",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "then": [
+            "普通文件可由原生工具读取，模型请求带原生图片字段。",
+            "纯文本模型拒绝图片并保留草稿，已发送的历史图片不阻塞后续文字。",
+            "未分组、项目和 Link 会话使用各自执行主机的路径，旧文本回执和重试只执行一次。"
+          ],
+          "when": "从工作台向 Codex、Claude Code、Pi 和 OpenCode 发送普通文件、单张图片及图文混合消息，并重连后重试。"
+        }
+      }
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "models.commander.attachments.check",
+        "to": "models.commander.attachments",
+        "type": "verifies"
+      }
+    }
+  ]
+}

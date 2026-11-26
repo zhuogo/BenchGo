@@ -1,0 +1,124 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T06:30:35.299Z",
+  "by": "codex",
+  "reason": "明确重复调用按整轮计数并复核管理工具依据",
+  "base": "1eecb54dc5f0",
+  "result": "7f6ee94f2a65",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.management",
+        "type": "module",
+        "title": "任务跟进、权限与清理",
+        "summary": "原工单承接进度、补充、审批、暂停及归档操作，并按事实反馈。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "无法确认的请求保留待核实状态。对任务结果的事后改动由关联任务处理。"
+          ],
+          "responsibilities": [
+            "Router 在原任务写入经确认的修改并记录原话。超出 Mandate 的变更需要用户确认。",
+            "暂停或停止请求与执行端确认分开。动作范围和回执按实际身份、来源、参数与许可验证。",
+            "展示整理使用官方归档，归档写入先于停止确认。恢复仅恢复展示。目标清单不产生执行任务。",
+            "普通工单查询省略空白续读字段，同一回合对无效查询和未变化快照结束重复读取。批量整理逐项保留回执，重试只处理未完成项。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/任务列表交互.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "9d03e60a18c382466da3c3b6238364d943e531b49c1adf5d15aeafb99164e6ed",
+              "path": "plugins/superagent/src/desktop-task-access.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "93de27a4408158b92c60ae2a44d35e2b6bf40ae00496b39098572f5d07b5b6b9",
+              "path": "plugins/superagent/src/router-tools.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "15b943ecf6dbc2e22db74b08ed5bfcd0a2ebd5eff066673996b5f1800f11fedc",
+              "path": "plugins/superagent/src/task-cleanup-store.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "ec6508965224f72a86a2f448e7c12d314f7b3014615afc6522ada661362f9946",
+              "path": "plugins/superagent/src/task-management.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive-check",
+      "fields": [
+        "body.then"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive-check",
+        "type": "acceptance",
+        "title": "验证总助手批量归档",
+        "summary": "核实 JSON 输出、Harness 边界、保护范围、只读查询重试收敛和归档回执。",
+        "parent": "assistant.management.session-archive",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "本机主人已有普通工作台聊天与运行中的活动"
+          ],
+          "then": [
+            "官方归档索引和适用的 Commander 状态按明确目标更新，聊天历史可在侧栏恢复。",
+            "当前总助手会话、工单会话、置顶和活跃会话保持原状态。",
+            "异步变化和局部失败只影响相应目标，回执给出实际结果。",
+            "官方工具执行器接受未归组会话预览，按 Harness 筛选时排除独立和挂接的外部 Harness 会话。",
+            "归档相关调用在同一指令内连续出现第三次相同调用或累计第八次时，官方回合在下一步前终止；工具输出校验失败立即收束，原对话保留已确认的归档回执。"
+          ],
+          "when": "在当前聊天按明确范围让总助手预览并归档会话"
+        },
+        "verification": {
+          "checkedAt": "2026-11-26T06:30:17.949Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/conversation-management.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/router-permissions.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/service.test.mjs"
+            }
+          ],
+          "note": "132 项定向测试通过，包括官方工具输出校验、超过 30 项的冻结批量归档、隔离档案的官方归档索引持久化及恢复、范围变化、历史错误参数、相同和变化的重试参数以及挂载 Router 的正式回复和下一轮恢复。模块构建成功，桌面 0.1.16 同步五个模块并在同一桌面进程中重新挂载 Router。批量写入验收使用隔离档案。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

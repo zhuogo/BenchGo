@@ -13,7 +13,11 @@ node_modules/
 /eval/superagent-evening-20261105/attention-1-diagnosis-20261106/
 /eval/superagent-evening-20261105/attention-1-diagnosis-20261106b/
 /eval/superagent-evening-20261105/attention-1-diagnosis-20261106c/
-/benchgo-web/
+/benchgo-web/*
+!/benchgo-web/site/
+/benchgo-web/site/*
+!/benchgo-web/site/changelog.html
+!/benchgo-web/site/navigation.html
 /[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
 /工作/
 /协作开发模式.md

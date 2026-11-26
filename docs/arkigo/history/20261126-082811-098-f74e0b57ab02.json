@@ -1,0 +1,18 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T08:28:11.098Z",
+  "by": "codex",
+  "reason": "记录受管服务器总助手恢复和独立中继资源入口",
+  "base": "883d0b20e407",
+  "result": "f74e0b57ab02",
+  "changes": [
+    {
+      "op": "add",
+      "id": "link.group-resource-relay"
+    },
+    {
+      "op": "add",
+      "id": "release.server-recovery-check"
+    }
+  ]
+}

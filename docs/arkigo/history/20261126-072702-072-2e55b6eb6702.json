@@ -1,0 +1,132 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T07:27:02.072Z",
+  "by": "codex",
+  "reason": "拆分归档工具参数并为明确的官方全量归档固定范围",
+  "base": "7f6ee94f2a65",
+  "result": "2e55b6eb6702",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive",
+      "fields": [
+        "body.request",
+        "body.signature"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive",
+        "type": "interface",
+        "title": "总助手批量归档工作台会话",
+        "summary": "本机主人在聊天里按 Harness、标题、项目、时间或保留数量归档普通会话。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "auth": "绑定当前本机主人真实指令",
+          "kind": "function",
+          "request": [
+            {
+              "description": "冻结匹配项。支持 harness=official，仅纳入 DeepSeek Harness 会话，排除 Commander 外部会话及其侧栏宿主；也可按项目、标题、时间、保留数量或精确 ID 筛选。未归组的项目字段为 null。",
+              "name": "preview",
+              "type": "object"
+            },
+            {
+              "description": "同一真人指令下按已冻结预览整批提交或指定精确子集。",
+              "name": "archive",
+              "type": "object"
+            }
+          ],
+          "response": [
+            {
+              "description": "报告实际归档项数和逐项未完成原因。",
+              "name": "结果",
+              "type": "object"
+            }
+          ],
+          "signature": "assistant_session_archive(preview | archive)"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求 AI 快捷归档过多的会话，历史会话归档需要保留当前对话。"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求只归档全部 DeepSeek Harness 会话，并修复 Router 的重复调用。"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T06:30:17.949Z",
+              "hash": "4d39ac75349ac382605b60fcc929b4396e8bea7107fccec2a91f7afcd618e9a0",
+              "path": "plugins/superagent/src/session-archive.mjs",
+              "symbol": "registerSessionArchive"
+            },
+            {
+              "checkedAt": "2026-11-26T06:30:17.949Z",
+              "hash": "e61862c4f31b3d4f6a35b9407a86478dff799be882a33acf262a00db8e2e5911",
+              "path": "plugins/superagent/src/router-permissions.mjs",
+              "symbol": "installRouterFailureConvergence"
+            },
+            {
+              "checkedAt": "2026-11-26T06:30:17.949Z",
+              "hash": "89e670ea34e604963afb1edec9a5a3912c6817b028679604ba5ac9445a56092c",
+              "path": "plugins/superagent/src/router-session-setup.mjs",
+              "symbol": "createRouterSessionSetup"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive-check",
+      "fields": [
+        "body.then"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive-check",
+        "type": "acceptance",
+        "title": "验证总助手批量归档",
+        "summary": "核实 JSON 输出、Harness 边界、保护范围、只读查询重试收敛和归档回执。",
+        "parent": "assistant.management.session-archive",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "本机主人已有普通工作台聊天与运行中的活动"
+          ],
+          "then": [
+            "官方归档索引和适用的 Commander 状态按明确目标更新，聊天历史可在侧栏恢复。",
+            "当前总助手会话、工单会话、置顶和活跃会话保持原状态。",
+            "异步变化和局部失败只影响相应目标，回执给出实际结果。",
+            "官方工具执行器接受未归组会话预览，按 Harness 筛选时排除独立和挂接的外部 Harness 会话。",
+            "归档相关调用在同一指令内第三次出现相同调用或累计第八次时，官方回合在下一步前终止；工具输出校验失败立即收束，原对话保留已确认的归档回执。"
+          ],
+          "when": "在当前聊天按明确范围让总助手预览并归档会话"
+        },
+        "verification": {
+          "checkedAt": "2026-11-26T06:30:17.949Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/conversation-management.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/router-permissions.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/service.test.mjs"
+            }
+          ],
+          "note": "132 项定向测试通过，包括官方工具输出校验、超过 30 项的冻结批量归档、隔离档案的官方归档索引持久化及恢复、范围变化、历史错误参数、相同和变化的重试参数以及挂载 Router 的正式回复和下一轮恢复。模块构建成功，桌面 0.1.16 同步五个模块并在同一桌面进程中重新挂载 Router。批量写入验收使用隔离档案。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

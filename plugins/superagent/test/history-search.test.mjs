@@ -170,6 +170,7 @@ test('metadata pages never observe logs and source changes invalidate metadata c
   const f = await fixture(t); f.turn('main', 'hello', 'reply'); f.turn('side', 'hello', 'reply');
   f.ctx.sessionQuery.observeSession = () => { throw Error('metadata must not read logs'); };
   const p = await f.service.sessions({ limit: 1 });
+  assert.deepEqual(await f.service.sessions({ limit: 1, cursor: '' }), p);
   assert.equal(p.sessions.length, 1); assert.ok(p.nextCursor);
   const p2 = await f.service.sessions({ limit: 1, cursor: p.nextCursor });
   assert.notEqual(p2.sessions[0].id, p.sessions[0].id); assert.equal(p2.nextCursor, null);

@@ -161,6 +161,23 @@ test('image safely falls back on definite refusal and persists its artifact for 
   assert.deepEqual(await (await create()).getSettings(), await service.getSettings());
 });
 
+test('provider parameter rejection names the tool field without leaking response details', async t => {
+  let calls = 0;
+  const { service } = await fixture(t, () => {
+    calls++;
+    return Response.json({ error: { param: calls === 1 ? 'output_format' : 'private-field', message: 'provider-private-text' } }, { status: 400 });
+  });
+  await service.updateSettings({ image: setting(route('primary-image')) }, 0);
+  const input = { kind: 'image', prompt: 'portrait', requestId: 'invalid-format' };
+  const isFieldError = error => error.code === 'MEDIA_PROVIDER_REJECTED' && /参数 format（HTTP 400）/.test(error.message)
+    && !/output_format|provider-private-text/.test(error.message);
+  await assert.rejects(service.generate(input), isFieldError);
+  await assert.rejects(service.generate(input), isFieldError);
+  assert.equal(calls, 1);
+  await assert.rejects(service.generate({ ...input, requestId: 'unknown-field' }), error =>
+    /供应商拒绝请求（HTTP 400）/.test(error.message) && !/private-field|provider-private-text/.test(error.message));
+});
+
 test('RouterGo CDN images settle as original links without a download or duplicate submission', async t => {
   const externalUrl = 'https://pub-13fd1d3607a441b4a9d232b3a223f5f6.r2.dev/generated/testing.png?fixture=one%2Ftwo&keep=1';
   const modelId = 'gpt-image-2.6-sunburst';

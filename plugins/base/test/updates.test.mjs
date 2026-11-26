@@ -84,7 +84,7 @@ async function fixture(t, options = {}) {
 }
 
 test('signed check, verified install, persistence and restart state form one complete update path', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, { appVersionInFeed: '0.1.2' });
   assert.equal((await f.service.status()).config.source, 'mirror');
   await f.service.dispatch({ action: 'configure', source: 'custom', mirrorUrl: 'https://mirror.example.com/' });
   assert.equal(JSON.parse(await readFile(join(f.directory, 'updates.json'))).source, 'custom');
@@ -93,8 +93,25 @@ test('signed check, verified install, persistence and restart state form one com
   await f.service.dispatch({ action: 'install' }); await f.service.settled();
   const status = await f.service.status();
   assert.equal(f.activated(), 1); assert.equal(status.restartRequired, true); assert.equal(status.current.plugin, '0.1.2'); assert.equal(status.current.app, '0.1.2');
+  assert.equal(status.decision.restartOnly, true);
   assert.equal(status.release.plugin.available, false, 'a staged update is waiting for restart, not another installation');
   await assert.rejects(f.service.dispatch({ action: 'install' }), /重启/);
+});
+
+test('restart alone requires a matching signed target and a known application that already satisfies it', async t => {
+  for (const options of [
+    { appVersionInFeed: '0.1.4' },
+    { appVersionInFeed: '0.1.2', state: { appVersion: undefined } },
+    { appVersionInFeed: '0.1.2', state: { version: '0.1.4' } },
+    {},
+  ]) {
+    const f = await fixture(t, { ...options, state: { version: '0.1.3', ...options.state } });
+    assert.equal((await f.service.status()).decision.restartOnly, undefined);
+    await f.service.dispatch({ action: 'check' }); await f.service.settled();
+    const { decision } = await f.service.status();
+    assert.equal(decision.action, 'restart');
+    assert.equal(decision.restartOnly, undefined);
+  }
 });
 
 test('status exposes real download, extraction and activation progress without changing the legacy active phase', async t => {

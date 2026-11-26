@@ -148,6 +148,8 @@ test('all-device inventory retains owner boundaries and rejects conflicting loca
   f.state.mainSessionId = 'other';
   await assert.rejects(f.run(), { code: 'DEVICE_CATALOG_SCOPE_DENIED' });
   assert.equal((await f.run({ scope: 'local' })).scope, 'local');
+  assert.equal((await f.run({ scope: 'local', deviceId: '', deviceIds: [], offset: 0, limit: 100 })).scope, 'local');
+  assert.equal((await f.run({ scope: 'local', deviceId: '\t', deviceIds: [] })).scope, 'local');
   assert.deepEqual(f.calls, []);
 });
 

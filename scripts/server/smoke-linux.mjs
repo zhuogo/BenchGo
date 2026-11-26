@@ -54,26 +54,37 @@ async function run(label, command, args, { cwd, stdoutFile, timeout = 120_000 } 
   } finally { if (fd !== undefined) closeSync(fd); }
 }
 
-async function linkState({ port, token }, cert) {
+async function linkRequest({ port, token }, cert, path, input, cookie) {
   return new Promise((resolve, reject) => {
-    const req = request({ hostname: '127.0.0.1', port, path: '/link/api/rpc', method: 'POST', ca: cert,
-      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, timeout: 10_000 }, response => {
+    const req = request({ hostname: '127.0.0.1', port, path, method: input === undefined ? 'GET' : 'POST', ca: cert,
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...(cookie ? { cookie } : {}) }, timeout: 10_000 }, response => {
       let data = '';
       response.on('data', chunk => { data += chunk; if (data.length > 1024 * 1024) response.destroy(); });
       response.once('error', () => reject(new Error('Link state response failed')));
-      response.on('end', () => { try { resolve({ status: response.statusCode, value: JSON.parse(data) }); } catch { reject(new Error('Link state response is not JSON')); } });
+      response.on('end', () => { try { resolve({ status: response.statusCode, value: JSON.parse(data), cookies: response.headers['set-cookie'] }); } catch { reject(new Error('Link state response is not JSON')); } });
     });
     req.once('error', error => reject(new Error(`Link state request failed${safeSmokeDiagnostic(error.code) ? ` (${safeSmokeDiagnostic(error.code)})` : ''}`)));
     req.once('timeout', () => req.destroy(new Error('timeout')));
-    req.end(JSON.stringify({ action: 'state' }));
+    req.end(JSON.stringify(input));
   });
 }
 
 async function assertAuthenticatedState(connection, cert) {
-  const denied = await linkState({ port: connection.port }, cert);
+  const denied = await linkRequest({ port: connection.port }, cert, '/link/api/rpc', { action: 'state' });
   if (denied.status !== 401) throw new Error('Unauthenticated Link state was not rejected');
-  const state = await linkState(connection, cert);
+  const state = await linkRequest(connection, cert, '/link/api/rpc', { action: 'state' });
   if (state.status !== 200 || !Array.isArray(state.value.sessions) || !Array.isArray(state.value.projects) || !Array.isArray(state.value.models)) throw new Error('Authenticated Link state is unavailable');
+}
+
+async function assertAssistantWorkbench(connection, cert) {
+  const { port, pin } = connection;
+  const entry = await linkRequest(connection, cert, '/link/api/workbench', { expectedHostId: `sha256:${pin}`, expectedAuthorizationId: connection.deviceId });
+  const cookie = entry.cookies?.find(value => value.startsWith('dsh_link_workbench='))?.split(';', 1)[0];
+  if (entry.status !== 200 || !cookie) throw new Error('Existing Link pairing cannot reopen the workbench');
+  const modules = await linkRequest({ port }, cert, '/link/workbench/api/benchgo/modules', undefined, cookie);
+  if (modules.status !== 200 || modules.value.modules?.superagent?.available !== true) throw new Error('SuperAgent is unavailable in the paired workbench');
+  const assistant = await linkRequest({ port }, cert, '/link/workbench/api/commander/assistant', { action: 'state' }, cookie);
+  if (assistant.status !== 200 || !assistant.value.state || !assistant.value.config) throw new Error('SuperAgent state is unavailable in the paired workbench');
 }
 
 /** Receipt checks happen before creating a privileged test account. */
@@ -147,12 +158,23 @@ export async function smokeLinuxServer({ directory = join(root, 'artifacts/linux
     const { cert } = await userJson(join(installation.dataDir, 'link/tls.json'), ['cert']);
     if (createHash('sha256').update(new X509Certificate(cert).publicKey.export({ type: 'spki', format: 'der' })).digest('base64') !== connection.pin) throw new Error('Installed Link TLS identity mismatch');
     await assertAuthenticatedState(connection, cert);
-    await asUser('Restart installed systemd service', ['systemctl', '--user', 'restart', 'benchgo.service']);
-    let ready = false;
+    let initialAssistantError;
     for (let attempt = 0; attempt < 60; attempt++) {
-      try { await assertAuthenticatedState(connection, cert); ready = true; break; } catch { await pause(500); }
+      try { await assertAssistantWorkbench(connection, cert); initialAssistantError = undefined; break; }
+      catch (error) { initialAssistantError = error; await pause(500); }
     }
-    if (!ready) throw new Error('Authenticated Link state did not recover after a real systemd restart');
+    if (initialAssistantError) throw initialAssistantError;
+    const assistantDir = join(installation.dataDir, 'assistant');
+    await asUser('Simulate an interrupted writer lock', [process.execPath, '--input-type=module', '-e',
+      'import { writeFile, utimes } from "node:fs/promises"; const path = process.argv[1]; await writeFile(path, "", { flag: "wx", mode: 0o600 }); const old = new Date(Date.now() - 10000); await utimes(path, old, old);', join(assistantDir, 'owner-guard.lock')]);
+    const updateFile = join(temporary, 'update.json');
+    await asUser('Update the installed Linux server', ['bash', 'install.sh', 'github', 'update'], { cwd: packageRoot, stdoutFile: updateFile, timeout: 600_000 });
+    const update = parseSmokePrivateJson(await readFile(updateFile, 'utf8'));
+    if (update?.version !== receipt.pluginVersion || update.port !== connection.port || update.pin !== connection.pin) throw new Error('The server update changed the paired Link identity or reported a different plugin version');
+    const files = await asUser('Verify archived empty writer lock', ['ls', '-1', assistantDir]);
+    if (!/^owner-guard\.lock\.recovery-[0-9a-f-]+$/m.test(files)) throw new Error('The interrupted writer lock was not archived');
+    await assertAuthenticatedState(connection, cert);
+    await assertAssistantWorkbench(connection, cert);
     await asUser('Verify restarted service is active', ['systemctl', '--user', 'is-active', '--quiet', 'benchgo.service']);
   } catch (error) {
     failure = error;
@@ -178,7 +200,7 @@ export async function smokeLinuxServer({ directory = join(root, 'artifacts/linux
   if (failure) throw failure;
   receipt.verified.push(installVerification);
   receipt.installSmoke = { kind: 'fresh-user-systemd', registry: 'https://registry.npmjs.org', engine: upstream.version,
-    checks: ['shipped-installer', 'fresh-npm-runtime', 'systemd-active', 'link-tls-pin', 'unauthenticated-rejected', 'authenticated-state', 'systemd-restart', 'isolated-user-cleanup'] };
+    checks: ['shipped-installer', 'fresh-npm-runtime', 'systemd-active', 'link-tls-pin', 'unauthenticated-rejected', 'authenticated-state', 'systemd-restart', 'shipped-updater', 'empty-guard-recovery', 'paired-superagent', 'isolated-user-cleanup'] };
   await writeReceipt(directory, receipt);
   return { verified: installVerification, sourceSha, platform: 'linux', arch: 'x64', version: receipt.version };
 }

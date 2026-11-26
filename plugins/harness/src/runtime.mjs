@@ -295,9 +295,11 @@ export class Commander extends EventEmitter {
       const nativeSession = copy(session), managed = config.managedProfile;
       const permission = await this.permissionFor(session);
       if (permission) nativeSession.permission = session.permission = permission;
-      if (managed?.configured && !nativeSession.model && !ACP_TOOL_DEFAULTS[session.provider]) nativeSession.model = managed.provider ? managed.provider + '/' + managed.model : managed.model;
+      if (managed?.provider && session.provider === 'opencode') nativeSession.model = managed.provider + '/' + managed.model;
+      if (managed?.configured && !nativeSession.model && !ACP_TOOL_DEFAULTS[session.provider]) nativeSession.model = managed.model;
       driver = await provider.connect(nativeSession, host);
       if (failed) throw failed;
+      if (managed?.vision !== undefined) driver.managedVision = managed.vision;
       if (driver.nativeId) session.nativeId = driver.nativeId;
       session.nativeEstablished = true;
       this.drivers.set(id, driver); session.status = 'idle';
@@ -313,9 +315,10 @@ export class Commander extends EventEmitter {
     }
   }
 
-  async submit(id, text, { requestId = randomUUID() } = {}) {
+  async submit(id, input, { requestId = randomUUID() } = {}) {
     if (!this.get(id).route) throw new Error('This session has no explicit API route; create a new session with a selected provider and model');
-    return this.acceptInput(id, text, requestId, () => this.drivers.get(id).submit(text), 'prompt');
+    const prompt = typeof input === 'string' ? { text: input } : input;
+    return this.acceptInput(id, prompt, requestId, () => this.drivers.get(id).submit(prompt.text, prompt.images), 'prompt');
   }
 
   async commands(id) {
@@ -332,7 +335,7 @@ export class Commander extends EventEmitter {
     const prompt = `/${command.name}${command.arguments ? ` ${command.arguments}` : ''}`;
     const session = this.get(id);
     // Durable retries never need a native connection or another catalog read.
-    if (Object.hasOwn(session.receipts, requestId)) return this.acceptInput(id, prompt, requestId, undefined, 'command');
+    if (Object.hasOwn(session.receipts, requestId)) return this.acceptInput(id, { text: prompt }, requestId, undefined, 'command');
     if (session.status !== 'idle' || this.activeSubmissions.has(id)) throw new Error(`Session is ${session.status}; connect or wait for idle and native acknowledgement first`);
     const driver = this.drivers.get(id);
     if (!driver?.command) throw new Error('Native command execution is unavailable; connect a supported provider first');
@@ -340,19 +343,22 @@ export class Commander extends EventEmitter {
     if (!catalog.some(entry => entry.name === command.name)) throw new Error(`Unsupported native command: /${command.name}`);
     driver.validateCommand?.(command);
     if (this.drivers.get(id) !== driver) throw new Error('Native connection changed while discovering commands; retry');
-    return this.acceptInput(id, prompt, requestId, () => driver.command(command), 'command');
+    return this.acceptInput(id, { text: prompt }, requestId, () => driver.command(command), 'command');
   }
 
-  async acceptInput(id, text, requestId, dispatch, kind) {
+  async acceptInput(id, { text, images = [] }, requestId, dispatch, kind) {
     this.healthy();
     if (this.removals.has(id)) throw new Error('Session is being deleted');
     if (this.archiving.has(id)) throw new Error('Session is being archived');
-    if (typeof text !== 'string' || !text.trim()) throw new Error('Prompt must not be empty');
+    if (typeof text !== 'string' || (!text.trim() && !images.length)) throw new Error('Prompt must not be empty');
+    const imageIds = images.map(image => image.id);
     if (typeof requestId !== 'string' || !requestId || requestId.length > 200) throw new Error('Invalid requestId');
     const session = this.get(id);
     if (Object.hasOwn(session.receipts, requestId)) {
       const previous = session.receipts[requestId];
-      if (previous.text !== text || (previous.kind ?? 'prompt') !== kind) throw new Error('requestId was already used for a different prompt or command');
+      if (previous.text !== text || (previous.kind ?? 'prompt') !== kind || JSON.stringify(previous.imageIds ?? []) !== JSON.stringify(imageIds)) {
+        throw new Error('requestId was already used for a different prompt or command');
+      }
       const inFlight = this.submissions.get(`${id}:${requestId}`);
       if (inFlight) return inFlight;
       return copy(previous.receipt);
@@ -365,8 +371,9 @@ export class Commander extends EventEmitter {
     const acceptance = new Promise((resolve, reject) => { resolveSubmission = resolve; rejectSubmission = reject; });
     acceptance.catch(() => {});
     this.submissions.set(`${id}:${requestId}`, acceptance); this.activeSubmissions.add(id);
-    session.receipts[requestId] = { text, receipt, kind };
-    this.event(id, 'input.accepted', { text, requestId, kind });
+    const content = { text, ...(imageIds.length ? { imageIds } : {}) };
+    session.receipts[requestId] = { ...content, receipt, kind };
+    this.event(id, 'input.accepted', { ...content, requestId, kind });
     // Persist BEFORE the irreversible native submission. A crash can produce
     // an uncertain receipt, but retries never blindly execute it twice.
     try {

@@ -1,0 +1,99 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T17:25:57.673Z",
+  "by": "codex",
+  "reason": "回写本机会话批量归档的实现与验证",
+  "base": "a39f60df898b",
+  "result": "071538b7148b",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive",
+        "type": "interface",
+        "title": "总助手批量归档工作台会话",
+        "summary": "本机主人在聊天里按标题、项目、时间或保留数量归档普通会话。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "auth": "绑定当前本机主人真实指令",
+          "kind": "function",
+          "request": [
+            {
+              "description": "收集匹配项并冻结会话身份，支持标题、项目、最后活动时间和保留最新数量。",
+              "name": "preview",
+              "type": "object"
+            },
+            {
+              "description": "按预览执行明确的归档要求，支持整份清单或指定子集。",
+              "name": "archive",
+              "type": "object"
+            }
+          ],
+          "response": [
+            {
+              "description": "报告实际归档项数和逐项未完成原因。",
+              "name": "结果",
+              "type": "object"
+            }
+          ],
+          "signature": "assistant_session_archive(preview | archive)"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求 AI 快捷归档过多的会话，历史会话归档需要保留当前对话。"
+          }
+        ]
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive-check",
+      "fields": [
+        "verification"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive-check",
+        "type": "acceptance",
+        "title": "验证总助手批量归档",
+        "summary": "核实筛选、归档、保护范围和失败回执。",
+        "parent": "assistant.management.session-archive",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "本机主人已有普通工作台聊天与运行中的活动"
+          ],
+          "then": [
+            "官方归档索引和适用的 Commander 状态按明确目标更新，聊天历史可在侧栏恢复。",
+            "当前总助手会话、工单会话、置顶和活跃会话保持原状态。",
+            "异步变化和局部失败只影响相应目标，回执给出实际结果。"
+          ],
+          "when": "在当前聊天按明确范围让总助手预览并归档会话"
+        }
+      }
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "assistant.management",
+        "to": "assistant.management.session-archive",
+        "type": "calls"
+      }
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "assistant.management.session-archive-check",
+        "to": "assistant.management.session-archive",
+        "type": "verifies"
+      }
+    }
+  ]
+}

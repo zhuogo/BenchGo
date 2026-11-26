@@ -1,0 +1,222 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T07:52:00.765Z",
+  "by": "codex",
+  "reason": "回写归档重复错误与媒体字段诊断的实现和定向验收",
+  "base": "96514e22ce47",
+  "result": "883d0b20e407",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive",
+        "type": "interface",
+        "title": "总助手批量归档工作台会话",
+        "summary": "本机主人在聊天里按 Harness、标题、项目、时间或保留数量归档普通会话。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "auth": "绑定当前本机主人真实指令",
+          "kind": "function",
+          "request": [
+            {
+              "description": "明确要求归档全部 DeepSeek Harness 工作台会话时使用。工具没有筛选参数，宿主在同一真人指令内锁定官方会话范围，冻结清单并复核后归档。",
+              "name": "archive_official",
+              "type": "object"
+            },
+            {
+              "description": "按 Harness、项目、标题、时间、保留数量或精确 ID 冻结清单。未归组项目字段为 null。",
+              "name": "preview",
+              "type": "object"
+            },
+            {
+              "description": "按同一真人指令冻结的清单提交，显式选择整批或精确子集。",
+              "name": "apply",
+              "type": "object"
+            }
+          ],
+          "response": [
+            {
+              "description": "报告实际归档项数和逐项未完成原因。",
+              "name": "结果",
+              "type": "object"
+            }
+          ],
+          "signature": "assistant_session_archive_official() / assistant_session_archive_preview(filters) / assistant_session_archive_apply(previewId, all | ids)"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求 AI 快捷归档过多的会话，历史会话归档需要保留当前对话。"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求只归档全部 DeepSeek Harness 会话，并修复 Router 的重复调用。"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T06:30:17.949Z",
+              "hash": "4d39ac75349ac382605b60fcc929b4396e8bea7107fccec2a91f7afcd618e9a0",
+              "path": "plugins/superagent/src/session-archive.mjs",
+              "symbol": "registerSessionArchive"
+            },
+            {
+              "checkedAt": "2026-11-26T06:30:17.949Z",
+              "hash": "e61862c4f31b3d4f6a35b9407a86478dff799be882a33acf262a00db8e2e5911",
+              "path": "plugins/superagent/src/router-permissions.mjs",
+              "symbol": "installRouterFailureConvergence"
+            },
+            {
+              "checkedAt": "2026-11-26T06:30:17.949Z",
+              "hash": "89e670ea34e604963afb1edec9a5a3912c6817b028679604ba5ac9445a56092c",
+              "path": "plugins/superagent/src/router-session-setup.mjs",
+              "symbol": "createRouterSessionSetup"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive-check",
+        "type": "acceptance",
+        "title": "验证总助手批量归档",
+        "summary": "核实 JSON 输出、Harness 边界、保护范围、只读查询重试收敛和归档回执。",
+        "parent": "assistant.management.session-archive",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "本机主人已有普通工作台聊天与运行中的活动"
+          ],
+          "then": [
+            "官方归档索引和适用的 Commander 状态按明确目标更新，聊天历史可在侧栏恢复。",
+            "当前总助手会话、工单会话、置顶和活跃会话保持原状态。",
+            "异步变化和局部失败只影响相应目标，回执给出实际结果。",
+            "官方工具执行器接受未归组会话预览，按 Harness 筛选时排除独立和挂接的外部 Harness 会话。",
+            "归档相关调用在同一指令内第三次出现相同调用或累计第八次时，官方回合在下一步前终止；工具输出校验失败立即收束，原对话保留已确认的归档回执。",
+            "明确要求全部官方会话时，模型端只需发出无参数工具调用。预览与提交使用各自的工具参数，同一指令的直接入口重复调用共享冻结清单和归档结果。无进展时展示实际工具错误或最近一次有代表性的结果。",
+            "归档提交指出 all 与 ids 冲突、缺少选择、重复 ID 或选中清单外 ID；无效归档预览参数在读取会话目录前返回。同一用户指令内，归档工具和项目查询只对已确认的相同参数错误复用诊断，参数修正后允许执行。"
+          ],
+          "when": "在当前聊天按明确范围让总助手预览并归档会话"
+        },
+        "verification": {
+          "checkedAt": "2026-11-26T06:30:17.949Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/conversation-management.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/router-permissions.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/service.test.mjs"
+            }
+          ],
+          "note": "132 项定向测试通过，包括官方工具输出校验、超过 30 项的冻结批量归档、隔离档案的官方归档索引持久化及恢复、范围变化、历史错误参数、相同和变化的重试参数以及挂载 Router 的正式回复和下一轮恢复。模块构建成功，桌面 0.1.16 同步五个模块并在同一桌面进程中重新挂载 Router。批量写入验收使用隔离档案。",
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "models.generate",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "models.generate",
+        "type": "flow",
+        "title": "调用媒体模型并交付产物",
+        "summary": "按配置生成图片、视频或音频，形成可检查的回执与工作台内展示。",
+        "parent": "models",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "deliver"
+          ],
+          "start": "configure",
+          "steps": [
+            {
+              "action": "从图片、视频或音频类别选择配置顺位和兼容路由。工具按实际可用性暴露。",
+              "failure": "无可用供应商或目标协议缺相应能力时给出诊断。",
+              "id": "configure",
+              "title": "匹配类别与能力"
+            },
+            {
+              "action": "生成服务以请求标识记录提交和终态。视频可继续查询供应商进度。",
+              "failure": "请求处于未知或在途时从既有回执继续，避免重复提交生成。供应商明确拒绝参数且提供已知字段时，按媒体工具字段名提示检查该参数。",
+              "id": "submit",
+              "title": "提交并登记回执"
+            },
+            {
+              "action": "下载或保存已确认产物，官方会话通过结构化结果展示；SuperAgent Worker 可向交付链报告结果。",
+              "failure": "拿不到已生成内容时保留当前回执和失败信息。",
+              "id": "deliver",
+              "title": "保存媒体与展示"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "configure",
+              "to": "submit"
+            },
+            {
+              "from": "submit",
+              "to": "deliver"
+            }
+          ],
+          "trigger": "当前会话请求媒体生成，且宿主提供相应媒体能力。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/媒体生成.md",
+            "symbol": "路由与交付"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "3ab0280a4cff9d6708c8d07d6071c6dedabe2282b702837c6482fbb4741ce199",
+              "path": "plugins/media/src/generation.mjs",
+              "symbol": "createMediaGeneration"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "5dabb14697571157737edee6962ee0f17de2e9fc5df44e523a7b14b48142729d",
+              "path": "plugins/media/src/generation-tools.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "3937d987a7418ec4e96bf8dc8f5b3be75dbbbe8b6a98cd30354fc0cdb9e3cdd0",
+              "path": "plugins/superagent/src/worker-media.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

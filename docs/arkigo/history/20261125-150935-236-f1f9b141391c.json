@@ -1,0 +1,169 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T15:09:35.236Z",
+  "by": "codex",
+  "reason": "按用户确认优化并行选路、工作台握手与中继诊断",
+  "base": "d8cfcf990e4d",
+  "result": "f1f9b141391c",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.connect",
+      "fields": [
+        "body.steps"
+      ],
+      "before": {
+        "id": "link.connect",
+        "type": "flow",
+        "title": "配对并进入远程工作台",
+        "summary": "主机批准后核对身份，按可信路线进入目标主机的原工作台。",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "open"
+          ],
+          "start": "pair",
+          "steps": [
+            {
+              "action": "目标主机批准配对，为设备发放独立授权；客户端保存可信身份和候选路线。",
+              "failure": "未获批准时保留配对状态，由用户重新发起或完成批准。",
+              "id": "pair",
+              "title": "批准设备"
+            },
+            {
+              "action": "按 [[link.trust]] 探测。可用直连优先，其后按配置顺序尝试中继。",
+              "failure": "身份、证书或授权异常立即停止。网络不可达时才转向其他已授权候选。",
+              "id": "route",
+              "title": "验证并选择路线"
+            },
+            {
+              "action": "客户端连接目标 Link HTTPS，兑换受保护的工作台会话。",
+              "failure": "返回失败诊断，业务写请求的发送方保留原结果状态。",
+              "id": "direct",
+              "title": "使用直连"
+            },
+            {
+              "action": "目标主机主动发起 TLS 通道，独立 Relay 按授权转发到目标工作台。",
+              "failure": "中继不可用时由选路层更新健康状态并给出恢复提示。",
+              "id": "relay",
+              "title": "使用中继"
+            },
+            {
+              "action": "官方页面、API 与会话能力从目标主机提供，用户继续使用原项目与会话。",
+              "id": "open",
+              "title": "打开目标工作台"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "pair",
+              "to": "route"
+            },
+            {
+              "from": "route",
+              "to": "direct",
+              "when": "直连验证成功"
+            },
+            {
+              "from": "route",
+              "to": "relay",
+              "when": "可回退的连通性错误且中继验证成功"
+            },
+            {
+              "from": "direct",
+              "to": "open"
+            },
+            {
+              "from": "relay",
+              "to": "open"
+            }
+          ],
+          "trigger": "用户在设备中心添加工作台，或在移动端打开配对入口。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/设计.md",
+            "symbol": "连接与信任模型"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md",
+            "symbol": "项目归属与远端执行"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/自建中继.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "cc0277f7fe9bc3c4364217dbbbf40d254f6e915c349f63564fa2e4e145c15b8b",
+              "path": "plugins/link/src/devices/routes.mjs",
+              "symbol": "selectRoute"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "6b9af1b62b6bfe16dd795744a21837bdf0a1b95e5520bed44089bec9f4c41809",
+              "path": "plugins/link/src/transport/workbench.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "50c779b21af5aa07ca196b5cb414f5e702f077ab348b70831153fa9d97f4dbca",
+              "path": "plugins/link/src/transport/relay-host.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "eeee52e2284c9ea75ea53e50faef59cbcdb94686398e16874733dd89e960e86e",
+              "path": "plugins/link/src/pairing/store.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect-check",
+      "fields": [
+        "body.then",
+        "body.when",
+        "notes"
+      ],
+      "before": {
+        "id": "link.connect-check",
+        "type": "acceptance",
+        "title": "连接回退保留信任边界",
+        "summary": "连接回退保留信任边界",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "一台已配对主机同时提供直连与有序中继路线"
+          ],
+          "then": [
+            "网络超时可试下一条授权路线",
+            "身份不符时停止且报错",
+            "待发送业务操作只走选定路线"
+          ],
+          "when": "依次模拟网络超时和身份校验失败。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md"
+          }
+        ]
+      }
+    }
+  ]
+}

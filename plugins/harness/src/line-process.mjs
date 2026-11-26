@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
+const defaultFrameBytes = 16 * 1024 * 1024;
+
 // The child never owns a shell. Framing, request lifetime and process lifetime
 // are shared; product methods belong to the individual provider adapters.
 export class LineProcess extends EventEmitter {
@@ -11,6 +13,8 @@ export class LineProcess extends EventEmitter {
     this.pending = new Map();
     this.sequence = 0;
     this.tail = '';
+    this.tailBytes = 0;
+    this.frameBytes = defaultFrameBytes;
     this.stderr = '';
     this.closed = false;
     this.child = spawn(command, args, {
@@ -29,21 +33,31 @@ export class LineProcess extends EventEmitter {
     this.child.stderr.setEncoding('utf8');
     this.child.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk).slice(-8192); });
     this.child.stdout.on('data', chunk => {
-      this.tail += chunk;
-      if (Buffer.byteLength(this.tail) > 16 * 1024 * 1024) {
-        this.fail(new Error('Agent exceeded JSONL frame limit'));
-        void this.close();
-        return;
-      }
-      let end;
-      while ((end = this.tail.indexOf('\n')) !== -1) {
-        const line = this.tail.slice(0, end).trim();
-        this.tail = this.tail.slice(end + 1);
+      let start = 0;
+      while (start < chunk.length) {
+        const end = chunk.indexOf('\n', start);
+        const part = chunk.slice(start, end === -1 ? undefined : end);
+        this.tailBytes += Buffer.byteLength(part);
+        if (this.tailBytes > this.frameBytes) {
+          this.fail(new Error('Agent exceeded JSONL frame limit'));
+          void this.close();
+          return;
+        }
+        this.tail += part;
+        if (end === -1) return;
+        start = end + 1;
+        const line = this.tail.trim();
+        this.tail = '';
+        this.tailBytes = 0;
         if (!line) continue;
         try { this.receive(JSON.parse(line)); }
         catch (error) { this.fail(new Error(`Invalid agent protocol: ${error.message}`)); void this.close(); return; }
       }
     });
+  }
+
+  allowFramePayload(bytes) {
+    this.frameBytes = Math.max(this.frameBytes, defaultFrameBytes + bytes);
   }
 
   receive(message) {

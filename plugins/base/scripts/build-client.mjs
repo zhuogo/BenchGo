@@ -21,7 +21,11 @@ await buildPreview();
 await buildLink();
 // React retains the shell's shared module identity.
 const out = fileURLToPath(new URL('../lib/client.js', import.meta.url));
-const sshChunk = 'client.ssh.js';
+const chunks = {
+  'client.ssh': 'benchgo-workbench-vendor:ssh',
+  'client.workbench': fileURLToPath(new URL('../workbench/client/local-client.jsx', import.meta.url)),
+  'client.fonts': fileURLToPath(new URL('../client/client-fonts.mjs', import.meta.url)),
+};
 // Match the installed official frontend metadata without exposing server environment variables.
 let record;
 try {
@@ -34,7 +38,7 @@ try {
 }
 record.environment.DSH_CLIENT_TITLE = 'BenchGo';
 const define = Object.fromEntries(['DSH_CLIENT_TITLE', 'DSH_CLIENT_VERSION', 'DSH_CLIENT_COMMIT_HASH', 'DSH_CLIENT_GIT_DIRTY'].map(key => ['process.env.' + key, JSON.stringify(record.environment[key]) ?? 'undefined']));
-const result = await build({ entryPoints: { client: fileURLToPath(new URL('../client/index.jsx', import.meta.url)), 'client.ssh': 'benchgo-workbench-vendor:ssh' }, outdir: dirname(out), nodePaths: [fileURLToPath(new URL('../node_modules', import.meta.url))], bundle: true, minify: true, write: false, format: 'cjs', platform: 'browser', define,
+const result = await build({ entryPoints: { client: fileURLToPath(new URL('../client/index.jsx', import.meta.url)), ...chunks }, outdir: dirname(out), nodePaths: [fileURLToPath(new URL('../node_modules', import.meta.url))], bundle: true, minify: true, write: false, format: 'cjs', platform: 'browser', define,
   // Pure address helpers ship with this client; never request an extra runtime module.
   alias: { '@deepseek-ai/dsh-util-workspace-path': fileURLToPath(new URL('../../../deepseek-harness/packages/util/workspace-path/src/index.ts', import.meta.url)) },
   external: ['react-dom', 'react', 'react/jsx-runtime', '@deepseek-ai/*'], plugins: [workbenchClientAdapters(), sharedUiStyles(), officialModelsStore(), officialModelsUi(), shellUi()], jsx: 'automatic', target: 'es2022', loader: { '.css': 'text', '.svg': 'text' }, logLevel: 'warning' });
@@ -44,10 +48,14 @@ await mkdir(new URL('../lib/', import.meta.url), { recursive: true });
 await writeUiLicenses(fileURLToPath(new URL('../lib/UI-LICENSES.txt', import.meta.url)));
 const pluginName = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).name;
 const factory = (source, chunk) => `window.__ModuleLoader__.load({id: '${pluginName}', ${chunk ? `chunk: '${chunk}', ` : ''}factory: (require) => { const module = {exports:{}}; const exports = module.exports;\n${source}\nreturn module.exports; }});\n`;
-const ssh = factory(output.get(sshChunk), sshChunk);
-await writeArtifact(join(dirname(out), sshChunk), ssh);
+const revisions = [];
+for (const name of Object.keys(chunks)) {
+  const file = name + '.js', source = factory(output.get(file), file);
+  await writeArtifact(join(dirname(out), file), source);
+  revisions.push(`// ${file} ${createHash('sha256').update(source).digest('hex')}\n`);
+}
 // The official loader revisions package-local chunks with their owning entry.
-await writeArtifact(out, `${factory(output.get('client.js'))}// ${sshChunk} ${createHash('sha256').update(ssh).digest('hex')}\n`);
+await writeArtifact(out, factory(output.get('client.js')) + revisions.join(''));
 console.log('BenchGo client built');
 
 // Server seed is a release payload, excluded from the running plugin reload.

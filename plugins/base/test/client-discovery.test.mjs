@@ -75,12 +75,14 @@ test('the shipped five-entry patch discovers one BenchGo client and serves its a
     assert.deepEqual(registrations.map(entry => entry.id), ['benchgo-plugin']);
     assert.equal(typeof registrations[0].factory, 'function');
     assert.equal(registrations[0].chunk, undefined);
-    const chunk = await fixture.service.fetchBundle(new Request(`http://benchgo.test/plugins/${pkg.name}/client.ssh.js?rev=${encodeURIComponent(rows[0].rev)}`));
-    assert.equal(chunk.status, 200);
-    runInNewContext(await chunk.text(), { window: { __ModuleLoader__: { load: entry => registrations.push(entry) } } });
-    assert.equal(registrations[1].id, pkg.name);
-    assert.equal(registrations[1].chunk, 'client.ssh.js');
-    assert.equal(typeof registrations[1].factory, 'function');
+    for (const name of ['client.ssh.js', 'client.workbench.js', 'client.fonts.js']) {
+      const chunk = await fixture.service.fetchBundle(new Request(`http://benchgo.test/plugins/${pkg.name}/${name}?rev=${encodeURIComponent(rows[0].rev)}`));
+      assert.equal(chunk.status, 200);
+      runInNewContext(await chunk.text(), { window: { __ModuleLoader__: { load: entry => registrations.push(entry) } } });
+      assert.equal(registrations.at(-1).id, pkg.name);
+      assert.equal(registrations.at(-1).chunk, name);
+      assert.equal(typeof registrations.at(-1).factory, 'function');
+    }
   } finally { await fixture.dispose(); }
 });
 

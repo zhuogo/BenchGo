@@ -1,0 +1,70 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T15:14:41.601Z",
+  "by": "codex",
+  "reason": "回写归档导航修复与官方工作区回归结果",
+  "base": "9dc41a4e5baf",
+  "result": "d496e4a7df46",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management.archive-navigation",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "assistant.management.archive-navigation",
+        "type": "rule",
+        "title": "Router 归档保留当前页面",
+        "summary": "Router 归档工单时，已打开的独立面板保留原位。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "工单和 Worker 的归档状态随宿主更新。旧 Worker 从原生会话选择中清除时，保留用户当前打开的独立面板。",
+          "when": "Router 在后台归档工单"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-25 用户要求 Router 归档工单时保持当前页面"
+          }
+        ]
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.archive-navigation-check",
+      "fields": [
+        "verification"
+      ],
+      "before": {
+        "id": "assistant.management.archive-navigation-check",
+        "type": "acceptance",
+        "title": "归档旧 Worker 时保留独立面板",
+        "summary": "验证后台归档与用户主动导航。",
+        "parent": "assistant.management.archive-navigation",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "曾打开 Worker 会话，当前已进入 SuperAgent 或其他独立面板"
+          ],
+          "then": [
+            "官方释放已归档会话的主视图引用",
+            "当前面板继续显示，随后用户仍可主动打开其他会话"
+          ],
+          "when": "工作区收到旧 Worker 的归档状态"
+        }
+      }
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "assistant.management.archive-navigation-check",
+        "to": "assistant.management.archive-navigation",
+        "type": "verifies"
+      }
+    }
+  ]
+}

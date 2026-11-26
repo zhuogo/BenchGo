@@ -1,0 +1,404 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T16:46:16.529Z",
+  "by": "codex",
+  "reason": "登记查询、交付和归档修复的源码与定向验收",
+  "base": "5f2bb41cfa64",
+  "result": "a91b22c908ef",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.delivery",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.delivery",
+        "type": "rule",
+        "title": "执行完成和消息送达独立",
+        "summary": "Worker 成果以实际终态及结果记录为准，告知或渠道发送重试不得重派执行。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "constraint": "按执行终态及结果记录交付。普通中止保留原会话尚未提交的结果通知，历史取消项按原事件身份核验后恢复。",
+          "when": "持久结果已生成，原 Router 或渠道正在告知时。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "任务、跟进与目标"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/结果与交付.md",
+            "symbol": "Worker 结果"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md",
+            "symbol": "公共接口与数据契约"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "9c23299b92874916df09eb1d7528a15fabab7254b0a85e2d81256f96115ad7f9",
+              "path": "plugins/superagent/src/result-commit.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "0830f75301d96129c4e24d7c29045c0252a38b2b91f4f6c2e83db5b368dbafc6",
+              "path": "plugins/superagent/src/result-delivery.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "0e87a84954389c2ddf279cd0fb592b091582bda3a5d5c61dd48358df59291e09",
+              "path": "plugins/superagent/src/message-inbox.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.delivery-check",
+      "fields": [
+        "verification"
+      ],
+      "before": {
+        "id": "assistant.delivery-check",
+        "type": "acceptance",
+        "title": "投递失败可恢复且不重跑 Worker",
+        "summary": "投递失败可恢复且不重跑 Worker",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "任务执行已结束并保存结果，原 Router 或渠道首次发送失败",
+            "原 Router 正在处理其他消息，Worker 结果已持久入队，但还未提交给模型。"
+          ],
+          "then": [
+            "仍有同一份结果原稿",
+            "不创建新 Worker",
+            "原对话收到普通公开正文，外部渠道按可信送达回执记录",
+            "普通中止当前回复后，原通知在原会话中投递一次。"
+          ],
+          "when": "恢复原对话投递并重新读取执行记录。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "任务、跟进与目标"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/结果与交付.md",
+            "symbol": "Worker 结果"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md",
+            "symbol": "公共接口与数据契约"
+          }
+        ]
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.delivery.media-markdown",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.delivery.media-markdown",
+        "type": "rule",
+        "title": "Router 以 Markdown 呈现产物",
+        "summary": "Router 可在原回复中使用 Markdown 图片、产物链接和其他适合内容的格式。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "允许 Router 使用当前会话可访问的已验证产物链接，按内容选择 Markdown 图片、文件链接和其他适合的格式。",
+          "when": "Router 向原会话交付 Worker 的已验证产物。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户明确要求删除 Router 省略产物链接的限制，允许 Markdown 等格式。"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/对话交互.md",
+            "symbol": "文件与图片交付"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T16:22:24.246Z",
+              "hash": "2ed1828d8eed1701b77afebd82446d7c4e98af7b0dfecf0e6f9c3a433ade969e",
+              "path": "plugins/superagent/src/task-reply.mjs",
+              "symbol": "taskReplyInstruction"
+            },
+            {
+              "checkedAt": "2026-11-25T16:22:24.246Z",
+              "hash": "71b2de64b61e3d988eda5ba2c9640ed1ae1fbf6e272ae1f72a773c135f8897cb",
+              "path": "plugins/superagent/src/chat-publication.mjs",
+              "symbol": "projectChatMessages"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.delivery.media-markdown-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "assistant.delivery.media-markdown-check",
+        "type": "acceptance",
+        "title": "Router 产物交付保留 Markdown",
+        "summary": "任务结果提示允许链接，公开回复保留图片和音频链接。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "Worker 回执包含已验证的媒体地址和逐项失败信息。"
+          ],
+          "then": [
+            "结果提示允许 Markdown 图片和文件链接。",
+            "公开回复保留 Markdown 及原始失败信息。"
+          ],
+          "when": "Router 用 Markdown 图片和链接交付任务成果。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/对话交互.md",
+            "symbol": "文件与图片交付"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-25T16:22:24.246Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/worker-media.test.mjs"
+            }
+          ],
+          "note": "运行 worker-media.test.mjs 和 result-delivery.test.mjs，7 项通过。覆盖结果提示、Markdown 公开回复和媒体回执。",
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.management",
+        "type": "module",
+        "title": "任务跟进、权限与清理",
+        "summary": "原工单承接进度、补充、审批、暂停及归档操作，并按事实反馈。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "无法确认的请求保留待核实状态。对任务结果的事后改动由关联任务处理。"
+          ],
+          "responsibilities": [
+            "Router 在原任务写入经确认的修改并记录原话。超出 Mandate 的变更需要用户确认。",
+            "暂停或停止请求与执行端确认分开。动作范围和回执按实际身份、来源、参数与许可验证。",
+            "展示整理使用官方归档，归档写入先于停止确认。恢复仅恢复展示。目标清单不产生执行任务。",
+            "普通工单查询省略空白续读字段，同一回合对无效查询和未变化快照结束重复读取。批量整理逐项保留回执，重试只处理未完成项。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/任务列表交互.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "dfda3c3b02bc563df75ceae87341b863c86887586ba23598595560b21cb3dab9",
+              "path": "plugins/superagent/src/task-management.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "71a007b96d41f9ede6073055b452160f6417ebae50af81283079b09ae723c795",
+              "path": "plugins/superagent/src/model-action.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "2c1c8f40cb75765dade7dc92d08d1983afb412a1239ad2b8d861fd6b83001f12",
+              "path": "plugins/superagent/src/task-archive.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "fe2cf67d9515ab7edb1310f503d64ec82a5a2a626c27dd3fe53cdada06c05645",
+              "path": "plugins/superagent/src/task-lifecycle.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.remote",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.remote",
+        "type": "flow",
+        "title": "A 持有工单，B 执行并回传",
+        "summary": "A 冻结执行身份和路线，B 的 benchgoExecution 运行 Worker，A 按事件水位接续。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "close"
+          ],
+          "start": "choose",
+          "steps": [
+            {
+              "action": "A 按 `deviceId` 与 `projectId` 通过 [[link.resources]] 查询执行目录，根据 B 公布的项目、Harness、供应商和模型确定组合。",
+              "failure": "能力、模型或目标身份缺失时报告阻断原因。",
+              "id": "choose",
+              "title": "探测 B 的实际能力"
+            },
+            {
+              "action": "持久保存原任务、要求、目标身份、Assignment / Run / fence、模型路线和 submit 请求。",
+              "id": "save",
+              "title": "写入 A 唯一工单与固定提交"
+            },
+            {
+              "action": "Link v2 核对授权。B 的 `benchgoExecution` 核验目标、项目、原生能力和本机凭据，记录执行实例及回执。",
+              "failure": "回执未知时按原执行身份查询，只有认证目标确认缺失才重投原冻结请求。",
+              "id": "submit",
+              "title": "B 核验提交与本机资源"
+            },
+            {
+              "action": "B 使用官方 Agent 或 Commander 运行支持的原生 Agent。原始会话、凭据与产物留在 B。",
+              "failure": "B 保留未确认事件；A 断线后原授权内的已接受运行可继续。",
+              "id": "execute",
+              "title": "B 建立或续接执行会话"
+            },
+            {
+              "action": "A 校验身份和事件序号，持久应用事实及水位再确认。归档变化核验当前执行和要求版本，先持久化事实后推进游标。控制、补充及问题回复须 B 确认。",
+              "failure": "事件断档、离线或控制未知时保留待核实状态，禁止推测远端已停止。",
+              "id": "reconcile",
+              "title": "A 逐页核对执行事实"
+            },
+            {
+              "action": "A 收取匹配结果与原执行引用，再由原 Router 交付。B 的展示会话只读，用户回 A 的工单输入。",
+              "id": "close",
+              "title": "让 A 更新任务并交付"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "choose",
+              "to": "save"
+            },
+            {
+              "from": "save",
+              "to": "submit"
+            },
+            {
+              "from": "submit",
+              "to": "execute"
+            },
+            {
+              "from": "execute",
+              "to": "reconcile"
+            },
+            {
+              "from": "reconcile",
+              "to": "close"
+            }
+          ],
+          "trigger": "A 接受项目任务，项目属于另一个已配对且可执行的设备 B。"
+        },
+        "notes": [
+          {
+            "text": "Link v2 当前每次接受一个冻结的执行组合。远端执行会话直接输入、二级子代理委派与跨设备产物传输尚未接入。物理双机及实际供应商请求按专项验收。",
+            "tone": "warn",
+            "type": "callout"
+          }
+        ],
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "跨设备任务"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/模型与上下文.md",
+            "symbol": "跨设备模型归属"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md",
+            "symbol": "定向命令、执行事实与恢复"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "56078abebb11cc19e4bec1a999051f17e40c2f05e4947916c88d8c9d578c3efe",
+              "path": "plugins/superagent/src/remote-assignment-executor.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "d82e63b0975cda578da33ade01c9182bc856fc70edf137e31306b8417b9e2615",
+              "path": "plugins/harness/src/remote-execution.mjs",
+              "symbol": "createRemoteExecutionService"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
+              "path": "plugins/link/src/devices/resources.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "b1a1976fccb7b81d9044cb6443e674affef167f7aa74f76ae60d6c7f1548c9a3",
+              "path": "plugins/link/src/index.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

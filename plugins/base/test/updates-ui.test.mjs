@@ -120,7 +120,7 @@ test('one hold stages the feature package then updates the application with one 
   } finally { await view.dispose(); }
 });
 
-test('feature-only update automatically restarts after confirming the application is current', async () => {
+test('desktop falls back to the native application check when the host has not confirmed that restart is sufficient', async () => {
   let state = update(), applications = 0, restarts = 0;
   const view = await mount(({ action }) => {
     if (action === 'install') state = { ...state, phase: 'ready', restartRequired: true, canInstall: false };
@@ -132,6 +132,27 @@ test('feature-only update automatically restarts after confirming the applicatio
     await view.click('下载，有更新'); await view.hold(); await view.flush();
     assert.equal(applications, 1); assert.equal(restarts, 1);
     assert(view.button('下载，正在重启'));
+  } finally { await view.dispose(); }
+});
+
+test('a verified feature-only update restarts even when the native installer check is unavailable', async () => {
+  let state = update(), applications = 0, restarts = 0;
+  const view = await mount(({ action }) => {
+    if (action === 'install') state = { ...state, phase: 'ready', restartRequired: true, canInstall: false,
+      decision: { action: 'restart', available: true, enabled: true, restartOnly: true } };
+    return state;
+  }, {}, { dshDesktop: { updates: {
+    async status() { return { phase: 'error', failure: 'check' }; },
+    async open() {},
+    async apply() { applications++; return { phase: 'error', failure: 'check' }; },
+    async restart() { restarts++; return { phase: 'installing' }; },
+  } } });
+  try {
+    await view.click('下载，有更新'); await view.hold(); await view.flush();
+    assert.equal(applications, 0);
+    assert.equal(restarts, 1);
+    assert(view.button('下载，正在重启'));
+    assert.equal(view.document.querySelector('[role="alert"]'), null);
   } finally { await view.dispose(); }
 });
 

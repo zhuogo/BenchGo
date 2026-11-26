@@ -1,0 +1,70 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T08:41:07.421Z",
+  "by": "codex",
+  "reason": "实现服务器升级恢复与中继设备组资源访问并记录验证结果",
+  "base": "f74e0b57ab02",
+  "result": "00be978988d1",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.group-resource-relay",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "link.group-resource-relay",
+        "type": "interface",
+        "title": "中继上的设备组资源入口",
+        "summary": "配对工作台使用独立的设备组资源路径。",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "auth": "目标主机验证配对会话、当前组成员与操作范围。",
+          "kind": "http",
+          "signature": "POST /link/workbench/api/group-resources"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/自建中继.md"
+          }
+        ]
+      }
+    },
+    {
+      "op": "update",
+      "id": "release.server-recovery-check",
+      "fields": [
+        "notes"
+      ],
+      "before": {
+        "id": "release.server-recovery-check",
+        "type": "acceptance",
+        "title": "服务器升级后恢复总助手与工作台",
+        "summary": "检查遗留空锁、模块就绪与重新打开。",
+        "parent": "release.install",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "受管 Linux 服务器存在已退出进程留下的空写锁"
+          ],
+          "then": [
+            "归档可核验的空写锁，保留数据与配对",
+            "总助手与工作台就绪后报告成功",
+            "重新打开使用新入口"
+          ],
+          "when": "通过设备中心更新服务器插件并重新打开工作台"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/SSH服务器运维.md"
+          }
+        ]
+      }
+    }
+  ]
+}

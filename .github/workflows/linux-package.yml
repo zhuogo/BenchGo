@@ -43,7 +43,9 @@ jobs:
           node --test scripts/server/package-seed.test.mjs scripts/server/package-linux.test.mjs scripts/server/smoke-linux.test.mjs plugins/link/test/server-bootstrap.test.mjs
           npm run package:plus:linux -- --version "$RELEASE_VERSION"
           npm run check
-      - name: Install shipped archive in a fresh user with real systemd and authenticate Link after restart
+      - name: Verify paired workbench access over direct Link and TLS relay
+        run: node --import ./scripts/source-loader.mjs --test --test-name-pattern 'relay configuration from|group workbench|paired workbench' plugins/link/test/cross-device-integration.test.mjs
+      - name: Install and update the shipped archive with systemd and reopen a paired workbench
         timeout-minutes: 15
         run: node scripts/server/smoke-linux.mjs --directory artifacts/linux-server
       - uses: actions/upload-artifact@v4

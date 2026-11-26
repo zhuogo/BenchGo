@@ -1,0 +1,14 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T13:20:05.851Z",
+  "by": "codex",
+  "reason": "按要求新增官网更新日志并同步 GitHub 正式发行",
+  "base": "cf02d04c45ae",
+  "result": "9b8668b10661",
+  "changes": [
+    {
+      "op": "add",
+      "id": "release.changelog"
+    }
+  ]
+}

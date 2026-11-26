@@ -1,0 +1,49 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T16:22:24.246Z",
+  "by": "codex",
+  "reason": "回写 Router Markdown 交付实现和定向验收",
+  "base": "b37f8b20aaad",
+  "result": "834624ebd0e5",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.delivery.media-markdown",
+      "fields": [
+        "implementation",
+        "sources"
+      ],
+      "before": {
+        "id": "assistant.delivery.media-markdown",
+        "type": "rule",
+        "title": "Router 以 Markdown 呈现产物",
+        "summary": "Router 可在原回复中使用 Markdown 图片、产物链接和其他适合内容的格式。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "允许 Router 使用当前会话可访问的已验证产物链接，按内容选择 Markdown 图片、文件链接和其他适合的格式。",
+          "when": "Router 向原会话交付 Worker 的已验证产物。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户明确要求删除 Router 省略产物链接的限制，允许 Markdown 等格式。"
+          }
+        ]
+      }
+    },
+    {
+      "op": "add",
+      "id": "assistant.delivery.media-markdown-check"
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "assistant.delivery.media-markdown-check",
+        "to": "assistant.delivery.media-markdown",
+        "type": "verifies"
+      }
+    }
+  ]
+}

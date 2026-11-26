@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { waitForUpdatedService } from './bootstrap.mjs';
+import { recoverAssistantGuard, waitForUpdatedService } from './bootstrap.mjs';
 
 test('an update can become ready after the former 50 second cutoff', async () => {
   let elapsed = 0;
@@ -25,6 +25,43 @@ test('the update timeout explains that the service may still be starting', async
   await assert.rejects(waitForUpdatedService(12345, async () => null, async delay => { elapsed += delay; }),
     /服务可能仍在启动/);
   assert.equal(elapsed, 180000);
+});
+
+test('an update waits for the workbench after the Link listener accepts requests', async () => {
+  let probes = 0, elapsed = 0;
+  await waitForUpdatedService(12345, async () => ({ enabled: true, port: 12345, host: '127.0.0.1' }),
+    async delay => { elapsed += delay; }, async () => {
+      if (++probes < 3) throw new Error('服务器总助手尚未就绪');
+    });
+  assert.equal(probes, 3);
+  assert.equal(elapsed, 1000);
+});
+
+test('managed startup archives an old empty writer guard and preserves live ownership and nonempty guards', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-guard-recovery-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const assistant = join(directory, 'assistant');
+  await mkdir(assistant);
+  const guard = join(assistant, 'owner-guard.lock');
+  const owner = join(assistant, 'owner.lock');
+  await writeFile(guard, '');
+  const metadata = await stat(guard);
+  const options = { uid: metadata.uid, now: () => metadata.mtimeMs + 10_000 };
+  const record = JSON.stringify({ host: hostname(), pid: process.pid, token: 'current' });
+  await writeFile(owner, record);
+  assert.equal(await recoverAssistantGuard(directory, options), false);
+  assert.equal(await readFile(guard, 'utf8'), '');
+  assert.equal(await readFile(owner, 'utf8'), record);
+
+  await rm(owner);
+  assert.equal(await recoverAssistantGuard(directory, options), true);
+  await assert.rejects(readFile(guard), { code: 'ENOENT' });
+  const archived = (await readdir(assistant)).find(name => name.startsWith('owner-guard.lock.recovery-'));
+  assert.equal(await readFile(join(assistant, archived), 'utf8'), '');
+
+  await writeFile(guard, `${process.pid}\n`);
+  assert.equal(await recoverAssistantGuard(directory, options), false);
+  assert.equal(await readFile(guard, 'utf8'), `${process.pid}\n`);
 });
 
 const script = fileURLToPath(new URL('./bootstrap.sh', import.meta.url));

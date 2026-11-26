@@ -10,7 +10,7 @@ import { modelProtocol } from '../../base/src/provider-access.mjs';
 import { notifySettings } from '../../base/shared/settings-adapter-utils.mjs';
 import {
   audioTypes, checkStreamPrefix, discard, imageFormat, imageTypes, MAX_REFERENCE, mediaFailure,
-  mediaJson, readImage, rejectsSpeechVoice, submission, validateStreamType, videoDocument,
+  mediaJson, mediaProviderRejectedField, readImage, readMediaProviderError, rejectsSpeechVoice, submission, validateStreamType, videoDocument,
 } from './generation-openai.mjs';
 
 const kinds = ['image', 'video', 'audio'];
@@ -421,8 +421,10 @@ export async function createMediaGeneration({ directory, providers, credentials,
       }
       if (!response.ok) {
         const refused = acceptedRejects.has(response.status);
-        const voiceRejected = input.kind === 'audio' && await rejectsSpeechVoice(response, upstreamSignal);
-        if (input.kind !== 'audio') await discard(response);
+        const parameterRejection = [400, 415, 422].includes(response.status);
+        const providerError = input.kind === 'audio' || parameterRejection ? await readMediaProviderError(response, upstreamSignal) : null;
+        if (input.kind !== 'audio' && !parameterRejection) await discard(response);
+        const voiceRejected = input.kind === 'audio' && rejectsSpeechVoice(providerError);
         if (voiceRejected) {
           const reason = '供应商报告音色「' + requestInput.voice + '」无效或不受支持（HTTP ' + response.status + '）。请核对供应商音色名称。';
           if (!refused) {
@@ -439,7 +441,10 @@ export async function createMediaGeneration({ directory, providers, credentials,
           await storeJson(path, { ...recorded, reason, diagnostic: { stage: 'submission-response', status: response.status } });
           throw mediaFailure(reason, 502, 'MEDIA_SUBMISSION_UNCERTAIN');
         }
-        unavailable.push('供应商拒绝请求（HTTP ' + response.status + '）');
+        const field = parameterRejection ? mediaProviderRejectedField(input.kind, providerError) : undefined;
+        unavailable.push(field
+          ? `供应商拒绝参数 ${field}（HTTP ${response.status}），请核对此模型支持的取值`
+          : `供应商拒绝请求（HTTP ${response.status}）`);
         continue;
       }
       if (input.kind === 'video') return settleVideo(path, recorded, response, route, upstreamSignal);

@@ -4,7 +4,7 @@ import { sessionStatusSource } from './session-status.mjs';
 import { Tooltip as SharedTooltip } from '../../shared/client/ui/tooltip.jsx';
 import { readJsonResponse } from './http-response.mjs';
 import { mountShellUi } from './shell-ui.jsx';
-import { mountAssistant, AssistantSidebarEntry } from '../../superagent/client/index.jsx';
+import { mountAssistant, AssistantSidebarEntry, readState as readAssistantState } from '../../superagent/client/index.jsx';
 import { projectWorkspaces, recentRows, startSidebarSession, isSidebarSessionSelected, isSidebarSessionVisible, sidebarSessionTitle, sidebarSessionUpdatedAt, sidebarWorkspaces, ensureSidebarWorkspace, workspaceActivity, sidebarSessionStatus, sidebarCapabilityWarning, latestSidebarNativeSessions } from './sidebar-state.mjs';
 import { apply as applyVoice, mountMediaSettings } from '../../media/client/index.jsx';
 import { applyMobileWorkbench } from './mobile-workbench.jsx';
@@ -14,7 +14,6 @@ import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } fro
 import icons from './icons.json';
 import { FishLogo, Tooltip, Modal, Menu, LinkIconMedium, IconPinOutlineRegular, IconPinFillRegular, IconBranchOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 import css from './style.css';
-import fontCss from './fonts.css';
 import chatTypographyCss from '../../shared/client/chat-typography.css';
 import { UIIcon } from './iconsax.jsx';
 import { mountModelPicker, mountNativeActivity } from './model-picker.jsx';
@@ -106,21 +105,54 @@ function ErrorLine({ message }) { return message ? <div className="cmd-error" ro
 
 export const inject = ['slots', 'layout', 'uiWorkspace', 'uiSession', 'uiConversation', 'sidebarRight', 'sessions', 'locale', 'remote', 'remote.session', 'workspaces', 'modelDirectories', 'conversation', 'theme', 'connection'];
 export function apply(ctx) {
+  const paired = globalThis.__DSH_LINK_WORKBENCH__ === true;
+  const projectReady = Promise.withResolvers();
+  const assistantReady = Promise.withResolvers();
+  let firstAssistantRead = true;
   mountWorkbenchRightbarLifecycle(ctx);
   mountWorkbenchSessionSurface(ctx);
-  mountBaseUi(ctx);
+  const style = mountBaseUi(ctx, paired ? projectReady.resolve : undefined);
   ctx.effect(() => startModuleLifecycle(ctx, {
-    superagent: mountAssistant,
+    superagent: child => {
+      if (paired && firstAssistantRead) {
+        firstAssistantRead = false;
+        void readAssistantState().then(assistantReady.resolve, assistantReady.resolve);
+      }
+      mountAssistant(child);
+    },
     voice: applyVoice,
     harness: child => {
       mountNativeActivity(child);
       mountToolSettingsStyle(child);
       child.slots.inject('settings.section', () => child.slots.register({ name: 'settings.section', id: 'harness-tools', order: 32, label: () => 'Harness 工具', inject: () => ({ ctx: child }) }, ToolSettingsSection));
     },
-  }));
+  }, paired ? { onSnapshot: next => { if (!next.superagent) assistantReady.resolve(); } } : undefined));
+  mountClientFonts(ctx, style, paired ? Promise.all([projectReady.promise, assistantReady.promise]) : undefined);
 }
 
-function mountBaseUi(ctx) {
+function mountClientFonts(ctx, style, ready) {
+  ctx.effect(() => {
+    let disposed = false, idle;
+    const load = () => {
+      if (disposed) return;
+      void require.async('./client.fonts.js').then(({ css }) => {
+        if (!disposed) style.textContent += css;
+      }).catch(error => { if (!disposed) console.warn('[BenchGo] 字体加载失败', error); });
+    };
+    if (ready) {
+      void ready.then(() => {
+        if (disposed) return;
+        idle = globalThis.requestIdleCallback ? requestIdleCallback(load, { timeout: 2000 }) : setTimeout(load, 0);
+      });
+    } else load();
+    return () => {
+      disposed = true;
+      if (globalThis.cancelIdleCallback) cancelIdleCallback(idle); else clearTimeout(idle);
+    };
+  });
+}
+
+function mountBaseUi(ctx, onFirstProjects) {
   ctx.effect(() => preservePanelOnSessionArchive(ctx));
   mountBrand(ctx);
   mountSessionMascot(ctx);
@@ -137,7 +169,7 @@ function mountBaseUi(ctx) {
   mountConversationImages(ctx);
   mountWorkbenchClient(ctx);
   const lifetime = new AbortController();
-  const style = document.createElement('style'); style.textContent = fontCss + css + chatTypographyCss; document.head.append(style); ctx.effect(() => () => style.remove());
+  const style = document.createElement('style'); style.textContent = css + chatTypographyCss; document.head.append(style); ctx.effect(() => () => style.remove());
   let ensuringRecent;
   const ensureRecent = () => {
     if (ensuringRecent) return ensuringRecent;
@@ -150,9 +182,20 @@ function mountBaseUi(ctx) {
     })().finally(() => { ensuringRecent = undefined; });
     return ensuringRecent;
   };
-  void ensureRecent().catch(error=>{ if (!lifetime.signal.aborted) update({error:error.message}); });
+  const prepareRecent = () => void ensureRecent().catch(error => { if (!lifetime.signal.aborted) update({ error: error.message }); });
+  if (!onFirstProjects) prepareRecent();
   readOwnershipIds = () => [...ctx.sessions.list.getSnapshot().ids];
-  const stopPolling = startSidebarPolling({ refresh, onError: error => update({ error: connectionMessage(error) }), isActive: () => data.sessions.some(session => liveStates.has(session.status)) });
+  const pollProjects = async signal => {
+    try { await refresh(signal); }
+    finally {
+      if (onFirstProjects && !signal.aborted) {
+        onFirstProjects();
+        onFirstProjects = undefined;
+        prepareRecent();
+      }
+    }
+  };
+  const stopPolling = startSidebarPolling({ refresh: pollProjects, onError: error => update({ error: connectionMessage(error) }), isActive: () => data.sessions.some(session => liveStates.has(session.status)) });
   let ownershipPending, ownershipAgain = false;
   const refreshOwnership = () => {
     if (ownershipPending) { ownershipAgain = true; return; }
@@ -206,6 +249,7 @@ function mountBaseUi(ctx) {
   const theme = createThemeSource(ctx);
   ctx.slots.inject('settings.launcher', () => ctx.slots.register({ name: 'settings.launcher', priority: -10, inject: () => ({ host: ctx, theme }) }, SettingsLauncher));
   mountSidebarProjects(ctx, open, newSession, ensureRecent);
+  return style;
 }
 
 /** The custom sidebar owns its extension slot without changing official entries. */

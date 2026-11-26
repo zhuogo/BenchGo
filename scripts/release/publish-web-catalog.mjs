@@ -11,6 +11,7 @@ import { compareVersions } from '../../plugins/base/shared/update-feed.mjs';
 const branch = 'release-metadata';
 const names = ['downloads.json', 'downloads.json.sig'];
 const latestPath = 'latest.json';
+const changelogPath = 'changelog.json';
 const stableVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
@@ -21,6 +22,24 @@ export function webCatalogSnapshot(raw, signature, publishedAt) {
     catalog: raw.toString('base64'),
     signature: signature.toString('utf8').trim(),
   }) + '\n');
+}
+
+async function changelogSnapshot(request, current) {
+  const releases = new Map();
+  function add(row) {
+    const tag = row.tag_name;
+    if (row.draft || row.prerelease || !tag?.startsWith('v') || !stableVersion.test(tag.slice(1))
+      || !Number.isFinite(Date.parse(row.published_at))) return;
+    releases.set(tag, { tag, publishedAt: row.published_at, notes: row.body ?? '' });
+  }
+  for (let page = 1; ; page++) {
+    const rows = await request(`/releases?per_page=100&page=${page}`);
+    for (const row of rows) add(row);
+    if (rows.length < 100) break;
+  }
+  add(current); // Include the verified public release even if the list has not caught up.
+  const history = [...releases.values()].sort((a, b) => compareVersions(b.tag.slice(1), a.tag.slice(1)));
+  return Buffer.from(`${JSON.stringify({ schemaVersion: 1, releases: history })}\n`);
 }
 
 export async function publishWebCatalog({ directory, releaseVersion, sourceSha, publicKey,
@@ -79,6 +98,8 @@ export async function publishWebCatalog({ directory, releaseVersion, sourceSha, 
   } else {
     stage(latestPath, nextSnapshot);
   }
+  const changelog = await changelogSnapshot(request, release);
+  if (!head || !(await read(head, changelogPath))?.equals(changelog)) stage(changelogPath, changelog);
   if (!tree.length) return { branch, tag, commit: head, changed: false };
   const parent = head ? await request(`/git/commits/${head}`) : null;
   if (parent && !sha(parent.tree?.sha)) throw new Error('Invalid web metadata base tree');
@@ -90,7 +111,7 @@ export async function publishWebCatalog({ directory, releaseVersion, sourceSha, 
   }
   const nextTree = await send('/git/trees', 'POST', { ...(parent ? { base_tree: parent.tree.sha } : {}), tree: entries });
   if (!sha(nextTree?.sha)) throw new Error('Invalid web metadata tree');
-  const commit = await send('/git/commits', 'POST', { message: `Publish signed download catalog ${tag}`, tree: nextTree.sha, parents: head ? [head] : [] });
+  const commit = await send('/git/commits', 'POST', { message: `Sync BenchGo release metadata ${tag}`, tree: nextTree.sha, parents: head ? [head] : [] });
   if (!sha(commit?.sha)) throw new Error('Invalid web metadata commit');
   // A concurrent update fails closed; never force or discard another release.
   if (head) await send(`/git/refs/heads/${branch}`, 'PATCH', { sha: commit.sha, force: false });

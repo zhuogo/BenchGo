@@ -1,0 +1,170 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T16:55:04.055Z",
+  "by": "codex",
+  "reason": "记录首个模型步骤前中断的结果恢复与 Windows 验收",
+  "base": "a91b22c908ef",
+  "result": "a7e54d9bfd97",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.delivery",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.delivery",
+        "type": "rule",
+        "title": "执行完成和消息送达独立",
+        "summary": "Worker 成果以实际终态及结果记录为准，告知或渠道发送重试不得重派执行。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "constraint": "按执行终态及结果记录交付。普通中止保留原会话尚未提交的结果通知，历史取消项按原事件身份核验后恢复。",
+          "when": "持久结果已生成，原 Router 或渠道正在告知时。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "任务、跟进与目标"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/结果与交付.md",
+            "symbol": "Worker 结果"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md",
+            "symbol": "公共接口与数据契约"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "9c23299b92874916df09eb1d7528a15fabab7254b0a85e2d81256f96115ad7f9",
+              "path": "plugins/superagent/src/result-commit.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "63e7be150eb6c2b832d5b2f17bc8dc91c3a3c26688979d433974a7f13370b57a",
+              "path": "plugins/superagent/src/message-inbox.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "e0e24ee182743eeb54c42032c077dbebdb36e005aa5a6c7b7d179ef90077b36a",
+              "path": "plugins/superagent/src/router-task-expression.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.delivery-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "assistant.delivery-check",
+        "type": "acceptance",
+        "title": "投递失败可恢复且不重跑 Worker",
+        "summary": "投递失败可恢复且不重跑 Worker",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "任务执行已结束并保存结果，原 Router 或渠道首次发送失败",
+            "原 Router 正在处理其他消息，Worker 结果已持久入队，但还未提交给模型。"
+          ],
+          "then": [
+            "仍有同一份结果原稿",
+            "不创建新 Worker",
+            "原对话收到普通公开正文，外部渠道按可信送达回执记录",
+            "普通中止当前回复后，原通知在原会话中投递一次。"
+          ],
+          "when": "恢复原对话投递并重新读取执行记录。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "任务、跟进与目标"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/结果与交付.md",
+            "symbol": "Worker 结果"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md",
+            "symbol": "公共接口与数据契约"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-25T16:46:16.529Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/engine.test.mjs"
+            }
+          ],
+          "note": "engine.test.mjs 定向集成测试 8 项通过，覆盖停止保留、原消息身份补投和已提交拦截。实机历史结果已提交原回合，桌面进程退出前未见公开正文。",
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.stop-reply",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.stop-reply",
+        "type": "rule",
+        "title": "主动停止保留 Router 正文",
+        "summary": "主聊与旁聊主动停止时，已输出的普通正文原位保留，刷新后仍可读。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "沿用官方会话保存的普通正文和原分段身份，回合保持中断。",
+          "when": "用户在 SuperAgent 主聊或旁聊停止正在生成的回复。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/对话交互.md",
+            "symbol": "聊天与正式发布"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T16:22:43.530Z",
+              "hash": "71b2de64b61e3d988eda5ba2c9640ed1ae1fbf6e272ae1f72a773c135f8897cb",
+              "path": "plugins/superagent/src/chat-publication.mjs",
+              "symbol": "projectChatMessages"
+            },
+            {
+              "checkedAt": "2026-11-25T16:22:43.530Z",
+              "hash": "2c8d035c420c9fdc24c89ef1a3778abe9ceb40ccddd79aefaf15de8251af62e8",
+              "path": "plugins/superagent/client/reply-stream.mjs",
+              "symbol": "ordinaryReply"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

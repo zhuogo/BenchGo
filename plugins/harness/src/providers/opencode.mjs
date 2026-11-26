@@ -74,7 +74,13 @@ export class OpenCodeProvider {
         if (sessionId !== info.id) return;
         if (event.type === 'message.part.delta' && p.field === 'text') host.event('text.delta', { text: p.delta, itemId: p.partID });
         else if (event.type === 'message.part.updated') {
-          host.event('item', { part: p.part, delta: p.delta ?? null });
+          const part = p.part;
+          if (part?.type === 'file' && part.url?.startsWith('data:')) {
+            const { url, ...metadata } = part;
+            host.event('item', { part: metadata, delta: null });
+          } else {
+            host.event('item', { part, delta: p.delta ?? null });
+          }
           if (p.part?.type === 'step-finish' && p.part.tokens) host.event('usage', { id: p.part.id, usage: p.part.tokens });
         }
         else if (event.type === 'session.idle') host.event('turn.completed', { status: 'completed' });
@@ -122,10 +128,16 @@ export class OpenCodeProvider {
             await request(`/session/${id}/summarize`, 'POST', { providerID: model[0], modelID: model.slice(1).join('/') }, 30 * 60_000);
           } else await request(`/session/${id}/command`, 'POST', { command: name, arguments: args, ...(session.model ? { model: session.model } : {}) }, 30 * 60_000);
         },
-        async submit(text) {
+        async submit(text, images = []) {
           const model = session.model?.split('/');
           if (model && model.length < 2) throw new Error('OpenCode model must be provider/model');
-          await request(`/session/${id}/prompt_async`, 'POST', { parts: [{ type: 'text', text }], ...(model ? { model: { providerID: model[0], modelID: model.slice(1).join('/') } } : {}) });
+          const parts = [
+            ...(text.trim() ? [{ type: 'text', text }] : []),
+            ...images.map(({ data, mediaType, name }) => ({
+              type: 'file', mime: mediaType, ...(name ? { filename: name } : {}), url: `data:${mediaType};base64,${data}`,
+            })),
+          ];
+          await request(`/session/${id}/prompt_async`, 'POST', { parts, ...(model ? { model: { providerID: model[0], modelID: model.slice(1).join('/') } } : {}) });
         },
         async interrupt() { await request(`/session/${id}/abort`, 'POST', {}); },
         async history() { return request(`/session/${id}/message`); },

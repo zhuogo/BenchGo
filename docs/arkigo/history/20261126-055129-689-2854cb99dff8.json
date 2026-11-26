@@ -1,0 +1,71 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T05:51:29.689Z",
+  "by": "codex",
+  "reason": "核对更新服务变更仍符合发布板块职责",
+  "base": "2b559be64108",
+  "result": "2854cb99dff8",
+  "changes": [
+    {
+      "op": "update",
+      "id": "release",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "release",
+        "type": "module",
+        "title": "更新与发布",
+        "summary": "统一发行版本，对变化的组件构建、验签和分发，运行时按安装方式激活。",
+        "parent": "benchgo",
+        "group": "产品板块",
+        "order": 5,
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "每个平台保留自己的安装入口和兼容条件。真机和公开发行由各自实物验收。"
+          ],
+          "responsibilities": [
+            "维护引擎 pin 和组件版本",
+            "生成可验证安装包与离线插件种子",
+            "协调 Desktop、CLI 和服务器安装、复用及更新"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "upstream.json"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "22d62c5bc083dfc33b7644621d3930af1cd02851fc9dc1198e5596e6b5a3b791",
+              "path": "scripts/release/plan.mjs",
+              "symbol": "createReleasePlan"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "da0a5e5ca76cc89bfb08f57500e660463490e3b511592555e8b9b8ee2973738b",
+              "path": "plugins/base/src/updates.mjs",
+              "symbol": "createUpdates"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "40d988e9b16621f7e38d30616cd3d01311e3d0ea4c3ba7325079b3bae34402b8",
+              "path": "packages/benchgo-cli/src/installer.mjs",
+              "symbol": "installWorkbench"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

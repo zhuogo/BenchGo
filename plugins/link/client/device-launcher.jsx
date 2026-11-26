@@ -50,7 +50,7 @@ export function DeviceLauncher({ compact = false, label = '' }) {
       if (event.data?.type === 'dsh-devices:return-local') setOpen(false);
       if (!paired && event.data?.type === 'dsh-devices:select' && typeof event.data.deviceId === 'string' && event.data.deviceId) {
         setOpen(false);
-        document.dispatchEvent(new CustomEvent('benchgo:device-select', { detail: { deviceId: event.data.deviceId } }));
+        document.dispatchEvent(new CustomEvent('benchgo:device-select', { detail: { deviceId: event.data.deviceId, reopen: event.data.reopen === true } }));
       }
       if (event.data?.type === 'dsh-devices:workbench-navigation') setIntegratedNavigation(event.data.ready === true);
     };

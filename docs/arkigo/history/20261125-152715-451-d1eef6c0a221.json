@@ -1,0 +1,222 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T15:27:15.451Z",
+  "by": "codex",
+  "reason": "回写 Link 并行选路、工作台入口和单次中继诊断的实现与验证",
+  "base": "d496e4a7df46",
+  "result": "d1eef6c0a221",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.connect",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "link.connect",
+        "type": "flow",
+        "title": "配对并进入远程工作台",
+        "summary": "主机批准后核对身份，按可信路线进入目标主机的原工作台。",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "open"
+          ],
+          "start": "pair",
+          "steps": [
+            {
+              "action": "目标主机批准配对，为设备发放独立授权；客户端保存可信身份和候选路线。",
+              "failure": "未获批准时保留配对状态，由用户重新发起或完成批准。",
+              "id": "pair",
+              "title": "批准设备"
+            },
+            {
+              "action": "提前探测少量已授权候选路线，保留直连优先和中继配置顺序，探测不发送设备凭据。",
+              "failure": "身份、证书或授权异常立即停止。网络不可达时才转向其他已授权候选。",
+              "id": "route",
+              "title": "验证并选择路线"
+            },
+            {
+              "action": "使用选中的可信 HTTPS 入口，在一次请求内核验设备和主机身份、确认网页入口就绪、签发会话并返回最新路线。",
+              "failure": "返回失败诊断，业务写请求的发送方保留原结果状态。",
+              "id": "direct",
+              "title": "使用直连"
+            },
+            {
+              "action": "目标主机连接独立 Relay，客户端按同一工作台握手进入目标，两端复用空闲 HTTP 数据通道。",
+              "failure": "中继不可用时由选路层更新健康状态并给出恢复提示。",
+              "id": "relay",
+              "title": "使用中继"
+            },
+            {
+              "action": "官方页面、API 与会话能力从目标主机提供，用户继续使用原项目与会话。",
+              "id": "open",
+              "title": "打开目标工作台"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "pair",
+              "to": "route"
+            },
+            {
+              "from": "route",
+              "to": "direct",
+              "when": "直连验证成功"
+            },
+            {
+              "from": "route",
+              "to": "relay",
+              "when": "可回退的连通性错误且中继验证成功"
+            },
+            {
+              "from": "direct",
+              "to": "open"
+            },
+            {
+              "from": "relay",
+              "to": "open"
+            }
+          ],
+          "trigger": "用户在设备中心添加工作台，或在移动端打开配对入口。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/设计.md",
+            "symbol": "连接与信任模型"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md",
+            "symbol": "项目归属与远端执行"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/自建中继.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "cc0277f7fe9bc3c4364217dbbbf40d254f6e915c349f63564fa2e4e145c15b8b",
+              "path": "plugins/link/src/devices/routes.mjs",
+              "symbol": "selectRoute"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "6b9af1b62b6bfe16dd795744a21837bdf0a1b95e5520bed44089bec9f4c41809",
+              "path": "plugins/link/src/transport/workbench.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "50c779b21af5aa07ca196b5cb414f5e702f077ab348b70831153fa9d97f4dbca",
+              "path": "plugins/link/src/transport/relay-host.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "eeee52e2284c9ea75ea53e50faef59cbcdb94686398e16874733dd89e960e86e",
+              "path": "plugins/link/src/pairing/store.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect-check",
+      "fields": [
+        "verification"
+      ],
+      "before": {
+        "id": "link.connect-check",
+        "type": "acceptance",
+        "title": "连接回退保留信任边界",
+        "summary": "连接回退保留信任边界",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "一台已配对主机同时提供直连与有序中继路线"
+          ],
+          "then": [
+            "网络超时可试下一条授权路线",
+            "身份不符时停止且报错",
+            "待发送业务操作只走选定路线",
+            "慢候选的探测重叠，实际连接保持优先级，未选探测及时取消。"
+          ],
+          "when": "模拟多个候选网络超时、身份校验失败和有效工作台握手。"
+        },
+        "notes": [
+          {
+            "text": "按用户确认使用统一工作台握手，不保留旧版多请求回退。中继连接诊断在一次 TLS 连接上完成 HTTP/2 协商和密钥验证。",
+            "tone": "info",
+            "type": "callout"
+          }
+        ],
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md"
+          }
+        ]
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.trust",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "link.trust",
+        "type": "rule",
+        "title": "先核验信任，再发送业务请求",
+        "summary": "在发送业务请求前完成选路。遇到证书、身份或授权错误立即停止回退。",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "constraint": "在发送业务请求前完成选路。遇到证书、身份或授权错误立即停止回退。",
+          "when": "已配对设备连接目标工作台或调用共享资源服务。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/设计.md",
+            "symbol": "连接与信任模型"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md",
+            "symbol": "项目归属与远端执行"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/自建中继.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "cc0277f7fe9bc3c4364217dbbbf40d254f6e915c349f63564fa2e4e145c15b8b",
+              "path": "plugins/link/src/devices/routes.mjs",
+              "symbol": "selectRoute"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

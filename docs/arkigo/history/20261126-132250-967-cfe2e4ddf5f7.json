@@ -1,0 +1,36 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T13:22:50.967Z",
+  "by": "codex",
+  "reason": "记录官网更新日志页面与发版同步实现",
+  "base": "9b8668b10661",
+  "result": "cfe2e4ddf5f7",
+  "changes": [
+    {
+      "op": "update",
+      "id": "release.changelog",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "release.changelog",
+        "type": "screen",
+        "title": "官网更新日志",
+        "summary": "在官网浏览 GitHub 正式发行说明和历史版本。",
+        "parent": "release",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "elements": [
+            "版本号、发布日期、发行说明和 GitHub 原文链接"
+          ],
+          "purpose": "将 GitHub Releases 的正式版本与发布说明同步到 BenchGo 官网。",
+          "route": "/changelog",
+          "states": [
+            "加载、可读的历史记录、空状态、失败重试"
+          ]
+        }
+      }
+    }
+  ]
+}

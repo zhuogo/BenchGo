@@ -55,6 +55,11 @@ if (process.argv.includes('serve')) {
       return reply({ summary: 'compacted' });
     }
     if (method === 'prompt') {
+      if (message.images?.length) {
+        send({ type: 'agent_start' });
+        reply({ agentInvoked: true });
+        return send({ type: 'agent_end', messages: [{ role: 'user', content: message.images }] });
+      }
       if (message.message === 'ui-fixture') {
         send({ type: 'agent_start' }); reply({});
         return send({ type: 'extension_ui_request', id: 'opaque:ui/1', ...JSON.parse(process.env.PI_UI_REQUEST) });

@@ -6,6 +6,7 @@ import { mountTooling } from './tooling.mjs';
 import { mountUsage } from './usage.mjs';
 import { mountUpdates } from './updates.mjs';
 import { mountFeedbackRoute } from './feedback.mjs';
+import { mountFaultFeedback } from './fault-feedback.mjs';
 import { mountWeb } from './web.mjs';
 import { assertSameOrigin } from '../shared/http.mjs';
 import { mountPreviewAssets } from './preview-assets.mjs';
@@ -114,7 +115,8 @@ export async function apply(ctx, config = {}) {
     await mountUsage(child, undefined, { ...config.usage, directory });
     await mountUpdates(child, undefined, { directory });
   });
-  ctx.inject(['connection', 'workspaceRegistry'], child => mountWeb(child, { directory }));
+  const reportFault = config.faultFeedback?.enabled === true ? mountFaultFeedback(ctx, { directory }) : undefined;
+  ctx.inject(['connection', 'workspaceRegistry'], child => mountWeb(child, { directory, reportFault }));
   // Keep the owner route present even while optional credential composition is
   // still settling. The first request resolves the already-registered service;
   // normal Harness startup provides credentials before the UI calls it.

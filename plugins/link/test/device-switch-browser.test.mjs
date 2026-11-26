@@ -470,6 +470,8 @@ test('legacy workbench handshake times out with a fresh-entry retry and device-c
       await page.evaluate(() => document.dispatchEvent(new CustomEvent('benchgo:device-select', { detail: { deviceId: 'cloud' } })));
       await page.locator('.dsh-device-switch-stage iframe').waitFor();
       await page.clock.runFor(15_100);
+      assert.equal(await page.locator('.dsh-device-switch-loading').count(), 1, 'slow startup must keep waiting after 15 seconds');
+      await page.clock.runFor(30_000);
       const trigger = page.locator('.dsh-device-switch-trigger[data-connection-error]');
       await trigger.waitFor();
       assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
@@ -492,6 +494,11 @@ test('legacy workbench handshake times out with a fresh-entry retry and device-c
       await page.evaluate(() => document.dispatchEvent(new CustomEvent('benchgo:device-select', { detail: { deviceId: 'cloud' } })));
       await page.waitForFunction(() => document.querySelector('.dsh-device-switch-stage')?.hidden === false);
       assert.equal(selections, 2, 'healthy retained workbench must be reused without another authorization request');
+      await page.evaluate(() => document.dispatchEvent(new CustomEvent('benchgo:device-select', { detail: { deviceId: 'cloud', reopen: true } })));
+      await page.waitForFunction(() => new URL(document.querySelector('.dsh-device-switch-stage iframe').src).searchParams.get('ticket') === '3');
+      await remote.locator('.dsh-device-switch-trigger').waitFor();
+      await page.locator('.dsh-device-switch-loading').waitFor({ state: 'detached' });
+      assert.equal(selections, 3, 'reopening after an update gets a new entry even when the frame is retained');
       assert.equal(await page.getByRole('textbox', { name: '尚未发送的消息' }).inputValue(), '保留本机草稿');
       await context.close();
     }

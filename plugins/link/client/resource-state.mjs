@@ -64,7 +64,7 @@ export function resourceQueryFailure(error) {
 export const resourceRequestId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
 export async function deviceRequest(action, args = {}, signal) {
   const paired = globalThis.__DSH_LINK_GROUP_RESOURCES__ === true;
-  const url = paired ? new URL('api/commander-devices', document.baseURI) : new URL('/api/commander-devices', location.origin);
+  const url = paired ? new URL('api/group-resources', document.baseURI) : new URL('/api/commander-devices', location.origin);
   const response = await fetch(url, { method:'POST', credentials:'same-origin', headers:{'content-type':'application/json'}, body:JSON.stringify({action,...args,parentOrigin:location.origin}), signal });
   const value = await readJsonResponse(response,url);
   if(value.error)throw Object.assign(Error(typeof value.error==='string'?value.error:value.error.message || '设备资源读取失败'),{code:value.error?.code||value.code,status:value.status});

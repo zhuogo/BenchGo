@@ -1,0 +1,20 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T08:42:10.255Z",
+  "by": "codex",
+  "reason": "关联已配对工作台导航与组资源接口",
+  "base": "00be978988d1",
+  "result": "55ffcca85671",
+  "changes": [
+    {
+      "op": "link",
+      "relation": {
+        "from": "workbench.session#find",
+        "to": "link.group-resource-relay",
+        "type": "calls",
+        "label": "配对工作台查询组内资源",
+        "when": "从已配对的设备组工作台查询"
+      }
+    }
+  ]
+}

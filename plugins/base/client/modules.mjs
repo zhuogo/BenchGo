@@ -22,7 +22,7 @@ export const moduleSource = createModuleSource();
 export function startModuleLifecycle(ctx, entries, { source = moduleSource, read = async signal => {
   const url = new URL('api/benchgo/modules', document.baseURI);
   return readJsonResponse(await fetch(url, { credentials: 'same-origin', signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]) }), url);
-}, poll = startSidebarPolling, onError = error => console.warn('[BenchGo] 模块状态同步失败', error) } = {}) {
+}, poll = startSidebarPolling, onSnapshot, onError = error => console.warn('[BenchGo] 模块状态同步失败', error) } = {}) {
   const fibers = new Map();
   let disposed = false;
   const disable = async () => {
@@ -50,7 +50,10 @@ export function startModuleLifecycle(ctx, entries, { source = moduleSource, read
       try { await fiber.await(); }
       catch (error) { fibers.delete(name); await fiber.dispose(); next[name] = false; onError(error); }
     }
-    if (!disposed && !signal?.aborted) source.update(next);
+    if (!disposed && !signal?.aborted) {
+      source.update(next);
+      onSnapshot?.(next);
+    }
   };
   const stop = poll({ refresh, isActive: () => true, onError });
   return async () => {

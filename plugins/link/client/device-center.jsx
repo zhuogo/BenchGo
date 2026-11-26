@@ -702,7 +702,7 @@ function ManageDevice({ device, runtime, onChanged, onRemoved, onCloseWorkbench,
     {job && <>
       <JobProgress job={job} />
       {!jobFinished(job) && job.cancellable === true && <div className="dc-actions"><Button disabled={busy} onClick={() => execute('jobCancel', { jobId: job.id })}>{busy ? '正在取消…' : '取消准备'}</Button></div>}
-      {jobFinished(job) && !jobFailed(job) && job.state !== 'cancelled' && onOpenWorkbench && <div className="dc-actions"><Button primary onClick={() => onOpenWorkbench(job.device || device)}>重新打开工作台</Button></div>}
+      {jobFinished(job) && !jobFailed(job) && job.state !== 'cancelled' && onOpenWorkbench && <div className="dc-actions"><Button primary onClick={() => onOpenWorkbench(job.device || device, { reopen: true })}>重新打开工作台</Button></div>}
       {error && !jobFinished(job) && <Button onClick={() => { setError(''); setPollAttempt(value => value + 1); }}>重新检查进度</Button>}
     </>}
     {membership && confirm === 'remove' && <p className="dc-note">{membership.local ? '退出后，本机会从其他成员的列表中消失，其他成员仍可互通。' : '移除后，该设备将从所有成员的列表中消失，并失去组内访问权限。'}</p>}
@@ -856,12 +856,12 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     const parentOrigin = globalThis.__DSH_DEVICE_PARENT_ORIGIN__ || new URLSearchParams(location.search).get('parentOrigin');
     if (parentOrigin && parent !== window) parent.postMessage({ type: 'dsh-devices:return-local' }, parentOrigin);
   }, []);
-  const select = useCallback(async device => {
+  const select = useCallback(async (device, { reopen = false } = {}) => {
     if (!device?.id || gate.current) return;
     if (runtime.isNative() && device.kind === 'local') { setModal({ type: 'manage', device }); return; }
     const parentOrigin = globalThis.__DSH_DEVICE_PARENT_ORIGIN__ || new URLSearchParams(location.search).get('parentOrigin');
     if (!runtime.isNative() && parentOrigin && parent !== window && new URLSearchParams(location.hash.slice(1)).get('reuseWorkbench') === '1') {
-      parent.postMessage({ type: 'dsh-devices:select', deviceId: device.id }, parentOrigin);
+      parent.postMessage({ type: 'dsh-devices:select', deviceId: device.id, reopen }, parentOrigin);
       setModal(null); setError(''); return;
     }
     if (!runtime.isNative() && device.kind !== 'local' && !frames.some(frame => frame.id === device.id) && frames.length >= 4) { setError('已保留 4 个工作台。请在设备设置中关闭暂不用的工作台页面，再打开新设备。'); return; }
@@ -878,8 +878,8 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
         } else {
           if (!value.url) throw new Error('设备未返回工作台地址，请重新连接');
           const url = themedWorkbenchUrl(workbenchUrl(value.url, location.origin));
-          if (!frames.some(frame => frame.id === device.id && new URL(frame.url).origin === new URL(url).origin)) setReadyFrames(items => items.filter(id => id !== device.id));
-          setFrames(items => items.some(item => item.id === device.id) ? items.map(item => item.id === device.id && new URL(item.url).origin !== new URL(url).origin ? { ...item, name: device.name, url } : item) : [...items, { id: device.id, name: device.name, url }]);
+          if (reopen || !frames.some(frame => frame.id === device.id && new URL(frame.url).origin === new URL(url).origin)) setReadyFrames(items => items.filter(id => id !== device.id));
+          setFrames(items => items.some(item => item.id === device.id) ? items.map(item => item.id === device.id && (reopen || new URL(item.url).origin !== new URL(url).origin) ? { ...item, name: device.name, url } : item) : [...items, { id: device.id, name: device.name, url }]);
           setActiveId(device.id); setShowDevices(false);
         }
       }

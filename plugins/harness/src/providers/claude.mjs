@@ -49,9 +49,13 @@ export class ClaudeProvider {
         await query.setPermissionMode(options.permissionMode);
         permission = next;
       },
-      async submit(text) {
+      async submit(text, images = []) {
         hasAssistantText = false;
-        queue.push({ type: 'user', session_id: driver.nativeId ?? '', message: { role: 'user', content: text }, parent_tool_use_id: null });
+        const content = images.length ? [
+          ...(text.trim() ? [{ type: 'text', text }] : []),
+          ...images.map(({ data, mediaType }) => ({ type: 'image', source: { type: 'base64', media_type: mediaType, data } })),
+        ] : text;
+        queue.push({ type: 'user', session_id: driver.nativeId ?? '', message: { role: 'user', content }, parent_tool_use_id: null });
         wake?.(); wake = undefined;
       },
       async commands() { return commandCatalog(await query.supportedCommands()); },
@@ -101,7 +105,11 @@ export class ClaudeProvider {
             if (!hasAssistantText && message.usage?.output_tokens === 0 && typeof message.result === 'string' && message.result.trim()) host.event('text.delta', { text: message.result });
             host.event('turn.completed', { status: message.is_error ? 'failed' : 'completed', result: message.result ?? null, errors: message.errors ?? [] });
           } else if (message.type === 'assistant' || message.type === 'user') {
-            host.event('message', { type: message.type, message: message.message });
+            const value = message.message;
+            const content = message.type === 'user' && Array.isArray(value.content)
+              ? value.content.map(block => block.type === 'image' ? { type: 'image', mediaType: block.source?.media_type } : block)
+              : value.content;
+            host.event('message', { type: message.type, message: { ...value, content } });
           } else if (message.type === 'system' && message.subtype === 'api_retry') {
             host.event('provider.retry', { attempt: message.attempt ?? null, maxRetries: message.max_retries ?? null, delayMs: message.retry_delay_ms ?? null, status: message.error_status ?? null });
           }

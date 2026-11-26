@@ -45,7 +45,7 @@ export async function mountWeb(ctx, options = {}) {
   return input => { if (failure) throw failure; return dispatch(input); };
 }
 
-async function initializeWeb(ctx, { directory, getCommander = () => ctx.get('commander'), getHarness = () => ctx.get('benchgoHarnessWeb'), mountFonts: fonts = mountFonts } = {}) {
+async function initializeWeb(ctx, { directory, getCommander = () => ctx.get('commander'), getHarness = () => ctx.get('benchgoHarnessWeb'), mountFonts: fonts = mountFonts, reportFault } = {}) {
   const projects = projectActions(ctx, { directory });
   const recent = recentWorkspaceActions(ctx, directory);
   const dismissedPath = join(directory, 'dismissed-harness.json');
@@ -69,7 +69,13 @@ async function initializeWeb(ctx, { directory, getCommander = () => ctx.get('com
   const dispatch = async input => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Expected an object');
     const { action } = input;
-    if (action === 'state') return state();
+    if (action === 'state') {
+      try { return await state(); }
+      catch (error) {
+        if (error instanceof TypeError) reportFault?.('SIDEBAR_STATE_INTERNAL');
+        throw error;
+      }
+    }
     if (action === 'ensureRecent') return recent.ensure(input);
     if (action === 'binding') {
       const ownerSessionId = text(input.harnessSessionId, 'harnessSessionId', 200);

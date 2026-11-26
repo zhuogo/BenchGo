@@ -276,7 +276,7 @@ export function createHistorySearch({ ctx, store }) {
       const headers = owned.ids.length ? await query.filterSessions([{ kind: 'id', values: owned.ids }], signal) : [];
       const ordered = headers.map(item => item.header).sort((a, b) => a.id.localeCompare(b.id));
       const binding = fingerprint(['sessions', owned.hash, ordered.map(header => header.id), limit]);
-      const position = cursorOf(input.cursor, binding), index = integer(position.index, 0, ordered.length);
+      const position = cursorOf(input.cursor === '' ? undefined : input.cursor, binding), index = integer(position.index, 0, ordered.length);
       const sessions = ordered.slice(index, index + limit).map(header => ({ id: header.id, title: header.title ?? null, createdAt: header.createdAt }));
       check(signal);
       return { sessions, nextCursor: index + limit < ordered.length ? next(binding, { index: index + limit }) : null };

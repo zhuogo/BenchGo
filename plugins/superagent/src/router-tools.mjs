@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { HarnessError } from '@deepseek-ai/dsh-llm';
 import { registerRouterScheduleTools } from './router-schedule-tools.mjs';
 import { assertRouterMemoryTool } from './memory-tool-policy.mjs';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
@@ -191,10 +192,16 @@ export function createRouterTools(runtime) {
       return store.learning.request({ scope: source.sessionId, eventId: source.messageId, source, entry: 'natural-language' });
     });
     register('assistant_projects', 'Read current BenchGo project facts directly. By default aggregate the local catalog and ALL saved outgoing devices, independent of sidebar scope; scope=local explicitly reads only local projects, native sessions and exact Harness model IDs. An explicitly named device needs only deviceId or deviceIds through authorized Link queries. Device identities and registered project catalogs are authoritative: a local folder or remembered server note cannot establish or disprove a remote device or project. Never substitute memory for this live inventory. Follow remaining pages; failures are unknown coverage, not empty catalogs. Organize results by device and name coverage gaps (unqueried, offline, unauthorized or unsupported); never present the local list, inbound authorizations or sidebar scope as all projects. isDefault=true identifies Recent (ungrouped sessions), not a named project and not part of the project count; identify Recent only by isDefault=true, never by a default-workspace name or path; preserve raw titles and IDs. Remote paths are never local paths. Read only; listing product state requires no investigation Task.', { scope: { type: 'string', enum: ['all', 'local'] }, deviceId: string, deviceIds: { type: 'array', items: string, maxItems: 32 }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, [], async (args, exec) => {
-      if (args.deviceId || args.deviceIds) {
-        if (args.scope === 'local') throw new Error('本机范围不能同时指定设备；请只保留一个查询范围');
+      const { deviceId, deviceIds, ...query } = args;
+      const selectedDevice = deviceId?.trim() ? deviceId : undefined;
+      const selectedDevices = deviceIds?.length ? deviceIds : undefined;
+      if (selectedDevice || selectedDevices) {
+        if (args.scope === 'local') {
+          throw new HarnessError('scope=local 不能同时指定设备。查询本机时删除 deviceId 和 deviceIds，查询指定设备时省略 scope', 'PROJECTS_SCOPE_CONFLICT');
+        }
         const { signal } = await deviceDirectoryAccess(exec);
-        return deviceTools.resources({ ...args, kind: 'projects', signal });
+        return deviceTools.resources({ ...query, ...(selectedDevice ? { deviceId: selectedDevice } : {}),
+          ...(selectedDevices ? { deviceIds: selectedDevices } : {}), kind: 'projects', signal });
       }
       const access = args.scope === 'local' ? null : await deviceDirectoryAccess(exec);
       const readLocalProjects = async () => {

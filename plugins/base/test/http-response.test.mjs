@@ -36,6 +36,15 @@ test('HTTP JSON errors retain server detail and support the nested error message
   await assert.rejects(readJsonResponse(response({ error: { code: 'unknown' } }, 403), url), /请求失败（HTTP 403/);
 });
 
+test('workbench errors retain the API path and hide the session credential', async () => {
+  const workbench = new URL('/s/' + 'a'.repeat(43) + '/link/workbench/api/group-resources', url);
+  await assert.rejects(readJsonResponse(new Response('not found', { status: 404 }), workbench), {
+    status: 404,
+    pathname: '/s/[已隐藏]/link/workbench/api/group-resources',
+    message: '请求失败（HTTP 404 · /s/[已隐藏]/link/workbench/api/group-resources）',
+  });
+});
+
 test('HTML, malformed JSON and empty successful responses are protocol errors with status and path', async () => {
   for (const body of ['<!doctype html><h1>login</h1>', '{"projects":', '']) {
     await assert.rejects(readJsonResponse(new Response(body), url), failure => {

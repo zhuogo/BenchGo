@@ -38,12 +38,27 @@ test('shared API catalog computes exact wire compatibility without tool bindings
 });
 
 test('unlaunchable and unsupported tools are omitted from model routes', async () => {
-  const catalog = fixture({ installed: [tool('codex', false), tool('pi')], providers: [provider('primary', 'responses')] });
+  const catalog = fixture({ installed: [tool('codex', false), tool('grok')], providers: [provider('primary', 'responses')] });
   const value = await catalog.list();
   assert.equal(value.tools.find(row => row.id === 'codex').available, false);
-  assert.equal(value.tools.find(row => row.id === 'pi').routeSupported, false);
+  assert.equal(value.tools.find(row => row.id === 'grok').routeSupported, false);
   assert.deepEqual(await catalog.models('codex'), []);
-  assert.deepEqual(await catalog.models('pi'), []);
+  assert.deepEqual(await catalog.models('grok'), []);
+});
+
+test('the four native chat drivers inherit the exact selected model vision capability', async () => {
+  const catalog = fixture({
+    installed: ['codex', 'claude', 'pi', 'opencode'].map(id => tool(id)),
+    providers: [provider('responses', 'responses'), provider('messages', 'anthropic')],
+    listModels: async () => [{ id: 'vendor/Vision', inputModalities: ['text', 'image'] }, { id: 'vendor/vision' }],
+  });
+  for (const driver of ['codex', 'claude', 'pi', 'opencode']) {
+    const models = await catalog.models(driver);
+    assert.ok(models.length >= 2);
+    for (const model of models) {
+      assert.deepEqual(model.inputModalities, model.nativeModelId === 'vendor/Vision' ? ['text', 'image'] : ['text']);
+    }
+  }
 });
 
 test('manual capability settings control dialogue selection by exact model ID', async () => {

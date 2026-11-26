@@ -85,7 +85,11 @@ export async function createUpdates({ directory, profile, runtime, version, rele
     const busyReason = busy ? '有任务正在运行，结束后再更新' : '';
     let decision;
     const decide = (action, available, enabled, explanation = '', targetVersion) => ({ action, available, enabled: !!enabled && !unavailable, reason: explanation, ...(targetVersion ? { targetVersion } : {}) });
-    if (restartRequired) decision = decide('restart', true, !busy, busyReason || (installation === 'server' ? '插件已准备好，请重启主机服务后生效' : '插件已准备好，请重启主机应用后生效'), state.version);
+    if (restartRequired) {
+      decision = decide('restart', true, !busy, busyReason || (installation === 'server' ? '插件已准备好，请重启主机服务后生效' : '插件已准备好，请重启主机应用后生效'), state.version);
+      if (windowsDesktop && phase !== 'checking' && phase !== 'error' && compatible
+        && release?.plugin.version === state.version && release.app && currentApp && !appAvailable) decision.restartOnly = true;
+    }
     else if (task) decision = decide('check', pluginAvailable || appAvailable, false, phase === 'downloading' ? '正在准备更新' : '正在检查更新');
     else if (phase === 'error' && lastAction === 'check') decision = decide('check', pluginAvailable || appAvailable, true, error || '更新检查失败，请重试');
     else if (!release) decision = decide('check', false, true, error || (phase === 'unpublished' ? '更新通道尚未就绪' : '检查可用更新'));

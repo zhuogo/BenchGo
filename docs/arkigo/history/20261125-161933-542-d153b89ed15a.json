@@ -1,0 +1,26 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T16:19:33.542Z",
+  "by": "codex",
+  "reason": "明确 Router 主聊与旁聊停止时保留已输出正文",
+  "base": "fec331d49158",
+  "result": "d153b89ed15a",
+  "changes": [
+    {
+      "op": "add",
+      "id": "assistant.stop-reply"
+    },
+    {
+      "op": "add",
+      "id": "assistant.stop-reply-check"
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "assistant.stop-reply-check",
+        "to": "assistant.stop-reply",
+        "type": "verifies"
+      }
+    }
+  ]
+}

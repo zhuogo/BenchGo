@@ -1,18 +1,39 @@
 import { LlmAdapter } from '@deepseek-ai/dsh-llm';
+import { access, constants } from 'node:fs/promises';
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { singleRequestUsage } from './usage.mjs';
 import { decodeRouteModelId } from '../../base/src/picker-catalog.mjs';
+import { supportsNativeImages } from '../../base/src/provider-access.mjs';
 import { nativeModelConfig, nativeReasoningEffort } from '../../base/shared/runtime-setting-fields.mjs';
 import { mediaResultFile, NATIVE_MEDIA_RESULT } from '../../media/shared/generation-result.mjs';
 
 const providers = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', grok: 'Grok Build', mcode: 'MiniMax Code' };
 const route = provider => `commander-${provider}`;
 const inputPrefix = 'harness-user:';
+const humanMessages = messages => messages.filter(message => message.role === 'user' && message.source?.kind === 'user');
+const imageUnsupported = '当前模型或 Harness 不支持图片输入，请切换模型或移除图片。';
+
+async function nativeImage(store, tool, attachment, signal) {
+  signal.throwIfAborted();
+  try {
+    const { attachmentId: id, mediaType, name } = attachment;
+    if (tool === 'codex') {
+      const path = store?.imageHostPath(attachment);
+      if (!path) throw new Error('Image path is unavailable');
+      await access(path, constants.R_OK);
+      return { id, path };
+    }
+    const { data } = await store.readImage(attachment, signal);
+    return { id, mediaType, name, data: Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('base64') };
+  } catch (error) {
+    signal.throwIfAborted();
+    throw new Error('图片附件无法读取，请移除后重新添加。', { cause: error });
+  }
+}
 
 /** Native agents remain the tool executor; Harness owns the conversation UI and journal. */
 export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
   const active = new Set();
-  const metadata = new Map();
   const jobs = new Set();
   let disposed = false;
   class CommanderAdapter extends LlmAdapter {
@@ -21,17 +42,13 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
     async listModels(provider) {
       const native = provider.slice('commander-'.length);
       if (!commander.pickerCatalog) throw new Error('Harness API model catalog is unavailable');
-      const models = await commander.pickerCatalog.models(native);
-      for (const model of models) metadata.set(`${provider}/${model.id}`, model);
-      return models;
+      return commander.pickerCatalog.models(native);
     }
     async resolveModel(provider, model) {
       // Exact metadata includes native reasoning choices and supplier identity.
-      // A historical route can still resolve its identity after directory removal.
       const binding = decodeRouteModelId(model);
       if (binding) {
-        if (!metadata.has(`${provider}/${model}`) && commander.pickerCatalog) await this.listModels(provider);
-        const result = metadata.get(`${provider}/${model}`);
+        const result = (await this.listModels(provider)).find(row => row.id === model);
         if (!result) throw new Error('所选供应商或模型已不可用');
         return result;
       }
@@ -45,17 +62,16 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
       const owner = String(agent.session.id);
       if (!options.sessionId || String(options.sessionId) !== owner) throw new Error('BenchGo requires the initiating Harness session identity');
       const directory = agent.session.header.cwd;
-      if (!directory) throw new Error('BenchGo requires a project working directory');
+      if (!directory) throw new Error('会话缺少工作目录。');
       const native = options.provider.slice('commander-'.length);
       if (!Object.hasOwn(providers, native)) throw new Error('Unknown BenchGo provider');
       const binding = decodeRouteModelId(options.model);
       if (!binding) throw new Error('请从 API 模型目录选择供应商和模型');
       const nativeModel = binding.model;
-      const human = options.messages.filter(message => message.role === 'user' && message.source?.kind === 'user');
+      const human = humanMessages(options.messages);
       if (!human.length) throw new Error('BenchGo requires a durable human message');
       for (const message of human) {
         if (!message.id) throw new Error('BenchGo requires stable human message identities');
-        if (message.content.some(block => block.type !== 'text')) throw new Error('BenchGo currently supports text messages only; attachments are not supported');
       }
       const key = owner;
       if (active.has(key)) throw new Error('A BenchGo request is already active for this conversation and model');
@@ -84,15 +100,28 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
         if (!existing && ownedSessions.length) throw new Error('此对话已绑定其他工具或供应商模型；请新建聊天，已有记录与运行配置不会被修改');
         const modelChanged = existing && (existing.route?.model !== nativeModel || existing.model !== nativeModel);
         const previousEffort = nativeReasoningEffort(native, existing?.route?.advancedConfig);
+        const latest = human.at(-1);
+        const requestId = `${inputPrefix}${latest.id}`;
+        const receipts = existing ? commander.get(existing.id).receipts : {};
+        const prior = receipts[requestId];
+        let lastDelivered = -1;
+        human.forEach((message, index) => { if (Object.hasOwn(receipts, `${inputPrefix}${message.id}`)) lastDelivered = index; });
+        const pending = prior ? [] : human.slice(lastDelivered + 1);
+        const imageRefs = pending.flatMap(message => message.content.filter(block => block.type === 'image').map(block => block.attachment));
         const mustCheckRoute = !existing || modelChanged || options.reasoningEffort !== previousEffort;
         let advancedConfig = existing?.route?.advancedConfig;
-        if (mustCheckRoute) {
-          const available = await commander.pickerCatalog.models(native, { fresh: true });
+        if (mustCheckRoute || imageRefs.length) {
+          const available = await commander.pickerCatalog.models(native, { fresh: mustCheckRoute });
           const route = available.find(model => model.id === options.model);
           if (!route) throw new Error('工具供应商或模型已变更，请重新选择模型');
-          const defaults = !existing || modelChanged ? await commander.routeService.defaultConfig?.(native, binding.providerId, nativeModel) : undefined;
-          advancedConfig = nativeModelConfig(native, defaults ?? advancedConfig, route.reasoning, { reasoningEffort: options.reasoningEffort });
+          if (imageRefs.length && (!supportsNativeImages(native) || !route.inputModalities?.includes('image'))) throw new Error(imageUnsupported);
+          if (mustCheckRoute) {
+            const defaults = !existing || modelChanged ? await commander.routeService.defaultConfig?.(native, binding.providerId, nativeModel) : undefined;
+            advancedConfig = nativeModelConfig(native, defaults ?? advancedConfig, route.reasoning, { reasoningEffort: options.reasoningEffort });
+          }
         }
+        const images = [];
+        for (const ref of imageRefs) images.push(await nativeImage(ctx.get('attachments'), native, ref, controller.signal));
         const effortChanged = nativeReasoningEffort(native, advancedConfig) !== previousEffort;
         if (existing && (modelChanged || effortChanged)) {
           if (['running', 'waiting', 'connecting'].includes(existing.status)) throw new Error('请等待当前轮次完成后再切换模型');
@@ -101,7 +130,7 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
           const nextRoute = await commander.routeService.capture({ tool: native, ...binding, advancedConfig });
           if (existing.route?.version && !nextRoute.version) throw new Error('会话绑定服务不可用，无法保存模型变更');
           if (existing.route?.version && ['mode', 'baseURL', 'protocol', 'sourceProtocol', 'credentialRef'].some(key => existing.route[key] !== nextRoute[key])) throw new Error('绑定供应商的地址、协议或凭据引用已更改，请新建会话或恢复原配置。');
-          if (driver && (effortChanged || !driver.setModel || JSON.stringify(existing.route?.advancedConfig) !== JSON.stringify(nextRoute.advancedConfig))) await commander.disconnect(existing.id);
+          if (driver && (effortChanged || !driver.setModel || native === 'pi' || native === 'opencode' || JSON.stringify(existing.route?.advancedConfig) !== JSON.stringify(nextRoute.advancedConfig))) await commander.disconnect(existing.id);
           else if (modelChanged) await driver?.setModel(nativeModel);
           const record = commander.get(existing.id);
           record.model = nativeModel;
@@ -115,25 +144,20 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
           }
           commander.event(existing.id, 'model.changed', { providerId: binding.providerId, model: binding.model, nativeModel, reasoningEffort: nativeReasoningEffort(native, advancedConfig) });
         }
-        const session = existing ?? await commander.create({ provider: native, cwd: directory, route: { ...binding, ...(Object.keys(advancedConfig ?? {}).length ? { advancedConfig } : {}) }, ownerSessionId: owner, title: human.at(-1).content.map(block => block.text).join('\n').slice(0, 120) });
+        if (existing && imageRefs.length && commander.drivers.get(existing.id)?.managedVision === false) {
+          await commander.disconnect(existing.id);
+        }
+        const title = latest.content.map(block => block.type === 'text' ? block.text : block.attachment?.name ?? '').join('\n').trim().slice(0, 120);
+        const session = existing ?? await commander.create({ provider: native, cwd: directory, route: { ...binding, ...(Object.keys(advancedConfig ?? {}).length ? { advancedConfig } : {}) }, ownerSessionId: owner, title: title || '图片消息' });
         id = session.id;
         bindOwner?.(id, agent);
         controller.signal.throwIfAborted();
         if (['disconnected', 'closed', 'failed'].includes(commander.snapshot(id).status)) await commander.connect(id);
         const record = commander.get(id);
-        const receipts = record.receipts;
-        // The terminal message id keys the whole admitted batch; preceding human messages
-        // are context only when entering this native route for the first time.
-        const latest = human.at(-1);
-        const requestId = `${inputPrefix}${latest.id}`;
-        let lastDelivered = -1;
-        human.forEach((message, index) => { if (Object.hasOwn(receipts, `${inputPrefix}${message.id}`)) lastDelivered = index; });
-        const pending = Object.hasOwn(receipts, requestId) ? [] : human.slice(lastDelivered + 1);
-        const text = pending.map(message => message.content.map(block => block.text).join('\n')).join('\n\n');
-        const prior = receipts[requestId];
+        const text = pending.map(message => message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')).filter(Boolean).join('\n\n');
         if (prior?.receipt.status === 'uncertain') throw new Error('Native input acceptance is uncertain; inspect the native session before retrying');
         let cursor = prior ? 0 : record.cursor;
-        const receipt = prior?.receipt ?? await commander.submit(id, text, { requestId });
+        const receipt = prior?.receipt ?? await commander.submit(id, images.length ? { text, images } : text, { requestId });
         const usageSamples = new Map();
         let result = '', index = 0, started = false, completed = false;
         while (!completed) {
@@ -204,14 +228,33 @@ export function mountHarnessAdapter(ctx, commander, { bindOwner } = {}) {
   }
   const adapter = new CommanderAdapter();
   const unregister = ctx.llm.registerAdapter(Object.keys(providers).map(route), adapter);
-  // Inspect original attachments before LlmRuntime converts unsupported modalities
-  // to text placeholders or projects durable file handles into text.
+  // Validate the new prompt before the official runtime projects attachments.
   ctx.on('llm/stream', async function* (options, next) {
-    if (Object.keys(providers).some(provider => route(provider) === options.provider)
-      && options.messages.some(message => message.role === 'user' && message.source?.kind === 'user'
-        && message.content.some(block => block.type !== 'text'))) {
-      yield { type: 'finish', reason: { kind: 'error', failure: { code: 'UNSUPPORTED_ATTACHMENT', message: 'BenchGo currently supports text messages only; attachments are not supported' } } };
-      return;
+    const tool = Object.keys(providers).find(provider => route(provider) === options.provider);
+    const latest = tool && humanMessages(options.messages).at(-1);
+    if (latest?.content.some(block => block.type === 'image' || block.type === 'file')) {
+      const agent = ctx.agents.requireInitiator();
+      const binding = decodeRouteModelId(options.model);
+      const previous = commander.list().find(session => !session.archived && (!session.parentId || session.harnessAdopted)
+        && session.ownerSessionId === String(agent.session.id) && session.cwd === agent.session.header.cwd
+        && session.provider === tool && session.route?.providerId === binding?.providerId);
+      if (!previous || !Object.hasOwn(commander.get(previous.id).receipts, inputPrefix + latest.id)) {
+        if (latest.content.some(block => block.type === 'image')
+          && (!supportsNativeImages(tool) || !(await adapter.resolveModel(options.provider, options.model)).inputModalities?.includes('image'))) {
+          yield { type: 'finish', reason: { kind: 'error', failure: { code: 'MODEL_DOES_NOT_SUPPORT_IMAGES', message: imageUnsupported } } };
+          return;
+        }
+        for (const block of latest.content.filter(block => block.type === 'file')) {
+          try {
+            const path = ctx.get('attachments')?.fileHostPath(block.attachment);
+            if (!path || !ctx.get('fs')?.processPathFromHostPath(path)) throw new Error('File path is unavailable');
+            await access(path, constants.R_OK);
+          } catch {
+            yield { type: 'finish', reason: { kind: 'error', failure: { code: 'ATTACHMENT_UNREADABLE', message: '文件附件无法读取，请移除后重新添加。' } } };
+            return;
+          }
+        }
+      }
     }
     yield* next();
   });

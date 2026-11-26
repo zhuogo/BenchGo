@@ -1,4 +1,4 @@
-import { nativeProviderRoute, providerProtocolReason, routerGoModelProtocolReason } from './provider-access.mjs';
+import { nativeProviderRoute, providerProtocolReason, routerGoModelProtocolReason, supportsNativeImages } from './provider-access.mjs';
 import { hasTextCapability } from '../shared/model-capabilities.mjs';
 import { nativeModelReasoning } from '../shared/runtime-setting-fields.mjs';
 
@@ -24,6 +24,11 @@ function safeReasoning(value) {
   const efforts = value.efforts.filter(item => cleanId(item?.id)).map(item => ({ id: item.id, name: cleanId(item.name) ? item.name : item.id, ...(cleanId(item.description) ? { description: item.description } : {}) }));
   return efforts.length ? { efforts, ...(efforts.some(item => item.id === value.defaultEffort) ? { defaultEffort: value.defaultEffort } : {}) } : undefined;
 }
+export async function resolveCatalogModel(llm, providerId, row) {
+  if (!llm?.resolveModelInfo) return row;
+  try { return { ...row, ...await llm.resolveModelInfo(providerId, row.id) }; }
+  catch { return row; }
+}
 export function createPickerCatalog({ commander, installer, providers, routeService, llm, isHarnessAvailable = () => true, cacheMs = 5000, modelCacheMs = 30_000 } = {}) {
   let installCache, installAt = 0, installationJob, catalogJob, modelSnapshot;
   const installations = async () => {
@@ -43,10 +48,11 @@ export function createPickerCatalog({ commander, installer, providers, routeServ
   const providerModels = async providerId => {
     const rows = llm?.listModels ? await llm.listModels(providerId) : await providers.models(providerId);
     return Promise.all(rows.filter(row => cleanId(row?.id) && !row.kinds?.length && (!row.inputModalities?.length || row.inputModalities.includes('text'))).map(async row => {
-      let resolved = row;
-      if (llm?.resolveModelInfo) { try { resolved = { ...row, ...await llm.resolveModelInfo(providerId, row.id) }; } catch { /* Configured directory metadata remains usable. */ } }
+      const resolved = await resolveCatalogModel(llm, providerId, row);
       const contextWindow = resolved.context?.contextWindow ?? resolved.contextWindow, reasoning = safeReasoning(resolved.reasoning);
-      return { id: row.id, name: cleanId(row.name) ? row.name : row.id, ...(positive(contextWindow) ? { context: { contextWindow } } : {}), ...(reasoning ? { reasoning } : {}) };
+      return { id: row.id, name: cleanId(row.name) ? row.name : row.id,
+        inputModalities: resolved.inputModalities?.includes('image') ? ['text', 'image'] : ['text'],
+        ...(positive(contextWindow) ? { context: { contextWindow } } : {}), ...(reasoning ? { reasoning } : {}) };
     }));
   };
   const build = async () => {
@@ -108,6 +114,7 @@ export function createPickerCatalog({ commander, installer, providers, routeServ
             tool: tool.id, providerId: provider.id, providerName: provider.name,
             modelId: tool.id === 'deepseek' ? model.id : encodeRouteModelId(provider.id, model.id),
             nativeModelId: model.id, name: model.name, protocol: direct?.protocol ?? provider.protocol,
+            inputModalities: tool.id === 'deepseek' || supportsNativeImages(tool.id) ? model.inputModalities : ['text'],
             ...(model.context ? { context: model.context } : {}),
             ...(reasoning ? { reasoning } : {}),
           });
@@ -155,7 +162,7 @@ export function createPickerCatalog({ commander, installer, providers, routeServ
     },
     async models(tool, { fresh = false } = {}) {
       const catalog = await read(!fresh);
-      return catalog.routes.filter(row => row.tool === tool).map(row => ({ provider: 'commander-' + tool, id: row.modelId, name: row.name, inputModalities: ['text'], providerId: row.providerId, providerName: row.providerName, nativeModelId: row.nativeModelId, ...(row.context ? { context: structuredClone(row.context) } : {}), ...(row.reasoning ? { reasoning: structuredClone(row.reasoning) } : {}) }));
+      return catalog.routes.filter(row => row.tool === tool).map(row => ({ provider: 'commander-' + tool, id: row.modelId, name: row.name, inputModalities: [...row.inputModalities], providerId: row.providerId, providerName: row.providerName, nativeModelId: row.nativeModelId, ...(row.context ? { context: structuredClone(row.context) } : {}), ...(row.reasoning ? { reasoning: structuredClone(row.reasoning) } : {}) }));
     },
   };
 }

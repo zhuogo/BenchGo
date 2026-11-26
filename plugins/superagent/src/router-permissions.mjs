@@ -1,4 +1,6 @@
 import { hostRootContext } from '../../base/shared/host-root-context.mjs';
+import { fallbackCallSignature } from './model-fallback.mjs';
+import { isChatUserMessage } from './question-reply.mjs';
 
 // Exact upstream contracts, never guessed prefixes, annotations or tool arguments.
 // Interaction and Schedule tools remain the Router's own coordination operations.
@@ -16,13 +18,13 @@ export function captureRouterTools(tools, agent) {
 }
 
 /** Keep Router coordination separate from Worker environment execution. */
-export function installRouterPermissionGate(scope, { agent, inherited, controlled, executor }) {
+export function installRouterPermissionGate(scope, { agent, inherited, controlled, executor, toolsClosed = () => false }) {
   const approved = new Set();
   for (const [name, definition] of controlled) {
     if (inherited.get(name) !== definition) approved.add(definition);
   }
   const contextTools = () => scope.get?.('benchgoEfficiency')?.contextTools?.() ?? [];
-  const permits = (name, definition) => Boolean(definition && (coordination.has(name)
+  const permits = (name, definition) => Boolean(!toolsClosed() && definition && (coordination.has(name)
     || approved.has(definition)
     || contextTools().some(row => row.name === name && row.definition === definition)));
   const permittedDefinitions = definitions => definitions.filter(definition => permits(definition.name, definition));
@@ -100,26 +102,77 @@ export function installRouterPermissionGate(scope, { agent, inherited, controlle
   });
 }
 
-/** Stop a repeated shared prerequisite failure at the official step boundary.
- * Argument errors remain correctable; successful work or new instructions resets the streak.
- */
-export function installRouterFailureConvergence(scope, agent, onStop) {
+/** Give the model one final response after closing tool execution for this instruction. */
+export function installRouterFailureConvergence(scope, agent) {
   const immediate = new Set(['PROFILE_CONFIG_DIRECT_WRITE', 'PROFILE_CONFIG_RESTORED', 'MANDATE_REVOKED']);
   const structural = new Set(['ENOSPC', 'EDQUOT', 'EROFS',
     'ROLE_SERVICES_UNAVAILABLE', 'ROLE_PRESET_UNAVAILABLE', 'SESSION_ROLE_STORE_UNAVAILABLE',
     'MANAGEMENT_OWNER_REQUIRED', 'MANAGEMENT_APPROVAL_UNAVAILABLE', 'MANAGEMENT_APPROVAL_DENIED', 'APPROVAL_POLICY_NEVER', 'SETTINGS_UNAVAILABLE', 'CLEANUP_UNAVAILABLE']);
-  let prior, stopped;
+  const archiveWrites = new Set(['assistant_session_archive_apply', 'assistant_session_archive_official']);
+  const archiveTools = new Set([...archiveWrites, 'assistant_session_archive_preview']);
+  const archiveQueries = new Set([...archiveTools, 'assistant_projects', 'assistant_sessions']);
+  const archiveInputErrors = new Set(['MANAGEMENT_INPUT', 'SESSION_ARCHIVE_SCOPE']);
+  let prior, stopped, archive, archiveReply, replyStarted;
+  const rejectedInputs = new Map();
   const admittedUsers = new Set(), failures = new Map();
+  const reset = () => {
+    prior = stopped = archive = archiveReply = replyStarted = undefined;
+    rejectedInputs.clear();
+  };
+  const admit = message => {
+    if (!isChatUserMessage(message) || admittedUsers.has(message.id)) return;
+    admittedUsers.add(message.id);
+    reset();
+  };
+  scope.on('agent/inbox/claimed', ({ message }) => admit(message));
   scope.on('tools/execute', async (execution, next) => {
+    if (execution.agent !== agent) return next();
+    const { name, callId } = execution;
+    const isArchive = archiveTools.has(name);
+    const signature = isArchive || name === 'assistant_projects' ? fallbackCallSignature(name, execution.arguments) : undefined;
+    const previous = rejectedInputs.get(signature);
+    if (previous) {
+      execution.signal.throwIfAborted();
+      const message = `${previous.message}。本轮未再次执行，请修改参数后再调用`;
+      return { isError: true, error: { ...previous, message }, content: [{ type: 'text', text: `Error: ${message}` }] };
+    }
     try { return await next(); }
-    catch (error) { if (execution.agent === agent && error?.code) failures.set(execution.callId, error.code); throw error; }
+    catch (error) { if (error?.code) failures.set(callId, error.code); throw error; }
   });
   scope.on('tools/result', (execution, result) => {
     if (execution.agent !== agent) return;
     const failure = failures.get(execution.callId);
     failures.delete(execution.callId);
     const message = result.error?.message || (result.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
-    const code = result.error?.info?.code ?? result.error?.code ?? failure ?? /^([A-Z_]+): /.exec(message)?.[1];
+    const structuredCode = result.error?.info?.code ?? result.error?.code ?? failure;
+    const code = structuredCode ?? /^([A-Z_]+): /.exec(message)?.[1];
+    const name = execution.name;
+    const errorInfo = result.error?.info;
+    if (result.isError && (archiveTools.has(name) && archiveInputErrors.has(errorInfo?.code)
+      || name === 'assistant_projects' && errorInfo?.code === 'PROJECTS_SCOPE_CONFLICT')) {
+      const signature = fallbackCallSignature(name, execution.arguments);
+      if (!rejectedInputs.has(signature)) {
+        if (rejectedInputs.size >= 32) rejectedInputs.delete(rejectedInputs.keys().next().value);
+        rejectedInputs.set(signature, { info: errorInfo, message });
+      }
+    }
+    if (archiveTools.has(name)) archive ??= { calls: 0, seen: new Map() };
+    if (archive && archiveQueries.has(name) && !replyStarted) {
+      if (result.isError) archive.lastError = { tool: name, code: code ?? null, message: message.slice(0, 1000) };
+      if (archiveWrites.has(name) && !result.isError) {
+        try { archive.receipt = JSON.parse(message); } catch { /* Ignore non-receipt output. */ }
+      }
+      if (!archiveReply) {
+        const signature = fallbackCallSignature(name, execution.arguments);
+        const repeats = (archive.seen.get(signature) ?? 0) + 1;
+        archive.seen.set(signature, repeats);
+        const calls = ++archive.calls;
+        const invalidOutput = archiveTools.has(name) && code === 'INVALID_TOOL_OUTPUT';
+        if (invalidOutput || calls >= 8 || repeats >= 3) {
+          archiveReply = { reason: invalidOutput ? code : repeats >= 3 ? 'REPEATED_CALL' : 'CALL_LIMIT', calls, repeatedCalls: repeats };
+        }
+      }
+    }
     if (!result.isError || (!structural.has(code) && !immediate.has(code))) { prior = undefined; return; }
     if (immediate.has(code)) stopped = { code, message, toolName: execution.name, callId: execution.callId };
     else if (prior?.code === code && prior.message === message) stopped = prior;
@@ -127,10 +180,17 @@ export function installRouterFailureConvergence(scope, agent, onStop) {
   });
   scope.on('agent/pre-step', (payload, next) => {
     if (payload.agent !== agent) return next();
-    for (const message of payload.messages || []) if (message.source?.kind === 'user' && !admittedUsers.has(message.id)) {
-      admittedUsers.add(message.id); stopped = undefined; prior = undefined;
+    for (const message of payload.messages || []) admit(message);
+    if (stopped || archiveReply) {
+      if (replyStarted) return { kind: 'reject' };
+      replyStarted = true;
     }
-    if (stopped) { onStop(stopped); return { kind: 'reject' }; }
     return next();
   });
+  scope.on('agent/status', ({ agent: current, status }) => {
+    if (current === agent && status === 'idle') reset();
+  });
+  return () => stopped
+    ? { reason: stopped.code, error: stopped, receipt: archive?.receipt ?? null }
+    : archiveReply && { ...archiveReply, error: archive.lastError ?? null, receipt: archive.receipt ?? null };
 }

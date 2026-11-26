@@ -21,7 +21,7 @@ async function fixture(t, { existing = false } = {}) {
   const bytes = [raw, signature];
   for (const [i, path] of paths.entries()) await writeFile(join(directory, path.split('/').at(-1)), bytes[i]);
   const release = { draft: false, prerelease: false, tag_name: tag, target_commitish: source,
-    published_at: '2026-11-22T02:32:18Z',
+    published_at: '2026-11-22T02:32:18Z', body: '## 本次更新\n\n- 发布说明',
     assets: bytes.map((value, i) => ({ id: i + 1, name: paths[i].split('/').at(-1), size: value.length, digest: `sha256:${sha256(value)}` })) };
   const files = new Map(existing ? [[`releases/v0.1.1/downloads.json`, Buffer.from('historical')]] : []), blobs = new Map(), calls = [];
   const state = { head: existing ? previous : null, release, commitSource: source, files };
@@ -31,6 +31,12 @@ async function fixture(t, { existing = false } = {}) {
     const body = options.body ? JSON.parse(options.body) : undefined;
     calls.push({ path, method: options.method ?? 'GET', body });
     if (path === `/releases/tags/${tag}`) return release;
+    if (path === '/releases?per_page=100&page=1') return [
+      { ...release, tag_name: 'v0.1.1', body: '历史发布说明' },
+      { ...release, tag_name: 'v0.1.3', draft: true },
+      { ...release, tag_name: 'v0.1.4', prerelease: true },
+      { ...release, tag_name: 'plugin-updates' },
+    ];
     if (path === `/commits/${tag}`) return { sha: state.commitSource };
     if (path === '/git/ref/heads/release-metadata') return state.head ? { object: { sha: state.head } } : null;
     if (path.startsWith('/contents/')) {
@@ -62,6 +68,10 @@ test('creates a root metadata branch with original signed bytes and becomes idem
   assert.equal(snapshot.publishedAt, f.release.published_at);
   assert.deepEqual(Buffer.from(snapshot.catalog, 'base64'), f.bytes[0]);
   assert.equal(snapshot.signature, f.bytes[1].toString().trim());
+  assert.deepEqual(JSON.parse(f.files.get('changelog.json')), { schemaVersion: 1, releases: [
+    { tag, publishedAt: f.release.published_at, notes: f.release.body },
+    { tag: 'v0.1.1', publishedAt: f.release.published_at, notes: '历史发布说明' },
+  ] });
   assert.deepEqual(f.calls.find(call => call.path === '/git/commits').body.parents, []);
   assert.equal(f.calls.find(call => call.path === '/git/refs').body.ref, 'refs/heads/release-metadata');
   const writes = f.calls.filter(call => call.method !== 'GET').length;
@@ -89,7 +99,7 @@ test('repairs an incomplete pair while preserving the original existing half', a
   const f = await fixture(t, { existing: true });
   f.files.set(paths[0], f.bytes[0]);
   await publishWebCatalog(f.options);
-  assert.deepEqual(f.calls.find(call => call.path === '/git/trees').body.tree.map(row => row.path), [paths[1], 'latest.json']);
+  assert.deepEqual(f.calls.find(call => call.path === '/git/trees').body.tree.map(row => row.path), [paths[1], 'latest.json', 'changelog.json']);
 });
 
 test('backfills or advances the static catalog without rolling back a newer version', async t => {
@@ -98,7 +108,7 @@ test('backfills or advances the static catalog without rolling back a newer vers
     for (const [index, path] of paths.entries()) f.files.set(path, f.bytes[index]);
     if (previousVersion) f.files.set('latest.json', Buffer.from(JSON.stringify({ version: previousVersion })));
     const result = await publishWebCatalog(f.options);
-    assert.equal(result.changed, previousVersion !== '0.1.10');
+    assert.equal(result.changed, true); // The archive is backfilled even if latest.json stays on a newer version.
     assert.equal(JSON.parse(f.files.get('latest.json')).version, previousVersion === '0.1.10' ? previousVersion : version);
   }
 });

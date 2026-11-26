@@ -1,0 +1,72 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T17:53:34.540Z",
+  "by": "codex",
+  "reason": "回写无上限派发实现和 102 单并发验证",
+  "base": "276b0a8ae64d",
+  "result": "8f24687830c7",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.dispatch.unlimited",
+      "fields": [
+        "implementation",
+        "sources"
+      ],
+      "before": {
+        "id": "assistant.dispatch.unlimited",
+        "type": "rule",
+        "title": "本机工单同时执行无数量上限",
+        "summary": "受理后，各工单独立启动。",
+        "parent": "assistant.dispatch",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "调度按各工单自身条件派发，已有执行占用不阻止新工单启动。",
+          "exceptions": [
+            "跨设备任务由目标设备的独立执行服务接收。"
+          ],
+          "when": "SuperAgent 已受理多个符合执行条件的本机工单。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求取消两单限制，连续派发 100 个任务也可以同时启动。"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "Worker 执行"
+          }
+        ]
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.dispatch.unlimited-check",
+      "fields": [
+        "verification"
+      ],
+      "before": {
+        "id": "assistant.dispatch.unlimited-check",
+        "type": "acceptance",
+        "title": "超过百单同时启动",
+        "summary": "连续受理逾百张工单，执行均可在前一单结束前启动。",
+        "parent": "assistant.dispatch",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "已有本机工单保持运行，随后受理一百张符合执行条件的独立工单",
+            "配置文件含升级前保存的并发数"
+          ],
+          "then": [
+            "全部新 Worker 启动，原执行继续运行",
+            "旧并发字段在配置读取和任务界面中消失"
+          ],
+          "when": "运行 SuperAgent 原有调度流程。"
+        }
+      }
+    }
+  ]
+}

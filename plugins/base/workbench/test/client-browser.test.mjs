@@ -68,7 +68,7 @@ async function fixture() {
       const entries=new Map();
       let navigation;
       window.sshLoads=[];
-      window.require.async=path=>new Promise((resolve,reject)=>{
+      window.require.async=path=>path==='./client.workbench.js' ? Promise.resolve({mountLocalWorkbench(){}}) : new Promise((resolve,reject)=>{
         window.sshLoads.push(path);
         window.finishSshLoad=success=>{
           if(!success){reject(new Error('fixture chunk failed'));return;}

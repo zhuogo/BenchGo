@@ -9,7 +9,7 @@ import { mediaResultFile, NATIVE_MEDIA_RESULT } from '../../media/shared/generat
 import { encodeRouteModelId } from '../../base/src/picker-catalog.mjs';
 import { createSessionRoutes } from '../../base/src/session-routes.mjs';
 import { createRuntimeSettings } from '../../base/src/runtime-settings.mjs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -205,12 +205,12 @@ test('official native replay keeps the external media receipt and its original g
   assert.notEqual(records()[0].data.groupId, records()[1].data.groupId);
 });
 
-test('auxiliary requests, wrong identities and attachments fail before native side effects', async () => {
+test('auxiliary requests, wrong identities and unsupported images fail before native side effects', async () => {
   const s = setup();
   await assert.rejects(collect(s.adapter.stream({ ...request([human('one', 'hello')]), purpose: 'session-title' })), /auxiliary/);
   await assert.rejects(collect(s.adapter.stream({ ...request([human('one', 'hello')]), sessionId: 'other' })), /identity/);
   const attachment = human('one', 'hello'); attachment.content.push({ type: 'image', attachment: {} });
-  await assert.rejects(collect(s.adapter.stream(request([attachment]))), /attachments/);
+  await assert.rejects(collect(s.adapter.stream(request([attachment]))), /不支持图片/);
   assert.equal(s.native.records.length, 0); await s.dispose();
 });
 
@@ -271,9 +271,18 @@ test('plugin disposal cancels active streams before unregistering', async () => 
   assert.equal(s.native.listenerCount('event'), 0); assert.equal(s.native.interrupted, 1);
 });
 
-test('actual Harness LlmRuntime routes native text and rejects attachments before modality projection', async () => {
+test('Harness LlmRuntime sends file paths and native images, rejects unsupported images, and skips replayed images', async t => {
   const ctx = new Context(), native = new Native();
-  ctx.provide('agents', { requireInitiator: () => ({ session: { id: 'harness', header: { cwd: '/project' } } }) });
+  const cwd = await mkdtemp(join(tmpdir(), 'benchgo-adapter-attachments-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const filePath = join(cwd, 'a note.txt'), imagePath = join(cwd, 'scene.png');
+  await Promise.all([writeFile(filePath, 'file content'), writeFile(imagePath, 'test image bytes')]);
+  ctx.provide('agents', { requireInitiator: () => ({ session: { id: 'harness', header: { cwd } } }) });
+  ctx.provide('attachments', { fileHostPath: () => filePath, imageHostPath: () => imagePath });
+  ctx.provide('fs', { processPathFromHostPath: path => path });
+  const vision = encodeRouteModelId('test-api', 'vision');
+  const list = native.pickerCatalog.models;
+  native.pickerCatalog.models = async () => [...await list(), { provider: 'commander-codex', id: vision, name: 'Vision', inputModalities: ['text', 'image'] }];
   try {
     await ctx.plugin(LlmRuntime);
     const fiber = ctx.plugin({ name: 'adapter-test', inject: ['llm', 'agents'], apply(scope) { mountHarnessAdapter(scope, native, { discover: async () => [] }); } });
@@ -281,10 +290,20 @@ test('actual Harness LlmRuntime routes native text and rejects attachments befor
     assert.equal(ctx.llm.listProviders().length, 7);
     const chunks = await collect(ctx.llm.stream(request([human('one', 'hello')])));
     assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } });
-    const attachment = human('two', 'look'); attachment.content.push({ type: 'image', attachment: {} });
-    const unsupported = await collect(ctx.llm.stream(request([attachment])));
-    assert.equal(unsupported.at(-1).reason.failure.code, 'UNSUPPORTED_ATTACHMENT');
-    assert.deepEqual(native.sent, ['hello']);
+    const photo = { id: 'two', role: 'user', source: { kind: 'user' }, content: [
+      { type: 'image', attachment: { attachmentId: 'image-id', name: 'scene.png', mediaType: 'image/png' } },
+    ] };
+    const unsupported = await collect(ctx.llm.stream(request([photo])));
+    assert.equal(unsupported.at(-1).reason.failure.code, 'MODEL_DOES_NOT_SUPPORT_IMAGES');
+    assert.equal((await collect(ctx.llm.stream({ ...request([photo]), model: vision }))).at(-1).reason.kind, 'stop');
+    assert.deepEqual(native.sent[1], { text: '', images: [{ id: 'image-id', path: imagePath }] });
+    const file = human('three', 'Read the file');
+    file.content.push({ type: 'file', attachment: { attachmentId: 'file-id', name: 'a note.txt', bytes: 12 } });
+    assert.equal((await collect(ctx.llm.stream(request([photo, file])))).at(-1).reason.kind, 'stop');
+    assert.match(native.sent[2], /verbatim read-only copy/);
+    assert.ok(native.sent[2].includes(JSON.stringify(filePath)));
+    assert.equal((await collect(ctx.llm.stream(request([photo, file])))).at(-1).reason.kind, 'stop');
+    assert.equal(native.sent.length, 3);
     await fiber.dispose(); assert.equal(ctx.llm.listProviders().length, 0);
   } finally { await ctx.fiber.dispose(); }
 });

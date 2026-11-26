@@ -67,7 +67,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     { writeEveryEvents: 200, writeIntervalMs: 5000 });
   const tokenRequire = createRequire(new URL('../../../deepseek-harness/packages/llm/token-meter/package.json', import.meta.url));
   await ctx.plugin((await import(pathToFileURL(tokenRequire.resolve('@deepseek-ai/dsh-token-meter')).href)).default);
-  let duringStream, maintenanceReply, startupMaintenance;
+  let duringStream, maintenanceReply, startupMaintenance, archiveReplay, archiveReplyError;
   const modelRequests = [];
   class Adapter extends LlmAdapter {
     async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: 131072 } }; }
@@ -84,6 +84,23 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
         });
       }
       const callback = duringStream; duringStream = undefined; if (callback) await callback();
+      if (archiveReplay?.length === 1 && !request.purpose) {
+        assert.equal(request.tools?.length ?? 0, 0);
+        assert.match(JSON.stringify(request.messages), /REPEATED_CALL/);
+        archiveReplay.shift();
+        if (archiveReplyError) throw archiveReplyError;
+        const text = '本轮的本机目录查询重复了三次，归档服务没有确认写入。';
+        yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text };
+        yield { type: 'block-end', index: 0, block: { type: 'text', text } }; yield { type: 'finish', reason: { kind: 'stop' } };
+        return;
+      }
+      const tool = archiveReplay && !request.purpose && archiveReplay.shift();
+      if (tool) {
+        yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+        yield { type: 'block-end', index: 0, block: { type: 'tool-call', ...tool } };
+        yield { type: 'finish', reason: { kind: 'tool-calls' } };
+        return;
+      }
       const text = maintenanceReply?.(request) ?? 'Mounted reply';
       yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text };
       yield { type: 'block-end', index: 0, block: { type: 'text', text } }; yield { type: 'finish', reason: { kind: 'stop' } };
@@ -719,6 +736,40 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   }
   const forbiddenHistory = await call({ action: 'sessionHistory', sessionId: 'unowned-worker' });
   assert.equal((await forbiddenHistory.json()).code, 'SESSION_QUERY_FORBIDDEN');
+  await t.test('archive convergence publishes one final message through the mounted Router', async () => {
+    archiveReplay = ['assistant_session_archive_preview', 'assistant_projects', 'assistant_projects', 'assistant_projects', 'reply']
+      .map((name, index) => ({ name, id: `archive-replay-${index}`, arguments: index ? '{"scope":"local","deviceId":"","deviceIds":[]}' : '{"harness":"official"}' }));
+    try {
+      const sent = await call({ action: 'send', text: '只预览 DeepSeek Harness 会话归档', requestId: 'archive-loop-replay' });
+      assert.equal(sent.status, 200);
+      await agent.whenIdle();
+      assert.equal(archiveReplay.length, 0);
+      const history = await (await call({ action: 'history' })).json();
+      assert.equal(history.messages.at(-1)?.text, '本轮的本机目录查询重复了三次，归档服务没有确认写入。');
+      const next = await call({ action: 'send', text: '继续正常对话', requestId: 'after-archive-loop' });
+      assert.equal(next.status, 200);
+      archiveReplay = undefined;
+      await agent.whenIdle();
+      const nextHistory = await (await call({ action: 'history' })).json();
+      assert.equal(nextHistory.messages.at(-1)?.text, 'Mounted reply');
+    } finally { archiveReplay = undefined; }
+  });
+  await t.test('failure of the final model request surfaces the actual model error', async () => {
+    archiveReplay = ['assistant_session_archive_preview', 'assistant_projects', 'assistant_projects', 'assistant_projects', 'reply']
+      .map((name, index) => ({ name, id: `archive-error-replay-${index}`, arguments: index ? '{"scope":"local"}' : '{"harness":"official"}' }));
+    archiveReplyError = new Error('fixture provider is unavailable for the final reply');
+    try {
+      const sent = await call({ action: 'send', text: '检查归档预览的结果', requestId: 'archive-model-error' });
+      assert.equal(sent.status, 200);
+      await agent.whenIdle();
+      assert.equal(archiveReplay.length, 0);
+      const events = agent.session.snapshotEvents();
+      const end = events.findLast(event => event.type === 'turn/end');
+      assert.equal(end.data.reason.kind, 'error');
+      assert.match(end.data.reason.error.message, /fixture provider is unavailable/);
+      assert.equal(events.some(event => event.type === 'plugin:benchgo-plugin/chat-publication' && event.data?.requestId === 'archive-model-error'), false);
+    } finally { archiveReplay = undefined; archiveReplyError = undefined; }
+  });
   response = await call({ action: 'archiveThread', threadId: 'main' }); assert.equal(response.status, 400);
   response = await call({ action: 'unknown' }); assert.equal(response.status, 400);
   const artifact = routes.get('/api/commander/assistant/artifact');

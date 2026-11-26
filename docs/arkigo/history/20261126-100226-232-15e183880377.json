@@ -1,0 +1,72 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T10:02:26.232Z",
+  "by": "codex",
+  "reason": "回写工作台续签与首屏优先加载的实现及验收",
+  "base": "b898dd45dd7b",
+  "result": "15e183880377",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.connect.workbench-recovery",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "link.connect.workbench-recovery",
+        "type": "rule",
+        "title": "工作台会话失效后恢复",
+        "summary": "配对有效时自动恢复当前工作台会话。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "桌面代理沿已核验路线重新签发失效会话，并合并并发续签。只读首屏请求可重试一次，写操作由用户决定是否重试。已撤销配对仍须重新配对。"
+        }
+      }
+    },
+    {
+      "op": "add",
+      "id": "link.connect.workbench-recovery-check"
+    },
+    {
+      "op": "update",
+      "id": "link.connect.workbench-startup",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "link.connect.workbench-startup",
+        "type": "rule",
+        "title": "远端工作台优先加载项目与总助手",
+        "summary": "先读取项目和总助手状态，推迟非首屏资源。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "远端先发出项目与总助手状态请求。推迟非首屏功能与字体，首屏可先用系统字体。"
+        }
+      }
+    },
+    {
+      "op": "add",
+      "id": "link.connect.workbench-startup-check"
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "link.connect.workbench-recovery-check",
+        "to": "link.connect.workbench-recovery",
+        "type": "verifies"
+      }
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "link.connect.workbench-startup-check",
+        "to": "link.connect.workbench-startup",
+        "type": "verifies"
+      }
+    }
+  ]
+}

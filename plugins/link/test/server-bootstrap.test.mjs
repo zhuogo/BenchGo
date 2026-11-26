@@ -37,7 +37,7 @@ test('server installer rejects ARM64 and other unsupported CPUs before systemd o
 
 async function serverLinkInitializer(allocatePort) {
   const source = await readFile(join(root, 'scripts/server/bootstrap.mjs'), 'utf8');
-  const start = source.indexOf('async function initializeServerLink('), end = source.indexOf('\nasync function ownerAdmin(', start);
+  const start = source.indexOf('async function initializeServerLink('), end = source.indexOf('\nfunction ownerAdmin(', start);
   assert(start >= 0 && end > start);
   return new Function('mkdir', 'readFile', 'writeFile', 'join', 'freePort', `return (${source.slice(start, end)});`)(mkdir, readFile, writeFile, join, allocatePort);
 }

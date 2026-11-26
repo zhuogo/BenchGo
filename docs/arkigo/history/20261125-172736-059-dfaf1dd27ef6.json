@@ -1,0 +1,53 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T17:27:36.059Z",
+  "by": "codex",
+  "reason": "记录官方工作区索引归档与恢复的隔离验收",
+  "base": "071538b7148b",
+  "result": "dfaf1dd27ef6",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.note"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive-check",
+        "type": "acceptance",
+        "title": "验证总助手批量归档",
+        "summary": "核实筛选、归档、保护范围和失败回执。",
+        "parent": "assistant.management.session-archive",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "本机主人已有普通工作台聊天与运行中的活动"
+          ],
+          "then": [
+            "官方归档索引和适用的 Commander 状态按明确目标更新，聊天历史可在侧栏恢复。",
+            "当前总助手会话、工单会话、置顶和活跃会话保持原状态。",
+            "异步变化和局部失败只影响相应目标，回执给出实际结果。"
+          ],
+          "when": "在当前聊天按明确范围让总助手预览并归档会话"
+        },
+        "verification": {
+          "checkedAt": "2026-11-25T17:25:57.673Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/conversation-management.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/base/test/sidebar-state.test.mjs"
+            }
+          ],
+          "note": "会话管理、Worker 归档与侧栏定向测试共 50 项通过，含官方 Native 工具执行器。npm run reload:plus 同步桌面插件并请求热重载，npm pack --dry-run 确认发布包包含所需源码。工作区广测另有一条旧 Worker Web 归档测试在替换为 HEAD 的 Web 入口后仍失败。本机真实会话仅保留作为用户数据。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

@@ -6,11 +6,21 @@ import { randomBytes, createHash } from 'node:crypto';
 import { remoteAgent, relayTargetHeaders, upstreamOrigin } from './remote.mjs';
 import { openRemoteWorkbench } from './routes.mjs';
 const secret = () => randomBytes(32).toString('base64url');
+const WORKBENCH = '/link/workbench/';
+const legacyAuthError = JSON.stringify({ error: '设备授权已失效，请重新配对' });
+const statePaths = new Set([WORKBENCH + 'api/commander', WORKBENCH + 'api/commander/assistant']);
+const isStateRequest = body => {
+  try {
+    const value = JSON.parse(body);
+    return value?.action === 'state' && Object.keys(value).length === 1;
+  } catch { return false; }
+};
 /** Each host has its own origin. Remote scripts cannot read the device centre. */
 export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuccess, webRoot, publicOrigin, publicPrefix = '', workbenchLease } = {}) {
   const agent = remoteAgent(target), tickets = new Map(), sessions = new Set(), sockets = new Set();
   const remoteOrigin = upstreamOrigin(target);
   let origin, remoteCookie, closed = false, leaseUntil = 0, renewing, admission;
+  let recoveryError, recoveryAfter = 0;
   const upstream = async () => {
     if (workbenchLease) {
       if (leaseUntil > Date.now()) return;
@@ -19,14 +29,31 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
           throw new Error('共享工作台路线已更新，请重新连接');
         remoteCookie = lease.cookie.split(';')[0];
         leaseUntil = Date.now() + 55_000;
+        recoveryError = undefined;
+        recoveryAfter = 0;
       }).finally(() => { renewing = undefined; });
       return renewing;
     }
-    renewing ??= openRemoteWorkbench(target, { agent }).then(({ cookie, ...info }) => {
+    const candidate = admission ? { ...target, hostId: admission.hostId, authorizationId: admission.authorizationId } : target;
+    renewing ??= openRemoteWorkbench(candidate, { agent }).then(({ cookie, ...info }) => {
       remoteCookie = cookie.split(';', 1)[0];
       admission = info;
+      recoveryError = undefined;
+      recoveryAfter = 0;
     }).finally(() => { renewing = undefined; });
     return renewing;
+  };
+  const recover = async cookie => {
+    if (closed) return false;
+    if (cookie !== remoteCookie) return true;
+    if (Date.now() < recoveryAfter) return false;
+    if (workbenchLease) leaseUntil = 0;
+    try { await upstream(); return !closed; }
+    catch (error) {
+      recoveryError = error;
+      recoveryAfter = Date.now() + 5000;
+      return false;
+    }
   };
   try { await upstream(); }
   catch (error) { agent.destroy(); throw error; }
@@ -54,9 +81,70 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
       Object.assign(headers, relayTargetHeaders(target));
       // Only static assets pass through unchanged. HTML must remain decodable for path/CSP rewriting.
       const staticAsset = url.pathname.startsWith('/link/workbench/plugins/') || url.pathname.startsWith('/link/workbench/assets/');
-      headers['accept-encoding'] = staticAsset ? req.headers['accept-encoding'] || 'identity' : 'identity'; headers.cookie = remoteCookie; headers.origin = remoteOrigin;
-      const remote = request(new URL(url.pathname + url.search, remoteOrigin), { agent, method: req.method, headers }, response => {
-        if (response.statusCode >= 200 && response.statusCode < 400) onSuccess?.();
+      headers['accept-encoding'] = staticAsset ? req.headers['accept-encoding'] || 'identity' : 'identity'; headers.origin = remoteOrigin;
+      const bodyLength = Number(req.headers['content-length']);
+      let body;
+      if (req.method === 'POST' && statePaths.has(url.pathname) && bodyLength > 0 && bodyLength <= 256
+        && req.headers['content-type']?.startsWith('application/json')) {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        body = Buffer.concat(chunks);
+      }
+      const streamedBody = !body && (req.method === 'POST' || bodyLength > 0 || req.headers['transfer-encoding']);
+      const retryable = !streamedBody && (req.method !== 'POST' || isStateRequest(body));
+      const forward = (cookie, retried = false) => {
+        if (res.destroyed) return;
+        const remote = request(new URL(url.pathname + url.search, remoteOrigin), { agent, method: req.method, headers: { ...headers, cookie } }, response => {
+          void sendResponse(response, cookie, retried).catch(error => res.destroy(error));
+        });
+        remote.on('error', error => { onFailure?.(error); if (res.headersSent) res.destroy(); else { res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' }); res.end('主机暂时不可达，请返回设备列表重试'); } });
+        remote.setTimeout(90000, () => remote.destroy(Object.assign(new Error('工作台响应超时'), { code: 'ETIMEDOUT' })));
+        res.once('close', () => { if (!res.writableEnded) remote.destroy(); });
+        if (streamedBody) req.pipe(remote);
+        else remote.end(body);
+      };
+      const sendResponse = async (response, cookie, retried) => {
+        response.on('error', error => res.destroy(error));
+        let rejectedBody;
+        const status = response.statusCode;
+        const entry = url.pathname === WORKBENCH || url.pathname === WORKBENCH + 'index.html';
+        let rejectedSession = entry && status === 303 && response.headers.location === '/link/';
+        // Older peers report an invalid workbench cookie in the JSON body. Keep
+        // application-level 401s intact, including those returned by tool routes.
+        if (!retried && status === 401) {
+          rejectedSession = response.headers['x-benchgo-workbench-session'] === 'expired';
+          if (!rejectedSession && String(response.headers['content-type']).startsWith('application/json')) {
+            const chunks = [];
+            let bytes = 0;
+            for await (const chunk of response.iterator({ destroyOnReturn: false })) {
+              chunks.push(chunk); bytes += chunk.length;
+              if (bytes > 4096) break;
+            }
+            rejectedBody = Buffer.concat(chunks);
+            rejectedSession = response.readableEnded && rejectedBody.toString() === legacyAuthError;
+          }
+        }
+        if (rejectedSession && !retried) {
+          const recovered = await recover(cookie);
+          if (res.destroyed) { response.resume(); return; }
+          if (recovered) {
+            response.resume();
+            if (retryable) { forward(remoteCookie, true); return; }
+            res.writeHead(409, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+            res.end(JSON.stringify({ error: '工作台连接已恢复，请重试本次操作' }));
+            return;
+          }
+          if (recoveryError && recoveryError.status !== 401) {
+            response.resume();
+            res.writeHead(recoveryError.status || 502, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+            res.end(JSON.stringify({ error: recoveryError.message }));
+            return;
+          }
+        }
+        if (status >= 200 && status < 300 && url.pathname === WORKBENCH + 'disconnect' && req.method === 'POST') {
+          sessions.delete(match[1]);
+        }
+        if (status >= 200 && status < 400 && !rejectedSession) onSuccess?.();
         const outgoing = { ...response.headers, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
         delete outgoing['set-cookie']; delete outgoing['x-frame-options']; delete outgoing['strict-transport-security'];
         if (outgoing['content-security-policy']) outgoing['content-security-policy'] = outgoing['content-security-policy'].replace(/frame-ancestors[^;]*/g, "frame-ancestors 'self' " + parentOrigin + ' dsh-app:');
@@ -71,13 +159,14 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
           const chunks = []; let bytes = 0;
           response.on('data', chunk => { bytes += chunk.length; if (bytes > 8 * 1024 * 1024) response.destroy(new Error('工作台页面过大')); else chunks.push(chunk); });
           response.on('end', () => { if (res.destroyed) return; let html = Buffer.concat(chunks).toString().replaceAll('/link/workbench/', prefix + '/link/workbench/'); if (url.pathname === '/link/workbench/' || url.pathname === '/link/workbench/index.html') html = html.replace('<head>', '<head><script src="' + prefix + '/local-proxy.js"></script>'); const hashes = [...html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(match => "'sha256-" + createHash('sha256').update(match[1]).digest('base64') + "'"); if (outgoing['content-security-policy']) { outgoing['content-security-policy'] = outgoing['content-security-policy'].replace(/'sha256-[^']+'/g, '').replace(/script-src([^;]*)/, (_, rules) => 'script-src' + rules + ' ' + hashes.join(' ')).replace(/connect-src([^;]*)/, (_, rules) => 'connect-src' + rules + ' ' + (publicOrigin || origin).replace(/^http/, 'ws')); } delete outgoing['content-length']; res.writeHead(response.statusCode, outgoing); res.end(html); });
-        } else { res.writeHead(response.statusCode, outgoing); response.pipe(res); }
-        response.on('error', error => res.destroy(error));
-      });
-      remote.on('error', error => { onFailure?.(error); if (res.headersSent) res.destroy(); else { res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' }); res.end('主机暂时不可达，请返回设备列表重试'); } });
-      remote.setTimeout(90000, () => remote.destroy(Object.assign(new Error('工作台响应超时'), { code: 'ETIMEDOUT' })));
-      res.on('close', () => { if (!res.writableEnded) remote.destroy(); });
-      req.pipe(remote);
+        } else {
+          res.writeHead(response.statusCode, outgoing);
+          if (rejectedBody && req.method !== 'HEAD') res.write(rejectedBody);
+          if (response.readableEnded) res.end();
+          else response.pipe(res);
+        }
+      };
+      forward(remoteCookie);
     } catch (error) { if (!res.headersSent) res.writeHead(error.status || 502, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(error.message); }
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });

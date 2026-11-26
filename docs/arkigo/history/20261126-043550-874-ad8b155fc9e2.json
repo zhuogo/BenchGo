@@ -1,0 +1,63 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T04:35:50.874Z",
+  "by": "ai",
+  "reason": "补记官方会话和输入框回归结果",
+  "base": "1093fde29364",
+  "result": "ad8b155fc9e2",
+  "changes": [
+    {
+      "op": "update",
+      "id": "models.commander.attachments.check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "models.commander.attachments.check",
+        "type": "acceptance",
+        "title": "验收外部 Harness 附件",
+        "summary": "确认实际工具读文件、视觉请求、模型校验和重试。",
+        "parent": "models.commander.attachments",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "then": [
+            "普通文件可由原生工具读取，模型请求带原生图片字段。",
+            "纯文本模型拒绝图片并保留草稿，已发送的历史图片不阻塞后续文字。",
+            "未分组、项目和 Link 会话使用各自执行主机的路径，旧文本回执和重试只执行一次。"
+          ],
+          "when": "从工作台向 Codex、Claude Code、Pi 和 OpenCode 发送普通文件、单张图片及图文混合消息，并重连后重试。"
+        },
+        "verification": {
+          "checkedAt": "2026-11-26T04:34:47.938Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/harness/test/native-loopback.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/harness/test/commands.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/harness/test/adapter.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/base/test/session-routes.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench.test.mjs"
+            }
+          ],
+          "note": "Harness 143 项和目录、路由、Link、官方提交入口相关 53 项通过。发布形态四个真实 CLI 通过图片字段、仅图片、普通文件工具读取和重连去重回环。RouterGo 的 gpt-6.2-sol 经四条路线均识别合成蓝图并读回临时文件。桌面开发副本五个关键文件哈希核对通过。覆盖协议与自动化入口，桌面和手机 UI 未手动点验。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

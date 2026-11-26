@@ -14,25 +14,26 @@ const protocols = {
 
 export const modelProtocol = value => Object.hasOwn(protocols, value) ? protocols[value] : null;
 export const protocolForTool = tool => tool === 'codex' ? 'responses' : tool === 'claude' ? 'anthropic' : null;
+export const supportsNativeImages = tool => ['codex', 'claude', 'pi', 'opencode'].includes(tool);
 
 export const isManagedRouterGo = (providerId, baseURL, credentialRef) => isRouterGo(providerId)
   && typeof baseURL === 'string' && baseURL.replace(/\/$/u, '') === routerGo.baseURL
   && isRouterGoAccountReference(credentialRef);
 
 export function nativeProviderRoute(tool, provider) {
-  const protocol = protocolForTool(tool);
-  if (!protocol) return null;
   const configured = provider.modelProtocol ?? modelProtocol(provider.protocol);
+  const protocol = protocolForTool(tool) ?? (['pi', 'opencode'].includes(tool) ? configured : null);
+  if (!protocol) return null;
   if (provider.managedRouterGo) {
-    return protocol === 'responses'
-      ? { protocol, sourceProtocol: 'openai-responses', baseURL: routerGo.baseURL }
-      : { protocol, sourceProtocol: 'anthropic-messages', baseURL: routerGoOrigin + '/api' };
+    if (protocol === 'anthropic') return { protocol, sourceProtocol: 'anthropic-messages', baseURL: routerGoOrigin + '/api' };
+    return { protocol, sourceProtocol: protocol === 'responses' ? 'openai-responses' : 'openai-completions', baseURL: routerGo.baseURL };
   }
   if (configured !== protocol) return null;
   return { protocol, sourceProtocol: provider.protocol, baseURL: provider.baseURL };
 }
 
 export function providerProtocolReason(tool) {
+  if (!protocolForTool(tool)) return '供应商未配置可用的对话 API';
   return '供应商未配置 ' + (tool === 'codex' ? 'Responses' : 'Anthropic Messages') + ' API';
 }
 

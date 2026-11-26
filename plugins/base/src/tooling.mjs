@@ -1,6 +1,6 @@
 import { ToolInstaller } from './tool-install.mjs';
 import { createSessionRoutes } from './session-routes.mjs';
-import { createPickerCatalog } from './picker-catalog.mjs';
+import { createPickerCatalog, resolveCatalogModel } from './picker-catalog.mjs';
 import { assertProviderToolAccess, routerGoModelProtocolReason } from './provider-access.mjs';
 import { createRuntimeSettings } from './runtime-settings.mjs';
 import { assertSameOrigin } from '../shared/http.mjs';
@@ -19,7 +19,11 @@ export async function mountTooling(ctx, commander, providers, options = {}) {
   };
   const installer = options.installer ?? new ToolInstaller({ isRunning: busy });
   const runtimeSettings = options.runtimeSettings ?? createRuntimeSettings({ directory });
-  const routeService = createSessionRoutes({ directory, providers, runtimeSettings, async harnessDefaults(tool, providerId, model) {
+  const routeService = createSessionRoutes({ directory, providers, runtimeSettings, async resolveModel(providerId, model) {
+    const rows = ctx.llm?.listModels ? await ctx.llm.listModels(providerId) : await providers.models?.(providerId);
+    const entry = rows?.find(row => row.id === model) ?? { id: model };
+    return resolveCatalogModel(ctx.llm, providerId, entry);
+  }, async harnessDefaults(tool, providerId, model) {
     if (tool === 'claude') return { settings: { env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' } } };
     const config = { features: { multi_agent: true } };
     const subagentSettings = ctx.settings?.describe({ redactSecrets: true }).find(({ ns }) => ns === 'subagent')?.value;

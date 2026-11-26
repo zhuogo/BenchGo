@@ -1,0 +1,26 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T17:47:28.337Z",
+  "by": "user",
+  "reason": "按用户要求取消本机工单并发上限",
+  "base": "dfaf1dd27ef6",
+  "result": "276b0a8ae64d",
+  "changes": [
+    {
+      "op": "add",
+      "id": "assistant.dispatch.unlimited"
+    },
+    {
+      "op": "add",
+      "id": "assistant.dispatch.unlimited-check"
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "assistant.dispatch.unlimited-check",
+        "to": "assistant.dispatch.unlimited",
+        "type": "verifies"
+      }
+    }
+  ]
+}

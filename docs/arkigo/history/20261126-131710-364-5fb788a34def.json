@@ -1,0 +1,50 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T13:17:10.364Z",
+  "by": "ai",
+  "reason": "记录自动故障反馈、研判审核与独立 worktree 流程",
+  "base": "15e183880377",
+  "result": "5fb788a34def",
+  "changes": [
+    {
+      "op": "add",
+      "id": "workbench.base.faults"
+    },
+    {
+      "op": "add",
+      "id": "workbench.base.faults.review"
+    },
+    {
+      "op": "add",
+      "id": "workbench.base.faults.triage"
+    },
+    {
+      "op": "add",
+      "id": "workbench.base.faults.worktree"
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "workbench.base.faults",
+        "to": "workbench.base.faults.review",
+        "type": "governed_by"
+      }
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "workbench.base.faults",
+        "to": "workbench.base.faults.triage",
+        "type": "governed_by"
+      }
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "workbench.base.faults",
+        "to": "workbench.base.faults.worktree",
+        "type": "governed_by"
+      }
+    }
+  ]
+}

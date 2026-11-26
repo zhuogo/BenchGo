@@ -1,0 +1,14 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T16:21:34.853Z",
+  "by": "codex",
+  "reason": "记录 Router 可用 Markdown 呈现已验证产物的用户要求",
+  "base": "d153b89ed15a",
+  "result": "b37f8b20aaad",
+  "changes": [
+    {
+      "op": "add",
+      "id": "assistant.delivery.media-markdown"
+    }
+  ]
+}

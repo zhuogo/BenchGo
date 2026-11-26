@@ -1,0 +1,129 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T06:30:17.949Z",
+  "by": "codex",
+  "reason": "登记归档范围修复、Router 终止边界和本机验证结果",
+  "base": "6db9e417a0a0",
+  "result": "1eecb54dc5f0",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive",
+        "type": "interface",
+        "title": "总助手批量归档工作台会话",
+        "summary": "本机主人在聊天里按 Harness、标题、项目、时间或保留数量归档普通会话。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "auth": "绑定当前本机主人真实指令",
+          "kind": "function",
+          "request": [
+            {
+              "description": "冻结匹配项。支持 harness=official，仅纳入 DeepSeek Harness 会话，排除 Commander 外部会话及其侧栏宿主；也可按项目、标题、时间、保留数量或精确 ID 筛选。未归组的项目字段为 null。",
+              "name": "preview",
+              "type": "object"
+            },
+            {
+              "description": "同一真人指令下按已冻结预览整批提交或指定精确子集。",
+              "name": "archive",
+              "type": "object"
+            }
+          ],
+          "response": [
+            {
+              "description": "报告实际归档项数和逐项未完成原因。",
+              "name": "结果",
+              "type": "object"
+            }
+          ],
+          "signature": "assistant_session_archive(preview | archive)"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求 AI 快捷归档过多的会话，历史会话归档需要保留当前对话。"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求只归档全部 DeepSeek Harness 会话，并修复 Router 的重复调用。"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T17:25:57.673Z",
+              "hash": "a2568edf97a2b56ec877604c23acb39a0456d4a2db9d33c49d4693b2168b9e82",
+              "path": "plugins/superagent/src/session-archive.mjs",
+              "symbol": "registerSessionArchive"
+            },
+            {
+              "checkedAt": "2026-11-25T17:25:57.673Z",
+              "hash": "d664dc00aeb5ec6b34d6eece7884dd25cac3c2860f882af9b16d4f97834728d9",
+              "path": "plugins/superagent/src/conversation-management.mjs",
+              "symbol": "registerConversationManagement"
+            },
+            {
+              "checkedAt": "2026-11-25T17:25:57.673Z",
+              "hash": "6cc357369eb038d9420b8935ff8bdc2b3f7257464acb3f38cb1e75a81f5dcf6b",
+              "path": "plugins/superagent/src/router-session-setup.mjs",
+              "symbol": "benchgo-session-archive"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive-check",
+      "fields": [
+        "body.then",
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive-check",
+        "type": "acceptance",
+        "title": "验证总助手批量归档",
+        "summary": "核实 JSON 输出、Harness 边界、保护范围、只读查询重试收敛和归档回执。",
+        "parent": "assistant.management.session-archive",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "本机主人已有普通工作台聊天与运行中的活动"
+          ],
+          "then": [
+            "官方归档索引和适用的 Commander 状态按明确目标更新，聊天历史可在侧栏恢复。",
+            "当前总助手会话、工单会话、置顶和活跃会话保持原状态。",
+            "异步变化和局部失败只影响相应目标，回执给出实际结果。",
+            "官方工具执行器接受未归组会话预览，按 Harness 筛选时排除独立和挂接的外部 Harness 会话。"
+          ],
+          "when": "在当前聊天按明确范围让总助手预览并归档会话"
+        },
+        "verification": {
+          "checkedAt": "2026-11-25T17:27:36.059Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/conversation-management.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/base/test/sidebar-state.test.mjs"
+            }
+          ],
+          "note": "会话管理、Worker 归档和侧栏 50 项定向测试通过。通过官方工具执行器与工作区服务验证隔离档案中的批量归档、索引持久化和取消归档。桌面插件已同步并请求热重载，验证安装目录可加载新模块。另有一条旧 Worker Web 测试使用 HEAD 的 Web 入口也会失败。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

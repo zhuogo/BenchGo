@@ -1,0 +1,18 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T15:12:06.930Z",
+  "by": "codex",
+  "reason": "记录用户要求的 Router 工单归档导航行为",
+  "base": "f1f9b141391c",
+  "result": "9dc41a4e5baf",
+  "changes": [
+    {
+      "op": "add",
+      "id": "assistant.management.archive-navigation"
+    },
+    {
+      "op": "add",
+      "id": "assistant.management.archive-navigation-check"
+    }
+  ]
+}

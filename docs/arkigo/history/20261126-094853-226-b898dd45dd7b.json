@@ -1,0 +1,18 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T09:48:53.226Z",
+  "by": "codex",
+  "reason": "让远端工作台优先显示项目和总助手，并恢复失效会话",
+  "base": "55ffcca85671",
+  "result": "b898dd45dd7b",
+  "changes": [
+    {
+      "op": "add",
+      "id": "link.connect.workbench-recovery"
+    },
+    {
+      "op": "add",
+      "id": "link.connect.workbench-startup"
+    }
+  ]
+}

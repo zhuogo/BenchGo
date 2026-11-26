@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { access } from 'node:fs/promises';
+import { access, stat } from 'node:fs/promises';
 import { LineProcess } from '../line-process.mjs';
 import { commandCatalog, compactCommand } from '../commands.mjs';
 
@@ -16,6 +16,8 @@ export class PiProvider {
     // proxy. A user can supply config.env with a compatible proxy explicitly.
     const args = [...(this.config.commandArgs ?? []), '--mode', 'rpc', '--extension', fileURLToPath(new URL('./pi-permissions.ts', import.meta.url))];
     if (session.nativeId) args.push('--session', session.nativeId);
+    const managedProvider = this.config.managedProfile?.provider;
+    if (managedProvider) args.push('--no-extensions', '--provider', managedProvider);
     if (session.model) args.push('--model', session.model);
     const wire = new LineProcess(this.config.command ?? 'pi', args, { cwd: session.cwd, env: { ...this.config.env, ...(host.delegation ? { COMMANDER_DELEGATE_URL: host.delegation.url, COMMANDER_DELEGATE_TOKEN: host.delegation.token } : {}) }, dialect: 'pi' });
     let promptGeneration = 0;
@@ -29,10 +31,15 @@ export class PiProvider {
         await wire.request('set_model', { provider, modelId: parts.join('/') });
         session.model = model;
       },
-      async submit(text) {
+      async submit(text, images = []) {
         const generation = ++promptGeneration;
         agentStarted = false;
-        const ack = await wire.request('prompt', { message: text });
+        // Pi echoes the user message, including its base64 image blocks, in RPC events.
+        wire.allowFramePayload(images.reduce((bytes, { data }) => bytes + data.length, 0));
+        const ack = await wire.request('prompt', {
+          message: text,
+          ...(images.length ? { images: images.map(({ data, mediaType }) => ({ type: 'image', data, mimeType: mediaType })) } : {}),
+        });
         if (ack?.agentInvoked === false) {
           await new Promise(resolve => setImmediate(resolve));
           if (generation === promptGeneration && !agentStarted) host.event('turn.completed', { status: 'completed', agentInvoked: false });
@@ -53,7 +60,14 @@ export class PiProvider {
       },
       async steer(text) { await wire.request('steer', { message: text }); },
       async interrupt() { await wire.request('abort'); },
-      async history() { return wire.request('get_messages'); },
+      async history() {
+        // get_messages can return images from multiple turns in one response.
+        if (driver.nativeId) {
+          const saved = await stat(driver.nativeId).catch(() => null);
+          if (saved?.isFile()) wire.allowFramePayload(saved.size);
+        }
+        return wire.request('get_messages');
+      },
       close: () => wire.close(),
     };
     wire.on('failure', error => host.failure(error));
@@ -65,7 +79,10 @@ export class PiProvider {
             // A new Pi session file may only become durable after the first turn.
             { const state = await wire.request('get_state');
               if (state.sessionFile) { driver.nativeId = state.sessionFile; host.nativeId(state.sessionFile); }
-              host.event('turn.completed', { status: message.messages?.some(m => m.stopReason === 'error') ? 'failed' : 'completed' }); }
+              if (message.willRetry) break;
+              const last = message.messages?.findLast(item => item.role === 'assistant');
+              const error = last?.stopReason === 'error';
+              host.event('turn.completed', { status: error ? 'failed' : 'completed', ...(error && last.errorMessage ? { error: last.errorMessage } : {}) }); }
             break;
           case 'message_update':
             if (message.assistantMessageEvent?.type === 'text_delta') host.event('text.delta', { text: message.assistantMessageEvent.delta });

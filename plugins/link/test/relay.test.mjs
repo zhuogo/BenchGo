@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { createServer as createNetServer } from 'node:net';
 import { request as httpsRequest, createServer as createHttpsServer } from 'node:https';
 import { connect as connectHttp2 } from 'node:http2';
@@ -78,6 +79,7 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
           }
           let uploaded = 0;
           if (request.body) for await (const chunk of request.body) uploaded += chunk.length;
+          if (path === '/api/commander') return Response.json({ ok: true });
           const data = Buffer.alloc(48 * 48 * 1024, 0x5a);
           return new Response(new ReadableStream({ start(controller) { controller.enqueue(data); controller.close(); } }), { status: 200, headers: { 'content-type': 'application/octet-stream', 'x-uploaded-bytes': String(uploaded) } });
         },
@@ -144,6 +146,14 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
     assert.equal(proxyPage.headers.get('content-encoding'), null); assert.match(await proxyPage.text(), /real-workbench/);
     const response = await fetch(proxy.origin + location + 'assets/large.js');
     assert.equal(response.headers.get('content-encoding'), 'gzip'); assert.equal(await response.text(), asset);
+    const proxyCookie = forwardedWorkbenchCookies.at(-1);
+    await store.removeWorkbenchSessions({ digest: createHash('sha256').update(proxyCookie.split('=')[1]).digest('hex') });
+    const recovered = await fetch(proxy.origin + location + 'api/commander', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"action":"state"}',
+    });
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(await recovered.json(), { ok: true });
+    assert.notEqual(forwardedWorkbenchCookies.at(-1), proxyCookie);
   } finally { await proxy.close(); }
 
   const multiplexed = connectHttp2(relayOrigin, { ca: relayIdentity.cert });
@@ -210,6 +220,7 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
   assert.equal((await request(relayPort, '/link/workbench/api/admin')).status, 404);
   assert.equal((await request(relayPort, '/link/api/info', { headers: { origin: 'https://attacker.example' } })).status, 403);
   assert.equal(relayPathAllowed('POST', '/link/workbench/api/commander-devices'), false);
+  assert.equal(relayPathAllowed('POST', '/link/workbench/api/group-resources'), true);
   assert.equal(relayPathAllowed('GET', '/link/workbench/%2e%2e/api/commander-link'), false);
   assert.equal(relayPathAllowed('GET', '/link/?relayTarget=sha256%3AAA%2FBB%3D'), true);
   assert.equal(relayPathAllowed('CONNECT', 'http://127.0.0.1:22'), false);

@@ -50,6 +50,14 @@ test('Pi compact uses native RPC and extension commands without model turns fini
   await runtime.wait(id);
 });
 
+test('Pi accepts an image-only turn when the echoed images exceed the standard RPC frame limit', async t => {
+  const { runtime, id } = await fixture(t, 'pi');
+  const data = Buffer.alloc(4 * 1024 * 1024).toString('base64');
+  const images = Array.from({ length: 4 }, (_, index) => ({ id: String(index), data, mediaType: 'image/png' }));
+  await runtime.submit(id, { text: '', images });
+  assert.equal((await runtime.wait(id)).status, 'idle');
+});
+
 test('OpenCode native commands and summarize use authenticated HTTP and complete through SSE', async t => {
   const { runtime, id } = await fixture(t, 'opencode', 'test/model');
   assert.deepEqual((await runtime.commands(id)).map(c => c.name), ['compact', 'review', 'summarize']);

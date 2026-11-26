@@ -1,6 +1,6 @@
 /** Decode one API response without hiding transport failures or retrying requests. */
 export async function readJsonResponse(response, requestUrl) {
-  const pathname = new URL(requestUrl).pathname;
+  const pathname = new URL(requestUrl).pathname.replace(/\/s\/[A-Za-z0-9_-]{43}(?=\/)/g, '/s/[已隐藏]');
   const context = 'HTTP ' + response.status + ' · ' + pathname;
   const text = await response.text();
   let value;

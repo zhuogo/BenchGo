@@ -1,0 +1,18 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T17:19:06.004Z",
+  "by": "codex",
+  "reason": "记录总助手批量归档工作台会话的要求和验收",
+  "base": "04612ab94efa",
+  "result": "a39f60df898b",
+  "changes": [
+    {
+      "op": "add",
+      "id": "assistant.management.session-archive"
+    },
+    {
+      "op": "add",
+      "id": "assistant.management.session-archive-check"
+    }
+  ]
+}

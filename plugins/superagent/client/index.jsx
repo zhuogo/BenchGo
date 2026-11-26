@@ -438,7 +438,7 @@ function abortable(promise, signal) {
   });
 }
 // Sidebar, page, board and sounds react to the same invalidation; they share its one read.
-function readState(signal) {
+export function readState(signal) {
   if (signal?.aborted) return Promise.reject(signal.reason);
   let read = stateRead;
   if (!read || read.epoch !== stateEpoch) {

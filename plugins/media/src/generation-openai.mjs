@@ -71,19 +71,35 @@ export async function discard(response) {
   await response.body?.cancel().catch(() => {});
 }
 
-export async function rejectsSpeechVoice(response, signal) {
+export async function readMediaProviderError(response, signal) {
   let text;
   try { text = new TextDecoder().decode(await readLimited(response, 16 * 1024, signal)); }
-  catch { await discard(response); return false; }
+  catch { await discard(response); return null; }
   let body;
   try { body = JSON.parse(text); } catch { body = text; }
-  const error = body?.error ?? body;
+  return body?.error ?? body;
+}
+
+export function rejectsSpeechVoice(error) {
   const code = typeof error?.code === 'string' ? error.code : error?.type;
   const message = typeof error === 'string' ? error : error?.message;
   if (error?.param === 'voice') return true;
   if (typeof code === 'string' && /^(?:invalid_voice|unsupported_voice|unknown_voice|voice_not_found|voice_not_supported|voice_invalid)$/iu.test(code)) return true;
   if (typeof message !== 'string') return false;
   return /\b(?:invalid|unsupported|unknown)\s+voice\b|\bvoice(?:\s+["'`][^"'`\r\n]{1,100}["'`])?\s+(?:is\s+)?(?:invalid|not supported|not found)\b|(?:音色|发音人)(?:名称)?(?:无效|不支持|不存在)|不支持(?:该|此|的)?音色/iu.test(message);
+}
+
+const providerParameters = {
+  image: { prompt: 'prompt', size: 'size', quality: 'quality', output_format: 'format', image: 'references', 'image[]': 'references', mask: 'mask' },
+  video: { prompt: 'prompt', size: 'size', seconds: 'seconds', input_reference: 'references' },
+  audio: { input: 'prompt', voice: 'voice', response_format: 'format' },
+};
+
+export function mediaProviderRejectedField(kind, error) {
+  const fields = providerParameters[kind], param = error?.param;
+  if (typeof param !== 'string') return;
+  if (param === 'model') return 'model';
+  return Object.hasOwn(fields, param) ? fields[param] : undefined;
 }
 
 export async function readImage(response, route, fetcher, signal, requestedFormat) {

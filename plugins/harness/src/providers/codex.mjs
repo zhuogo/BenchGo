@@ -57,9 +57,12 @@ export class CodexProvider {
         const response = await wire.request('turn/start', { threadId: driver.nativeId, ...turnPermission(), ...turnModel(), input: [{ type: 'skill', name: skill.name, path: skill.path }, { type: 'text', text: `$${name}${args ? ` ${args}` : ''}` }] });
         driver.turnId = response.turn.id;
       },
-      async submit(text) {
+      async submit(text, images = []) {
         const response = await wire.request('turn/start', {
-          threadId: driver.nativeId, ...turnPermission(), ...turnModel(), input: [{ type: 'text', text }],
+          threadId: driver.nativeId, ...turnPermission(), ...turnModel(), input: [
+            ...(text.trim() ? [{ type: 'text', text }] : []),
+            ...images.map(({ path }) => ({ type: 'localImage', path })),
+          ],
         });
         driver.turnId = response.turn.id;
       },

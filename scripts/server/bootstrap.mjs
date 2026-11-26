@@ -1,6 +1,6 @@
 /** Run only through a verified SSH channel. Final stdout JSON is a private protocol response. */
 import { createHash, randomUUID, X509Certificate } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -41,6 +41,7 @@ async function install() {
   let installed; try { installed = JSON.parse(await readFile(stateFile, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   const lock = join(base, 'install.lock');
   try { await mkdir(lock, { mode: 0o700 }); } catch (e) { if (e.code === 'EEXIST') throw new Error('已有服务器安装正在进行，请稍后重试'); throw e; }
+  let requireAssistant = false;
   try {
     if (!installed || operation === 'update') {
       if (installed && installed.harnessVersion !== manifest.harnessVersion) throw new Error('此包需要升级服务器引擎，请由维护者处理，现有数据已保留');
@@ -74,11 +75,14 @@ async function install() {
           const state = await linkJson(installed, '/link/api/rpc', { action: 'state' }, active.token);
           await ownerAdmin(installed, { action: 'revoke', id: active.deviceId });
           if (state.sessions?.some(session => session.running)) throw new Error('服务器有任务运行中，请结束后再升级');
+          const modules = await ownerRequest(installed, '/api/benchgo/modules').catch(() => null);
+          const guard = await lstat(join(dataDir, 'assistant/owner-guard.lock')).catch(error => { if (error.code !== 'ENOENT') throw error; });
+          requireAssistant = modules?.modules?.superagent?.available === true || guard?.isFile() && guard.size === 0;
         }
         await helper.activateRelease({ profile, runtime, release, enabled: true, appVersion: null, migrateLegacy: true });
         installed = { schemaVersion: 1, harnessVersion: manifest.harnessVersion, pluginVersion: manifest.pluginVersion, runtime, profile, dataDir, webPort, port };
         await atomic(stateFile, JSON.stringify(installed));
-        const launcher = '(' + launchServer.toString() + ')(' + [process.execPath, runtime, ownerFile, base, webPort].map(value => JSON.stringify(value)).join(',') + ');';
+        const launcher = '(' + launchServer.toString() + ')(' + [process.execPath, runtime, ownerFile, base, webPort, dataDir].map(value => JSON.stringify(value)).join(',') + ', ' + recoverAssistantGuard.toString() + ');';
         await atomic(join(base, 'start.mjs'), launcher);
         const units = join(homedir(), '.config/systemd/user'); await mkdir(units, { recursive: true, mode: 0o700 });
         const quote = value => JSON.stringify(String(value)).replaceAll('%', '%%');
@@ -89,20 +93,68 @@ async function install() {
         await rm(ownerFile, { force: true }); await run('systemctl', ['--user', 'restart', 'benchgo.service']);
       } finally { await rm(incoming, { recursive: true, force: true }); }
     } else { process.stderr.write('复用已安装的 BenchGo…\n'); await run('systemctl', ['--user', 'start', 'benchgo.service']); }
-    if (operation === 'update') await waitForUpdatedService(installed.port, () => ownerAdmin(installed, { action: 'status' }));
+    if (operation === 'update') await waitForUpdatedService(installed.port, () => ownerAdmin(installed, { action: 'status' }), wait, async () => {
+      const state = await ownerRequest(installed, '/api/commander', { action: 'state' });
+      if (!Array.isArray(state.projects) || !Array.isArray(state.sessions)) throw new Error('服务器工作台状态异常');
+      if (requireAssistant) {
+        const modules = await ownerRequest(installed, '/api/benchgo/modules');
+        if (modules?.modules?.superagent?.available !== true) throw new Error('服务器总助手尚未就绪');
+        const assistant = await ownerRequest(installed, '/api/commander/assistant', { action: 'state' });
+        if (!assistant.state || !assistant.config) throw new Error('服务器总助手状态异常');
+      }
+    });
     const result = operation === 'update' ? { port: installed.port, pin: createHash('sha256').update(new X509Certificate(JSON.parse(await readFile(join(installed.dataDir, 'link/tls.json'), 'utf8')).cert).publicKey.export({ type: 'spki', format: 'der' })).digest('base64') } : await authorize(installed, true);
     const linger = await run('loginctl', ['show-user', String(process.getuid()), '--property=Linger', '--value']).catch(() => 'unknown');
     process.stdout.write(JSON.stringify({ ...result, version: installed.pluginVersion, persistent: linger.trim() === 'yes', ...(linger.trim() !== 'yes' ? { warning: '系统尚未启用用户常驻服务，退出所有 SSH 会话后服务可能停止；维护者可执行 loginctl enable-linger 用户名' } : {}) }) + '\n');
   } finally { await rm(lock, { recursive: true, force: true }); }
 }
 
-export async function waitForUpdatedService(port, readStatus, pause = wait) {
-  for (let attempt = 0; attempt < 360; attempt++) {
+export async function waitForUpdatedService(port, readStatus, pause = wait, verifyWorkbench) {
+  const deadline = Date.now() + 180_000;
+  let readinessError;
+  for (let attempt = 0; attempt < 360 && Date.now() < deadline; attempt++) {
     const status = await readStatus().catch(() => null);
-    if (status?.enabled && status.port === port && status.host === '127.0.0.1') return;
+    if (status?.enabled && status.port === port && status.host === '127.0.0.1') {
+      try { await verifyWorkbench?.(); return; }
+      catch (error) { readinessError = error; }
+    }
     await pause(500);
   }
-  throw new Error('服务器升级后未正常就绪，服务可能仍在启动，请查看服务日志');
+  throw new Error('服务器升级后未正常就绪，服务可能仍在启动，请查看服务日志' + (readinessError ? '（' + readinessError.message + '）' : ''));
+}
+
+/** The managed systemd launcher runs this before starting Harness, after its predecessor has stopped. */
+export async function recoverAssistantGuard(dataDir, { uid = process.getuid?.(), now = Date.now } = {}) {
+  const [{ lstat, readFile, rename }, { join }, { hostname }, { randomUUID }] = await Promise.all([
+    import('node:fs/promises'), import('node:path'), import('node:os'), import('node:crypto'),
+  ]);
+  const directory = join(dataDir, 'assistant');
+  const guard = join(directory, 'owner-guard.lock');
+  const owner = join(directory, 'owner.lock');
+  const metadata = path => lstat(path).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  const original = await metadata(guard);
+  if (!original?.isFile() || original.uid !== uid || original.size !== 0 || original.nlink !== 1) return false;
+
+  // The old writer creates the file before writing its PID. Give a new lock time to finish.
+  const settle = 5000 - (now() - original.mtimeMs);
+  if (settle > 5000) return false;
+  if (settle > 0) await new Promise(resolve => setTimeout(resolve, settle));
+
+  const ownership = await metadata(owner);
+  if (ownership) {
+    if (!ownership.isFile() || ownership.uid !== uid || ownership.size > 1024) return false;
+    let record;
+    try { record = JSON.parse(await readFile(owner, 'utf8')); } catch { return false; }
+    if (record?.host !== hostname() || !Number.isInteger(record.pid) || record.pid <= 0 || record.pid > 2147483647) return false;
+    try { process.kill(record.pid, 0); return false; }
+    catch (error) { if (error.code !== 'ESRCH') return false; }
+  }
+
+  const current = await metadata(guard);
+  if (!current?.isFile() || current.uid !== uid || current.size !== 0 || current.nlink !== 1
+    || current.dev !== original.dev || current.ino !== original.ino || current.ctimeMs !== original.ctimeMs) return false;
+  await rename(guard, guard + '.recovery-' + randomUUID());
+  return true;
 }
 /** Seed the persistent transport before its first start; never rewrite an existing device store. */
 async function initializeServerLink(directory) {
@@ -124,12 +176,13 @@ async function initializeServerLink(directory) {
   catch (error) { if (error.code === 'EEXIST') return existingPort(); throw error; }
   return port;
 }
-async function ownerAdmin(state, input) {
+function ownerAdmin(state, input) { return ownerRequest(state, '/api/commander-link', input); }
+async function ownerRequest(state, path, input) {
   const owner = JSON.parse(await readFile(ownerFile, 'utf8')); const url = new URL(owner.url);
   if (url.hostname !== '127.0.0.1' || Number(url.port) !== state.webPort) throw new Error('服务器启动授权地址无效');
   const login = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
   const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; '); if (!cookie) throw new Error('服务器尚未准备好');
-  const response = await fetch(url.origin + '/api/commander-link', { method: 'POST', headers: { cookie, 'content-type': 'application/json', origin: url.origin }, body: JSON.stringify(input), signal: AbortSignal.timeout(10000) });
+  const response = await fetch(url.origin + path, { method: input === undefined ? 'GET' : 'POST', headers: { cookie, 'content-type': 'application/json', origin: url.origin }, body: JSON.stringify(input), signal: AbortSignal.timeout(10000) });
   const value = await response.json(); if (!response.ok) throw new Error(value.error ?? '服务器初始化失败'); return value;
 }
 async function linkJson(state, path, value, token) {
@@ -158,8 +211,11 @@ async function authorize(state, retry) {
   throw new Error('服务器启动或授权失败：' + (failure?.message ?? '未知错误'));
 }
 
-function launchServer(node, runtime, ownerFile, base, webPort) {
-  Promise.all([import('node:child_process'), import('node:fs'), import('node:path')]).then(([{ spawn }, { writeFileSync, renameSync }, { join }]) => {
+function launchServer(node, runtime, ownerFile, base, webPort, dataDir, recoverGuard) {
+  Promise.all([import('node:child_process'), import('node:fs'), import('node:path')]).then(async ([{ spawn }, { writeFileSync, renameSync }, { join }]) => {
+    try {
+      if (await recoverGuard(dataDir)) process.stderr.write('已归档 SuperAgent 遗留的空写锁\n');
+    } catch { process.stderr.write('无法核验或归档 SuperAgent 遗留写锁，请查看服务器数据目录\n'); }
     const child = spawn(node, [join(runtime, 'node_modules/@deepseek-ai/dsh/lib/bin.js'), '--profile', 'web', '--host', '127.0.0.1', '--port', String(webPort), '--no-open'], { env: { ...process.env, DSH_HOME: join(base, 'home'), DSH_TELEMETRY_DISABLED: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
     let pending = '';
     function log(data) {

@@ -1,0 +1,64 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T16:22:43.530Z",
+  "by": "codex",
+  "reason": "回写 Router 停止保留正文的实现与定向回归结果",
+  "base": "834624ebd0e5",
+  "result": "0ff61bf77f89",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.stop-reply",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "assistant.stop-reply",
+        "type": "rule",
+        "title": "主动停止保留 Router 正文",
+        "summary": "主聊与旁聊主动停止时，已输出的普通正文原位保留，刷新后仍可读。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "沿用官方会话保存的普通正文和原分段身份，回合保持中断。",
+          "when": "用户在 SuperAgent 主聊或旁聊停止正在生成的回复。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/对话交互.md",
+            "symbol": "聊天与正式发布"
+          }
+        ]
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.stop-reply-check",
+      "fields": [
+        "verification"
+      ],
+      "before": {
+        "id": "assistant.stop-reply-check",
+        "type": "acceptance",
+        "title": "停止与刷新保留半截回复",
+        "summary": "主聊和旁聊的停止保留已生成的文字及原气泡。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "Router 正在主聊或旁聊流式输出普通正文。"
+          ],
+          "then": [
+            "同一分段保留已输出的正文。",
+            "历史接管后只显示一份回复。",
+            "回合保持中断状态。"
+          ],
+          "when": "点击停止，等回合结束，再刷新历史。"
+        }
+      }
+    }
+  ]
+}

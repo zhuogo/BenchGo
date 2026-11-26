@@ -150,7 +150,7 @@ export function DeviceSwitch() {
     setFailure({ deviceId, message });
     selected(fallback ?? state.items[0].id);
   };
-  const choose = async (device, { requestedResource, admitted = () => true } = {}) => {
+  const choose = async (device, { requestedResource, admitted = () => true, reopen = false } = {}) => {
     if (!device?.id || gate.current || state.busy) {
       if (requestedResource) throw Error('工作台正在连接，请重试');
       return;
@@ -165,10 +165,10 @@ export function DeviceSwitch() {
       clearFailure(device.id);
       return;
     }
-    if (device.id === state.active.id && !requestedResource) { selected(device.id); return; }
+    if (device.id === state.active.id && !requestedResource && !reopen) { selected(device.id); return; }
     gate.current = true; setBusy(device.id);
     try {
-      const needsEntry = !Object.hasOwn(urls, device.id);
+      const needsEntry = reopen || !Object.hasOwn(urls, device.id);
       if (needsEntry) {
         const value = await ownerRequest('select', { deviceId: device.id });
         if (typeof value.url !== 'string' || !value.url) throw new Error('设备未返回工作台地址');
@@ -312,7 +312,7 @@ export function DeviceSwitch() {
       let device = state.items.find(item => item.id === id);
       if (!device) device = (await refresh())?.find(item => item.id === id);
       if (!device) { setFailure({ deviceId: null, message: '设备已不可用，请在设备中心重新连接' }); return; }
-      void choose(device);
+      void choose(device, { reopen: event.detail.reopen === true });
     };
     document.addEventListener('benchgo:device-select', select);
     return () => document.removeEventListener('benchgo:device-select', select);
@@ -320,7 +320,7 @@ export function DeviceSwitch() {
   const loadingWorkbench = activeId && !ready.includes(activeId);
   useEffect(() => {
     if (!owner || !loadingWorkbench) return;
-    const timeout = setTimeout(() => failWorkbench(activeId, '设备工作台未响应，请检查设备连接与插件版本'), 15_000);
+    const timeout = setTimeout(() => failWorkbench(activeId, '设备工作台未响应，请检查连接后重试'), 45_000);
     return () => clearTimeout(timeout);
   }, [owner, activeId, loadingWorkbench]);
   if ((!owner && !delegated) || !state.multiple) return null;

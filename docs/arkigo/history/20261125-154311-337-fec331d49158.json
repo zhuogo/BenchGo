@@ -1,0 +1,76 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-25T15:43:11.337Z",
+  "by": "codex",
+  "reason": "补记 Android 单测、打包及内置种子核验",
+  "base": "d1eef6c0a221",
+  "result": "fec331d49158",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.connect-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "link.connect-check",
+        "type": "acceptance",
+        "title": "连接回退保留信任边界",
+        "summary": "连接回退保留信任边界",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "一台已配对主机同时提供直连与有序中继路线"
+          ],
+          "then": [
+            "网络超时可试下一条授权路线",
+            "身份不符时停止且报错",
+            "待发送业务操作只走选定路线",
+            "慢候选的探测重叠，实际连接保持优先级，未选探测及时取消。"
+          ],
+          "when": "模拟多个候选网络超时、身份校验失败和有效工作台握手。"
+        },
+        "notes": [
+          {
+            "text": "按用户确认使用统一工作台握手，不保留旧版多请求回退。中继连接诊断在一次 TLS 连接上完成 HTTP/2 协商和密钥验证。",
+            "tone": "info",
+            "type": "callout"
+          }
+        ],
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-25T15:27:15.451Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/routes.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/relay.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/devices.test.mjs"
+            }
+          ],
+          "note": "已运行 Link 路由、中继、工作台与设备中心定向测试。模拟两条直连超时时，选路耗时从 5.12 秒降到 2.63 秒。公网蜂窝网络未测。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

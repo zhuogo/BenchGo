@@ -50,7 +50,7 @@ function fixture({ threadId = 'main', risk = false, approvalPolicy = 'ask' } = {
     setOutcome: value => { outcome = value; }, onApproval: hook => { approvalHook = hook; },
     settings: (args, execution = exec) => definitions.get('assistant_settings').execute(args, execution),
     manage: (args, execution = exec) => definitions.get('assistant_task_manage').execute(args, execution),
-    sessions: (args, execution = exec) => definitions.get('assistant_session_archive').execute(args, execution),
+    sessions: ({ op, ...args }, execution = exec) => definitions.get(`assistant_session_archive_${op === 'archive' ? 'apply' : op}`).execute(args, execution),
     cleanup: (args, execution = exec) => definitions.get('assistant_task_cleanup').execute(args, execution) };
 }
 
@@ -111,14 +111,84 @@ test('owner can batch archive a scoped Workbench preview under never and keep pr
   assert.equal(results[0].archived, 4);
   assert.deepEqual(f.writes, ['official:linked', 'native:link-peer', 'native:detached', 'official:old', 'official:fork']);
   assert.deepEqual(f.approvals, []);
-  assert.equal(isRouterQuery('assistant_session_archive', { op: 'preview' }), true);
-  assert.equal(isRouterQuery('assistant_session_archive', { op: 'archive' }), false);
+  assert.equal(isRouterQuery('assistant_session_archive_preview', {}), true);
+  assert.equal(isRouterQuery('assistant_session_archive_apply', {}), false);
+  assert.equal(isRouterQuery('assistant_session_archive_official', {}), false);
+});
+
+test('official tool execution archives the full frozen DeepSeek scope, including ungrouped sessions', async t => {
+  const { loadRolePackage } = await import('./role-host-fixture.mjs');
+  const load = name => loadRolePackage('core/agent-loop', name);
+  const { Context } = await load('@deepseek-ai/cordis');
+  const ctx = new Context(); t.after(() => ctx.fiber.dispose());
+  for (const name of ['session', 'session-projection', 'system-prompt', 'tools', 'agent']) await ctx.plugin((await load(`@deepseek-ai/dsh-${name}`)).default);
+  await ctx.plugin(await loadRolePackage('core/tool-executor-native', '@deepseek-ai/dsh-tool-executor-native'));
+  const f = await sessionArchiveFixture(t);
+  for (let index = 0; index < 32; index++) f.items.push({ sessionId: `extra-${index}`, updatedAt: index + 100 });
+  for (const operation of ['preview', 'apply', 'official']) {
+    const name = `assistant_session_archive_${operation}`;
+    const definition = f.definitions.get(name);
+    ctx.tools.register({ name, description: definition.description, parameters: { type: 'object', properties: definition.properties, required: definition.required, additionalProperties: false },
+      output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: args => definition.execute(args, f.exec) });
+  }
+  let call = 0;
+  const run = async ({ op, ...args }) => {
+    const name = `assistant_session_archive_${op === 'archive' ? 'apply' : op}`;
+    const batch = await ctx.tools.execute({ signal: f.exec.signal, calls: [{ type: 'tool-call', id: `archive-${++call}`, name, arguments: JSON.stringify(args) }] });
+    const result = batch.results[0].result;
+    assert.equal(result.isError, false, JSON.stringify(result));
+    return JSON.parse(result.content[0].text);
+  };
+  const ungrouped = await run({ op: 'preview', harness: 'official', ids: ['official:unrelated'] });
+  assert.deepEqual(ungrouped.items[0], { id: 'official:unrelated', harness: 'official', title: 'Chat unrelated', updatedAt: 4, projectId: null, project: null });
+  const mixed = await run({ op: 'preview', ids: ['official:linked', 'native:detached'] });
+  assert.deepEqual(mixed.items.map(row => row.harness), ['native', 'native']);
+  const preview = await run({ op: 'preview', harness: 'official' });
+  assert.equal(preview.total, 36);
+  assert.equal(preview.items.length, 30);
+  assert.equal(preview.truncated, true);
+  assert.equal(preview.protected, 2);
+  // The migrated session acquires an external Harness between preview and commit.
+  f.native.push({ id: 'new-peer', ownerSessionId: 'new', updatedAt: 16, status: 'idle' });
+  const receipt = await run({ op: 'archive', previewId: preview.previewId, all: true });
+  assert.equal(receipt.archived, 35);
+  assert.equal(receipt.skipped, 1);
+  assert.equal(receipt.issues[0].id, 'official:new');
+  assert.ok(f.writes.includes('official:unrelated'));
+  assert.deepEqual(f.writes.filter(id => !id.startsWith('official:extra-')).sort(), ['official:fork', 'official:old', 'official:unrelated']);
+  assert.deepEqual(await run({ op: 'official' }), { archived: 0, alreadyArchived: 0, skipped: 0, failed: 0, partial: 0,
+    total: 0, issues: [], issuesTruncated: false, protected: 2 });
+});
+
+test('one no-argument official call archives eligible sessions, and replay preserves the original selection', async t => {
+  const f = await sessionArchiveFixture(t);
+  const definition = f.definitions.get('assistant_session_archive_official');
+  assert.deepEqual(definition.properties, {});
+  assert.deepEqual(definition.required, []);
+  assert.equal('previewId' in f.definitions.get('assistant_session_archive_preview').properties, false);
+  assert.equal('harness' in f.definitions.get('assistant_session_archive_apply').properties, false);
+  await assert.rejects(f.sessions({ op: 'official', all: true }), { code: 'MANAGEMENT_INPUT' });
+  const [first, second] = await Promise.all([f.sessions({ op: 'official' }), f.sessions({ op: 'official' })]);
+  assert.equal(first.archived, 4);
+  assert.deepEqual(second, first);
+  assert.deepEqual(f.writes.sort(), ['official:fork', 'official:new', 'official:old', 'official:unrelated']);
+  f.items.push({ sessionId: 'arrived', updatedAt: 32 });
+  assert.deepEqual(await f.sessions({ op: 'official' }), first);
+  assert.equal(f.writes.length, 4);
 });
 
 test('Workbench archive rejects expanded and stale previews and preserves newly active chats', async t => {
   const f = await sessionArchiveFixture(t);
+  await assert.rejects(f.sessions({ op: 'preview', before: '2026-11-26' }), /before.+带时区/);
+  await assert.rejects(f.sessions({ op: 'preview', ids: ['official:old', 'official:old'] }), /ids.+不可重复/);
   const preview = await f.sessions({ op: 'preview', ids: ['official:old', 'official:linked', 'official:fork'] });
-  await assert.rejects(f.sessions({ op: 'archive', previewId: preview.previewId, ids: ['official:new'] }), { code: 'SESSION_ARCHIVE_SCOPE' });
+  const apply = { op: 'archive', previewId: preview.previewId };
+  await assert.rejects(f.sessions(apply), /all:true.+至少一个.+ids/);
+  await assert.rejects(f.sessions({ ...apply, all: true, ids: ['official:old'] }), /all 和 ids 只能传一个/);
+  await assert.rejects(f.sessions({ ...apply, ids: ['official:old', 'official:old'] }), /ids.+不可重复/);
+  await assert.rejects(f.sessions({ ...apply, ids: ['official:new'] }), { code: 'SESSION_ARCHIVE_SCOPE', message: /不在该预览可归档清单/ });
+  assert.deepEqual(f.writes, []);
   f.items.find(row => row.sessionId === 'old').updatedAt = 30;
   f.native.find(row => row.id === 'link-peer').status = 'waiting';
   const result = await f.sessions({ op: 'archive', previewId: preview.previewId,
@@ -171,14 +241,17 @@ test('Workbench archive uses the native tool executor and persists recoverable o
   }] });
   await ctx.plugin((await loadWorkspace('workspace')).default);
   f.ctx.workspaceRegistry = ctx.workspaceRegistry;
-  const name = 'assistant_session_archive';
-  const { description, properties, required } = f.definitions.get(name);
-  ctx.tools.register({ name, description, parameters: { type: 'object', properties, required, additionalProperties: false },
-    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
-    execute: args => f.sessions(args) });
-  const invoke = async args => {
+  for (const operation of ['preview', 'apply']) {
+    const name = `assistant_session_archive_${operation}`;
+    const { description, properties, required, execute } = f.definitions.get(name);
+    ctx.tools.register({ name, description, parameters: { type: 'object', properties, required, additionalProperties: false },
+      output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: args => execute(args, f.exec) });
+  }
+  const invoke = async ({ op, ...args }) => {
+    const name = `assistant_session_archive_${op === 'archive' ? 'apply' : op}`;
     const signal = new AbortController().signal;
-    const batch = await ctx.tools.execute({ signal, calls: [{ type: 'tool-call', id: args.op, name, arguments: JSON.stringify(args) }] });
+    const batch = await ctx.tools.execute({ signal, calls: [{ type: 'tool-call', id: op, name, arguments: JSON.stringify(args) }] });
     const result = batch.results[0].result;
     assert.equal(result.isError, false, JSON.stringify(result));
     return JSON.parse(result.content[0].text);
