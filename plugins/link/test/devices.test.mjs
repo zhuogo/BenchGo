@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:https';
@@ -73,6 +74,48 @@ test('an SSH registration and group membership with the same fingerprint share o
   assert.equal(restored.list().devices.length, 1);
   assert.throws(() => restored.get('ssh-id'), /设备不存在/);
   assert.throws(() => restored.get(hostId), /设备不存在/);
+});
+test('group removal clears local SSH credentials and allows re-adding with the same Link identity', async t => {
+  for (const previouslyRemoved of [false, true]) {
+    const directory = await temp(t), hostId = 'sha256:' + Buffer.alloc(32, 1).toString('base64');
+    const localId = 'sha256:' + Buffer.alloc(32, 2).toString('base64');
+    const member = { id: hostId, name: '服务器', generation: 'first', routes: [], removed: previouslyRemoved };
+    const group = {
+      localId, enabled: () => true, members: () => [member],
+      member: id => id === hostId && !member.removed ? member : undefined,
+      status: () => ({ enabled: true }),
+      async remove(id) { assert.equal(id, hostId); member.removed = true; },
+    };
+    const ssh = { host: 'server.test', port: 22, username: 'ubuntu', fingerprint: 'SHA256:' + 'A'.repeat(43) };
+    await writeFile(join(directory, 'connections.json'), JSON.stringify({
+      version: 1, activeId: 'old', devices: [{ id: 'old', kind: 'ssh', hostId, token: 'old-token', ssh }],
+    }));
+    const key = 'benchgo-plugin/link-ssh-' + createHash('sha256').update('old').digest('hex');
+    const saved = new Set([key, 'unrelated-credential']);
+    const credentials = { async deleteRecord(id) { saved.delete(id); } };
+    const center = await createDeviceCenter({ directory, webRoot: new URL('../dist/web/', import.meta.url), group, credentials });
+    t.after(() => center.close());
+    if (!previouslyRemoved) {
+      await center.api({ action: 'groupRemove', deviceId: hostId });
+      assert.equal(saved.has(key), false);
+    }
+    assert.equal(center.devices().devices.some(device => device.hostId === hostId), false);
+    if (previouslyRemoved) {
+      await center.api({ action: 'sshConnect', host: ssh.host, port: ssh.port, username: ssh.username, password: 'test-password' });
+    }
+    assert.deepEqual([...saved], ['unrelated-credential']);
+    await assert.rejects(center.sshTarget({ deviceId: 'old' }), { code: 'SSH_NOT_CONFIGURED' });
+    const registry = await openDeviceRegistry(directory, { group });
+    assert.deepEqual(registry.sshRecords(), []);
+    await registry.upsert({ id: 'fresh', kind: 'ssh', hostId, token: 'new-token', ssh: { ...ssh, fingerprint: 'SHA256:' + 'B'.repeat(43) } });
+    assert.equal(registry.get('fresh').token, 'new-token');
+    assert.equal(registry.isGroup('fresh'), false);
+    const restored = await openDeviceRegistry(directory, { group });
+    assert.equal(restored.get('fresh').token, 'new-token');
+    member.generation = 'second';
+    assert.equal(restored.isRetiredSsh(restored.sshRecords()[0]), true);
+    assert.throws(() => restored.get('fresh'), /设备不存在/);
+  }
 });
 test('pairing two hosts through one relay keeps their credentials and aliases independent', async t => {
   const directory = await temp(t);

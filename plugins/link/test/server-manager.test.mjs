@@ -53,7 +53,7 @@ test('input validation preserves host values and rejects shell and malformed add
   for (const host of ['127.0.0.1', '::1', 'node.example.com']) assert.equal(validateSshInput({ host, username: 'user' }).host, host);
   for (const host of ['a; touch /tmp/pwn', '-oProxyCommand=x', 'https://host', 'a\nlocalhost']) assert.throws(() => validateSshInput({ host, username: 'user' }));
   assert.throws(() => validateSshInput({ host: 'host', username: 'user', port: 65536 }));
-  assert.throws(() => validateSshInput({ host: 'host', username: 'user' }, { credentials: true }), /指纹/);
+  assert.throws(() => validateSshInput({ host: 'host', username: 'user' }, { credentials: true }), /SSH 身份/);
 });
 
 test('shell quoting passes opaque values through a real POSIX shell', requiresBash, () => {
@@ -77,6 +77,23 @@ test('valid fingerprint authenticates but failed install neither persists nor re
   const { jobId } = await f.manager.connect({ ...f.input, fingerprint, password: 'secret' });
   const job = await completed(f.manager, jobId); assert.equal(job.state, 'error'); assert.equal(f.authentications(), 1); assert(!job.device); assert(!JSON.stringify(job).includes('secret'));
   await assert.rejects(readFile(join(f.directory, 'servers.json')), { code: 'ENOENT' });
+});
+
+test('adding an existing SSH address without a fingerprint still rejects a changed host before authentication', async t => {
+  const f = await fixture(t);
+  await f.manager.close();
+  const { openDeviceRegistry } = await import('../src/devices/registry.mjs');
+  const registry = await openDeviceRegistry(f.directory);
+  await registry.upsert({ id: 'old', kind: 'ssh', token: 'test-token',
+    ssh: { ...f.input, fingerprint: 'SHA256:' + 'A'.repeat(43), remotePort: 4430 } });
+  const manager = createServerManager({ directory: f.directory, registry });
+  t.after(() => manager.close());
+  const { jobId } = await manager.connect({ ...f.input, password: 'secret' });
+  const job = await completed(manager, jobId);
+  assert.equal(job.state, 'error');
+  assert.match(job.error, /服务器身份已变化.*移除原连接/);
+  assert.equal(f.authentications(), 0);
+  assert.equal((await manager.sshTarget({ deviceId: 'old' })).fingerprint, 'SHA256:' + 'A'.repeat(43));
 });
 
 test('SSH checks the shared installer before creating or uploading remote resources', async t => {
@@ -242,13 +259,14 @@ test('existing Link server binds in place, restores SSH through an agent, and se
   t.after(() => new Promise(resolve => https.close(resolve)));
   port = https.address().port;
   const { fingerprint } = await f.manager.probe(f.input);
-  const { jobId } = await manager.connect({ ...f.input, fingerprint, password: 'secret', device: registry.get('paired-id') });
+  const { jobId } = await manager.connect({ ...f.input, password: 'secret', device: registry.get('paired-id') });
   const result = await completed(manager, jobId);
   assert.equal(result.state, 'done', result.error);
   assert.equal(result.device.id, 'paired-id');
   assert.equal(registry.list().devices.length, 2);
   assert.equal(registry.get('paired-id').url, 'https://relay.example');
   const first = await manager.sshTarget({ deviceId: 'paired-id' });
+  assert.equal(first.fingerprint, fingerprint);
   await manager.close();
   const localId = 'sha256:' + Buffer.alloc(32, 7).toString('base64');
   const groupRows = [{ id: localId, name: '本机', routes: [] }, { id: hostId, name: '组内服务器', routes: [] }];

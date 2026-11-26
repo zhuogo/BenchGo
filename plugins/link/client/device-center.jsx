@@ -154,7 +154,7 @@ function ServerInstall({ runtime, onAdded, sshAvailable, agentAvailable }) {
   </>;
 }
 function AddServer({ runtime, onAdded, device, agentAvailable }) {
-  const [form, setForm] = useState(() => ({ ...emptyServer(), ...(device ? { name: device.name } : {}), ...(agentAvailable ? { auth: 'agent' } : {}) })), [fingerprint, setFingerprint] = useState(''), [job, setJob] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [form, setForm] = useState(() => ({ ...emptyServer(), ...(device ? { name: device.name } : {}) })), [job, setJob] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const gate = useRef(false), mounted = useRef(true);
   const [pollAttempt, setPollAttempt] = useState(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -163,8 +163,13 @@ function AddServer({ runtime, onAdded, device, agentAvailable }) {
     if (gate.current) return; gate.current = true; setBusy(true); setError('');
     try {
       const input = sshInput(form);
-      if (!fingerprint) { const result = await runtime.call('sshProbe', { host: input.host, port: input.port, username: input.username }); if (mounted.current) setFingerprint(result.fingerprint); }
-      else { const result = await runtime.call('sshConnect', { ...input, fingerprint, ...(device ? { deviceId: device.id } : {}) }); if (mounted.current) { setJob({ id: result.jobId, state: 'running', steps: [] }); setForm(value => ({ ...value, password: '', privateKey: '', passphrase: '' })); } }
+      if (form.auth === 'password' && !input.password) throw new Error('请输入密码');
+      if (form.auth === 'key' && !input.privateKey?.trim()) throw new Error('请输入 SSH 私钥');
+      const result = await runtime.call('sshConnect', { ...input, ...(device ? { deviceId: device.id } : {}) });
+      if (mounted.current) {
+        setJob({ id: result.jobId, state: 'running', steps: [] });
+        setForm(value => ({ ...value, password: '', privateKey: '', passphrase: '' }));
+      }
     } catch (reason) { if (mounted.current) setError(reason.message); }
     finally { gate.current = false; if (mounted.current) setBusy(false); }
   };
@@ -186,8 +191,8 @@ function AddServer({ runtime, onAdded, device, agentAvailable }) {
     } catch (reason) { if (mounted.current) setError(reason.message); }
     finally { gate.current = false; if (mounted.current) setBusy(false); }
   };
-  const resetJob = () => { setJob(null); setFingerprint(''); setError(''); };
-  const field = key => ({ value: form[key], disabled: busy, onChange: event => { setForm(value => ({ ...value, [key]: event.target.value })); setFingerprint(''); setError(''); } });
+  const resetJob = () => { setJob(null); setError(''); };
+  const field = key => ({ value: form[key], disabled: busy, onChange: event => { setForm(value => ({ ...value, [key]: event.target.value })); setError(''); } });
   if (job) {
     const prefetch = job.kind === 'server-prefetch', cancelled = job.state === 'cancelled';
     const ready = jobFinished(job) && !jobFailed(job) && !cancelled;
@@ -207,12 +212,8 @@ function AddServer({ runtime, onAdded, device, agentAvailable }) {
     </>;
   }
   return <><form onSubmit={event => { event.preventDefault(); void submit(); }}><div className="dc-form-grid">{!device && <Field label="名称（可选）" full><input placeholder="例如：开发服务器" maxLength={100} {...field('name')} /></Field>}<Field label="服务器地址"><input required placeholder="IP 或域名" autoCapitalize="off" autoCorrect="off" {...field('host')} /></Field><Field label="SSH 端口"><input required inputMode="numeric" type="number" min="1" max="65535" {...field('port')} /></Field><Field label="用户名" full><input required placeholder="root / ubuntu" autoCapitalize="off" autoCorrect="off" autoComplete="off" {...field('username')} /></Field><Credentials form={form} setForm={setForm} disabled={busy} agentAvailable={agentAvailable} />{!device && <Field label="下载源" full><Select {...field('source')}><option value="mirror">国内加速（默认）</option><option value="github">官方直连</option></Select></Field>}</div>
-    {fingerprint && <div className="dc-fingerprint">
-      <strong role="status">服务器准备就绪</strong>
-      <details><summary>查看 SSH 指纹</summary><code>{fingerprint}</code></details>
-    </div>}
     <ErrorLine error={error} />
-    <div className="dc-actions">{!device && <Button title="准备离线部署资源" disabled={busy} onClick={prepareResources}>准备部署资源</Button>}<Button primary type="submit" disabled={busy}>{busy ? '处理中…' : fingerprint ? '连接' : '检查'}</Button></div>
+    <div className="dc-actions">{!device && <Button title="准备离线部署资源" disabled={busy} onClick={prepareResources}>准备部署资源</Button>}<Button primary type="submit" disabled={busy}>{busy ? '正在连接…' : device ? '连接 SSH' : '添加服务器'}</Button></div>
   </form></>;
 }
 
@@ -672,7 +673,7 @@ function ManageDevice({ device, runtime, onChanged, onRemoved, onCloseWorkbench,
   const serviceActions = [['status', '状态'], ['start', '启动'], ['restart', '重启'], ['stop', '停止'], ['logs', '日志'], ['update', '更新插件']];
   const pendingAction = serviceActions.find(([operation]) => operation === confirm);
   const canRemove = membership ? canRemoveMember : device.kind !== 'local';
-  const removeAction = membership?.local ? '退出设备组' : membership ? '移出设备组' : '移除连接';
+  const removeAction = membership?.local ? '退出设备组' : '移除连接';
   const remove = () => membership?.local ? execute('groupLeave') : membership ? execute('groupRemove', { deviceId: membership.id }) : execute('remove');
   return <>
     {deviceIcon(device) === 'server'
@@ -705,7 +706,8 @@ function ManageDevice({ device, runtime, onChanged, onRemoved, onCloseWorkbench,
       {jobFinished(job) && !jobFailed(job) && job.state !== 'cancelled' && onOpenWorkbench && <div className="dc-actions"><Button primary onClick={() => onOpenWorkbench(job.device || device, { reopen: true })}>重新打开工作台</Button></div>}
       {error && !jobFinished(job) && <Button onClick={() => { setError(''); setPollAttempt(value => value + 1); }}>重新检查进度</Button>}
     </>}
-    {membership && confirm === 'remove' && <p className="dc-note">{membership.local ? '退出后，本机会从其他成员的列表中消失，其他成员仍可互通。' : '移除后，该设备将从所有成员的列表中消失，并失去组内访问权限。'}</p>}
+    {confirm === 'remove' && membership && <p className="dc-note">{membership.local ? '退出后，本机会从其他成员的列表中消失，其他成员仍可互通。' : '移除后，该设备将从所有成员的列表中消失，并失去组内访问权限。'}</p>}
+    {confirm === 'remove' && managed && <p className="dc-note">本机保存的 SSH 凭据也会清除。</p>}
     {(onCloseWorkbench || canRemove) && <div className="dc-management dc-actions">
       {onCloseWorkbench && <Button onClick={onCloseWorkbench}>关闭工作台</Button>}
       {canRemove && (confirm === 'remove' ? <><Button disabled={working} onClick={() => setConfirm('')}>取消</Button><Button danger disabled={working} onClick={remove}>{membership?.local ? '确认退出' : '确认移除'}</Button></> : <Button danger icon="trash" disabled={working} onClick={() => setConfirm('remove')}>{removeAction}</Button>)}

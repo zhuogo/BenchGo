@@ -89,17 +89,20 @@ test('Android redelivery keeps the original pairing request through approval', a
   assert.equal(added[0]?.id, 'desk');
 });
 
-test('server authentication starts after fingerprint confirmation', async () => {
-  const view = fixture('AddServer', { onAdded() {} }); await view.settle();
+test('adding a server submits password authentication without a fingerprint step', async () => {
+  const view = fixture('AddServer', { onAdded() {}, agentAvailable: true }); await view.settle();
   const fields = view.nodes().filter(node => node.type === 'input');
   fields[1].props.onChange({ target: { value: 'server.example.com' } }); fields[3].props.onChange({ target: { value: 'ubuntu' } }); await view.settle();
+  assert.match(textOf(view.tree), /添加服务器/);
+  assert.doesNotMatch(textOf(view.tree), /指纹/);
+  const credentials = view.nodes().find(node => node.type?.name === 'Credentials');
+  assert.equal(credentials.props.form.auth, 'password');
+  credentials.props.setForm(form => ({ ...form, password: 'test-password' }));
+  await view.settle();
   view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
-  assert(textOf(view.tree).includes('服务器准备就绪'));
-  assert.equal(view.nodes().find(node => node.type === 'details').props.open, undefined);
-  assert.deepEqual(Object.keys(view.calls.find(item => item.action === 'sshProbe').args).sort(), ['host', 'port', 'username']);
-  assert.equal(view.calls.some(item => item.action === 'sshConnect'), false);
-  view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} }); await view.settle();
-  assert.equal(view.calls.find(item => item.action === 'sshConnect').args.fingerprint, 'SHA256:valid');
+  assert.deepEqual(view.calls.map(item => item.action), ['sshConnect']);
+  assert.equal(view.calls[0].args.password, 'test-password');
+  assert.equal(Object.hasOwn(view.calls[0].args, 'fingerprint'), false);
   await view.tick(); assert(textOf(view.tree).includes('打开工作台'));
 });
 
@@ -140,7 +143,7 @@ test('resource cancellation waits for the final job state and remains a neutral 
   assert.match(textOf(view.tree), /返回/);
   assert.doesNotMatch(textOf(view.tree), /打开工作台|刷新进度/);
   await view.click('返回');
-  assert.match(textOf(view.tree), /检查/);
+  assert.match(textOf(view.tree), /添加服务器/);
 });
 
 test('failed resource preparation retries with the selected source and never connects SSH', async () => {
@@ -169,8 +172,10 @@ test('server upload and install stages do not offer resource cancellation', asyn
   await view.settle();
   const fields = view.nodes().filter(node => node.type === 'input');
   fields[1].props.onChange({ target: { value: 'server.example.com' } }); fields[3].props.onChange({ target: { value: 'ubuntu' } }); await view.settle();
-  const submit = () => view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
-  submit(); await view.settle(); submit(); await view.settle(); await view.tick();
+  view.nodes().find(node => node.type?.name === 'Credentials').props.setForm(form => ({ ...form, password: 'test-password' }));
+  await view.settle();
+  view.nodes().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  await view.settle(); await view.tick();
   assert.doesNotMatch(textOf(view.tree), /取消/);
 });
 
@@ -629,7 +634,7 @@ test('removing a group member uses its member identity and the group operation',
     onRemoved: id => { removed = id; },
   });
   await view.settle();
-  await view.click('移出设备组');
+  await view.click('移除连接');
   await view.click('确认移除');
   assert.equal(view.calls.at(-1).action, 'groupRemove');
   assert.equal(view.calls.at(-1).args.deviceId, 'member-id');

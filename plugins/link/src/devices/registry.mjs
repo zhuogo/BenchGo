@@ -73,6 +73,8 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
   if (legacy !== undefined || retiredAiGrants.length) await persist();
   if (legacy !== undefined) await rm(oldServers);
   const groupTargets = new Map();
+  const removalGeneration = member => member.generation ?? member.id;
+  const groupRemoval = hostId => group?.members().find(member => member.id === hostId && member.removed);
   const targets = () => {
     const current = new Set();
     const stored = new Map();
@@ -112,7 +114,9 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
       if (!row.hostId) return true;
       if (row.hostId === group?.localId || stored.get(row.hostId) !== row) return false;
       const member = groupMembers.get(row.hostId);
-      return !member || groupEnabled && !member.removed && !groupTargets.has(row.hostId);
+      return !member || (member.removed
+        ? Boolean(row.ssh && row.sshGroupRemovalGeneration === removalGeneration(member))
+        : groupEnabled && !groupTargets.has(row.hostId));
     })];
   };
   const find = (devices, id) => {
@@ -142,6 +146,10 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
       return rows.find(row => row.ssh) ?? rows[0];
     },
     sshRecords() { return state.devices.filter(value => value.ssh?.host).map(value => ({ ...value, kind: 'ssh' })); },
+    isRetiredSsh(value) {
+      const removed = groupRemoval(value.hostId);
+      return Boolean(removed && value.sshGroupRemovalGeneration !== removalGeneration(removed));
+    },
     scope() {
       if (!state.resourceScope) return { mode: 'current', deviceIds: [] };
       const devices = targets();
@@ -166,6 +174,11 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
       const value = { ...existing, ...input, ...target, ...(routes === undefined ? {} : { routes }), id: existing?.id || input.id || randomUUID(), name: label(existing?.alias || input.name || existing?.name || `BenchGo-${randomUUID().slice(0, 6)}`), kind: input.kind === 'ssh' ? 'ssh' : 'computer', status: 'online', lastError: null };
       if (!input.hostId && existing?.hostId) value.hostId = existing.hostId;
       if (existing?.kind === 'computer' && input.kind === 'ssh') Object.assign(value, { kind: existing.kind, url: existing.url, pin: existing.pin, token: existing.token, authorizationId: existing.authorizationId });
+      if (input.kind === 'ssh') {
+        const removed = groupRemoval(value.hostId);
+        if (removed) value.sshGroupRemovalGeneration = removalGeneration(removed);
+        else delete value.sshGroupRemovalGeneration;
+      }
       const previous = state.devices;
       activeRoutes.delete(value.id);
       state.devices = [...state.devices.filter(row => row.id !== value.id), value];
@@ -174,7 +187,19 @@ export async function openDeviceRegistry(directory, { localName = () => '本机'
     },
     async select(id) { const value = id === 'local' ? null : get(id); state.activeId = value?.id ?? 'local'; await persist(); return value ? publicDevice(value) : localDevice(); },
     async rename(id, name) { const value = get(id); value.alias = value.name = label(name); await persist(); return publicDevice(value); },
-    async remove(id) { const value = get(id); activeRoutes.delete(value.id); state.devices = state.devices.filter(row => row.id !== value.id); if (state.activeId === id || state.activeId === value.id) state.activeId = 'local'; await persist(); },
+    async remove(id) {
+      const value = state.devices.find(row => row.id === id) ?? get(id);
+      const previous = state.devices, activeId = state.activeId;
+      state.devices = previous.filter(row => row.id !== value.id);
+      if (state.activeId === id || state.activeId === value.id) state.activeId = 'local';
+      try { await persist(); }
+      catch (error) {
+        state.devices = previous;
+        state.activeId = activeId;
+        throw error;
+      }
+      activeRoutes.delete(value.id);
+    },
     mark(id, status, lastError = null) { const value = get(id); value.status = status; value.lastError = lastError; },
     async updateIdentity(id, expected, resolved) {
       const stored = get(id);

@@ -6,7 +6,7 @@ import { probeRemote, remoteJson } from './remote.mjs';
 import { createDeviceResources, deviceConnectionFailure } from './resources.mjs';
 import { selectRoute } from './routes.mjs';
 import { createDeviceProxy } from './proxy.mjs';
-import { createServerManager } from '../server/manager.mjs';
+import { createServerManager, validateSshInput } from '../server/manager.mjs';
 import { verifyReturnRoute } from '../pairing/return.mjs';
 const secret = () => randomBytes(32).toString('base64url');
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -98,6 +98,21 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
   } });
   await manager?.ready;
   const serverManagement = !publicOrigin && typeof manager?.sshTarget === 'function';
+  const removing = new Map();
+  function removeConnection(id) {
+    if (removing.has(id)) return removing.get(id);
+    const task = (async () => {
+      await manager?.disconnect?.(id);
+      await registry.remove(id);
+      if (!publicOrigin) await groupAssets?.removeLocal(id);
+      resources.invalidate(id);
+      const proxy = proxies.get(id);
+      proxies.delete(id);
+      await proxy?.close();
+    })().finally(() => removing.delete(id));
+    removing.set(id, task);
+    return task;
+  }
   const decorate = device => ({ ...device, ...(serverManagement ? manager.state(device.id) : undefined) });
   const localAssets = () => registry.list().devices
     .filter(row => row.kind === 'ssh' || row.kind !== 'local' && !registry.isGroup(row.id))
@@ -261,7 +276,12 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       return { device: { id, name: member.name } };
     }
     if (input.action === 'groupRemove' && group) {
-      await group.remove(group.member(id)?.id ?? registry.get(id).hostId);
+      const sshRecords = registry.sshRecords();
+      const hostId = group.members().find(member => member.id === id)?.id
+        ?? sshRecords.find(device => device.id === id)?.hostId ?? registry.get(id).hostId;
+      await group.remove(hostId);
+      const localConnections = sshRecords.filter(device => device.hostId === hostId && registry.isRetiredSsh(device));
+      for (const device of localConnections) await removeConnection(device.id);
       return group.status();
     }
     if (input.action === 'groupLeave' && group) { await group.remove(group.localId); return group.status(); }
@@ -374,14 +394,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       return { device: registry.list().devices[0] };
     }
     if (input.action === 'remove') {
-      id = registry.get(id).id;
-      await manager?.disconnect?.(id);
-      await registry.remove(id);
-      if (!publicOrigin) await groupAssets?.removeLocal(id);
-      resources.invalidate(id);
-      const proxy = proxies.get(id);
-      proxies.delete(id);
-      await proxy?.close();
+      await removeConnection(registry.get(id).id);
       return { ok: true };
     }
     if (!manager) throw fail('此客户端不支持 SSH，请更新应用');
@@ -398,6 +411,15 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
         if (!serverManagement) throw fail('请在本机设备中心补绑 SSH', 403);
         await resources.resolveDeviceIdentity({ deviceId: input.deviceId, signal: input.signal });
         return manager.connect({ ...input, device: registry.get(input.deviceId) });
+      }
+      if (group) {
+        const target = validateSshInput(input, { credentials: true, requireFingerprint: false });
+        for (const saved of registry.sshRecords()) {
+          const { host, port, username } = saved.ssh;
+          if (host === target.host && port === target.port && username === target.username && registry.isRetiredSsh(saved)) {
+            await removeConnection(saved.id);
+          }
+        }
       }
       return manager.connect({ ...input, device: undefined });
     }

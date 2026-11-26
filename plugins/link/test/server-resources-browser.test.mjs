@@ -249,14 +249,11 @@ test('device center renders server preparation and relay pool states across them
     await page.getByRole('button', { name: '返回', exact: true }).click();
     await page.getByLabel('服务器地址', { exact: true }).fill('server.example.com');
     await page.getByLabel('用户名', { exact: true }).fill('ubuntu');
-    await page.getByRole('button', { name: '检查', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: '服务器准备就绪' }).waitFor();
-    assert.equal(await page.getByText('SHA256:verified', { exact: true }).isVisible(), false);
-    await page.screenshot({ path: join(screenshots, 'ssh-ready-390-dark.png'), fullPage: true });
-    await page.getByText('查看 SSH 指纹', { exact: true }).click();
-    await page.getByText('SHA256:verified', { exact: true }).waitFor();
-    await page.getByRole('button', { name: '连接', exact: true }).click();
+    await page.getByLabel('密码', { exact: true }).fill('test-password');
+    await page.getByRole('button', { name: '添加服务器', exact: true }).click();
     await page.getByText('远端安装已开始', { exact: true }).waitFor();
+    assert.equal(await page.getByText('查看 SSH 指纹', { exact: true }).count(), 0);
+    assert.equal(await page.evaluate(() => window.calls.some(call => call.action === 'sshProbe')), false);
     assert.equal(await page.getByRole('button', { name: '取消', exact: true }).count(), 0, 'upload/install cannot be cancelled as resource preparation');
     await page.screenshot({ path: join(screenshots, 'install-390-dark.png'), fullPage: true });
     await page.getByRole('button', { name: '手动安装', exact: true }).click();

@@ -1,0 +1,67 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T13:54:15.247Z",
+  "by": "codex",
+  "reason": "按用户要求简化服务器添加并统一清理 SSH 登记和凭据",
+  "base": "b495e20a24e4",
+  "result": "f7a9e7e555e9",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.manage",
+      "fields": [
+        "body.responsibilities"
+      ],
+      "before": {
+        "id": "link.manage",
+        "type": "module",
+        "title": "共享资源与服务器管理",
+        "summary": "聚合导航与助手共用资源查询，设备中心承担首次信任和部署。",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "配对工作台保留官方资源接口。本机文件、任意终端与 SSH 以本机 owner 边界为准。"
+          ],
+          "responsibilities": [
+            "按设备分页查询项目、会话、模型和能力。离线是可报告结果。",
+            "已配对设备按开放能力使用会话菜单操作、连接与中继管理。",
+            "人工 SSH 终端与本机 AI 运维复用登记目标。先确认指纹，再连接认证。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/SSH服务器运维.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
+              "path": "plugins/link/src/devices/resources.mjs",
+              "symbol": "createDeviceResources"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "b1a1976fccb7b81d9044cb6443e674affef167f7aa74f76ae60d6c7f1548c9a3",
+              "path": "plugins/link/src/index.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "19f72f84075f63f1c2a61138199db75fda75cbce9411451dd0800979b147f39b",
+              "path": "plugins/base/workbench/src/ssh-trust.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

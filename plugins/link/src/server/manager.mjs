@@ -16,14 +16,14 @@ const operationError = (message, code, status = 409) => Object.assign(new Error(
 const sshAgent = () => process.env.SSH_AUTH_SOCK || (process.platform === 'win32' ? '\\\\.\\pipe\\openssh-ssh-agent' : undefined);
 export const fingerprintOf = key => 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '');
 export const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
-export function validateSshInput(input, { credentials = false } = {}) {
+export function validateSshInput(input, { credentials = false, requireFingerprint = credentials } = {}) {
   const host = typeof input?.host === 'string' ? input.host.trim().replace(/^\[|\]$/g, '') : '';
   const username = typeof input?.username === 'string' ? input.username.trim() : '';
   const port = input?.port === undefined || input.port === '' ? 22 : Number(input.port);
   if (!host || host.length > 253 || !(isIP(host) || /^(?=.{1,253}$)[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$/.test(host))) throw new Error('请输入有效的服务器 IP 或域名');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SSH 端口必须为 1–65535');
   if (!username || username.length > 64 || /[\x00-\x20\x7f]/.test(username)) throw new Error('请输入有效的 SSH 用户名');
-  if (credentials && !/^SHA256:[A-Za-z0-9+/]{43}$/.test(input.fingerprint ?? '')) throw new Error('请先确认服务器 SSH 指纹');
+  if ((requireFingerprint || credentials && input.fingerprint !== undefined) && !/^SHA256:[A-Za-z0-9+/]{43}$/.test(input.fingerprint ?? '')) throw new Error('服务器 SSH 身份信息无效');
   if (credentials && !input.password && !input.privateKey && !sshAgent()) throw operationError('请在设备中心重新连接 SSH，输入密码或私钥', 'SSH_AUTH_REQUIRED');
   for (const field of ['password', 'privateKey', 'passphrase']) if (input[field] !== undefined && (typeof input[field] !== 'string' || input[field].length > (field === 'privateKey' ? 65536 : 4096))) throw new Error('SSH 认证信息无效');
   const source = input.source ?? 'mirror'; if (!['mirror', 'github'].includes(source)) throw new Error('不支持的下载源');
@@ -503,20 +503,21 @@ export function createServerManager({ directory, registry: sharedRegistry, crede
     },
     async probe(input) { ensure(); validateSshInput(input); return open(input, true); },
     async connect(input) {
-      ensure(); await ready; const target = validateSshInput(input, { credentials: true });
+      ensure(); await ready; const target = validateSshInput(input, { credentials: true, requireFingerprint: false });
       const name = String(input.name || target.host).trim(); if (!name || name.length > 100) throw new Error('设备名称须为 1–100 个字符');
       const key = [target.host, target.port, target.username].join('|');
       const known = [...records.values()].find(device => [device.ssh.host, device.ssh.port, device.ssh.username].join('|') === key);
       if (known) {
         if (input.device && input.device.id !== known.id) throw new Error('此 SSH 账号已绑定其他设备，请核对登记');
-        if (known.ssh.fingerprint !== input.fingerprint) throw new Error('SSH 主机指纹已改变，已保留原连接');
+        if (input.fingerprint !== undefined && known.ssh.fingerprint !== input.fingerprint) throw operationError('服务器身份已变化，请确认服务器地址后，移除原连接并重新添加', 'IDENTITY_CHANGED');
         return this.reconnect({ ...input, id: known.id });
       }
       if (connecting.has(key)) throw new Error('此服务器正在连接'); connecting.add(key);
       return startJob(async (job, step, signal) => {
         let client;
         try {
-          client = await open(input); ensure();
+          const { fingerprint } = input.fingerprint !== undefined ? input : await open(target, true);
+          client = await open({ ...input, fingerprint }); ensure();
           step('检查已有 BenchGo 安装');
           const discovery = await execute(client, ownerDiscoverCommand);
           const installed = discovery.stdout.trim();
@@ -532,7 +533,7 @@ export function createServerManager({ directory, registry: sharedRegistry, crede
             result = await install(client, input, 'connect', job, step, signal);
           }
           ensure(); step('验证安全工作台');
-          const ssh = { ...target, fingerprint: input.fingerprint, remotePort: result.port };
+          const ssh = { ...target, fingerprint, remotePort: result.port };
           const device = { id: existing?.id ?? input.device?.id ?? randomUUID(), name: input.device?.name ?? existing?.name ?? name, kind: 'ssh', hostId: 'sha256:' + result.pin,
             authorizationId: result.deviceId, pin: result.pin, token: result.token, ssh,
             ...(result.warning ? { warning: result.warning } : {}) };
@@ -553,7 +554,13 @@ export function createServerManager({ directory, registry: sharedRegistry, crede
       ensure(); await ready; const device = records.get(input.id); if (!device) throw new Error('未找到此服务器');
       const value = { ...device.ssh, password: input.password, privateKey: input.privateKey, passphrase: input.passphrase }; validateSshInput(value, { credentials: true });
       return startJob(async () => {
-        const client = await open(value).catch(error => { if (!sessions.has(input.id)) sshErrors.set(input.id, error.code); throw error; });
+        const client = await open(value).catch(error => {
+          if (!sessions.has(input.id)) sshErrors.set(input.id, error.code);
+          if (error.code === 'IDENTITY_CHANGED') {
+            throw operationError('服务器身份已变化，请确认服务器地址后，移除原连接并重新添加', error.code);
+          }
+          throw error;
+        });
         try {
           if (records.get(input.id) !== device) throw new Error('服务器登记已变化');
           await saveCredential(device, input);
