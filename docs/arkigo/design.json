@@ -2676,20 +2676,26 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-26T13:22:50.967Z",
+            "checkedAt": "2026-11-26T13:33:58.619Z",
             "hash": "316ca0aeb7438883796e79fc8f481258aefb00a092e94ed1559e2cf109162f0b",
             "path": "benchgo-web/site/changelog.html",
             "symbol": "/changelog"
           },
           {
-            "checkedAt": "2026-11-26T13:22:50.967Z",
+            "checkedAt": "2026-11-26T13:33:58.619Z",
+            "hash": "78d76d2e6aaccbd7104351b1880c4750e60387fcd904f48c94c74ac14f314628",
+            "path": "benchgo-web/site/navigation.html",
+            "symbol": "benchgo-site-nav"
+          },
+          {
+            "checkedAt": "2026-11-26T13:33:58.619Z",
             "hash": "abedc76d5c377df7e033dbc2b96e93d8f1c0e67a017aa243c442a121f8bb58c7",
             "path": "scripts/release/publish-web-catalog.mjs",
             "symbol": "changelogSnapshot"
           }
         ],
-        "note": "页面和发行元数据同步已实现，官网源站返回 HTTP 502，等待部署并核实实际访问。",
-        "status": "partial"
+        "note": "官网页面已部署，匿名浏览器从首页导航打开并读取 16 条 GitHub 历史发行。",
+        "status": "implemented"
       }
     },
     {

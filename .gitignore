@@ -18,6 +18,7 @@ node_modules/
 /benchgo-web/site/*
 !/benchgo-web/site/changelog.html
 !/benchgo-web/site/navigation.html
+!/benchgo-web/site/site.json
 /[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
 /工作/
 /协作开发模式.md

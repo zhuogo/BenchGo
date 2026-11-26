@@ -1,0 +1,56 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T13:33:58.619Z",
+  "by": "codex",
+  "reason": "记录官网更新日志已部署并验证历史记录",
+  "base": "cfe2e4ddf5f7",
+  "result": "b495e20a24e4",
+  "changes": [
+    {
+      "op": "update",
+      "id": "release.changelog",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note",
+        "implementation.status"
+      ],
+      "before": {
+        "id": "release.changelog",
+        "type": "screen",
+        "title": "官网更新日志",
+        "summary": "在官网浏览 GitHub 正式发行说明和历史版本。",
+        "parent": "release",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "elements": [
+            "版本号、发布日期、发行说明和 GitHub 原文链接"
+          ],
+          "purpose": "将 GitHub Releases 的正式版本与发布说明同步到 BenchGo 官网。",
+          "route": "/changelog",
+          "states": [
+            "加载、可读的历史记录、空状态、失败重试"
+          ]
+        },
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T13:22:50.967Z",
+              "hash": "316ca0aeb7438883796e79fc8f481258aefb00a092e94ed1559e2cf109162f0b",
+              "path": "benchgo-web/site/changelog.html",
+              "symbol": "/changelog"
+            },
+            {
+              "checkedAt": "2026-11-26T13:22:50.967Z",
+              "hash": "abedc76d5c377df7e033dbc2b96e93d8f1c0e67a017aa243c442a121f8bb58c7",
+              "path": "scripts/release/publish-web-catalog.mjs",
+              "symbol": "changelogSnapshot"
+            }
+          ],
+          "note": "页面和发行元数据同步已实现，官网源站返回 HTTP 502，等待部署并核实实际访问。",
+          "status": "partial"
+        }
+      }
+    }
+  ]
+}
