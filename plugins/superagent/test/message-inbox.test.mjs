@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createMessageInbox, messageReceiptFromEvents } from '../src/message-inbox.mjs';
+import { createMessageInbox, interruptedResultClaim, messageReceiptFromEvents } from '../src/message-inbox.mjs';
+import { modelRouteType } from '../src/model-fallback.mjs';
 import { taskReplySource } from '../src/task-reply.mjs';
 
 function fixture(initial = {}, options = {}) {
@@ -20,6 +21,32 @@ function fixture(initial = {}, options = {}) {
     async finish(reason = { kind: 'stop' }) { events.push({ type: 'turn/end', data: { reason } }); agent.status = 'idle'; await inbox.settle('main'); },
   };
 }
+
+test('restart recognizes the official pre-step result claim before and after an interrupted closer', () => {
+  const message = { id: 'result-message', source: { kind: taskReplySource, replyKind: 'result', eventKey: 'saved', taskId: 'task' } };
+  const row = { messageId: message.id, message, requestId: 'task-reply:saved', taskReply: { kind: 'result', eventKey: 'saved', taskId: 'task' } };
+  const event = (type, data) => ({ type, data });
+  const prefix = [{ ...event(modelRouteType, { messageId: message.id }), ignorable: true },
+    event('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [message] }), event('turn/start', { turn: 5 })];
+  const claim = { target: 'next-turn', start: 0, removedCount: 1, inserted: [] };
+  const compaction = [event('compaction/start', { compactionId: 'compact', turn: 5 }), event('compaction/summary', { compactionId: 'compact' }),
+    event('user/message', { id: 'checkpoint', source: { kind: 'compact-checkpoint', compactionId: 'compact' } }),
+    event('compaction/end', { compactionId: 'compact', turn: 5 })];
+  const events = [...prefix, event('agent/inbox/spliced', claim), ...compaction];
+  assert.equal(interruptedResultClaim(row, events), 5);
+  const resumed = [...events, event('turn/end', { turn: 5, reason: { kind: 'interrupted' } }), event('session/end-seed', {}), event('permission/preset', {})];
+  assert.equal(interruptedResultClaim(row, resumed), 5);
+  assert.equal(interruptedResultClaim(row, [...resumed, event('session/end-seed', {}), event('sandbox/mode', {})]), 5);
+  assert.equal(interruptedResultClaim(row, [...resumed, event('session/end-seed', { inherited: true })]), undefined);
+  for (const evidence of [event('step/start', { turn: 5, step: 1 }), event('request/header', {}), event('user/message', message),
+    event('turn/end', { turn: 5, reason: { kind: 'aborted', reason: { kind: 'user' } } }),
+    event('plugin:benchgo-plugin/chat-publication', { requestId: message.id })]) {
+    assert.equal(interruptedResultClaim(row, [...events, evidence]), undefined, evidence.type);
+  }
+  assert.equal(interruptedResultClaim(row, [...prefix, event('agent/inbox/spliced', { ...claim, outcome: 'canceled' })]), undefined);
+  assert.equal(interruptedResultClaim(row, [...prefix, ...compaction]), undefined);
+  assert.equal(interruptedResultClaim({ ...row, taskReply: { ...row.taskReply, kind: 'state' } }, events), undefined);
+});
 
 test('three consecutive requests persist, then dispatch once in order without blocking acceptance', async () => {
   const f = fixture();
@@ -42,15 +69,15 @@ test('duplicate pending IDs are acknowledged and mismatched content is rejected'
 });
 
 test('a durable execution notice retains internal source identity, hides from the human queue and reconciles without replay', async () => {
-  const f = fixture();
-  const args = { text: 'PRIVATE HOST INPUT', requestId: 'execution-input:native', hostCleanupNotice: { taskId: 'task', triggerId: 'native' } };
-  await f.inbox.enqueue(args);
-  assert.equal(f.sent[0].source.kind, 'benchgo-execution-input');
-  assert.deepEqual(await f.inbox.state(), []);
-  assert.equal((await f.inbox.enqueue(args)).duplicate, true);
-  await f.finish({ kind: 'completed' });
-  const restored = fixture(JSON.parse(JSON.stringify(f.state())), { events: f.events });
-  await restored.inbox.recover(); await restored.inbox.enqueue(args);
+  const notice = { taskId: 'task', triggerId: 'native' };
+  const message = { id: 'execution-message', source: { kind: 'benchgo-execution-input', ...notice },
+    content: [{ type: 'text', text: 'PRIVATE HOST INPUT' }] };
+  const restored = fixture({ requests: [{ requestId: 'execution-input:native', threadId: 'main', sessionId: 'session',
+    messageId: message.id, message, executionInput: notice, status: 'processing' }] }, { events: [
+    { type: 'user/message', data: message }, { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+  ] });
+  assert.deepEqual(await restored.inbox.state('main'), []);
+  await restored.inbox.recover();
   assert.equal(restored.sent.length, 0);
   assert.equal(restored.state().requests[0].status, 'processed');
 });
@@ -94,6 +121,41 @@ test('cancel terminates accepted queued requests and keeps idempotency tombstone
   assert.equal(f.sent.length, 1);
   assert.deepEqual((await f.inbox.state('main')).map(row => row.status), ['cancelled', 'cancelled']);
   assert.equal((await f.inbox.enqueue({ text: 'B', requestId: 'B' })).duplicate, true);
+});
+
+test('stop retains only unsubmitted Worker results for the next turn', async () => {
+  const f = fixture();
+  const signal = { kind: 'result', eventKey: 'result:first', taskId: 'task' };
+  const interrupted = await f.inbox.enqueueTaskReply({ threadId: 'main', signal });
+  await f.inbox.settle('main');
+  assert.equal(f.sent.length, 1);
+  const queuedSignal = { ...signal, eventKey: 'result:second' };
+  const queued = await f.inbox.enqueueTaskReply({ threadId: 'main', signal: queuedSignal });
+  await f.inbox.enqueueTaskReply({ threadId: 'main', signal: { ...queuedSignal, kind: 'state', eventKey: 'notice:first' } });
+  await f.inbox.cancel('main', { preserveQueuedResults: true });
+  await f.finish({ kind: 'aborted', reason: { kind: 'user' } });
+  assert.deepEqual(f.sent.map(message => message.id), [interrupted.messageId, queued.messageId]);
+  await f.finish({ kind: 'completed' });
+  await f.inbox.enqueueTaskReply({ threadId: 'main', signal: queuedSignal });
+  await f.inbox.settle('main');
+  assert.deepEqual(f.state().requests.map(row => row.status), ['cancelled', 'processed', 'cancelled']);
+  assert.equal(f.sent.length, 2);
+});
+
+test('discarding a thread during session startup cancels its queued Worker result', async () => {
+  const startup = Promise.withResolvers(), release = Promise.withResolvers();
+  const f = fixture({}, { getAgent: () => undefined, ensureSession: async () => {
+    startup.resolve();
+    await release.promise;
+    return f.agent;
+  } });
+  await f.inbox.enqueueTaskReply({ threadId: 'main', signal: { kind: 'result', eventKey: 'result:discard', taskId: 'task' } });
+  await startup.promise;
+  await f.inbox.cancel('main');
+  release.resolve();
+  await f.inbox.settle('main');
+  assert.equal(f.state().requests[0].status, 'cancelled');
+  assert.equal(f.sent.length, 0);
 });
 
 test('session startup failure is durable and visible instead of forever prepared', async () => {

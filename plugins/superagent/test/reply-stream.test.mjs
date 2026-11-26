@@ -262,7 +262,7 @@ test('same-turn steering and late events cannot borrow the earlier request text'
   assert.equal(run([], { chat, history: updated }), null, 'late old-turn text cannot enter the next turn');
 });
 
-test('cancel and failure discard all uncommitted steps but preserve an accepted publication', () => {
+test('non-user interruption and failure discard uncommitted steps but preserve an accepted publication', () => {
   for (const reason of ['aborted', 'error']) {
     const chat = settledChat(reason, { blocks: [{ kind: 'text', text: '未提交进度' }, { kind: 'tool-call', name: 'read' }] });
     assert.equal(run([], { chat, running: false }), null);
@@ -270,6 +270,37 @@ test('cancel and failure discard all uncommitted steps but preserve an accepted 
       content: [{ type: 'text', text: '{"published":true,"requestId":"human"}' }] });
     assert.equal(run([], { chat, running: false }).text, '已正式提交');
   }
+});
+
+test('user stop keeps earlier text and the interrupted prefix through official settlement and history', () => {
+  const chat = settledChat(null);
+  const turn = chat.timeline.turns.get(2);
+  const prefix = { kind: 'text', text: '生成到一半' };
+  chat.legacy.partial = { turn: 2, step: 2, blocks: [prefix] };
+  const live = rows(chat);
+  assert.deepEqual(live.map(row => row.text), ['完整正文', prefix.text]);
+  chat.legacy.nodes.push({ kind: 'assistant', messageId: 'interrupted', turn: 2, step: 2, seq: 11,
+    interrupted: true, blocks: [prefix, { kind: 'reasoning', text: 'PRIVATE' }] });
+  assert.deepEqual(rows(chat).map(row => row.key), live.map(row => row.key), 'durable node replaces the live partial before turn/end');
+  assert.equal(rows(chat).at(-1).streaming, false);
+  turn.end = { seq: 12, data: { turn: 2, reason: { kind: 'aborted', reason: { kind: 'user' } } } };
+  const stopped = rows(chat, { running: false });
+  assert.deepEqual(stopped.map(row => row.key), live.map(row => row.key));
+  assert.deepEqual(stopped.map(row => row.text), live.map(row => row.text));
+  assert.ok(stopped.every(row => !row.streaming));
+
+  const events = [{ type: 'turn/start', seq: turn.start.seq, data: { turn: 2 } },
+    { type: 'user/message', seq: 8, data: { id: 'human', source: { kind: 'user' }, content: [] } },
+    ...chat.legacy.nodes.filter(node => node.kind === 'assistant').map(node => ({ type: 'assistant/message', seq: node.seq, data: {
+      turn: node.turn, step: node.step, interrupted: node.interrupted,
+      message: { id: node.messageId, source: { kind: 'model' }, content: node.blocks.map(({ kind, ...block }) => ({ type: kind, ...block })) },
+    } })), { type: 'turn/end', ...turn.end }];
+  const messages = projectChatMessages(JSON.parse(JSON.stringify(events)));
+  const refreshed = { ...history, activeReply: null, messages };
+  const replies = rows(chat, { history: refreshed, running: false });
+  assert.deepEqual(replies, []);
+  assert.deepEqual(quietChatRows(refreshed, 'main', {}, chat, undefined, replies).filter(row => row.role === 'assistant').map(row => row.key),
+    live.map(row => row.key));
 });
 
 test('repeated human steering preserves each reply, event order and identities through delayed history and reload', () => {

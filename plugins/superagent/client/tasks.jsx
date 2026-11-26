@@ -3,7 +3,6 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import { useConfirmation } from '../../shared/client/ui/confirmation.jsx';
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDirtyRegistry } from './dirty-registry.mjs';
-import { Modal } from '@deepseek-ai/dsh-client-ui-primitives';
 import { UIIcon } from '../../base/client/iconsax.jsx';
 import { SegmentedControl } from '../../shared/client/segmented-control.jsx';
 import taskCss from './tasks.css';
@@ -71,7 +70,6 @@ export function Tasks({ api, onDirtyChange, onDetailChange, onSchedule, onOpenEx
     .map(row => ({ ...row, status: row.domainStatus ?? row.status })).sort((a, b) => Number(a.status === 'completed') - Number(b.status === 'completed') || activityTime(b) - activityTime(a)), [activityRows]);
   const [actionError, setError] = useState(''), [busy, setBusy] = useState(null);
   const error = actionError || activityError;
-  const [concurrency, setConcurrency] = useState(''), [configRevision, setConfigRevision] = useState(null), [settingsOpen, setSettingsOpen] = useState(false), [configError, setConfigError] = useState('');
   const [selectedId, setSelectedId] = useState(null), [changeId, setChangeId] = useState(null), [detailDirty, setDetailDirty] = useState(false);
   const [detailTab, setDetailTab] = useState('execution');
   const detailTabsId = useId();
@@ -98,13 +96,9 @@ export function Tasks({ api, onDirtyChange, onDetailChange, onSchedule, onOpenEx
     setBusy(row.id); setError('');
     try {
       const { worker } = await api('taskArchiveInfo', { taskId: row.id });
-      if (!worker) {
-        if (row.status !== 'completed' && !row.executionControl?.stopped) throw new Error('当前任务还没有可归档的执行会话');
-        openCleanup('archive', [row.id]);
-        return;
-      }
+      if (!worker) throw new Error('当前任务还没有可归档的执行会话');
       const label = worker.active ? '停止并归档' : '归档';
-      if (!await confirm({ title: `${label}“${worker.title}”？`, description: (worker.active ? '将停止正在进行的活动。' : '') +
+      if (!await confirm({ title: `${label}“${worker.title}”？`, description: (worker.active ? '进行中的工作会同时被要求停止。' : '') +
         '执行会话和关联工单将一同归档。历史记录和已有成果会保留。', confirmLabel: label })) return;
       const result = await api('archiveWorkerTask', { taskId: row.id, worker, requestId: crypto.randomUUID() });
       if (!result.archived) throw new Error('关联工单的归档尚未确认，请刷新后核验');
@@ -136,22 +130,11 @@ export function Tasks({ api, onDirtyChange, onDetailChange, onSchedule, onOpenEx
   const detailChanged = React.useCallback(dirty => detailDirtyCallback.current?.(dirty), []);
   const reload = async () => { setError(''); await refresh(); };
   const lifecycle = async (row, method, input = {}) => { setBusy(row.id); setError(''); try { const response = await api(method, { taskId: row.id, ...input }); if (method === 'taskResume' && response?.queued === false) throw new Error(`系统状态：原任务暂未恢复（${response.code || 'WAITING'}）`); await refreshTasks([row.id]); } catch (cause) { setError(cause.message); } finally { setBusy(null); } };
-  const savedConcurrency = useRef('');
-  const configDirty = dirtyEditor('configuration');
-  useEffect(() => { configDirty(settingsOpen && concurrency !== savedConcurrency.current); return () => configDirty(false); }, [settingsOpen, concurrency, configDirty]);
-  const loadConfig = async () => { setConfigError(''); try { const value = await api('state'); savedConcurrency.current = String(value.config.workerConcurrency ?? 2); setConcurrency(savedConcurrency.current); setConfigRevision(value.config.revision); } catch (cause) { setConfigError(cause.message); } };
-  const closeSettings = () => { if (busy === 'configuration') return; setConcurrency(savedConcurrency.current); setSettingsOpen(false); setConfigError(''); };
-  const saveConcurrency = async event => {
-    event.preventDefault(); if (configRevision === null || !Number.isInteger(Number(concurrency)) || Number(concurrency) < 1 || busy === 'configuration') return; setBusy('configuration'); setConfigError('');
-    try {
-      const value = await api('config', { revision: configRevision, patch: { workerConcurrency: Number(concurrency) } });
-      setConfigRevision(value.revision); savedConcurrency.current = concurrency; setSettingsOpen(false);
-    } catch (cause) { setConfigError(cause.message); }
-    finally { setBusy(null); }
-  };
   const visibleRows = rows?.filter(row => !row.taskMeta?.deleted && archivedActivityTask(row) === (archiveScope === 'archived'));
   const filteredRows = filterTasks(visibleRows || [], query);
-  const cleanupCandidates = filteredRows.filter(row => (row.status === 'completed' || row.executionControl?.stopped) && !row.cleanup?.id && !row.taskMeta?.archived);
+  // Any archivable Task qualifies: archival itself stops running work, so
+  // completion is not a precondition.
+  const cleanupCandidates = filteredRows.filter(row => !!row.executionSession?.sessionId && !row.cleanup?.id && !row.taskMeta?.archived);
   const selectedRow = rows?.find(row => row.id === selectedId && !row.taskMeta?.deleted);
   const switchArchiveScope = value => {
     setError(''); setArchiveScope(value);
@@ -187,9 +170,9 @@ export function Tasks({ api, onDirtyChange, onDetailChange, onSchedule, onOpenEx
         if (recovery) actions.push({ icon: 'play', label: recovery.label, onClick: () => lifecycle(row, 'taskResume', recovery.input), disabled: busy !== null });
         else if (control.paused && !control.stopRequested && !safetyWait) actions.push({ icon: 'play', label: '继续任务', onClick: () => lifecycle(row, 'taskResume'), disabled: busy !== null });
       } else actions.push({ icon: 'refresh', label: '创建关联调整任务', onClick: () => openDetail(row.id, true), disabled: busy !== null });
-      return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="task" row={row} title={title} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><Tooltip label={summary} onlyWhenClipped><span className="ba-task-summary" tabIndex={0}>{summary}</span></Tooltip>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}{row.cleanup?.archivedAt && <time className="ba-task-updated" dateTime={row.cleanup.archivedAt}>归档整理于 {new Date(row.cleanup.archivedAt).toLocaleString('zh-CN')}</time>}</>} onChanged={() => refreshTasks([row.id])} onOpen={() => openDetail(row.id)} onArchive={busy === null && !listDirty && (execution?.sessionId || row.status === 'completed' || control.stopped) ? archiveTask : undefined} onRestore={() => openCleanup('restore', [row.id])} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
-      {detailOnly && <TaskDetail inline open title={<TaskStatusTitle title={title} status={status} label={stateLabel} />} headerActions={<><div className="ba-task-detail-tabs"><SegmentedControl options={detailTabs} value={detailTab} onChange={setDetailTab} label="任务详情内容" tabIdPrefix={detailTabsId} /></div><TaskIconButton icon={row.status === 'completed' || control.stopped ? 'refresh' : 'edit'} label={changeLabel} tooltip={changeBlocked ? '执行尚未结束或已中断，已有记录保留。' : changeLabel} disabled={changeBlocked || detailDirty || busy !== null} onClick={() => openChange(row.id)} />{!row.cleanup?.id && (execution?.sessionId || row.status === 'completed' || control.stopped) && <TaskIconButton icon="archive" label="归档" disabled={detailDirty || busy !== null} onClick={() => archiveTask(row)} />}</>} dirty={detailDirty} onClose={closeDetail} footer={row.executionSession?.available && <div className="ba-row-actions">
-        {row.executionSession?.available && <TaskIconButton icon="external" label={busy === `execution:${row.id}` ? '正在打开执行会话…' : '查看执行会话'} disabled={!onOpenExecution || busy !== null} onClick={async event => {
+      return <React.Fragment key={row.id}>{!detailOnly && <TaskListRow api={api} kind="task" row={row} title={title} summary={<><span className="ba-task-state" data-state={status}>{stateLabel}</span><Tooltip label={summary} onlyWhenClipped><span className="ba-task-summary" tabIndex={0}>{summary}</span></Tooltip>{updatedLabel && <time className="ba-task-updated" dateTime={row.updatedAt}>更新 {updatedLabel}</time>}{row.cleanup?.archivedAt && <time className="ba-task-updated" dateTime={row.cleanup.archivedAt}>归档整理于 {new Date(row.cleanup.archivedAt).toLocaleString('zh-CN')}</time>}</>} onChanged={() => refreshTasks([row.id])} onOpen={() => openDetail(row.id)} onArchive={busy === null && !listDirty ? archiveTask : undefined} onRestore={() => openCleanup('restore', [row.id])} actions={actions} onDirtyChange={dirtyEditor(`rename:${row.id}`)} />}
+      {detailOnly && <TaskDetail inline open title={<TaskStatusTitle title={title} status={status} label={stateLabel} />} headerActions={<><div className="ba-task-detail-tabs"><SegmentedControl options={detailTabs} value={detailTab} onChange={setDetailTab} label="任务详情内容" tabIdPrefix={detailTabsId} /></div><TaskIconButton icon={row.status === 'completed' || control.stopped ? 'refresh' : 'edit'} label={changeLabel} tooltip={changeBlocked ? '执行尚未结束或已中断，已有记录保留。' : changeLabel} disabled={changeBlocked || detailDirty || busy !== null} onClick={() => openChange(row.id)} />{!row.cleanup?.id && <TaskIconButton icon="archive" label="归档" disabled={detailDirty || busy !== null} onClick={() => archiveTask(row)} />}</>} dirty={detailDirty} onClose={closeDetail} footer={row.executionSession?.available && <div className="ba-row-actions">
+        {row.executionSession?.available && <TaskIconButton icon="external" label={busy === `execution:${row.id}` ? '正在打开会话…' : '查看执行会话'} disabled={!onOpenExecution || busy !== null} onClick={async event => {
           event.currentTarget.closest('.ba-task-inline')?.focus({ preventScroll: true });
           setBusy(`execution:${row.id}`); setError('');
           try { await onOpenExecution(row.executionSession); } catch (cause) { setError(`执行会话暂时无法打开：${cause.message || cause}`); }
@@ -222,8 +205,7 @@ export function Tasks({ api, onDirtyChange, onDetailChange, onSchedule, onOpenEx
 
   };
   return <section className="ba-group ba-tasks" aria-label="任务">{confirmation}<style>{taskCss}</style><div ref={listContainer} hidden={!!selectedId || !!cleanup} style={selectedId || cleanup ? { display: 'none' } : undefined} className="ba-task-list-container">
-    <Modal open={settingsOpen} onClose={closeSettings} title="任务设置" closeLabel="关闭" footer={<><Button variant="ghost" className="cmd-dialog-button" disabled={busy === 'configuration'} onClick={closeSettings}>取消</Button><Button className="cmd-dialog-button cmd-dialog-primary" type="submit" form="ba-worker-settings" disabled={configRevision === null || busy === 'configuration' || !Number.isInteger(Number(concurrency)) || Number(concurrency) < 1}>{busy === 'configuration' ? '保存中…' : '保存'}</Button></>}><form id="ba-worker-settings" className="cmd-rename-form ba-worker-settings" aria-label="并发执行设置" onSubmit={saveConcurrency}><div className="ba-worker-settings-intro"><UIIcon name="settings" size={22} /><div><strong>执行容量</strong><p id="ba-worker-concurrency-help">设置同时执行的任务数量，按设备性能与模型额度调整。</p></div></div><label htmlFor="ba-worker-concurrency">并发数</label><div className="ba-worker-settings-input"><input id="ba-worker-concurrency" aria-describedby="ba-worker-concurrency-help" autoFocus type="number" min="1" step="1" required value={concurrency} disabled={configRevision === null || busy === 'configuration'} onChange={event => setConcurrency(event.target.value)} /><span>项任务</span></div>{configRevision === null && !configError && <p className="ba-worker-settings-status" role="status"><UIIcon name="refresh" size={16} />正在读取执行设置…</p>}{configError && <p className="ba-worker-settings-error" role="alert"><UIIcon name="close" size={16} /><span>{configError}</span><Button variant="ghost" type="button" disabled={busy === 'configuration'} onClick={loadConfig}>重新读取</Button></p>}</form></Modal>
-    <TaskViewControls disabled={listDirty || detailDirty} view={view} onViewChange={setView} archiveScope={archiveScope} onArchiveScopeChange={switchArchiveScope} query={query} onQueryChange={setQuery} archiveAction={<TaskIconButton icon="archive" label="归档已结束任务" tooltip={rows === null ? '正在同步可归档任务' : cleanupCandidates.length ? `归档已结束任务 · ${cleanupCandidates.length} 项可归档` : '暂无可归档任务'} disabled={!cleanupCandidates.length || listDirty || detailDirty || busy !== null} onClick={() => openCleanup('archive', cleanupCandidates.map(row => row.id))} />} panelId={`${viewId}-panel`} tabIdPrefix={`${viewId}-tab`}><div className="ba-task-actions ba-task-list-actions">{onSchedule && <TaskIconButton icon="schedules" label="定时任务" onClick={onSchedule} />}<TaskIconButton icon="settings" label="设置" onClick={() => { setSettingsOpen(true); setConfigRevision(null); void loadConfig(); }} /></div></TaskViewControls>
+    <TaskViewControls disabled={listDirty || detailDirty} view={view} onViewChange={setView} archiveScope={archiveScope} onArchiveScopeChange={switchArchiveScope} query={query} onQueryChange={setQuery} archiveAction={<TaskIconButton icon="archive" label="归档任务" tooltip={rows === null ? '正在同步可归档任务' : cleanupCandidates.length ? `归档任务 · ${cleanupCandidates.length} 项可归档` : '暂无可归档任务'} disabled={!cleanupCandidates.length || listDirty || detailDirty || busy !== null} onClick={() => openCleanup('archive', cleanupCandidates.map(row => row.id))} />} panelId={`${viewId}-panel`} tabIdPrefix={`${viewId}-tab`}>{onSchedule && <div className="ba-task-actions ba-task-list-actions"><TaskIconButton icon="schedules" label="定时任务" onClick={onSchedule} /></div>}</TaskViewControls>
     {error && (rows === null ? <ResourceState kind="error" title="任务暂时无法读取" description={error} onAction={reload} /> : <div className="ba-task-feedback" role="alert"><UIIcon name="close" size={18} /><span tabIndex={0} aria-label="任务错误详情">任务未能更新：{error}</span><Button variant="ghost" type="button" className="ba-quiet" onClick={reload}>重试读取</Button></div>)}
     {rows === null && !error && <ResourceState kind="loading" title="正在读取任务" description="正在同步执行进展与交付结果。" />}
     {visibleRows?.length === 0 && !error && <ResourceState icon="box" title={archiveScope === 'archived' ? '暂无归档任务' : '暂无任务'} description={archiveScope === 'archived' ? '手动归档的任务保存在这里，成果与执行记录仍可查看。' : '在 SuperAgent 对话中交办任务。完成的任务会保留在当前列表。'} actionLabel={archiveScope === 'archived' ? '查看当前任务' : undefined} onAction={archiveScope === 'archived' ? () => switchArchiveScope('active') : undefined} />}
@@ -233,7 +215,7 @@ export function Tasks({ api, onDirtyChange, onDetailChange, onSchedule, onOpenEx
         : <div className="ba-task-list">{filteredRows.map(row => renderTask(row))}</div>}
     </div>}
     </div>
-    {cleanup && <TaskCleanup api={api} mode={cleanup.mode} taskIds={cleanup.taskIds} onClose={() => setCleanup(null)} onChanged={async ids => { await refreshTasks(ids); setCleanup(null); }} />}
+    {cleanup && <TaskCleanup api={api} mode={cleanup.mode} taskIds={cleanup.taskIds} onClose={() => setCleanup(null)} onProgress={refreshTasks} onChanged={async ids => { await refreshTasks(ids); setCleanup(null); }} />}
     {selectedId && !selectedRow && <TaskDetail inline open title="任务详情" onClose={closeDetail}><ResourceState kind={error || (rows !== null && loadedDetailId === selectedId) ? 'error' : 'loading'} title={error ? '任务详情暂时无法读取' : rows !== null && loadedDetailId === selectedId ? '关联任务暂不可用' : '正在读取任务详情'} description={error || (rows !== null && loadedDetailId === selectedId ? '任务可能已移出列表，或尚未同步。' : '正在读取原任务、成果与执行记录。')} onAction={error || loadedDetailId === selectedId ? async () => { setError(''); await refreshTasks([selectedId]); setLoadedDetailId(selectedId); } : undefined} /></TaskDetail>}
     {selectedRow && renderTask(selectedRow, true)}
   </section>;

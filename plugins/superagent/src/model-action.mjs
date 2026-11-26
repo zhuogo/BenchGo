@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 
-const modelActionTools = new Set(['assistant_profile', 'assistant_pet', 'generate_image', 'generate_video', 'generate_audio']);
+const modelActionTools = new Set(['assistant_profile', 'assistant_pet']);
 const validId = (value, name) => {
   if (typeof value !== 'string' || !value.trim() || value.length > 512) throw new Error(`Model action requires ${name}`);
   return value;
@@ -27,8 +27,8 @@ const asEvidence = value => {
   return JSON.parse(serialized);
 };
 
-/** Model-owned persistent actions use a real, fenced Router-action Task. */
-export function createModelActionTaskExecutor({ ctx, database, readPolicy, perform, verify, leaseMs = 120000 } = {}) {
+/** Persistent Router tools retain a receipt in the originating conversation. */
+export function createModelActionExecutor({ ctx, database, readPolicy, perform, verify, leaseMs = 120000 } = {}) {
   if (!database?.reserveRouterAction || !database?.settleRouterAction || !database?.getRouterAction) throw new Error('Model action executor requires atomic Router-action APIs');
   if (!ctx?.agents || typeof readPolicy !== 'function' || typeof perform !== 'function' || typeof verify !== 'function') throw new Error('Model action executor requires host identity, policy and verifier callbacks');
   const pending = new Map();
@@ -43,7 +43,7 @@ export function createModelActionTaskExecutor({ ctx, database, readPolicy, perfo
     if (!instruction?.message?.id) throw new Error('Model action requires the active root user turn');
     const frozen = snapshot(args), argsHash = digest(frozen.serialized);
     const requestKey = JSON.stringify([sessionId, callId]);
-    const binding = JSON.stringify([toolName, argsHash, threadId]);
+    const binding = JSON.stringify([toolName, argsHash, threadId, instruction.message.id]);
     const existingPending = pending.get(requestKey);
     if (existingPending) {
       if (existingPending.binding !== binding) throw Object.assign(new Error('Model action identity conflict'), { code: 'IDEMPOTENCY_CONFLICT' });
@@ -60,9 +60,11 @@ export function createModelActionTaskExecutor({ ctx, database, readPolicy, perfo
     const prior = database.getRouterAction(sessionId, callId);
     if (prior) {
       if (prior.action?.toolName !== toolName || prior.action?.argsHash !== argsHash || prior.action?.threadId !== threadId
-        || prior.task?.mandate?.source?.messageId !== sourceMessage.id) throw Object.assign(new Error('Model action identity conflict'), { code: 'IDEMPOTENCY_CONFLICT' });
+        || prior.action?.messageId !== sourceMessage.id) throw Object.assign(new Error('Model action identity conflict'), { code: 'IDEMPOTENCY_CONFLICT' });
       if (prior.state === 'completed' && prior.receipt && Object.hasOwn(prior.receipt, 'value')) return prior.receipt.value;
-      throw Object.assign(new Error('Model action is already reserved; inspect its Task and reconcile before retrying'), { code: 'MODEL_ACTION_UNCERTAIN' });
+      if (prior.state === 'failed' && prior.receipt?.error)
+        throw Object.assign(new Error(prior.receipt.error.message), { code: prior.receipt.error.code });
+      throw Object.assign(new Error('Tool call result is unconfirmed. Check the original request before retrying.'), { code: 'MODEL_ACTION_UNCERTAIN' });
     }
 
     exec.signal?.throwIfAborted();
@@ -89,14 +91,15 @@ export function createModelActionTaskExecutor({ ctx, database, readPolicy, perfo
       && value?.action?.argsHash === argsHash && value?.action?.threadId === threadId;
     const reservation = database.reserveRouterAction({
       sessionId, messageId: sourceMessage.id, callId, toolName, argsHash,
-      triggerId: trigger.trigger.id, mandate, target: `Model action: ${toolName}`,
-      acceptance: 'Execute once; persist canonical result and independently verify authoritative state.',
+      triggerId: trigger.trigger.id, mandate,
       owner, leaseMs, validateMandate,
     });
     if (reservation.duplicate) {
       if (reservation.action?.toolName !== toolName || reservation.action?.argsHash !== argsHash || reservation.action?.threadId !== threadId) throw Object.assign(new Error('Model action identity conflict'), { code: 'IDEMPOTENCY_CONFLICT' });
       if (reservation.state === 'completed' && reservation.receipt && Object.hasOwn(reservation.receipt, 'value')) return reservation.receipt.value;
-      throw Object.assign(new Error('Model action was already reserved; external outcome must be reconciled'), { code: 'MODEL_ACTION_UNCERTAIN' });
+      if (reservation.state === 'failed' && reservation.receipt?.error)
+        throw Object.assign(new Error(reservation.receipt.error.message), { code: reservation.receipt.error.code });
+      throw Object.assign(new Error('Tool call result is unconfirmed. Check the original request before retrying.'), { code: 'MODEL_ACTION_UNCERTAIN' });
     }
     let observedReceipt;
     try {
@@ -105,29 +108,28 @@ export function createModelActionTaskExecutor({ ctx, database, readPolicy, perfo
       if (afterReserve?.desktopVersion !== desktopVersion || !validateMandate(mandate)) throw Object.assign(new Error('Model action policy changed before execution'), { code: 'MODEL_ACTION_POLICY_CHANGED' });
       const dispatchInstruction = currentHumanInstruction(ctx, ownerAgent);
       if (!dispatchInstruction || digest(JSON.stringify([dispatchInstruction.turn, dispatchInstruction.message])) !== instructionHash) throw Object.assign(new Error('User instruction changed before model-action dispatch'), { code: 'MODEL_ACTION_INSTRUCTION_CHANGED' });
-      const actionResult = await perform({ name: toolName, args, exec, sourceMessage, task: reservation.task, assignment: reservation.assignment, run: reservation.run, actionKey: reservation.actionKey });
+      const actionResult = await perform({ name: toolName, args, exec, sourceMessage, actionKey: reservation.actionKey });
       observedReceipt = asEvidence({ value: actionResult });
       const afterAction = await readPolicy();
       if (afterAction?.desktopVersion !== desktopVersion) throw Object.assign(new Error('Model action policy changed before verification'), { code: 'MODEL_ACTION_POLICY_CHANGED' });
-      const proof = await verify({ name: toolName, args, result: actionResult, task: reservation.task, assignment: reservation.assignment, run: reservation.run });
+      const proof = await verify({ name: toolName, args, result: actionResult });
       if (proof?.verified !== true) throw new Error('Model action readback did not verify the requested state');
       const evidence = asEvidence(proof.evidence);
       const finalPolicy = await readPolicy();
       if (finalPolicy?.desktopVersion !== desktopVersion) throw Object.assign(new Error('Model action policy changed before settlement'), { code: 'MODEL_ACTION_POLICY_CHANGED' });
       const settled = database.settleRouterAction({
-        sessionId, callId, owner, fence: reservation.assignment.fence, argsHash,
+        sessionId, callId, owner, argsHash,
         receipt: observedReceipt, readback: evidence, verified: true,
-        summary: `Model action completed: ${toolName}`,
         validateMandate: value => validateMandate(value) && finalPolicy.desktopVersion === desktopVersion,
       });
-      if (settled.state !== 'completed' || !settled.receipt || !Object.hasOwn(settled.receipt, 'value')) throw Object.assign(new Error('Model action settlement is uncertain; inspect its Task'), { code: 'MODEL_ACTION_UNCERTAIN' });
+      if (settled.state !== 'completed' || !settled.receipt || !Object.hasOwn(settled.receipt, 'value')) throw Object.assign(new Error('Tool call result is unconfirmed. Check the original request before retrying.'), { code: 'MODEL_ACTION_UNCERTAIN' });
       return settled.receipt.value;
     } catch (error) {
       try {
-        database.settleRouterAction({ sessionId, callId, owner, fence: reservation.assignment.fence, argsHash,
-          receipt: observedReceipt || { error: { code: error.code || 'MODEL_ACTION_OUTCOME_UNKNOWN', message: String(error.message || error).slice(0, 1000) } },
-          readback: { verified: false }, verified: false, uncertain: true,
-          summary: `Model action requires reconciliation: ${toolName}`, validateMandate: () => false });
+        const failure = { code: error.code || 'MODEL_ACTION_OUTCOME_UNKNOWN',
+          message: String(error.message || error).slice(0, 1000) };
+        database.settleRouterAction({ sessionId, callId, owner, argsHash,
+          receipt: observedReceipt ?? { error: failure }, readback: { verified: false } });
       } catch { /* Keep the original failure; the reservation remains non-replayable. */ }
       throw error;
     }

@@ -67,7 +67,7 @@ const relay=await createRelayServer({host:'127.0.0.1',port,publicUrl:origin,iden
 let session,socket;
 try {
   const probe=credential=>new Promise((done,fail)=>{const request=httpsRequest(origin+'/__link/relay/probe',{ca:identity.cert,servername:'localhost',headers:{authorization:'Bearer '+credential}},response=>{let body='';response.on('data',data=>body+=data);response.once('end',()=>done({status:response.statusCode,body}));});request.once('error',fail);request.setTimeout(8000,()=>request.destroy(new Error('HTTPS probe timeout')));request.end();});
-  const valid=await probe(token); assert.equal(valid.status,200); assert.deepEqual(JSON.parse(valid.body),{protocol:'benchgo-link-relay',version:1,authenticated:true});
+  const valid=await probe(token); assert.equal(valid.status,200); assert.deepEqual(JSON.parse(valid.body),{protocol:'benchgo-link-relay',version:1,authenticated:true,multipleHosts:true});
   assert.equal((await probe('wrong-package-smoke-secret')).status,401);
   session=connectHttp2(origin,{ca:identity.cert,servername:'localhost'}); await once(session,'connect'); assert.equal(session.alpnProtocol,'h2');
   const response=await new Promise((done,fail)=>{const request=session.request({':method':'GET',':authority':new URL(origin).host,':path':'/__link/relay/probe',authorization:'Bearer '+token});let body='',status;request.once('response',headers=>status=headers[':status']);request.on('data',chunk=>body+=chunk);request.once('end',()=>done({status,body}));request.once('error',fail);request.setTimeout(8000,()=>request.destroy(new Error('HTTP2 probe timeout')));request.end();});

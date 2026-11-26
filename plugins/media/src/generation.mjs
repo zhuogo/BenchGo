@@ -4,6 +4,7 @@ import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { extname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { performance } from 'node:perf_hooks';
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
 import { modelProtocol } from '../../base/src/provider-access.mjs';
 import { notifySettings } from '../../base/shared/settings-adapter-utils.mjs';
@@ -21,7 +22,25 @@ const validIdentifier = value => typeof value === 'string' && value.trim() === v
   && value.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(value);
 const validRequestId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/u.test(value);
 const options = (signal, timeout) => AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
+const transportCodes = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
+  'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET', 'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID']);
+function submissionFailure(error, { signal, upstreamSignal, started, requestId, modelId }) {
+  const failures = [error, error?.cause, ...(Array.isArray(error?.cause?.errors) ? error.cause.errors : [])];
+  const knownCodes = [...new Set(failures.map(failure => failure?.code).filter(code => transportCodes.has(code)))];
+  const timeout = upstreamSignal.aborted && upstreamSignal.reason?.name === 'TimeoutError';
+  const code = signal.aborted && !timeout ? 'ABORTED' : timeout ? 'TIMEOUT' : knownCodes.join('/') || 'FETCH_FAILED';
+  const elapsedMs = Math.round(performance.now() - started);
+  const detail = signal.aborted && !timeout ? '本地取消了响应等待' : timeout ? '等待供应商 HTTP 响应超时'
+    : '未收到供应商 HTTP 响应，网络错误 ' + code;
+  return { diagnostic: { stage: 'submission-response', code, elapsedMs },
+    reason: `${detail}（${elapsedMs} ms，模型 ${modelId}，请求 ID ${requestId}）。供应商是否接单尚未确认，请勿自动重新生成。` };
+}
 const validVoice = value => validIdentifier(value) && value.length <= 100;
+export const MAX_MEDIA_BATCH = 8;
+const validPrompt = (prompt, kind) => typeof prompt === 'string' && prompt.trim()
+  && prompt.length <= (kind === 'audio' ? 4096 : 16000);
 
 function audioRouteSettings({ voice, voices, defaultVoice }) {
   const entries = voices ?? (voice === undefined || voice === '' ? [] : [{ name: voice }]);
@@ -80,7 +99,7 @@ async function jsonFile(path) {
 async function normalizeInput(args) {
   const { kind, requestId, prompt, model, providerId, size, quality, seconds, voice, configuredVoice } = args;
   if (!kinds.includes(kind) || !validRequestId(requestId)) throw mediaFailure('媒体类型或请求 ID 无效');
-  if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > (kind === 'audio' ? 4096 : 16000)) throw mediaFailure('请输入有效的媒体生成描述');
+  if (!validPrompt(prompt, kind)) throw mediaFailure('请输入有效的媒体生成描述');
   if (model !== undefined && !validIdentifier(model) || providerId !== undefined && (!model || !validIdentifier(providerId))) {
     throw mediaFailure('请指定有效的模型 ID 或显示名');
   }
@@ -392,9 +411,14 @@ export async function createMediaGeneration({ directory, providers, credentials,
         reserved = true;
       } else await storeJson(path, recorded);
       const upstreamSignal = options(signal, 120000);
+      const started = performance.now();
       let response;
       try { response = await request(route, data.path, upstreamSignal, 'POST', data); }
-      catch { throw mediaFailure('媒体请求发送后未能确认结果，请勿自动重新生成', 502, 'MEDIA_SUBMISSION_UNCERTAIN'); }
+      catch (error) {
+        const failure = submissionFailure(error, { signal, upstreamSignal, started, requestId: result.requestId, modelId: result.modelId });
+        await storeJson(path, { ...recorded, ...failure });
+        throw mediaFailure(failure.reason, 502, 'MEDIA_SUBMISSION_UNCERTAIN');
+      }
       if (!response.ok) {
         const refused = acceptedRejects.has(response.status);
         const voiceRejected = input.kind === 'audio' && await rejectsSpeechVoice(response, upstreamSignal);
@@ -410,7 +434,11 @@ export async function createMediaGeneration({ directory, providers, credentials,
           await storeJson(path, { kind: input.kind, state: 'rejected', fingerprint, reason, code });
           throw mediaFailure(reason, 400, code);
         }
-        if (!refused) throw mediaFailure('媒体供应商响应状态未能确认提交结果（HTTP ' + response.status + '），请勿自动重新生成', 502, 'MEDIA_SUBMISSION_UNCERTAIN');
+        if (!refused) {
+          const reason = `媒体供应商返回 HTTP ${response.status}（模型 ${result.modelId}，请求 ID ${result.requestId}）。供应商是否接单尚未确认，请勿自动重新生成。`;
+          await storeJson(path, { ...recorded, reason, diagnostic: { stage: 'submission-response', status: response.status } });
+          throw mediaFailure(reason, 502, 'MEDIA_SUBMISSION_UNCERTAIN');
+        }
         unavailable.push('供应商拒绝请求（HTTP ' + response.status + '）');
         continue;
       }
@@ -428,6 +456,10 @@ export async function createMediaGeneration({ directory, providers, credentials,
   async function generate(args = {}) {
     const signal = useSignal(args.signal);
     const input = await normalizeInput(args);
+    return generateInput(input, signal);
+  }
+
+  function generateInput(input, signal) {
     signal.throwIfAborted();
     const fingerprint = requestFingerprint(input);
     const path = taskPath(input.requestId);
@@ -439,6 +471,34 @@ export async function createMediaGeneration({ directory, providers, credentials,
     const pending = generateOnce(path, input, fingerprint, signal).finally(() => active.delete(path));
     active.set(path, { fingerprint, pending });
     return pending;
+  }
+
+  async function generateBatch({ prompts, ...args }) {
+    if (!Array.isArray(prompts) || prompts.length < 2 || prompts.length > MAX_MEDIA_BATCH) throw mediaFailure('每批须提供 2–8 条生成描述');
+    const descriptions = Array.from(prompts);
+    if (!descriptions.every(prompt => validPrompt(prompt, args.kind))) throw mediaFailure('请输入有效的媒体生成描述');
+    const input = await normalizeInput({ ...args, prompt: descriptions[0] });
+    const { requestId, kind } = input;
+    if (requestId.length > 126) throw mediaFailure('批量媒体请求 ID 过长');
+    const signal = useSignal(args.signal);
+    const path = taskPath(requestId);
+    const fingerprint = createHash('sha256').update(JSON.stringify([requestFingerprint(input), descriptions])).digest('hex');
+    await withFileLock(path, async () => {
+      const existing = await jsonFile(path);
+      if (!existing) await storeJson(path, { kind, state: 'batch', fingerprint });
+      else if (existing.state !== 'batch' || existing.fingerprint !== fingerprint)
+        throw mediaFailure('媒体请求 ID 已用于另一组参数', 409, 'MEDIA_REQUEST_CONFLICT');
+    }, { signal });
+    const results = await Promise.all(descriptions.map(async (prompt, index) => {
+      const itemId = requestId + '-' + (index + 1);
+      try {
+        return await generateInput({ ...input, requestId: itemId, prompt }, signal);
+      } catch (error) {
+        return { requestId: itemId, status: 'error', error: { code: error.code ?? 'MEDIA_GENERATION_FAILED', message: error.message } };
+      }
+    }));
+    signal.throwIfAborted();
+    return { requestId, results };
   }
 
   async function imageReceipt(requestId) {
@@ -488,5 +548,5 @@ export async function createMediaGeneration({ directory, providers, credentials,
     }
   }
 
-  return { getSettings, updateSettings, subscribeSettings, importLegacyMedia, generate, imageReceipt, videoReceipt, videoStatus, artifact, dispose: () => disposeController.abort() };
+  return { getSettings, updateSettings, subscribeSettings, importLegacyMedia, generate, generateBatch, imageReceipt, videoReceipt, videoStatus, artifact, dispose: () => disposeController.abort() };
 }

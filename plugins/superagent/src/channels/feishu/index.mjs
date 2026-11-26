@@ -5,6 +5,7 @@ import { authorizeChannel } from '../connection-authorization.mjs';
 import { channelSessionKey } from '../../channel-policy.mjs';
 
 const origin = 'https://open.feishu.cn/open-apis';
+const richReplyLimit = 30_000;
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 512 && !/[\x00-\x1f\x7f]/u.test(value);
 const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -51,7 +52,7 @@ export function normalizeFeishuEvent(envelope, config) {
   if (message.message_type === 'text' && typeof content?.text === 'string') text = content.text;
   else if (message.message_type === 'post') {
     const post = content.content ? content : content.zh_cn || content.en_us || Object.values(content).find(value => value?.content);
-    const lines = Array.isArray(post?.content) ? post.content.map(row => Array.isArray(row) ? row.map(part => part.tag === 'text' ? part.text || '' : part.tag === 'a' ? `${part.text || ''} (${part.href || ''})` : part.tag === 'at' ? `@${part.user_name || part.user_id || ''}` : '[附件暂不支持读取]').join('') : '').join('\n') : '';
+    const lines = Array.isArray(post?.content) ? post.content.map(row => Array.isArray(row) ? row.map(part => part.tag === 'text' || part.tag === 'md' ? part.text || '' : part.tag === 'a' ? `${part.text || ''} (${part.href || ''})` : part.tag === 'at' ? `@${part.user_name || part.user_id || ''}` : '[附件暂不支持读取]').join('') : '').join('\n') : '';
     text = [post?.title, lines].filter(Boolean).join('\n') || '[飞书富文本消息暂不支持读取，请发送文字描述]';
   } else text = `[飞书 ${message.message_type} 消息暂不支持读取正文，请发送文字描述或使用 BenchGo 工作台]`;
   return {
@@ -224,7 +225,7 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
         if (row.msg_type === 'text') text = typeof content.text === 'string' ? content.text : '';
         else if (row.msg_type === 'post') {
           const post = content.content ? content : content.zh_cn || content.en_us || Object.values(content).find(value => value?.content);
-          text = [post?.title, ...(Array.isArray(post?.content) ? post.content.map(line => Array.isArray(line) ? line.map(part => part.tag === 'text' || part.tag === 'a' ? part.text || '' : part.tag === 'at' ? `@${part.user_name || part.user_id || ''}` : '[附件]').join('') : '') : [])].filter(Boolean).join('\n');
+          text = [post?.title, ...(Array.isArray(post?.content) ? post.content.map(line => Array.isArray(line) ? line.map(part => part.tag === 'text' || part.tag === 'a' || part.tag === 'md' ? part.text || '' : part.tag === 'at' ? `@${part.user_name || part.user_id || ''}` : '[附件]').join('') : '') : [])].filter(Boolean).join('\n');
         } else text = `[${row.msg_type || '未知'} 消息正文暂不支持读取]`;
         const time = Number(row.create_time);
         if (!Number.isSafeInteger(time) || time <= 0 || Number.isNaN(new Date(time).getTime())) return;
@@ -305,7 +306,7 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
         return Response.json({ error: status >= 500 ? '飞书事件暂未持久接收，请重试' : '飞书事件校验失败' }, { status });
       }
     },
-    async send({ source, text, idempotencyKey }) {
+    async send({ source, text, idempotencyKey, format }) {
       const config = await beforeDelivery(async () => {
         const current = await readConfig(); enabled(current);
         if (source?.channel !== 'feishu' || source.appId !== current.appId || !id(source.messageId) || !id(source.chatId)) throw fail('飞书交付来源不属于当前连接', 403);
@@ -314,8 +315,15 @@ export function createFeishuAdapter({ getConfig, credentials, ingest, readLocalC
         return current;
       });
       const uuid = createHash('sha256').update(config.appId + '\0' + idempotencyKey).digest('hex').slice(0, 32);
+      const encodeReply = (msg_type, content) => JSON.stringify({ msg_type, content: JSON.stringify(content),
+        uuid, reply_in_thread: source.replyInThread === true });
+      // Feishu extends Markdown with mentions. Keep Router output as display content.
+      const post = format === 'markdown' && encodeReply('post', { zh_cn: { content: [[{
+        tag: 'md', text: text.replace(/<\/?at\b/giu, prefix => '&lt;' + prefix.slice(1)),
+      }]] } });
+      const requestBody = post && Buffer.byteLength(post) <= richReplyLimit ? post : encodeReply('text', { text });
       try {
-        const body = await api(config, `/im/v1/messages/${encodeURIComponent(source.messageId)}/reply`, { method: 'POST', body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }), uuid, reply_in_thread: source.replyInThread === true }) }, true, { operation: 'send', source });
+        const body = await api(config, `/im/v1/messages/${encodeURIComponent(source.messageId)}/reply`, { method: 'POST', body: requestBody }, true, { operation: 'send', source });
         if (!id(body.data?.message_id)) throw deliveryFailure('飞书发送回执缺少消息标识', 'unknown', 502);
         state.sending = 'verified'; state.lastSendAt = now(); state.error = null;
         return { status: 'accepted', messageId: body.data.message_id, idempotencyKey, uuid };

@@ -32,6 +32,27 @@
         }
       }
     },
+    "/link/api/workbench": {
+      "servers": [{ "url": "/" }],
+      "post": {
+        "summary": "校验目标身份并打开工作台",
+        "description": "持有效设备 Bearer 凭据调用。expectedHostId 和 expectedAuthorizationId 用于在签发前核对已保存身份。检查网页入口后签发 HttpOnly 会话，并返回入口及该设备可用的最新路线。",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "properties": {
+            "expectedHostId": { "type": "string" },
+            "expectedAuthorizationId": { "type": "string" },
+            "groupAssetLease": { "type": "boolean" }
+          } } } }
+        },
+        "responses": {
+          "200": { "description": "会话 Cookie 和 url、hostId、authorizationId、hostName 及最新 routes。" },
+          "401": { "description": "设备凭据无效或已撤销。" },
+          "409": { "description": "目标主机身份或配对授权与预期不一致。" },
+          "503": { "description": "网页工作台入口尚未就绪。" }
+        }
+      }
+    },
     "/link/api/pair": {
       "servers": [{ "url": "/" }],
       "post": {

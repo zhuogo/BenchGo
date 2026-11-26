@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { taskCleanupNoticeSource } from './chat-publication.mjs';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { readModelFallbacks } from './model-fallback.mjs';
+import { modelRouteType, readModelFallbacks } from './model-fallback.mjs';
 import { readQuestionReply, readBoundQuestionReply } from './question-reply.mjs';
 import { taskReplySource, taskReplyInstruction, taskReplyIdentity } from './task-reply.mjs';
 import { watchdogIncidentIdentity, watchdogNoticeCurrent, watchdogNotificationIdentity } from './watchdog-router-signal.mjs';
@@ -9,10 +8,12 @@ import { approvalSignalBinding } from './approval-chat-binding.mjs';
 
 const active = new Set(['queued', 'processing', 'prepared']);
 const fingerprint = (threadId, text, context) => createHash('sha256').update(JSON.stringify(context === undefined ? [threadId, text] : [threadId, text, context])).digest('hex');
-const taskReplyMessageSource = (signal, threadId) => {
+export const taskReplyMessageSource = (signal, threadId) => {
   const approval = approvalSignalBinding(signal, threadId);
   return { kind: taskReplySource, replyKind: signal.kind, eventKey: signal.eventKey, taskId: signal.taskId,
     ...(signal.kind === 'result' ? { replyMode: 'conversation' } : {}),
+    ...(signal.media?.files.length ? { media: signal.media.files } : {}),
+    ...(signal.media?.failures.length ? { mediaFailures: signal.media.failures } : {}),
     ...(approval ? { approval } : {}) };
 };
 
@@ -54,12 +55,58 @@ function receiptEnding(reason) {
   return { status: 'processed' };
 }
 
+/** The official inbox claimed this result, but the interrupted turn never opened a step. */
+export function interruptedResultClaim(request, events) {
+  const { messageId, message, taskReply } = request;
+  if (taskReply?.kind !== 'result' || !messageId || message?.id !== messageId || message.source?.kind !== taskReplySource
+    || message.source.replyKind !== 'result' || message.source.eventKey !== taskReply.eventKey || message.source.taskId !== taskReply.taskId
+    || request.requestId !== `task-reply:${taskReply.eventKey}`) return undefined;
+  const turnIndex = events.findLastIndex(event => event.type === 'turn/start');
+  if (turnIndex < 2) return undefined;
+  const [route, insertion, turn, claim] = events.slice(turnIndex - 2, turnIndex + 2);
+  const inserted = insertion.data?.inserted;
+  if (route.type !== modelRouteType || route.ignorable !== true || route.data?.messageId !== messageId
+    || insertion.type !== 'agent/inbox/spliced' || insertion.data.target !== 'next-turn' || insertion.data.start !== 0
+    || insertion.data.removedCount || insertion.data.outcome || inserted?.length !== 1 || inserted[0].id !== messageId
+    || inserted[0].source?.kind !== taskReplySource || inserted[0].source.eventKey !== taskReply.eventKey
+    || inserted[0].source.taskId !== taskReply.taskId || inserted[0].source.replyKind !== 'result'
+    || claim?.type !== 'agent/inbox/spliced' || claim.data.target !== 'next-turn' || claim.data.start !== 0
+    || claim.data.removedCount !== 1 || claim.data.outcome || claim.data.inserted?.length !== 0) return undefined;
+  if (events.some(({ type, data }) => data?.requestId === messageId || data?.taskReplyEventKey === taskReply.eventKey
+    || (type === 'user/message' && (data?.id === messageId || data?.source?.eventKey === taskReply.eventKey)))) return undefined;
+  const tail = events.slice(turnIndex + 2);
+  const isResumeSeed = event => event.type === 'session/end-seed' && event.data?.inherited !== true;
+  const seedIndex = tail.findIndex(isResumeSeed);
+  if (seedIndex >= 0) {
+    // The resumed Router records its policy before draining. Any later turn,
+    // request, publication or inbox mutation invalidates the old claim proof.
+    const setup = tail.splice(seedIndex + 1);
+    if (setup.some(event => !isResumeSeed(event)
+      && !['permission/preset', 'sandbox/mode', 'approval/policy', 'model/selection'].includes(event.type))) return undefined;
+    tail.pop();
+  }
+  if (tail.at(-1)?.type === 'turn/end' && tail.at(-1).data?.reason?.kind === 'interrupted'
+    && tail.at(-1).data.turn === turn.data.turn) tail.pop();
+  if (tail.some(({ type, data }) => !['compaction/start', 'compaction/summary', 'compaction/end'].includes(type)
+    && !(type === 'user/message' && data?.source?.kind === 'compact-checkpoint'))) return undefined;
+  return turn.data.turn;
+}
+
 /** Reuses state.requests: one durable inbox, one host writer per conversation. */
 export function createMessageInbox({ getState, updateState, ensureSession, getAgent, readSession, beforeDispatch, onDispatch, onSettled, onChange = () => {}, now = Date.now, isStopped = () => false }) {
   const drains = new Map();
   const receipt = row => ({ threadId: row.threadId, sessionId: row.sessionId ?? null, requestId: row.requestId, messageId: row.messageId, status: row.status === 'sent' ? 'processed' : row.status, ...(row.error ? { error: row.error } : {}) });
-  const patch = async (requestId, change) => updateState(state => ({ requests: (state.requests || []).map(row => row.requestId === requestId ? { ...row, ...change,
-    ...(change.status === 'processed' ? { message: undefined } : {}), updatedAt: new Date(now()).toISOString() } : row) }));
+  async function transition(requestId, expectedStatus, change) {
+    let applied;
+    await updateState(state => {
+      const requests = state.requests || [];
+      applied = requests.some(row => row.requestId === requestId && row.status === expectedStatus);
+      if (!applied) return {};
+      return { requests: requests.map(row => row.requestId === requestId ? { ...row, ...change,
+        ...(change.status === 'processed' ? { message: undefined } : {}), updatedAt: new Date(now()).toISOString() } : row) };
+    });
+    return applied;
+  }
   async function reconcile(threadId, agent) {
     const rows = (await getState()).requests || [];
     for (const row of rows.filter(item => item.threadId === threadId && ['prepared', 'processing', 'uncertain', 'sent'].includes(item.status))) {
@@ -68,10 +115,10 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
         if (!row.sessionId) throw new Error('缺少原始会话标识');
         const { events } = await readSession(row.sessionId);
         const ending = messageReceiptFromEvents(row, events);
-        await patch(row.requestId, ending);
-        // Downstream bookkeeping never changes whether the Router finished.
-        await onSettled?.({ ...row, ...ending });
-      } catch (error) { await patch(row.requestId, { status: 'uncertain', error: `无法核实原消息交付：${error.message}` }); }
+        if (await transition(row.requestId, row.status, ending)) await onSettled?.({ ...row, ...ending });
+      } catch (error) {
+        await transition(row.requestId, row.status, { status: 'uncertain', error: `无法核实原消息交付：${error.message}` });
+      }
     }
   }
   function drain(threadId) {
@@ -90,25 +137,26 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
         if (!row || isStopped()) return;
         agent ||= await ensureSession({ threadId });
         if (isStopped() || agent.status === 'running') return;
-        await patch(row.requestId, { status: 'processing', sessionId: agent.id });
+        if (!await transition(row.requestId, 'queued', { status: 'processing', sessionId: agent.id })) return;
         if (isStopped()) {
-          await patch(row.requestId, { status: 'queued' });
+          await transition(row.requestId, 'processing', { status: 'queued' });
           return;
         }
         // Cancellation/clear may have committed while the writer was prepared.
         if (!((await getState()).requests || []).some(item => item.requestId === row.requestId && item.status === 'processing')) return;
         try {
           if (await beforeDispatch?.({ ...row, sessionId: agent.id }, agent) === false) {
-            await patch(row.requestId, { status: 'processed', suppressed: true });
+            await transition(row.requestId, 'processing', { status: 'processed', suppressed: true });
             return;
           }
-          if (isStopped()) { await patch(row.requestId, { status: 'queued' }); return; }
+          if (isStopped()) { await transition(row.requestId, 'processing', { status: 'queued' }); return; }
           if (!((await getState()).requests || []).some(item => item.requestId === row.requestId && item.status === 'processing')) return;
           onDispatch?.(row, agent);
           agent.followup(row.message);
         } catch (error) {
-          await patch(row.requestId, { status: 'uncertain', error: `消息分诊提交失败，未自动重放：${error.message}` });
-          onChange({ type: 'inbox', threadId, status: 'uncertain' });
+          if (await transition(row.requestId, 'processing', { status: 'uncertain', error: `消息分诊提交失败，未自动重放：${error.message}` })) {
+            onChange({ type: 'inbox', threadId, status: 'uncertain' });
+          }
         }
       } catch (error) {
         // An unavailable model/session must not strand accepted messages forever.
@@ -197,9 +245,9 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
       onChange({ type: 'inbox', threadId, requestId, status: row.status });
       return { ...receipt(row), ...(duplicate ? { duplicate: true } : {}) };
     },
-    async enqueue({ threadId = 'main', text, requestId = randomUUID(), replyContext, hostCleanupNotice }) {
+    async enqueue({ threadId = 'main', text, requestId = randomUUID(), replyContext }) {
       const context = replySnapshot(replyContext);
-      const digest = fingerprint(threadId, text, hostCleanupNotice ? { executionInput: hostCleanupNotice } : context);
+      const digest = fingerprint(threadId, text, context);
       let duplicate = false;
       await updateState(state => {
         const previous = (state.requests || []).find(row => row.requestId === requestId);
@@ -208,12 +256,10 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
           duplicate = true;
           return {};
         }
-        const message = createUserMessage({ content: [{ type: 'text', text }], source: hostCleanupNotice
-          ? { kind: taskCleanupNoticeSource, ...hostCleanupNotice }
-          : { kind: 'user', requestId, rpcId: requestId,
-          ...(context ? { replyContext: context } : {}) } });
+        const message = createUserMessage({ content: [{ type: 'text', text }],
+          source: { kind: 'user', requestId, rpcId: requestId, ...(context ? { replyContext: context } : {}) } });
         const row = { requestId, threadId, sessionId: getAgent?.(threadId)?.id ?? null, messageId: message.id, message,
-          ...(hostCleanupNotice ? { executionInput: hostCleanupNotice } : {}), fingerprint: digest, status: 'queued', createdAt: new Date(now()).toISOString() };
+          fingerprint: digest, status: 'queued', createdAt: new Date(now()).toISOString() };
         return { requests: [...(state.requests || []), row] };
       });
       await drain(threadId);
@@ -227,9 +273,12 @@ export function createMessageInbox({ getState, updateState, ensureSession, getAg
       const threads = [...new Set(((await getState()).requests || []).filter(row => active.has(row.status) || ['uncertain', 'sent'].includes(row.status)).map(row => row.threadId))];
       await Promise.all(threads.map(drain));
     },
-    async cancel(threadId) {
-      await updateState(state => ({ requests: (state.requests || []).map(row => row.threadId === threadId && active.has(row.status)
-        ? { ...row, status: 'cancelled', updatedAt: new Date(now()).toISOString() } : row) }));
+    async cancel(threadId, { preserveQueuedResults = false } = {}) {
+      await updateState(state => ({ requests: (state.requests || []).map(row => {
+        if (row.threadId !== threadId || !active.has(row.status)) return row;
+        if (preserveQueuedResults && row.status === 'queued' && row.taskReply?.kind === 'result') return row;
+        return { ...row, status: 'cancelled', updatedAt: new Date(now()).toISOString() };
+      }) }));
     },
     async hasPending(threadId) { return ((await getState()).requests || []).some(row => row.threadId === threadId && active.has(row.status)); },
     async state(threadId) {

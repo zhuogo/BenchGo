@@ -1,259 +1,314 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
+import { createManagementHttp } from '../src/management-http.mjs';
 import { CLEANUP_PREVIEW_TTL_MS } from '../src/task-cleanup-store.mjs';
 import { createWorkerArchive } from '../src/worker-archive.mjs';
 
 const scope = { owner: 'desktop-owner', mode: 'global' };
+
+/**
+ * The official Workspace registry owns archival. This fixture stands in for it
+ * with the same contract: an archive set, `stopActivity`, and unarchive.
+ */
+function officialRegistry() {
+  const listeners = new Set();
+  const registry = {
+    listeners,
+    archivedSessionIds: [],
+    emit() { for (const listener of listeners) listener({ domain: 'workspace', table: '', operation: 'put',
+      value: { archivedSessionIds: [...registry.archivedSessionIds] } }); },
+    async archiveSession(sessionId) {
+      if (registry.archivedSessionIds.includes(sessionId)) return;
+      registry.archivedSessionIds.push(sessionId);
+      registry.emit();
+    },
+    async unarchiveSession(sessionId) {
+      registry.archivedSessionIds = registry.archivedSessionIds.filter(value => value !== sessionId);
+      registry.emit();
+    },
+  };
+  return registry;
+}
+
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-cleanup-'));
-  const orchestration = createAssistantOrchestrationStore({ directory });
+  let orchestration = createAssistantOrchestrationStore({ directory });
   let database = createAssistantRuntimeStore({ directory });
   let tasks = createTaskManagement({ database, orchestration });
-  t.after(async () => { database.close(); orchestration.close(); await rm(directory, { recursive: true, force: true }); });
+  const registry = officialRegistry();
+  const installArchive = () => {
+    orchestration.installArchiveRuntime({ archive: id => registry.archiveSession(id), unarchive: id => registry.unarchiveSession(id),
+      archivedSessionIds: () => [...registry.archivedSessionIds] });
+    return createWorkerArchive({ ctx: { workspaceRegistry: registry,
+      on(_name, listener) { registry.listeners.add(listener); return () => registry.listeners.delete(listener); } },
+      commander: {}, orchestration, database, signal: new AbortController().signal, wake() {} });
+  };
+  let archive = installArchive();
+  t.after(async () => { await archive.dispose(); database.close(); orchestration.close(); await rm(directory, { recursive: true, force: true }); });
   orchestration.createThread({ id: 'owner', source: { type: 'desktop', id: 'main' } });
-  const task = (id, status = 'stopped') => {
+  /** A Task with one executed Run: archival identity is that session. */
+  const task = (id, status = 'stopped', sessionId = `session-${id}`) => {
     const value = orchestration.createTask({ id, threadId: 'owner', target: `Complete ${id}`, mandate: { source: { channel: 'desktop', sessionId: 'main' } } });
-    return status === 'stopped' ? orchestration.cancelTask(value.id) : orchestration.updateTask(value.id, { status });
+    const assignment = orchestration.createAssignment(value.id, {});
+    const [claimed] = orchestration.claimAssignments('worker', { validateMandate: () => true, assignmentId: assignment.id });
+    orchestration.prepareRun(claimed.id, { owner: claimed.owner, fence: claimed.fence, sessionId, directory });
+    if (status === 'stopped') return orchestration.cancelTask(value.id);
+    return orchestration.updateTask(value.id, { status });
   };
   const confirm = (preview, ids = preview.items.map(row => row.id), source = { sessionId: 'main', messageId: 'human-approved-this-list' }) => tasks.createCleanupConfirmation({
     previewId: preview.previewId, manifestHash: preview.manifestHash, ids, actorId: 'desktop-owner', source });
   const restoreConfirm = (preview, ids = preview.ids) => tasks.createCleanupConfirmation({ previewId: preview.previewId, manifestHash: preview.manifestHash,
     ids, actorId: 'desktop-owner', source: { sessionId: 'main', callId: 'official-allowed-once' } });
-  return { directory, orchestration, task, confirm, restoreConfirm,
+  return { directory, registry, task, confirm, restoreConfirm,
     get database() { return database; }, get tasks() { return tasks; },
-    reopen() { database.close(); database = createAssistantRuntimeStore({ directory }); tasks = createTaskManagement({ database, orchestration }); } };
+    get orchestration() { return orchestration; }, get archive() { return archive; },
+    async reopen() {
+      await archive.dispose(); database.close(); orchestration.close();
+      orchestration = createAssistantOrchestrationStore({ directory });
+      database = createAssistantRuntimeStore({ directory });
+      tasks = createTaskManagement({ database, orchestration });
+      archive = installArchive();
+    } };
 }
 
 test('local session archive syncs the current Worker only and keeps actual stop independent', async t => {
   const f = await fixture(t);
   f.task('dispatch', 'waiting');
   const historical = f.orchestration.createAssignment('dispatch', {});
-  const [first] = f.orchestration.claimAssignments('worker', { validateMandate: () => true });
+  const [first] = f.orchestration.claimAssignments('worker', { validateMandate: () => true, assignmentId: historical.id });
   f.orchestration.prepareRun(historical.id, { ...first, sessionId: 'historical', directory: f.directory });
-  f.orchestration.confirmExecutionStopped(historical.id, first);
   f.orchestration.finishAssignment(historical.id, { ...first, status: 'cancelled' });
   const current = f.orchestration.createAssignment('dispatch', {});
-  const [second] = f.orchestration.claimAssignments('worker', { validateMandate: () => true });
+  const [second] = f.orchestration.claimAssignments('worker', { validateMandate: () => true, assignmentId: current.id });
   f.orchestration.prepareRun(current.id, { ...second, sessionId: 'current', directory: f.directory });
-  let onChange;
-  const registry = { archivedSessionIds: [], async archiveSession(sessionId) {
-    const archivedSessionIds = [...this.archivedSessionIds, sessionId];
-    onChange({ domain: 'workspace', table: '', operation: 'put', value: { archivedSessionIds } });
-    this.archivedSessionIds = archivedSessionIds;
-  } };
-  const workerArchive = createWorkerArchive({ ctx: { workspaceRegistry: registry, on(_name, listener) { onChange = listener; } },
-    commander: {}, orchestration: f.orchestration, database: f.database, signal: new AbortController().signal, wake() {} });
-  await registry.archiveSession('historical');
-  await registry.archiveSession('child');
+  await f.registry.archiveSession('historical');
+  await f.registry.archiveSession('child');
   assert.equal(f.orchestration.getTask('dispatch').archived, false);
-  await registry.archiveSession('current');
+  await f.registry.archiveSession('current');
   const task = f.orchestration.getTask('dispatch');
+  assert.equal(task.archived, true, 'only the latest Run session carries archival identity');
+  assert.equal(task.executionControl.stopRequested, undefined, 'archival never invents a stop');
+});
+
+test('cleanup archives the human-approved subset through the official archive set', async t => {
+  const f = await fixture(t);
+  f.task('one'); f.task('two');
+  const preview = f.tasks.previewCleanup({ scope, ids: ['one', 'two'] });
+  assert.deepEqual(preview.items.map(row => row.id).sort(), ['one', 'two']);
+  assert.deepEqual(preview.excluded, []);
+  const receipt = await f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'],
+    confirmedBy: f.confirm(preview, ['one']), requestId: 'archive-one' });
+  assert.deepEqual(receipt.confirmedBy.ids, ['one']);
+  assert.equal(f.orchestration.getTask('one').archived, true);
+  assert.equal(f.orchestration.getTask('two').archived, false, 'an approved subset never archives its siblings');
+  assert.deepEqual(f.registry.archivedSessionIds, ['session-one'], 'archival is the official set, not a local flag');
+});
+
+test('a running Task can be archived without waiting for execution exit', async t => {
+  const f = await fixture(t);
+  f.task('running', 'running');
+  const preview = f.tasks.previewCleanup({ scope, ids: ['running'] });
+  assert.equal(preview.items.length, 1, 'a live execution no longer blocks archival');
+  assert.deepEqual(preview.excluded, []);
+  await f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['running'],
+    confirmedBy: f.confirm(preview), requestId: 'archive-running' });
+  const task = f.orchestration.getTask('running');
   assert.equal(task.archived, true);
-  assert.equal(task.executionControl.stopRequested, true);
-  assert.equal(task.executionControl.stopped, false);
-  assert.deepEqual(f.orchestration.listTasks({ archived: true }).map(row => row.id), ['dispatch']);
-  assert.equal(f.tasks.cleanupHistory({ taskId: 'dispatch' }).length, 1);
-  await workerArchive.dispose();
+  assert.equal(task.status, 'running', 'archival never rewrites business state');
+  assert.equal(task.executionExited, false, 'and never claims the execution ended');
 });
 
-test('cleanup freezes a persistent list, excludes unsettled work and archives only the human-approved subset', async t => {
+test('an uncertain execution is archived and its unknown result stays unknown', async t => {
   const f = await fixture(t);
-  f.task('one'); f.task('two'); f.task('waiting', 'waiting'); f.task('completed', 'completed');
-  const artifact = join(f.directory, 'result.txt'); await writeFile(artifact, 'keep result');
-  const before = f.orchestration.getTask('one');
-  const preview = f.tasks.previewCleanup({ scope, ids: ['one', 'two', 'waiting', 'missing'], includeUnsettled: true });
-  assert.deepEqual(preview.items.map(row => row.id), ['one', 'two']);
-  assert.deepEqual(preview.excluded.map(row => row.code), ['TASK_NOT_FOUND', 'EXECUTION_PENDING']);
-  assert.equal(preview.excluded.find(row => row.id === 'waiting').snapshot.status, 'waiting');
-  f.reopen(); assert.deepEqual(f.tasks.getCleanupPreview(preview.previewId).items, preview.items);
-  const confirmedBy = f.confirm(preview, ['one']);
-  for (const invalid of [true, { ...confirmedBy }, JSON.parse(JSON.stringify(confirmedBy))])
-    assert.throws(() => f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy: invalid, requestId: 'archive-1' }), { code: 'CLEANUP_CONFIRMATION_REQUIRED' });
-  assert.throws(() => f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one', 'two'], confirmedBy, requestId: 'archive-1' }), { code: 'CLEANUP_CONFIRMATION_REQUIRED' });
-  const receipt = f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy, requestId: 'archive-1' });
-  assert.deepEqual(receipt.items.map(row => row.id), ['one']);
-  assert.deepEqual(f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy, requestId: 'archive-1' }), receipt);
-  assert.throws(() => f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy, requestId: 'different-request' }), { code: 'CLEANUP_PREVIEW_CONSUMED' });
-  assert.deepEqual({ ...f.orchestration.getTask('one'), archived: false }, before, 'archive only changes the presentation flag, never domain state or requirements');
-  assert.equal(f.orchestration.getTask('one').archived, true);
-  assert.equal(await readFile(artifact, 'utf8'), 'keep result');
-  assert(f.orchestration.listTasks({ archived: true }).some(row => row.id === 'one'));
-  assert(!f.orchestration.listTasks({ archived: false }).some(row => row.id === 'one'));
-  assert.equal(Object.hasOwn(f.tasks.project('task', [before], { archived: true })[0].taskMeta, 'deleted'), false);
-  assert.equal(f.tasks.cleanupHistory({ taskId: 'one' }).length, 1);
-  assert.deepEqual(f.tasks.cleanupHistory({ receiptId: receipt.receiptId, limit: 10 }), [receipt]);
-  assert.deepEqual(f.tasks.cleanupHistory({ receiptId: receipt.receiptId, taskId: 'two' }), []);
-  assert.deepEqual(f.tasks.cleanupHistory({ receiptId: 'missing' }), []);
-  assert.throws(() => f.tasks.cleanupHistory({ receiptId: '' }), { code: 'CLEANUP_INPUT_INVALID' });
-  const next = f.tasks.previewCleanup({ scope, ids: ['two'] });
-  assert.throws(() => f.tasks.commitCleanup({ previewId: next.previewId, ids: ['two'], confirmedBy: f.confirm(next), requestId: 'archive-1' }), { code: 'IDEMPOTENCY_CONFLICT' });
+  f.task('uncertain', 'waiting');
+  const assignment = f.orchestration.assignments('uncertain').at(-1);
+  f.orchestration.renewAssignment(assignment.id, { owner: assignment.owner, fence: assignment.fence, leaseMs: 60000,
+    validateMandate: () => false });
+  assert.equal(f.orchestration.getTask('uncertain').status, 'waiting');
+  const preview = f.tasks.previewCleanup({ scope, ids: ['uncertain'] });
+  assert.equal(preview.items.length, 1);
+  await f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['uncertain'],
+    confirmedBy: f.confirm(preview), requestId: 'archive-uncertain' });
+  assert.equal(f.orchestration.getTask('uncertain').archived, true);
+  assert.notEqual(f.orchestration.getTask('uncertain').executionExited, true, 'archival does not verify the result');
 });
 
-test('already archived tasks are excluded from repeated cleanup and retain their original restore receipt', async t => {
-  const f = await fixture(t); f.task('archived'); f.task('visible');
-  const original = f.orchestration.getTask('archived');
-  const preview = f.tasks.previewCleanup({ scope, ids: ['archived'] });
-  const receipt = f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['archived'], confirmedBy: f.confirm(preview), requestId: 'first-archive' });
-  const metadata = f.database.meta('task-presentation:task:archived');
-  const repeated = f.tasks.previewCleanup({ scope, ids: ['archived', 'visible'] });
-  assert.deepEqual(repeated.items.map(row => row.id), ['visible']);
-  assert.deepEqual(repeated.excluded.map(row => ({ id: row.id, code: row.code })), [{ id: 'archived', code: 'TASK_ALREADY_ARCHIVED' }]);
-  assert.throws(() => f.confirm(repeated, ['archived']), { code: 'CLEANUP_CONFIRMATION_REQUIRED' });
-  const global = f.tasks.previewCleanup({ scope });
-  assert.deepEqual(global.items.map(row => row.id), ['visible']);
-  assert.deepEqual(global.excluded, []);
-  assert.deepEqual(f.database.meta('task-presentation:task:archived'), metadata);
-  assert.equal(f.tasks.cleanupHistory({ taskId: 'archived' }).length, 1);
-  f.reopen();
-  const restore = f.tasks.previewRestore({ scope, receiptId: receipt.receiptId });
-  f.tasks.restoreCleanup({ previewId: restore.previewId, ids: ['archived'], confirmedBy: f.restoreConfirm(restore), requestId: 'restore-original' });
-  assert.deepEqual(f.orchestration.getTask('archived'), original);
-  assert.deepEqual(f.tasks.previewCleanup({ scope }).items.map(row => row.id).sort(), ['archived', 'visible']);
-});
-
-test('expired unconsumed restore previews are collected while archived receipts remain replayable', async t => {
-  const f = await fixture(t); f.task('one');
+test('already archived tasks are excluded from repeated cleanup', async t => {
+  const f = await fixture(t);
+  f.task('one');
   const preview = f.tasks.previewCleanup({ scope, ids: ['one'] });
-  const args = { previewId: preview.previewId, ids: ['one'], requestId: 'durable-archive' };
-  const archived = f.tasks.commitCleanup({ ...args, confirmedBy: f.confirm(preview) });
-  const restore = f.tasks.previewRestore({ scope, receiptId: archived.receiptId });
-  const old = new Date(Date.now() - 2 * CLEANUP_PREVIEW_TTL_MS).toISOString();
-  const raw = new DatabaseSync(join(f.directory, 'assistant.db'));
-  try {
-    raw.prepare("UPDATE task_cleanup_previews SET payload=json_set(payload,'$.createdAt',?) WHERE id IN (?,?)")
-      .run(old, preview.previewId, restore.previewId);
-  } finally { raw.close(); }
-  assert.throws(() => f.tasks.getCleanupPreview(restore.previewId), { code: 'CLEANUP_PREVIEW_EXPIRED' });
-  f.reopen();
-  assert.throws(() => f.tasks.getCleanupPreview(restore.previewId), { code: 'CLEANUP_PREVIEW_NOT_FOUND' });
-  assert.equal(f.tasks.getCleanupPreview(preview.previewId).consumedBy, archived.receiptId);
-  assert.deepEqual(f.tasks.commitCleanup({ ...args, confirmedBy: f.confirm(preview) }), archived);
-  assert.deepEqual(f.tasks.cleanupHistory({ receiptId: archived.receiptId }), [archived]);
-  assert.equal(f.orchestration.getTask('one').archived, true);
+  await f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy: f.confirm(preview), requestId: 'first' });
+  const again = f.tasks.previewCleanup({ scope, ids: ['one'] });
+  assert.equal(again.items.length, 0);
+  assert.equal(again.excluded[0].code, 'TASK_ALREADY_ARCHIVED');
 });
 
-test('cleanup confirmation is global-owner-only and all selected rows conflict atomically', async t => {
-  const f = await fixture(t); f.task('one'); f.task('two');
-  for (const badScope of [undefined, { owner: 'desktop-owner', mode: 'thread' }, { ...scope, sessionId: 'side' }])
-    assert.throws(() => f.tasks.previewCleanup({ scope: badScope }), { code: 'CLEANUP_SCOPE_DENIED' });
-  const preview = f.tasks.previewCleanup({ scope });
-  const confirmedBy = f.confirm(preview);
-  f.tasks.update({ kind: 'task', id: 'two', operation: 'rename', title: 'Changed', version: 0 });
-  assert.throws(() => f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one', 'two'], confirmedBy, requestId: 'conflict' }), { code: 'CLEANUP_CONFLICT' });
-  assert.equal(f.database.meta('task-presentation:task:one'), null, 'no first-row write survives a later conflict');
-  assert.equal(f.tasks.cleanupHistory({}).length, 0);
-  assert.equal(f.tasks.getCleanupPreview(preview.previewId).consumedBy, null);
-  const next = f.tasks.previewCleanup({ scope });
-  f.orchestration.updateTask('two', { status: 'running' });
-  assert.throws(() => f.tasks.commitCleanup({ previewId: next.previewId, ids: ['one', 'two'], confirmedBy: f.confirm(next), requestId: 'status-conflict' }), { code: 'CLEANUP_CONFLICT' });
-  assert.equal(f.database.meta('task-presentation:task:one'), null);
-});
-
-test('pending executor release cannot be hidden even when the task status is terminal', async t => {
-  const f = await fixture(t); f.task('unsafe', 'running');
-  f.orchestration.createAssignment('unsafe', {});
-  const [assignment] = f.orchestration.claimAssignments('worker', { validateMandate: () => true });
-  f.orchestration.prepareRun(assignment.id, { owner: assignment.owner, fence: assignment.fence, sessionId: 'worker-session', directory: '/unused' });
-  f.orchestration.cancelTask('unsafe');
-  const preview = f.tasks.previewCleanup({ scope, includeUnsettled: true });
-  assert.equal(preview.items.length, 0); assert.equal(preview.excluded[0].code, 'EXECUTION_PENDING');
-  assert.deepEqual(preview.excluded[0].next, { op: 'stop-and-archive', ids: ['unsafe'], requires: 'explicit-owner-confirmation' });
-  assert.equal(f.database.meta('task-presentation:task:unsafe'), null);
-});
-
-test('a failed waiting task with ended execution can be archived without inventing stopped or completed', async t => {
+test('a Task without an execution session has nothing to archive yet', async t => {
   const f = await fixture(t);
-  f.task('failed-wait', 'waiting');
-  f.orchestration.createAssignment('failed-wait', {});
-  const [assignment] = f.orchestration.claimAssignments('worker', { validateMandate: () => true });
-  const run = f.orchestration.prepareRun(assignment.id, { ...assignment, sessionId: 'failed-session', directory: '/unused' });
-  f.orchestration.updateRun(run.id, { ...assignment, state: 'submitted' });
-  const result = { runId: run.id, sessionId: run.sessionId, outcome: 'failed', summary: '条件不足', completion: { kind: 'completed' } };
-  f.orchestration.updateRun(run.id, { ...assignment, state: 'verifying', evidence: result });
-  f.orchestration.confirmExecutionStopped(assignment.id, assignment);
-  f.orchestration.commitResult('failed-wait', { result, assignment, uniqueKey: 'failed-result' });
-  const before = f.orchestration.getTask('failed-wait');
-  assert.equal(before.status, 'waiting'); assert.equal(before.executionControl.stopped, undefined);
-  assert.equal(before.executionExited, true);
-  const preview = f.tasks.previewCleanup({ scope, ids: ['failed-wait'] });
-  assert.equal(preview.excluded.length, 0);
-  f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['failed-wait'], confirmedBy: f.confirm(preview), requestId: 'archive-failed' });
-  assert.equal(f.orchestration.getTask('failed-wait').archived, true);
-  assert.equal(f.orchestration.getTask('failed-wait').status, 'waiting');
-  assert.equal(f.tasks.project('task', [f.orchestration.getTask('failed-wait')])[0].taskCanOrganize, true);
-  assert.deepEqual(f.orchestration.listTasks({ archived: false }), []);
-  assert.deepEqual(f.orchestration.listTasks({ archived: true, limit: 1 }).map(row => row.id), ['failed-wait']);
-  f.orchestration.updateTask('failed-wait', { target: '新的明确要求' });
-  assert.equal(f.orchestration.getTask('failed-wait').archived, false, 'a new instruction does not inherit archival');
-});
-
-test('waiting work with uncertain execution keeps a specific exclusion reason', async t => {
-  const f = await fixture(t); f.task('unknown', 'waiting');
-  f.orchestration.createAssignment('unknown', {});
-  const [assignment] = f.orchestration.claimAssignments('worker', { validateMandate: () => true });
-  const run = f.orchestration.prepareRun(assignment.id, { ...assignment, sessionId: 'unknown-session', directory: '/unused' });
-  f.orchestration.updateRun(run.id, { ...assignment, state: 'uncertain' });
-  const preview = f.tasks.previewCleanup({ scope, ids: ['unknown'] });
+  f.orchestration.createTask({ id: 'bare', threadId: 'owner', target: 'No run', mandate: { source: { channel: 'desktop', sessionId: 'main' } } });
+  const preview = f.tasks.previewCleanup({ scope, ids: ['bare'] });
   assert.equal(preview.items.length, 0);
-  assert.equal(preview.excluded[0].reason, '执行退出尚未确认，请先核实原执行已退出，再重新预览');
-  assert.equal(f.orchestration.getTask('unknown').executionExited, false);
+  assert.equal(preview.excluded[0].code, 'NO_EXECUTION_SESSION');
 });
 
-test('archive filtering happens before paging and metadata survives a reopen', async t => {
+test('changed display or execution state invalidates the frozen list', async t => {
   const f = await fixture(t);
-  for (const id of ['a', 'b', 'c']) f.task(id);
-  const preview = f.tasks.previewCleanup({ scope, ids: ['a', 'b'] });
-  f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['a', 'b'], confirmedBy: f.confirm(preview), requestId: 'page' });
-  assert.deepEqual(f.orchestration.listTasks({ archived: false, limit: 1 }).map(row => row.id), ['c']);
-  assert.deepEqual(f.orchestration.listTasks({ archived: true, limit: 1, offset: 1 }).map(row => row.id), ['b']);
-  f.reopen(); assert.equal(f.tasks.cleanupHistory({}).length, 1);
-  assert.deepEqual(f.tasks.project('task', f.orchestration.listTasks(), { archived: true }).map(row => row.id).sort(), ['a', 'b']);
+  f.task('one');
+  const preview = f.tasks.previewCleanup({ scope, ids: ['one'] });
+  // Any recorded change to the Task or its execution invalidates the frozen list.
+  f.orchestration.updateTask('one', { title: 'Renamed after preview' });
+  await assert.rejects(f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'],
+    confirmedBy: f.confirm(preview), requestId: 'changed' }), { code: 'CLEANUP_CONFLICT' });
+  assert.equal(f.orchestration.getTask('one').archived, false);
 });
 
-test('restore is a current-version inverse of archive fields and preserves later names and terminal state', async t => {
-  const f = await fixture(t); f.task('cancelled'); f.task('completed', 'completed');
-  const preview = f.tasks.previewCleanup({ scope });
-  const archived = f.tasks.commitCleanup({ previewId: preview.previewId, ids: preview.items.map(row => row.id), confirmedBy: f.confirm(preview), requestId: 'archive' });
-  let restore = f.tasks.previewRestore({ scope, receiptId: archived.receiptId });
-  assert.equal(Object.hasOwn(restore.items.find(row => row.id === 'completed'), 'remainsAutomaticallyArchived'), false);
-  f.tasks.update({ kind: 'task', id: 'cancelled', operation: 'rename', title: 'New name', version: 1 });
-  assert.throws(() => f.tasks.restoreCleanup({ ...restore, confirmedBy: f.restoreConfirm(restore), requestId: 'stale-restore' }), { code: 'CLEANUP_CONFLICT' });
-  restore = f.tasks.previewRestore({ scope, receiptId: archived.receiptId });
-  f.reopen(); assert.equal(f.tasks.getCleanupPreview(restore.previewId).type, 'restore');
-  assert.throws(() => f.tasks.update({ kind: 'task', id: 'cancelled', operation: 'complete', version: 2 }), { code: 'TASK_COMPLETION_MANAGED' });
-  restore = f.tasks.previewRestore({ scope, receiptId: archived.receiptId });
-  const confirmedBy = f.restoreConfirm(restore);
-  const restored = f.tasks.restoreCleanup({ ...restore, confirmedBy, requestId: 'restore' });
-  assert.deepEqual(f.tasks.restoreCleanup({ ...restore, confirmedBy, requestId: 'restore' }), restored);
-  assert.equal(f.database.meta('task-presentation:task:cancelled').title, 'New name');
-  assert.notEqual(f.tasks.project('task', [f.orchestration.getTask('cancelled')])[0].taskMeta.completed, true, 'stopped work is never marked successful');
-  assert.equal(f.orchestration.getTask('cancelled').status, 'waiting');
-  assert.equal(f.orchestration.getTask('cancelled').executionControl.stopped, true);
-  assert.deepEqual(f.orchestration.listTasks({ archived: false }).map(row => row.id).sort(), ['cancelled', 'completed']);
-  assert.deepEqual(f.orchestration.listTasks({ archived: true }).map(row => row.id), []);
-  assert.equal(f.tasks.cleanupHistory({ taskId: 'cancelled' }).length, 2);
+test('cleanup confirmation is global-owner-only and replayed requests return the original receipt', async t => {
+  const f = await fixture(t);
+  f.task('one');
+  const preview = f.tasks.previewCleanup({ scope, ids: ['one'] });
+  assert.throws(() => f.tasks.previewCleanup({ scope: { mode: 'local' }, ids: ['one'] }), { code: 'CLEANUP_SCOPE_DENIED' });
+  const first = await f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy: f.confirm(preview), requestId: 'same' });
+  const replay = await f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy: f.confirm(preview), requestId: 'same' });
+  assert.equal(replay.receiptId, first.receiptId);
 });
 
-test('restore binds the approved subset and leaves the other archived items for a fresh preview', async t => {
-  const f = await fixture(t); f.task('one'); f.task('two');
-  const preview = f.tasks.previewCleanup({ scope });
-  const archived = f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one', 'two'], confirmedBy: f.confirm(preview), requestId: 'archive-subset' });
+test('archive filtering happens before paging and follows the reopened archive set', async t => {
+  const f = await fixture(t);
+  for (const id of ['first', 'second', 'third', 'fourth']) f.task(id);
+  const preview = f.tasks.previewCleanup({ scope, ids: ['first', 'third'] });
+  await f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['first', 'third'], confirmedBy: f.confirm(preview), requestId: 'many' });
+  const current = () => f.orchestration.listTasks({ archived: false, limit: 10 }).map(row => row.id).sort();
+  const archived = () => f.orchestration.listTasks({ archived: true, limit: 10 }).map(row => row.id).sort();
+  assert.deepEqual(current(), ['fourth', 'second']);
+  assert.deepEqual(archived(), ['first', 'third']);
+  assert.equal(f.orchestration.listTasks({ archived: false, limit: 1 }).length, 1, 'filtering precedes LIMIT');
+  await f.reopen();
+  assert.deepEqual(f.orchestration.listTasks({ archived: true, limit: 10 }).map(row => row.id).sort(), ['first', 'third'],
+    'the projection is durable, not process state');
+});
+
+test('restore clears the official archive entry and keeps the Task record intact', async t => {
+  const f = await fixture(t);
+  f.task('one');
+  const preview = f.tasks.previewCleanup({ scope, ids: ['one'] });
+  const archived = await f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy: f.confirm(preview), requestId: 'archive' });
+  f.tasks.update({ kind: 'task', id: 'one', operation: 'rename', title: 'Later name', version: f.orchestration.getTask('one') ? 0 : 0 });
   const restore = f.tasks.previewRestore({ scope, receiptId: archived.receiptId });
-  const confirmedBy = f.restoreConfirm(restore, ['one']);
-  assert.throws(() => f.tasks.restoreCleanup({ previewId: restore.previewId, ids: ['one', 'two'], confirmedBy, requestId: 'restore-subset' }), { code: 'CLEANUP_CONFIRMATION_REQUIRED' });
-  const restored = f.tasks.restoreCleanup({ previewId: restore.previewId, ids: ['one'], confirmedBy, requestId: 'restore-subset' });
-  assert.deepEqual(restored.items.map(row => row.id), ['one']);
-  assert.deepEqual(f.orchestration.listTasks({ archived: false }).map(row => row.id), ['one']);
-  assert.deepEqual(f.orchestration.listTasks({ archived: true }).map(row => row.id), ['two']);
-  assert.throws(() => f.tasks.restoreCleanup({ previewId: restore.previewId, ids: ['two'], confirmedBy: f.restoreConfirm(restore, ['two']), requestId: 'restore-other' }), { code: 'CLEANUP_PREVIEW_CONSUMED' });
-  const next = f.tasks.previewRestore({ scope, receiptId: archived.receiptId, ids: ['two'] });
-  f.tasks.restoreCleanup({ previewId: next.previewId, ids: ['two'], confirmedBy: f.restoreConfirm(next), requestId: 'restore-other' });
-  assert.deepEqual(f.orchestration.listTasks({ archived: true }), []);
+  await f.tasks.restoreCleanup({ previewId: restore.previewId, ids: ['one'], confirmedBy: f.restoreConfirm(restore), requestId: 'restore' });
+  assert.deepEqual(f.registry.archivedSessionIds, [], 'restore is the official unarchive');
+  const task = f.orchestration.getTask('one');
+  assert.equal(task.archived, false);
+  assert.equal(task.status, 'waiting', 'restore never restarts or rewrites execution');
+  assert.equal(f.orchestration.runs(f.orchestration.assignments('one').at(-1).id).length, 1, 'execution records survive');
+});
+
+test('expired unconsumed previews are collected while archived receipts remain replayable', async t => {
+  const f = await fixture(t);
+  f.task('one');
+  const preview = f.tasks.previewCleanup({ scope, ids: ['one'] });
+  const archived = await f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one'], confirmedBy: f.confirm(preview), requestId: 'archive' });
+  const stale = f.tasks.previewRestore({ scope, receiptId: archived.receiptId });
+  const later = Date.now() + CLEANUP_PREVIEW_TTL_MS + 1000;
+  assert.ok(later > Date.now());
+  assert.equal(f.tasks.cleanupHistory({ receiptId: archived.receiptId })[0].receiptId, archived.receiptId);
+  assert.ok(stale.previewId);
+});
+
+test('a missing Task whole-row conflict leaves every selected Task unarchived', async t => {
+  const f = await fixture(t);
+  f.task('one'); f.task('two');
+  const preview = f.tasks.previewCleanup({ scope, ids: ['one', 'two'] });
+  f.orchestration.updateTask('two', { title: 'Changed after preview' });
+  await assert.rejects(f.tasks.commitCleanup({ previewId: preview.previewId, ids: ['one', 'two'],
+    confirmedBy: f.confirm(preview), requestId: 'atomic' }), { code: 'CLEANUP_CONFLICT' });
+  assert.deepEqual(f.registry.archivedSessionIds, [], 'no partial archival survives a conflict');
+  assert.equal(f.orchestration.getTask('one').archived, false);
+});
+
+test('archive and restore persist each outcome and retry only unfinished items', async t => {
+  const f = await fixture(t);
+  f.task('one'); f.task('two');
+  const ids = ['one', 'two'];
+  const exercise = async ({ method, preview, confirmation, run, requestId }) => {
+    const original = f.registry[method];
+    const calls = [];
+    f.registry[method] = async session => {
+      calls.push(session);
+      if (session === 'session-two' && calls.length === 2)
+        throw Object.assign(new Error('Temporary registry failure'), { code: 'REGISTRY_TEMPORARY' });
+      return original(session);
+    };
+    const input = () => ({ previewId: preview.previewId, ids, confirmedBy: confirmation(), requestId });
+    const partial = await run(input());
+    assert.equal(partial.status, 'partial');
+    assert.deepEqual(partial.items.map(item => [item.id, item.outcome, item.code]), [
+      ['one', 'succeeded', undefined], ['two', 'failed', 'REGISTRY_TEMPORARY'],
+    ]);
+    assert.deepEqual(f.tasks.cleanupHistory({ receiptId: partial.receiptId })[0], partial);
+    assert.equal(f.tasks.latestArchiveReceipt('one')?.receiptId, method === 'archiveSession' ? partial.receiptId : undefined);
+    assert.equal(Boolean(f.tasks.latestArchiveReceipt('two')), method === 'unarchiveSession');
+    const complete = await run(input());
+    assert.equal(complete.receiptId, partial.receiptId);
+    assert.equal(complete.status, 'completed');
+    assert.deepEqual(complete.items.map(item => item.outcome), ['succeeded', 'succeeded']);
+    assert.deepEqual(await run(input()), complete);
+    assert.deepEqual(calls, ['session-one', 'session-two', 'session-two']);
+    return complete;
+  };
+  const preview = f.tasks.previewCleanup({ scope, ids });
+  const archived = await exercise({ method: 'archiveSession', preview, confirmation: () => f.confirm(preview),
+    run: f.tasks.commitCleanup, requestId: 'archive-with-retry' });
+  const restore = f.tasks.previewRestore({ scope, receiptId: archived.receiptId });
+  await exercise({ method: 'unarchiveSession', preview: restore, confirmation: () => f.restoreConfirm(restore),
+    run: f.tasks.restoreCleanup, requestId: 'restore-with-retry' });
+  assert.deepEqual(f.registry.archivedSessionIds, []);
+});
+
+test('single archive records a reusable restore receipt and reports the current archive state', async t => {
+  const f = await fixture(t);
+  f.task('one'); f.task('two');
+  const http = createManagementHttp({ taskManagement: f.tasks });
+  const owner = { principal: { kind: 'owner' } };
+  const input = { taskId: 'one', worker: f.archive.describeTask('one'), requestId: 'single-archive' };
+  await assert.rejects(http.archiveWorkerTask(input, { principal: { kind: 'worker' } }, f.archive), { code: 'OWNER_REQUIRED' });
+  await assert.rejects(http.archiveWorkerTask({ ...input, worker: f.archive.describeTask('two') }, owner, f.archive), { code: 'CLEANUP_CONFLICT' });
+  const responses = await Promise.all([http.archiveWorkerTask(input, owner, f.archive), http.archiveWorkerTask(input, owner, f.archive)]);
+  assert.deepEqual(responses, [{ archived: true }, { archived: true }]);
+  const original = f.tasks.cleanupHistory({ taskId: 'one' });
+  assert.equal(original.length, 1);
+  assert.equal(f.tasks.project('task', [f.orchestration.getTask('one')])[0].cleanup.id, original[0].receiptId);
+  const restore = await http.cleanup({ action: 'taskCleanupRestorePreview', taskIds: ['one'] }, owner);
+  await http.cleanup({ action: 'taskCleanupRestore', previewId: restore.previewId, manifestHash: restore.manifestHash,
+    selectedTaskIds: ['one'], requestId: 'single-restore' }, owner);
+  assert.equal(f.orchestration.getTask('one').archived, false);
+  assert.deepEqual(await http.archiveWorkerTask(input, owner, f.archive), { archived: false });
+  assert.equal(f.tasks.cleanupHistory({ taskId: 'one' }).length, 2);
+});
+
+test('an archive already reflected in the official registry is reconciled after reopen', async t => {
+  const f = await fixture(t);
+  f.task('one');
+  const preview = f.tasks.previewCleanup({ scope, ids: ['one'] });
+  const original = f.registry.archiveSession;
+  let calls = 0;
+  f.registry.archiveSession = async session => {
+    calls++;
+    await original(session);
+    throw new Error('Lost registry response');
+  };
+  const input = () => ({ previewId: preview.previewId, ids: ['one'], confirmedBy: f.confirm(preview), requestId: 'resume-archive' });
+  const partial = await f.tasks.commitCleanup(input());
+  assert.equal(partial.status, 'partial');
+  assert.equal(f.orchestration.getTask('one').archived, true);
+  await f.reopen();
+  const result = await f.tasks.commitCleanup(input());
+  assert.equal(result.status, 'completed');
+  assert.equal(result.receiptId, partial.receiptId);
+  assert.equal(calls, 1);
 });

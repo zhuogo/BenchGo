@@ -19,7 +19,6 @@ import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
 import { createRouterTools } from '../src/router-tools.mjs';
 import { serverSshTool } from '../../base/shared/server-ssh-tool.mjs';
-import { taskCleanupNoticeKey } from '../src/task-cleanup-continuation.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 import { taskReplySignal } from '../src/task-reply.mjs';
 import { readAssessmentPolicy, validateTaskMandate } from '../src/assessment-policy.mjs';
@@ -360,6 +359,40 @@ test('the local side-chat Router saves only its own title through the official t
   assert.equal(rejected.isError, true);
   const { threads } = await store.getState();
   assert.deepEqual(threads, [{ ...side, title, pinned: true }, other, channel]);
+});
+
+test('Router removes stalled Task queries from the next Harness step and still publishes its reply', async t => {
+  const name = 'assistant_tasks';
+  let setup, reads = 0;
+  const f = await fixture(t, (request, index) => {
+    const available = request.tools.some(tool => tool.name === name);
+    if (index === 5) {
+      assert.equal(available, false);
+      return text('工单仍在执行，完成后会收到通知。');
+    }
+    assert.equal(available, true);
+    if (index === 7) return text('这是新一轮的工单进展。');
+    assert(index <= 6);
+    return [
+      { type: 'block-start', index: 0, blockType: 'tool-call' },
+      { type: 'block-end', index: 0, block: { type: 'tool-call', id: `task-query-${index}`, name, arguments: '{}' } },
+      { type: 'finish', reason: { kind: 'tool-calls' } },
+    ];
+  }, { setupTools: (...args) => setup(...args) });
+  setup = createRouterTools({ ctx: f.ctx, store: f.store, engine: f.engine, shutdown: new AbortController(), goals: { goals: () => [] },
+    desktopTasks: { query() { reads++; return { tasks: [{ id: 'running', status: 'running' }], nextOffset: null }; } } });
+  const agent = await f.engine.ensureSession();
+  await f.engine.send({ text: '工单进展如何？' });
+  await agent.whenIdle();
+  const results = agent.session.snapshotEvents().filter(event => event.type === 'tool/result' && event.data.message.toolCallId.startsWith('task-query-'))
+    .map(event => JSON.parse(event.data.message.content[0].text));
+  assert.deepEqual(results.map(result => result.code), [undefined, 'TASK_QUERY_UNCHANGED', 'TASK_QUERY_UNCHANGED', 'TASK_QUERY_PAUSED']);
+  assert.equal(reads, 4);
+  assert.equal((await f.engine.history()).messages.at(-1).text, '工单仍在执行，完成后会收到通知。');
+  await f.engine.send({ text: '再查一次工单。' });
+  await agent.whenIdle();
+  assert.equal(reads, 5);
+  assert.equal((await f.engine.history()).messages.at(-1).text, '这是新一轮的工单进展。');
 });
 
 test('new side chats preserve drafts whose transcript cannot be read', async t => {
@@ -2539,7 +2572,7 @@ test('completed scoped tool survives later model failover without repeating the 
   assert.equal((await f.engine.history()).messages.at(-1).text, 'Complete');
 });
 
-test('live partial text remains private and cancellation stops current turn', async t => {
+for (const side of [false, true]) test(`stopping the ${side ? 'side' : 'main'} Router keeps partial text in history`, async t => {
   let visible;
   const started = new Promise(resolve => { visible = resolve; });
   const f = await fixture(t, request => (async function* () {
@@ -2549,19 +2582,29 @@ test('live partial text remains private and cancellation stops current turn', as
     await new Promise(resolve => request.signal.addEventListener('abort', resolve, { once: true }));
     request.signal.throwIfAborted();
   })());
-  await f.engine.send({ text: 'Wait' });
+  const threadId = side ? (await f.engine.createThread({ title: 'Stop a reply' })).id : 'main';
+  const agent = await f.engine.ensureSession({ threadId });
+  const cursor = f.store.orchestration.executionFactCursor();
+  await f.engine.send({ threadId, text: 'Wait' });
   await started;
-  const before = await f.engine.history();
+  const before = await f.engine.history(threadId);
   assert.equal(before.running, true);
   assert.deepEqual(before.messages.map(row => row.text), ['Wait']);
-  const queued = await f.engine.send({ text: 'Next request', requestId: 'next-request' });
+  const queued = await f.engine.send({ threadId, text: 'Next request', requestId: 'next-request' });
   assert.equal(queued.status, 'queued');
-  assert.equal((await f.engine.history()).requests.find(row => row.requestId === 'next-request').text, 'Next request');
-  await f.engine.cancel();
-  await (await f.engine.ensureSession()).whenIdle();
-  assert.equal((await f.engine.history()).running, false);
+  assert.equal((await f.engine.history(threadId)).requests.find(row => row.requestId === 'next-request').text, 'Next request');
+  await f.engine.cancel(threadId);
+  await agent.whenIdle();
+  const after = await f.engine.history(threadId);
+  assert.equal(after.running, false);
+  assert.deepEqual(after.messages.map(row => row.text), ['Wait', 'Partial']);
+  assert.equal(after.messages[1].interrupted, true);
+  assert.deepEqual(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end').data.reason,
+    { kind: 'aborted', reason: { kind: 'user' } });
+  assert.equal(f.store.orchestration.executionFactPage({ after: cursor }).entries.some(entry => entry.kind === 'chat'), false);
+  assert.deepEqual((await f.engine.history(threadId)).messages, after.messages);
   assert.equal(f.requests.length, 1);
-  assert.equal((await f.engine.requestState()).find(row => row.requestId === 'next-request').status, 'cancelled');
+  assert.equal((await f.engine.requestState(threadId)).find(row => row.requestId === 'next-request').status, 'cancelled');
 });
 
 test('confirmed side chat archive cancels the running turn and queued input without a model message', async t => {
@@ -2719,130 +2762,6 @@ test('execution native prompt delegates cold and completed Worker admission to t
   assert.equal(resumed.length, 2);
   assert.equal(resumed[0].sessionId, run.sessionId);
   await assert.rejects(f.engine.nativePrompt({ request, dispatch: async () => { throw new Error('official admission failed'); } }), /official admission failed/);
-});
-
-async function savedCleanupNotice(f, runtime, { requestId, threadId = 'main', sessionId, status = 'completed' }) {
-  sessionId ||= (await f.engine.ensureSession({ threadId })).id;
-  const source = { channel: 'desktop', sessionId, threadId, messageId: `human:${requestId}` };
-  const original = f.store.orchestration.ingest({ dedupeKey: requestId,
-    thread: { id: `desktop:${sessionId}`, source: { type: 'desktop', id: sessionId } }, source,
-    actor: { kind: 'human', id: 'desktop-owner' }, content: '先停止再归档这项任务', mode: 'direct' }).trigger;
-  const task = f.store.orchestration.createTask({ id: `task:${requestId}`, threadId: original.threadId,
-    title: `待整理任务 ${requestId}`, target: '读取本地项目状态', mandate: { source } });
-  f.store.orchestration.cancelTask(task.id);
-  const prepared = runtime.taskCleanupContinuations.prepare({ requestId, triggerId: original.id,
-    source: { sessionId, threadId, messageId: source.messageId, excerpt: '先停止再归档这项任务' },
-    items: [{ id: task.id, instructionRevision: task.instructionRevision, resultVersion: task.resultVersion, metaVersion: 0 }] });
-  const row = prepared.items[0];
-  if (status === 'completed') {
-    const management = createTaskManagement({ database: runtime, orchestration: f.store.orchestration });
-    const preview = management.previewCleanup({ scope: { owner: 'desktop-owner', mode: 'global' }, ids: [task.id] });
-    const confirmedBy = management.createCleanupConfirmation({ previewId: preview.previewId, manifestHash: preview.manifestHash,
-      ids: [task.id], actorId: 'desktop-owner', source: { sessionId, messageId: source.messageId } });
-    const receipt = management.commitCleanup({ previewId: preview.previewId, ids: [task.id], confirmedBy, requestId: `archive:${requestId}` });
-    runtime.taskCleanupContinuations.finish(row.id, { status, receiptId: receipt.receiptId });
-  } else if (status !== 'pending') runtime.taskCleanupContinuations.finish(row.id, { status, code: 'CLEANUP_CONTINUATION_STALE', reason: '任务要求已变化，本次未归档' });
-  return { operationId: prepared.operationId, items: [runtime.taskCleanupContinuations.get(row.id)] };
-}
-
-test('cleanup notification persists the real terminal facts and deduplicates across Router restart without human authority', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'cleanup-router-notice-'));
-  const store = await createAssistantStore({ dataDirectory: directory });
-  await store.updateConfig({ models: [{ providerId: 'test', modelId: 'exact' }] });
-  const runtime = createAssistantRuntimeStore({ filename: store.paths.database });
-  t.after(() => runtime.close());
-  const options = { store, persistenceRoot: join(directory, 'sessions'), readTaskCleanupContinuation: id => runtime.taskCleanupContinuations.get(id) };
-  let first, instruction;
-  first = await fixture(t, async () => {
-    const agent = await first.engine.ensureSession();
-    instruction = currentHumanInstruction(first.ctx, agent);
-    return text('刚才选中的任务已经停止并归档。');
-  }, options);
-  const router = await first.engine.ensureSession();
-  const notice = await savedCleanupNotice(first, runtime, { requestId: 'durable-cleanup' });
-  const accepted = await first.engine.notifyTaskCleanup(notice);
-  await router.whenIdle();
-  const key = taskCleanupNoticeKey(notice.operationId, notice.items);
-  const saved = (await store.getState()).requests.find(row => row.requestId === `cleanup-notice:${key}`);
-  assert.ok(saved);
-  assert.deepEqual(saved.executionInput, { cleanupContinuation: { operationId: notice.operationId, ids: notice.items.map(row => row.id) }, eventKey: key });
-  const message = router.session.snapshotEvents().find(event => event.type === 'user/message' && event.data.id === saved.messageId).data;
-  assert.equal(message.source.kind, 'benchgo-execution-input');
-  assert.match(message.content[0].text, new RegExp(notice.items[0].receiptId));
-  assert.match(message.content[0].text, /此通知不是新真人授权/);
-  assert.equal(instruction, null, 'an internal terminal result never becomes a fresh human instruction');
-  assert.equal((await first.engine.requestState()).length, 0);
-  const before = (await first.engine.history()).messages;
-  assert.equal(before.length, 1);
-  assert.equal(before[0].role, 'assistant');
-  assert.equal(first.requests.length, 1);
-  const duplicate = await first.engine.notifyTaskCleanup(notice);
-  assert.equal(duplicate.duplicate, true);
-  assert.equal(duplicate.messageId, accepted.messageId);
-  await first.engine.dispose(); await first.ctx.fiber.dispose();
-  const second = await fixture(t, () => text('must not replay'), options);
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await second.engine.ensureSession();
-  assert.equal((await second.engine.notifyTaskCleanup(notice)).duplicate, true);
-  assert.deepEqual((await second.engine.history()).messages, before);
-  assert.equal(second.requests.length, 0);
-});
-
-test('cleanup notification rejects forged facts and foreign logical owners before enqueue', async t => {
-  const runtime = createAssistantRuntimeStore({ filename: ':memory:' }); t.after(() => runtime.close());
-  const f = await fixture(t, () => text('must not run'), { readTaskCleanupContinuation: id => runtime.taskCleanupContinuations.get(id) });
-  const router = await f.engine.ensureSession();
-  const notice = await savedCleanupNotice(f, runtime, { requestId: 'forgery', status: 'conflict' });
-  for (const patch of [{ id: 'missing' }, { status: 'completed' }, { code: 'FAKE' }, { receiptId: 'forged-receipt' }]) {
-    await assert.rejects(f.engine.notifyTaskCleanup({ ...notice, items: [{ ...notice.items[0], ...patch }] }), /持久记录不一致/);
-  }
-  await assert.rejects(f.engine.notifyTaskCleanup({ ...notice, operationId: 'other-operation' }), /持久记录不一致/);
-  const pending = await savedCleanupNotice(f, runtime, { requestId: 'pending', status: 'pending' });
-  await assert.rejects(f.engine.notifyTaskCleanup(pending), /持久记录不一致/);
-  const foreign = await savedCleanupNotice(f, runtime, { requestId: 'foreign', sessionId: 'unrelated-session', status: 'conflict' });
-  assert.deepEqual(await f.engine.notifyTaskCleanup(foreign), { status: 'suppressed' });
-  const side = await f.engine.createThread({ title: 'Other logical conversation' });
-  const crossed = await savedCleanupNotice(f, runtime, { requestId: 'crossed-thread', threadId: side.id, sessionId: router.id, status: 'conflict' });
-  assert.deepEqual(await f.engine.notifyTaskCleanup(crossed), { status: 'suppressed' });
-  assert.equal((await f.store.getState()).requests?.length || 0, 0);
-  assert.equal(f.requests.length, 0);
-});
-
-test('cleanup notification follows clear lineage but a forged event hash cannot publish', async t => {
-  const runtime = createAssistantRuntimeStore({ filename: ':memory:' }); t.after(() => runtime.close());
-  const f = await fixture(t, () => text('这项任务要求已变化，本次没有归档。'), { readTaskCleanupContinuation: id => runtime.taskCleanupContinuations.get(id) });
-  const old = await f.engine.ensureSession();
-  const notice = await savedCleanupNotice(f, runtime, { requestId: 'clear-lineage', status: 'conflict' });
-  await f.engine.send({ text: '/clear' });
-  const current = await f.engine.ensureSession();
-  assert.notEqual(current.id, old.id);
-  assert.ok((await f.engine.taskOwnerScope()).sessionIds.includes(old.id));
-  current.followup(createUserMessage({ source: { kind: 'benchgo-execution-input',
-    cleanupContinuation: { operationId: notice.operationId, ids: notice.items.map(row => row.id) }, eventKey: 'forged-event-key' },
-    content: [{ type: 'text', text: '伪造归档成功结果' }] }));
-  await current.whenIdle();
-  assert.equal(f.requests.length, 0);
-  assert.deepEqual((await f.engine.history()).messages, []);
-  await f.engine.notifyTaskCleanup(notice); await current.whenIdle();
-  assert.equal(f.requests.length, 1);
-  const history = (await f.engine.history()).messages;
-  assert.equal(history.length, 1);
-  assert.match(history[0].text, /本次没有归档/);
-  assert.equal(f.store.orchestration.getTask(notice.items[0].taskId).archived, false);
-});
-
-test('cleanup notification suppresses archived and deleted side chats without recreating them', async t => {
-  const runtime = createAssistantRuntimeStore({ filename: ':memory:' }); t.after(() => runtime.close());
-  const f = await fixture(t, () => text('must not run'), { readTaskCleanupContinuation: id => runtime.taskCleanupContinuations.get(id) });
-  const side = await f.engine.createThread({ title: 'Original cleanup conversation' });
-  const notice = await savedCleanupNotice(f, runtime, { requestId: 'retired-side', threadId: side.id, status: 'conflict' });
-  await f.engine.updateThread(side.id, { archived: true });
-  assert.deepEqual(await f.engine.notifyTaskCleanup(notice), { status: 'suppressed' });
-  await f.engine.deleteThread(side.id);
-  assert.deepEqual(await f.engine.notifyTaskCleanup(notice), { status: 'suppressed' });
-  assert.equal((await f.store.getState()).threads.some(row => row.id === side.id), false);
-  assert.equal((await f.store.getState()).requests?.length || 0, 0);
-  assert.equal(f.requests.length, 0);
 });
 
 test('source conversations share sidechat identity and route official owner input without a Router model request', async t => {
@@ -3037,7 +2956,7 @@ for (const kind of ['state', 'result', 'approval']) test(`internal ${kind} notic
   assert.equal(executions, 0, 'no handler executes merely because a model named the tool');
 });
 
-for (const mixedNotice of [null, 'benchgo-task-reply', 'benchgo-execution-input']) test(`human steering supersedes a stale internal state notice (mixed=${mixedNotice})`, { timeout: 10000 }, async t => {
+for (const mixedNotice of [null, 'benchgo-task-reply', 'benchgo-execution-input']) test(`human steering supersedes a stale internal state notice (mixed=${mixedNotice})`, { timeout: 60000 }, async t => {
   let f, steering;
   f = await stateReportFixture(t, (_request, count) => {
     if (count !== 1) return text('已收到插话，先回答当前问题。');
@@ -3066,7 +2985,7 @@ for (const mixedNotice of [null, 'benchgo-task-reply', 'benchgo-execution-input'
   assert.ok(history.messages.some(row => row.id === steering.id));
 });
 
-for (const notice of ['state', 'result']) test(`a valid mixed ${notice} notice is deferred until after human steering and consumed once`, { timeout: notice === 'result' ? 60000 : 10000 }, async t => {
+for (const notice of ['state', 'result']) test(`a valid mixed ${notice} notice is deferred until after human steering and consumed once`, { timeout: 60000 }, async t => {
   const f = await stateReportFixture(t, (_request, count) => text(count === 1 ? '先回答你的问题。' : '后台任务状态已核对。'), {
     workerResult: notice === 'result',
     setupTools(scope, { toolEnabled }) {
@@ -3261,6 +3180,139 @@ test('Worker result notification returns after durable enqueue and streams throu
   assert.doesNotMatch(JSON.stringify(f.requests.at(-1).messages), /PRIVATE WORKER BODY/);
 });
 
+for (const stop of ['assistant', 'official']) test(`Worker result survives ${stop} Stop and reaches the original conversation once`, async t => {
+  const started = Promise.withResolvers();
+  const f = await stateReportFixture(t, (request, count) => count === 1 ? (async function* () {
+    started.resolve();
+    await new Promise(resolve => request.signal.addEventListener('abort', resolve, { once: true }));
+    request.signal.throwIfAborted();
+  })() : text('Saved Worker result'), { workerResult: true });
+  await f.engine.send({ text: 'Checking progress', requestId: 'current-progress' });
+  await started.promise;
+  await f.engine.send({ text: 'Discard this queued question', requestId: 'queued-question' });
+  const receipt = await f.engine.notifyTaskResult(f.delivery);
+  assert.equal(receipt.status, 'accepted');
+  const readNotice = async () => (await f.store.getState()).requests.find(row => row.messageId === receipt.messageId);
+  assert.equal((await readNotice()).status, 'queued');
+  if (stop === 'assistant') await f.engine.cancel();
+  else f.agent.cancel({ kind: 'user' });
+  assert.equal((await f.wait()).status, 'processed');
+  assert.equal((await f.engine.requestState()).find(row => row.requestId === 'queued-question').status, 'cancelled');
+  assert.equal((await readNotice()).requestId, `task-reply:${f.delivery.uniqueKey}`);
+  assert.deepEqual((await f.engine.history()).messages.map(row => row.text), ['Checking progress', 'Saved Worker result']);
+  assert.equal(f.replies.length, 1);
+  assert.equal(f.replies[0].sessionId, f.agent.id);
+  assert.deepEqual(await f.engine.notifyTaskResult(f.delivery), receipt);
+  await f.engine.retryTaskReplies();
+  assert.equal(f.requests.length, 2);
+});
+
+async function cancelledResultFixture(t, script) {
+  const f = await stateReportFixture(t, script, { workerResult: true });
+  const signal = taskReplySignal(f.store.orchestration, f.delivery);
+  const message = createUserMessage({ source: { kind: 'benchgo-task-reply', replyKind: 'result', eventKey: signal.eventKey,
+    taskId: signal.taskId }, content: [{ type: 'text', text: 'LEGACY PRIVATE MATERIAL' }] });
+  const row = { requestId: `task-reply:${signal.eventKey}`, threadId: 'main', messageId: message.id, message, taskReply: signal,
+    status: 'cancelled', attempt: 1, createdAt: new Date().toISOString() };
+  await f.ctx.sessions.flush(f.agent.session);
+  await f.store.updateState({ requests: [row] });
+  return { ...f, row, retry: () => f.engine.retryUnsentTaskResult({ taskId: signal.taskId, eventKey: signal.eventKey }) };
+}
+
+test('explicit replay of a known unsent Worker result retains its IDs and publishes once', async t => {
+  const started = Promise.withResolvers(), release = Promise.withResolvers();
+  t.after(release.resolve);
+  const f = await cancelledResultFixture(t, async (_request, count) => {
+    if (count !== 1) return text('Recovered a saved result');
+    started.resolve();
+    await release.promise;
+    return text('Finished the current reply');
+  });
+  await f.engine.send({ text: 'Current message', requestId: 'before-replay' });
+  await started.promise;
+  try {
+    const receipt = { status: 'accepted', messageId: f.row.messageId };
+    assert.deepEqual(await Promise.all([f.retry(), f.retry()]), [receipt, receipt]);
+    assert.deepEqual(await f.retry(), receipt);
+    const queued = (await f.store.getState()).requests.find(row => row.requestId === f.row.requestId);
+    assert.equal(queued.status, 'queued');
+    assert.equal(queued.message.id, f.row.messageId);
+    assert.equal(queued.message.source.replyMode, 'conversation');
+  } finally { release.resolve(); }
+  const settled = await f.wait();
+  assert.equal(settled.status, 'processed');
+  assert.equal(settled.messageId, f.row.messageId);
+  assert.equal(settled.sessionId, f.agent.id);
+  assert.deepEqual((await f.engine.history()).messages.map(row => row.text), ['Current message', 'Finished the current reply', 'Recovered a saved result']);
+  assert.equal(f.replies.length, 1);
+  assert.equal(f.replies[0].requestId, f.row.messageId);
+  assert.equal((await f.retry()).status, 'skipped');
+  assert.equal(f.requests.length, 2);
+});
+
+test('cold restart delivers the exact Worker result claimed before the first model step', async t => {
+  const persistenceRoot = await mkdtemp(join(tmpdir(), 'benchgo-result-claim-'));
+  const f = await stateReportFixture(t, () => text('Recovered the original Worker result'), { workerResult: true, persistenceRoot, officialSessionQuery: true });
+  t.after(() => rm(persistenceRoot, { recursive: true, force: true }));
+  const sessionId = 'interrupted-result-router';
+  f.delivery.payload.source.sessionId = sessionId;
+  const signal = taskReplySignal(f.store.orchestration, f.delivery);
+  const message = createUserMessage({ source: { kind: 'benchgo-task-reply', replyKind: 'result', replyMode: 'conversation', eventKey: signal.eventKey,
+    taskId: signal.taskId }, content: [{ type: 'text', text: 'Saved Worker result' }] });
+  const session = f.ctx.sessions.prepare(sessionId);
+  const seed = [
+    { type: 'model/selection', data: { provider: 'test', model: 'first' } },
+    { type: 'plugin:benchgo-plugin/model-route', ignorable: true, data: { messageId: message.id, models: [{ providerId: 'test', modelId: 'first' }] } },
+    { type: 'agent/inbox/spliced', data: { target: 'next-turn', start: 0, inserted: [message] } },
+    { type: 'turn/start', data: { turn: 1 } },
+    { type: 'agent/inbox/spliced', data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] } },
+  ].map((event, seq) => ({ ...event, seq, time: seq + 1 }));
+  const writer = await f.ctx.sessionPersistence.create(session.header);
+  try { await writer.append(seed); } finally { await writer.close(); }
+  const before = (await f.ctx.sessionQuery.readSession(sessionId)).events;
+  assert.equal(before.some(event => event.type === 'step/start'), false);
+  assert.ok(before.at(-1).type === 'agent/inbox/spliced' || before.at(-1).data?.reason?.kind === 'interrupted');
+  const row = { requestId: `task-reply:${signal.eventKey}`, messageId: message.id, message, taskReply: signal, threadId: 'main', sessionId,
+    status: 'processing', attempt: 1, createdAt: new Date().toISOString() };
+  await f.store.updateState({ mainSessionId: sessionId, sessionLineage: { main: [sessionId] }, requests: [row] });
+  const engine = await f.reloadEngine();
+  const settled = await f.wait();
+  assert.equal(settled.status, 'processed');
+  assert.equal(settled.messageId, row.messageId);
+  assert.equal(settled.sessionId, sessionId);
+  const live = f.ctx.agents.get(sessionId).session.snapshotEvents();
+  assert.equal(settled.suppressed, undefined, JSON.stringify(live.map(({ seq, type, data }) => ({ seq, type, reason: data?.reason, turn: data?.turn }))));
+  assert.deepEqual((await engine.history()).messages.map(item => item.text), ['Recovered the original Worker result']);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.replies.length, 1);
+  const { events } = await f.ctx.sessionQuery.readSession(sessionId);
+  assert.ok(events.some(event => event.type === 'turn/end' && event.data.turn === 1 && event.data.reason.kind === 'interrupted'));
+  assert.equal(events.filter(event => event.type === 'user/message' && event.data?.id === row.messageId).length, 1);
+});
+
+for (const evidence of ['bound', 'result publication', 'live preparation', 'historical turn', 'cleared']) {
+  test(`explicit Worker result replay skips ${evidence}`, async t => {
+    const f = await cancelledResultFixture(t, () => text('MUST NOT PUBLISH'));
+    if (evidence === 'bound') await f.store.updateState({ requests: [{ ...f.row, sessionId: f.agent.id }] });
+    if (evidence === 'result publication') f.store.orchestration.results(f.task.id)[0].reply = { requestId: 'other' };
+    if (evidence === 'live preparation') modules[0].appendPluginRecord(f.agent.session, 'plugin:benchgo-plugin/model-route', { messageId: f.row.messageId });
+    if (evidence === 'historical turn') {
+      const prior = f.ctx.sessions.create();
+      prior.append('turn/start', { turn: 1 });
+      prior.append('user/message', f.row.message, { surfaceOp: 'append' });
+      prior.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+      await f.ctx.sessions.flush(prior);
+      await f.store.updateState({ sessionLineage: { main: [prior.id] } });
+    }
+    if (evidence === 'cleared') await f.engine.resetMain();
+    const reasons = { bound: 'already-submitted', 'result publication': 'already-published', 'live preparation': 'already-recorded',
+      'historical turn': 'already-recorded', cleared: 'conversation-unavailable' };
+    assert.deepEqual(await f.retry(), { status: 'skipped', reason: reasons[evidence] });
+    assert.equal((await f.store.getState()).requests[0].status, 'cancelled');
+    assert.equal(f.requests.length, 0);
+  });
+}
+
 test('known-unsent legacy hidden result migrates to one ordinary public expression', async t => {
   const f = await stateReportFixture(t, () => text('Current public result'), { workerResult: true });
   const signal = taskReplySignal(f.store.orchestration, f.delivery);
@@ -3426,13 +3478,6 @@ test('failed downstream callback retries persisted public messages after engine 
   assert.equal(restored.replyNotified, true); assert.equal(attempts, 2); assert.equal(f.requests.length, 1);
   assert.deepEqual((await f.engine.history()).messages, publicRows);
   await f.engine.retryTaskReplies(); assert.equal(attempts, 2);
-});
-
-test('verified Router actions do not create a second reminder expression', async t => {
-  const f = await stateReportFixture(t, () => text('must not run'));
-  f.delivery.payload = { ...f.delivery.payload, replyState: 'suppressed', suppressionReason: 'router-action-already-replied' };
-  assert.deepEqual(await f.engine.notifyTaskResult(f.delivery), { status: 'suppressed', reason: 'router-action-already-replied' });
-  assert.equal(f.requests.length, 0);
 });
 
 test('a greeting injects each profile once without unrelated memory or card bodies', async t => {

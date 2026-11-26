@@ -27,14 +27,17 @@ async function fixture() {
       window.renderScenario=(state='data')=>{
         window.calls=[];window.control={state};
         const sample=(id,title,status,extra={})=>({id,title,target:title+'：按要求完成并提供证据',status,instructionRevision:1,resultVersion:0,
-          createdAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:05:00Z',taskCanOrganize:false,...extra});
-        const metadata=new Map(), manifests=new Map();
-        const tasks=createTaskManagement({database:{meta:key=>metadata.get(key)}});
+          createdAt:'2026-11-07T08:00:00Z',updatedAt:'2026-11-07T08:05:00Z',taskCanOrganize:false,
+          executionSession:{available:false,sessionId:'session-'+id,taskId:id},...extra});
+        const metadata=new Map(), manifests=new Map(), receipts=new Map(), archiveSet=new Set(['archived']);
+        const tasks=createTaskManagement({database:{meta:key=>metadata.get(key),transaction:fn=>fn()},
+          orchestration:{archivePointers:ids=>new Map(ids.filter(id=>archiveSet.has(id))
+            .map(id=>[id,{receiptId:'receipt-'+id,createdAt:'2026-11-10T08:00:00Z'}]))}});
         const rows=[sample('queued','准备周报','waiting',{updatedAt:'2026-11-01T08:00:00Z'}),sample('running','运行兼容测试','running',{updatedAt:'2026-11-09T08:00:00Z',assignments:[{state:'claimed'}],executionSession:{available:true,sessionId:'real-execution',taskId:'running'}}),
           sample('paused','确认发布范围','waiting',{executionControl:{paused:true},updatedAt:'2026-11-08T08:00:00Z'}),sample('stopped','已停止验证','waiting',{executionControl:{stopped:true},updatedAt:null,taskCanOrganize:true}),
           sample('done','交付设计稿','completed',{updatedAt:null,taskCanOrganize:true,resultVersion:1,results:[{version:1,summary:'保留原始成果与审计证据',evidenceRefs:[]}]})];
         if(state==='cleanup')rows.push(sample('stopped-two','另一项已停止任务','waiting',{executionControl:{stopped:true},taskCanOrganize:true}));
-        else {rows.push(sample('archived','已归档设计稿','completed',{resultVersion:1,results:[{version:1,summary:'保留归档成果'}]}));metadata.set('task-presentation:task:archived',{version:1,archived:true,archiveRevision:1,cleanupReceiptId:'old-receipt',archivedAt:'2026-11-08T08:00:00Z'});}
+        else rows.push(sample('archived','已归档设计稿','completed',{archived:true,resultVersion:1,results:[{version:1,summary:'保留归档成果'}]}));
         if(state==='long')rows.push(...Array.from({length:35},(_,index)=>sample('extra-'+index,'历史工作 '+index,'running',{updatedAt:'2026-11-02T08:00:00Z'})));
         if(state==='uncertain')Object.assign(rows[1],{assignments:[{state:'uncertain'}]});
         if(state==='blocked')Object.assign(rows[1],{status:'waiting',assignments:[{state:'blocked'}]});
@@ -43,14 +46,14 @@ async function fixture() {
           if(window.control.state==='loading')return new Promise(()=>{});
           if(window.control.state==='error')throw Error('连接暂不可用');
           if(action==='taskPause'&&window.control.pauseError)throw Error('暂停未落账');
-          if(action==='tasks')return {tasks:window.control.state==='empty'?[]:tasks.project('task',rows).filter(row=>input.taskId?row.id===input.taskId:row.archived===input.archived)};
+          if(action==='tasks'){for(const row of rows)row.archived=archiveSet.has(row.id);return {tasks:window.control.state==='empty'?[]:tasks.project('task',rows).filter(row=>input.taskId?row.id===input.taskId:row.archived===input.archived)};}
           if(action==='taskCleanupPreview'||action==='taskCleanupRestorePreview'){
             if(window.control.cleanupLoading)return new Promise(()=>{});
             if(window.control.cleanupPreviewError)throw Error('归档清单暂未读取');
             const restore=action==='taskCleanupRestorePreview',items=[],excluded=[];
             for(const id of input.taskIds){
               const row=tasks.project('task',rows.filter(row=>row.id===id))[0];
-              if(!row||!(row.status==='completed'||row.executionControl?.stopped)||window.control.cleanupEmpty||(restore?!row.cleanup?.id:!!row.cleanup?.id)){
+              if(!row||window.control.cleanupEmpty||(restore?!row.archived:!!row.archived)||(!restore&&!row.id)){
                 excluded.push({id,title:row?.title,reason:'当前状态不可归档或恢复'});continue;
               }
               items.push({id,title:row.title,status:row.status,metaVersion:row.taskMeta.version});
@@ -66,16 +69,31 @@ async function fixture() {
               const item=preview.items.find(item=>item.id===id),row=tasks.project('task',rows.filter(row=>row.id===id))[0];
               if(item.metaVersion!==row.taskMeta.version||item.status!==row.status)throw Error('任务状态已变化，请重新核对清单');
             }
-            for(const id of input.selectedTaskIds){
-              const key='task-presentation:task:'+id,prior=metadata.get(key)||{version:0};
-              metadata.set(key,{...prior,version:prior.version+1,archived:!preview.restore,archiveRevision:1,
-                cleanupReceiptId:preview.restore?null:'receipt-'+input.requestId,archivedAt:preview.restore?null:'2026-11-10T08:00:00Z'});
+            const receipt=receipts.get(input.requestId)||{receiptId:'receipt-'+input.requestId,items:input.selectedTaskIds.map(id=>({id}))};
+            for(const item of receipt.items){
+              if(item.outcome==='succeeded')continue;
+              if(window.control.cleanupPartialId===item.id){item.outcome='failed';item.reason='归档服务暂时不可用';continue;}
+              const id=item.id;
+              if(preview.restore)archiveSet.delete(id);else archiveSet.add(id);
+              rows.find(row=>row.id===id).archived=archiveSet.has(id);
+              item.outcome='succeeded';delete item.reason;
               sink.update({type:'changes',cursor:++cursor,entries:[{seq:cursor,taskId:id,kind:preview.restore?'taskCleanupRestore':'taskCleanup'}]});
             }
-            return {receiptId:'receipt-'+input.requestId,items:input.selectedTaskIds.map(id=>({id}))};
+            receipt.status=receipt.items.every(item=>item.outcome==='succeeded')?'completed':'partial';
+            receipts.set(input.requestId,receipt);
+            return structuredClone(receipt);
+          }
+          if(action==='taskArchiveInfo')return {worker:{taskId:input.taskId,title:rows.find(row=>row.id===input.taskId)?.title||'',
+            sessionId:'session-'+input.taskId,runId:'run-'+input.taskId,assignmentId:'assignment-'+input.taskId,fence:1,
+            instructionRevision:1,active:false}};
+          if(action==='archiveWorkerTask'){
+            archiveSet.add(input.taskId);
+            rows.find(row=>row.id===input.taskId).archived=true;
+            sink.update({type:'changes',cursor:++cursor,entries:[{seq:cursor,taskId:input.taskId,kind:'archiveWorkerTask'}]});
+            return {archived:true};
           }
           if(action==='goalList')return {goals:[]};
-          if(action==='state')return {config:{revision:1,workerConcurrency:2}};
+          if(action==='state')return {config:{revision:1}};
           return {queued:true};
         };
         let sink, cursor=0;
@@ -123,7 +141,7 @@ test('task board renders resource states with three business states, filters, re
     for (const [state, title] of [['loading', '正在读取任务'], ['error', '任务暂时无法读取'], ['empty', '暂无任务']]) {
       await render(state); await page.getByText(title, { exact: true }).waitFor(); await shot(state);
       assert.equal(await page.locator('.ba-task-count').count(), 0, 'the toolbar uses an archive action instead of visible totals');
-      const archive = page.locator('.ba-task-view-controls').getByRole('button', { name: '归档已结束任务', exact: true });
+      const archive = page.locator('.ba-task-view-controls').getByRole('button', { name: '归档任务', exact: true });
       assert(await archive.isDisabled(), 'unloaded or empty records cannot be archived');
       await page.locator('.ba-task-archive-action').hover();
       await page.getByRole('tooltip').getByText(state === 'empty' ? '暂无可归档任务' : '正在同步可归档任务', { exact: true }).waitFor();
@@ -137,9 +155,9 @@ test('task board renders resource states with three business states, filters, re
     await render('data');
     const list = page.locator('.ba-task-list > .ba-task-list-row');
     await list.first().waitFor();
-    const archive = page.locator('.ba-task-view-controls').getByRole('button', { name: '归档已结束任务', exact: true });
+    const archive = page.locator('.ba-task-view-controls').getByRole('button', { name: '归档任务', exact: true });
     await archive.hover();
-    await page.getByRole('tooltip').getByText('归档已结束任务 · 2 项可归档', { exact: true }).waitFor();
+    await page.getByRole('tooltip').getByText('归档任务 · 5 项可归档', { exact: true }).waitFor();
     await page.getByRole('searchbox', { name: '搜索任务' }).hover();
     assert.deepEqual(await list.locator('.ba-task-open > strong').allTextContents(), ['运行兼容测试', '确认发布范围', '已停止验证', '准备周报', '交付设计稿']);
     assert(!(await page.evaluate(() => window.calls)).some(([name]) => name === 'tasks'), 'healthy opening uses the execution-facts snapshot directly');
@@ -328,13 +346,14 @@ test('cleanup previews a subset before archiving, retains conflicts and restores
     const mutations = () => page.evaluate(() => window.calls.filter(([action]) => ['taskCleanupCommit', 'taskCleanupRestore', 'taskResume', 'taskUpdate'].includes(action)));
     await render();
     const original = await page.evaluate(() => window.taskFacts().map(({ id, status, instructionRevision, results }) => ({ id, status, instructionRevision, results })));
-    await page.getByRole('button', { name: '归档已结束任务', exact: true }).click();
+    await page.getByRole('button', { name: '归档任务', exact: true }).click();
     await detail.getByRole('region', { name: '归档清单', exact: true }).waitFor();
     assert.equal(await page.getByRole('dialog').count(), 0);
-    assert.equal(await detail.getByRole('checkbox').count(), 3, 'only current terminal tasks enter this manifest');
+    assert.equal(await detail.getByRole('checkbox').count(), 6, 'every unarchived Task with an execution session enters the manifest');
     assert.deepEqual(await mutations(), [], 'opening a preview never changes a task');
-    await detail.getByRole('checkbox', { name: /另一项已停止任务/ }).uncheck();
-    await detail.getByRole('checkbox', { name: /交付设计稿/ }).uncheck();
+    // Narrow to a single exact Task so the confirmed subset is unambiguous.
+    for (const label of [/准备周报/, /运行兼容测试/, /确认发布范围/, /另一项已停止任务/, /交付设计稿/])
+      await detail.getByRole('checkbox', { name: label }).uncheck();
     await detail.getByRole('button', { name: '确认归档 1 项', exact: true }).waitFor();
     await shot('cleanup-data');
     await page.setViewportSize({ width: 390, height: 844 });
@@ -360,9 +379,9 @@ test('cleanup previews a subset before archiving, retains conflicts and restores
     await page.evaluate(() => window.control.cleanupPreviewError = false);
     await page.evaluate(() => window.control.cleanupCommitError = false);
     await detail.getByRole('button', { name: '重新核对清单', exact: true }).click();
-    await detail.getByRole('button', { name: '确认归档 3 项', exact: true }).waitFor();
-    await detail.getByRole('checkbox', { name: /另一项已停止任务/ }).uncheck();
-    await detail.getByRole('checkbox', { name: /交付设计稿/ }).uncheck();
+    await detail.getByRole('button', { name: '确认归档 6 项', exact: true }).waitFor();
+    for (const label of [/准备周报/, /运行兼容测试/, /确认发布范围/, /另一项已停止任务/, /交付设计稿/])
+      await detail.getByRole('checkbox', { name: label }).uncheck();
     await detail.getByRole('button', { name: '确认归档 1 项', exact: true }).click();
     await detail.waitFor({ state: 'hidden' });
     assert.equal(await page.getByText('已停止验证', { exact: true }).count(), 0);
@@ -374,7 +393,7 @@ test('cleanup previews a subset before archiving, retains conflicts and restores
     const archived = page.locator('.ba-task-list-row').filter({ has: page.getByText('已停止验证', { exact: true }) });
     await archived.waitFor();
     assert(await archived.getByText(/归档整理于/).isVisible());
-    await archived.getByRole('button', { name: /已停止验证.*等待/ }).click();
+    await archived.getByRole('button', { name: /已停止验证.*已停止/ }).click();
     await detail.getByRole('region', { name: '归档记录', exact: true }).waitFor();
     await detail.getByRole('button', { name: '恢复展示', exact: true }).click();
     await detail.getByRole('region', { name: '恢复展示清单', exact: true }).waitFor();
@@ -387,9 +406,10 @@ test('cleanup previews a subset before archiving, retains conflicts and restores
 
     for (const title of ['交付设计稿', '另一项已停止任务']) {
       const done = page.locator('.ba-task-list-row').filter({ has: page.getByText(title, { exact: true }) });
+      // Single archive uses the row's own confirmation and leaves a restore receipt.
       await done.getByRole('button', { name: '归档', exact: true }).click();
-      await detail.getByRole('button', { name: '确认归档 1 项', exact: true }).click();
-      await detail.waitFor({ state: 'hidden' });
+      await page.getByRole('button', { name: /^归档/, exact: false }).last().click();
+      await done.waitFor({ state: 'detached' });
       assert.equal(await done.count(), 0, 'manual archive moves the row out of the current list');
       await page.getByRole('tab', { name: '已归档', exact: true }).click();
       await done.getByRole('button', { name: '恢复展示', exact: true }).click();
@@ -402,10 +422,31 @@ test('cleanup previews a subset before archiving, retains conflicts and restores
       assert.equal(await done.getByRole('button', { name: '恢复展示', exact: true }).count(), 0);
     }
 
+    await render();
+    await page.getByRole('button', { name: '归档任务', exact: true }).click();
+    await detail.getByRole('region', { name: '归档清单', exact: true }).waitFor();
+    for (const label of [/准备周报/, /运行兼容测试/, /确认发布范围/, /交付设计稿/]) {
+      await detail.getByRole('checkbox', { name: label }).uncheck();
+    }
+    await page.evaluate(() => window.control.cleanupPartialId = 'stopped-two');
+    await detail.getByRole('button', { name: '确认归档 2 项', exact: true }).click();
+    await detail.getByRole('status').getByText('已归档 1 项，1 项待处理', { exact: true }).waitFor();
+    await detail.getByText('归档服务暂时不可用', { exact: true }).waitFor();
+    assert(await detail.getByRole('checkbox', { name: /另一项已停止任务/ }).isDisabled());
+    assert.deepEqual(await page.evaluate(() => window.taskFacts().filter(row => row.cleanup).map(row => row.id)), ['stopped']);
+    await page.evaluate(() => delete window.control.cleanupPartialId);
+    await detail.getByRole('button', { name: '重试未完成项', exact: true }).click();
+    await detail.waitFor({ state: 'hidden' });
+    const partialRetries = (await mutations()).filter(([name]) => name === 'taskCleanupCommit');
+    assert.deepEqual([...partialRetries[0][1].selectedTaskIds].sort(), ['stopped', 'stopped-two']);
+    assert.deepEqual(partialRetries[1][1].selectedTaskIds, partialRetries[0][1].selectedTaskIds);
+    assert.equal(partialRetries[0][1].requestId, partialRetries[1][1].requestId);
+    assert.deepEqual(await page.evaluate(() => window.taskFacts().filter(row => row.cleanup).map(row => row.id).sort()), ['stopped', 'stopped-two']);
+
     for (const state of ['loading', 'error', 'empty']) {
       await render();
       await page.evaluate(state => { window.control.cleanupLoading = state === 'loading'; window.control.cleanupPreviewError = state === 'error'; window.control.cleanupEmpty = state === 'empty'; }, state);
-      await page.getByRole('button', { name: '归档已结束任务', exact: true }).click();
+      await page.getByRole('button', { name: '归档任务', exact: true }).click();
       const title = { loading: '正在准备归档清单', error: '归档清单暂时无法读取', empty: '没有可归档的任务' }[state];
       await detail.getByText(title, { exact: true }).waitFor();
       if (state === 'empty') assert(await detail.getByRole('region', { name: '未纳入清单', exact: true }).isVisible());

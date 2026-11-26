@@ -21,7 +21,11 @@ export function useChatScroll(rows, sessionKey) {
     return () => { observer.disconnect(); owner.dispose(); controller.current = null; };
   }, [sessionKey]);
   useLayoutEffect(() => { controller.current?.update(rows); });
-  return { root, host, ...state, returnToBottom: event => {
+  return { root, host, ...state, reveal: element => {
+    element.scrollIntoView({ block: 'center', behavior: 'instant' });
+    controller.current?.holdPosition();
+    element.focus({ preventScroll: true });
+  }, returnToBottom: event => {
     root.current?.closest('[data-assistant-scroll]')?.focus({ preventScroll: true });
     controller.current?.bottom(event?.detail > 0);
   } };

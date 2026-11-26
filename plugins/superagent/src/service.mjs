@@ -5,7 +5,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { createAssistantStore } from './store.mjs';
 import { cleanupAssistant } from './service-cleanup.mjs';
-import { createTaskCleanupContinuation } from './task-cleanup-continuation.mjs';
 import { createAssistantSystemFiles } from './system-files.mjs';
 import { createAssistantEngine } from './engine.mjs';
 import { registerNativePromptIngress } from './native-prompt-ingress.mjs';
@@ -26,7 +25,6 @@ import { createAssistantDeliveryWorker } from './delivery-worker.mjs';
 import { voiceAvailability } from '../../media/src/availability.mjs';
 import { protocolDescriptor } from '../../media/shared/protocol-catalog.mjs';
 import { createVoiceHandlers } from '../../media/src/web.mjs';
-import { mediaToolDefinitions } from '../../media/src/generation-tools.mjs';
 import { assertSameOrigin } from '../../base/shared/http.mjs';
 import { DataOwner } from '../../base/shared/data-owner.mjs';
 import { readAdmissionRules } from './admission-rules.mjs';
@@ -53,7 +51,7 @@ import { registerOwnedSkillProvider } from './owned-skill-provider.mjs';
 import { createDesktopDelegationService } from './desktop-delegation-service.mjs';
 import { createDesktopTaskAccess } from './desktop-task-access.mjs';
 import { createDesktopTaskControl } from './desktop-task-control.mjs';
-import { createModelActionTaskExecutor } from './model-action-task.mjs';
+import { createModelActionExecutor } from './model-action.mjs';
 import { createAssistantDeviceStatus } from './device-status.mjs';
 import { createAssistantSettingsAdapter } from './settings-adapter.mjs';
 import { createConnectionSettingsAdapter } from './connection-settings-adapter.mjs';
@@ -101,7 +99,7 @@ export async function mountAssistant(ctx, commander, providers) {
   let channelCredentials;
   let database, goals, reviewWorker, deliveryWorker, engine, watchdogRetryTimer, disposal, feishu, feishuStream, channels, assessmentRunner, assessmentTimer, orchestrationRuntime, scheduleBridge, routerWatchdog;
   let notificationQueue = Promise.resolve(), skillProvider, unsubscribeSkills, unsubscribeLearning, scheduleLifecycle, externalActionStore, unregisterExternalActions, channelSessions;
-  let disposeFactsRemote, executionSummaries, disposeWatchdogRoute, cleanupContinuations, executionSessionTitles, workerArchive;
+  let disposeFactsRemote, executionSummaries, disposeWatchdogRoute, executionSessionTitles, workerArchive;
   let settings;
   const unregisterSettings = [];
   const projectSchedules = async () => {
@@ -133,8 +131,6 @@ export async function mountAssistant(ctx, commander, providers) {
   const generation = () => ctx.get?.('mediaGeneration');
   ctx.inject(['mediaGeneration'], child => store.migrateGenerationSettings(legacy => child.get('mediaGeneration').importLegacyMedia(legacy))
     .catch(error => ctx.logger?.warn?.(`媒体配置迁移失败：${error.code || error.name}`)));
-  const mediaTools = mediaToolDefinitions({ generation, attachments: ctx.get?.('attachments') });
-  const mediaByName = new Map(mediaTools.map(definition => [definition.name, definition]));
   historySearch = createHistorySearch({ ctx, store });
   channelCredentials = createChannelCredentials({ credentials: ctx.credentials });
   settings = ctx.get?.('benchgoSettings');
@@ -177,7 +173,7 @@ export async function mountAssistant(ctx, commander, providers) {
   ctx.provide('benchgoExternalActions', createExternalActionHost({ ctx, store: externalActionStore, registry: externalRegistry,
     onApprovalPending: input => engine?.notifyApprovalPending(input) }));
   orchestrationRuntime = createOrchestrationRuntime({ ctx, store, feishu, channels,
-    maintainTasks: () => { void workerArchive?.tick(); return cleanupContinuations?.tick(); },
+    maintainTasks: () => { workerArchive?.tick(); },
     onTaskTitleChanged: taskId => { void executionSessionTitles?.syncTask(taskId); },
     notifyTaskResult: async notice => {
       const receipt = await engine.notifyTaskResult(notice);
@@ -221,8 +217,18 @@ export async function mountAssistant(ctx, commander, providers) {
   workerArchive = createWorkerArchive({ ctx, commander, orchestration: store.orchestration, database, signal: shutdown.signal,
     wake: () => orchestrationRuntime.tick() });
   ctx.provide('benchgoWorkerArchive', workerArchive);
-  cleanupContinuations = createTaskCleanupContinuation({ database, orchestration: store.orchestration, taskManagement, signal: shutdown.signal,
-    onUpdate: update => engine.notifyTaskCleanup(update) });
+  // Batch and single cleanup both act on the frozen worker on its owning device.
+  const changeWorkerArchive = async (archived, sessionId, { requestId, ...worker }) => {
+    const change = archived ? workerArchive.archiveTask : workerArchive.unarchiveTask;
+    const result = await change({ taskId: worker.taskId, worker: { ...worker, sessionId }, requestId });
+    if (result?.archived !== archived)
+      throw Object.assign(new Error('尚未确认会话状态已更新，请重试'), { code: 'CLEANUP_UNCONFIRMED' });
+  };
+  store.orchestration.installArchiveRuntime({
+    archive: (sessionId, target) => changeWorkerArchive(true, sessionId, target),
+    unarchive: (sessionId, target) => changeWorkerArchive(false, sessionId, target),
+    archivedSessionIds: () => workerArchive.archivedSessionIds(),
+  });
   const desktopTasks = createDesktopTaskAccess(store.orchestration, taskManagement, orchestrationRuntime.taskProgress);
   const projectTasks = rows => taskManagement.project('task', rows).map(row => {
     const summary = store.orchestration.executionSummary(row.id);
@@ -244,15 +250,14 @@ export async function mountAssistant(ctx, commander, providers) {
     onChange: taskId => store.orchestration.recordExecutionDisplayChange({ taskId, kind: 'summary' }),
     onError: error => ctx.logger?.warn?.(`SuperAgent execution summary: ${error.code || error.name}`) });
   void executionSummaries.ready.catch(error => ctx.logger?.warn?.(`SuperAgent execution summary: ${error.code || error.name}`));
-  const modelActions = createModelActionTaskExecutor({
-    ctx, database: store.orchestration, workspace: store.paths.workspace,
+  const modelActions = createModelActionExecutor({
+    ctx, database: store.orchestration,
     readPolicy: () => readAssessmentPolicy(store, ctx.workspaceRegistry),
-    perform: async ({ name, args, exec, actionKey, sourceMessage }) => {
+    perform: async ({ name, args, exec }) => {
       if (name === 'assistant_pet') return args.op === 'restore' ? pet.restore(args) : pet.apply(args);
-      if (name === 'assistant_profile') return profileDocuments(store, args, { kind: 'conversation', threadId: args.threadId, sessionId: String(exec.agent.session.id), callId: exec.callId });
-      return mediaByName.get(name).execute(args, exec, { requestId: actionKey, userMessage: sourceMessage });
+      return profileDocuments(store, args, { kind: 'conversation', threadId: args.threadId, sessionId: String(exec.agent.session.id), callId: exec.callId });
     },
-    verify: async ({ name, args, result }) => {
+    verify: async ({ name, result }) => {
       if (name === 'assistant_pet') {
         const current = await store.getConfig();
         if (current.revision !== result.revision || JSON.stringify(current.pet) !== JSON.stringify(result.pet)) throw new Error('Pet configuration revision could not be verified');
@@ -263,25 +268,7 @@ export async function mountAssistant(ctx, commander, providers) {
         if (current.hash !== result.document.hash) throw new Error('Assistant document hash could not be verified');
         return { verified: true, evidence: { kind: 'assistant-document', document: current.name, hash: current.hash, revision: current.revision } };
       }
-      if (name === 'generate_video' && result?.requestId && result.jobId && !result.filename) {
-        const receipt = await generation()?.videoReceipt(result.requestId);
-        if (!receipt || !['jobId', 'providerId', 'modelId'].every(key => receipt[key] === result[key])) throw new Error('视频任务凭据回读失败');
-        return { verified: true, evidence: { kind: 'video-submission', ...receipt } };
-      }
-      if (name === 'generate_image' && result?.requestId && result.externalUrl) {
-        const receipt = await generation()?.imageReceipt(result.requestId);
-        if (!receipt || result.url !== receipt.externalUrl
-          || !['externalUrl', 'mimeType', 'providerId', 'modelId', 'status'].every(key => receipt[key] === result[key])) {
-          throw new Error('外链图片收据回读失败');
-        }
-        const urlHash = createHash('sha256').update(receipt.externalUrl).digest('hex');
-        return { verified: true, evidence: { kind: 'media-external-image', requestId: receipt.requestId, mimeType: receipt.mimeType, urlHash } };
-      }
-      const artifact = result?.filename && await generation()?.artifact(result.filename);
-      if (!artifact) throw new Error('媒体产物回读失败');
-      const hash = createHash('sha256');
-      for await (const chunk of artifact.stream()) hash.update(chunk);
-      return { verified: true, evidence: { kind: 'media-artifact', requestId: result.requestId, filename: artifact.filename, artifactHash: hash.digest('hex') } };
+      throw new Error('Assistant document result has no readback identity');
     },
   });
   let maintenanceEnabled = true;
@@ -367,10 +354,9 @@ export async function mountAssistant(ctx, commander, providers) {
   const artifacts = createAssistantArtifacts({ workspace: store.paths.workspace });
   const auxiliary = createAuxiliaryOperations({ ctx, store, artifacts, shutdown: shutdown.signal });
   const setupTools = createRouterTools({ ctx, commander, store, database, shutdown, historySearch, readLedger, goals, orchestrationRuntime, settings, projectSchedules, pet, desktopDelegation,
-    taskChanges, desktopTasks, taskControl, taskManagement, cleanupContinuations, modelActions, mediaTools, capabilities, deviceStatus, auxiliary, deviceTools,
+    taskChanges, desktopTasks, taskControl, taskManagement, modelActions, capabilities, deviceStatus, auxiliary, deviceTools,
     get engine() { return engine; } });
   engine = await createAssistantEngine({ ctx, store, setupTools, scheduleBridge,
-    readTaskCleanupContinuation: id => database.taskCleanupContinuations.get(id),
     resumeExecutionSession: input => orchestrationRuntime.resumeExecutionSession(input),
     readWatchdogFacts,
     onSourceMessage: input => channelSessions.onSourceMessage(input),

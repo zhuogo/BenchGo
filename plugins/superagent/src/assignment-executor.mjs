@@ -7,6 +7,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native';
 import { installWorkerSubagents } from './worker-subagents.mjs';
 import { installWorkerProgressPrompt } from './worker-progress.mjs';
+import { installWorkerMedia, workerMediaReport } from './worker-media.mjs';
 import { installWorkerVault } from './worker-vault.mjs';
 import { installSubscriptionInbox } from './subscription-inbox.mjs';
 import { createTaskRevisionService } from './task-revision-service.mjs';
@@ -154,6 +155,7 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         };
         installProjectRules(scope, agent);
         installWorkerProgressPrompt(scope);
+        installWorkerMedia(scope, ctx, agent, task.mandate.source, task.mandate.instruction);
         scope.systemPrompt.section({ name: 'deployment:persona-prefix', order: -1000, interpolate: false, text: 'You are a BenchGo task worker.' });
         scope.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, interpolate: false, text: '' });
         const inbox = installSubscriptionInbox(scope, agent, { database, assignment, run, onTaskTitleChanged });
@@ -314,9 +316,11 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         throw Object.assign(new Error(`Worker did not complete its final turn (${ending?.kind || 'missing turn/end'})`), { code: 'WORKER_TURN_INCOMPLETE' });
       }
       const { summary, transcript } = executionEvidence(log);
-      if (!waitingAttention && !waitingPause && !summary.trim()) throw new Error('Worker stopped without a readable result');
+      const mediaReport = workerMediaReport(log.events);
+      if (!waitingAttention && !waitingPause && !summary.trim() && !mediaReport) throw new Error('Worker stopped without a readable result');
       signal.throwIfAborted();
       const result = { summary, transcript, completion: executionCompletion(log.events),
+        ...(mediaReport && { mediaReport, ...(!mediaReport.files.length && !mediaReport.pending.length && !waitingAttention && !waitingPause && { outcome: 'failed' }) }),
         instructionRevision: database.appliedTaskSnapshot(assignment.id)?.instructionRevision ?? assignment.instructionRevision,
         executionEffects: effectsOf(log), toolReceipts: Object.fromEntries(toolReceipts), evidenceRefs: [{ sessionId, runId: run.id }], sessionId, runId: run.id, directory, ...(environment ? { environment } : {}), ...(waitingAttention ? { waitingAttention } : {}), ...(waitingPause ? { waitingPause: true } : {}) };
       producedResult = result;
@@ -335,7 +339,9 @@ export function createAssignmentExecutor({ ctx, database, workspaceRoot, readPol
         let draftRevision = assignment.instructionRevision;
         try { draftRevision = database.appliedTaskSnapshot(assignment.id)?.instructionRevision ?? draftRevision; } catch { /* Known assignment identity is sufficient to retain text. */ }
         const completion = executionCompletion(events);
+        const mediaReport = workerMediaReport(events);
         const draft = producedResult || { ...executionEvidence({ events }), runId: run.id, sessionId, directory,
+          ...(mediaReport && { mediaReport }),
           instructionRevision: draftRevision,
           completion, ...(!completion ? { interrupted: true } : {}), executionEffects: effects, toolReceipts: receipts,
           ...(attention?.waiting() ? { waitingAttention: attention.waiting() } : {}), ...(waitingPause ? { waitingPause: true } : {}) };

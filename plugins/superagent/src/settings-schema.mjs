@@ -6,7 +6,7 @@ const modelQueue = { type: 'array', maxItems: 32, items: model };
 const media = { anyOf: [{ type: 'null' }, { ...model, properties: { ...model.properties, ...Object.fromEntries(['protocol', 'voice', 'language', 'size', 'quality', 'credentialRef'].map(key => [key, { type: 'string', maxLength: 512, pattern: '^[^\\u0000-\\u001f\\u007f]*$' }])), speed: { type: 'number', minimum: 0.25, maximum: 4 } } }] };
 export const ASSISTANT_CONFIG_SCHEMA = { type: 'object', additionalProperties: false, properties: {
   name: { type: 'string', maxLength: 100 },
-  models: modelQueue, workerModels: modelQueue, workerHarness: { type: 'string', enum: ['official', 'codex', 'claude'] }, workerConcurrency: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+  models: modelQueue, workerModels: modelQueue, workerHarness: { type: 'string', enum: ['official', 'codex', 'claude'] },
   auxiliary: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false, required: ['models', 'capabilities'], properties: { models: { ...modelQueue, minItems: 1 }, capabilities: { type: 'array', uniqueItems: true, items: { type: 'string', enum: ['vision', 'compression', 'summary', 'review'] } } } }] },
   tts: media, asr: media,
   capabilities: { type: 'object', additionalProperties: true },

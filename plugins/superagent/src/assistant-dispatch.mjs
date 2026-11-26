@@ -30,8 +30,7 @@ export function createAssistantDispatch(runtime) {
         return { worker: workerArchive.describeTask(input.taskId) };
       }
       case 'archiveWorkerTask': {
-        managementOwner(peer);
-        return workerArchive.archiveTask(input);
+        return management.archiveWorkerTask(input, peer, workerArchive);
       }
       case 'sessionRole': return { role: await readOwnedSessionRole({ store, sessionId: input.sessionId,
         listSessions: () => ctx.sessionQuery.listSessions() }) };

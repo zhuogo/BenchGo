@@ -9,15 +9,16 @@ import { taskReplySignal } from '../src/task-reply.mjs';
 import { createDirectReplyDelivery } from '../src/direct-reply-delivery.mjs';
 import { createUnifiedChannelIngress } from '../src/channel-ingress.mjs';
 import { replyWindowExpired } from '../src/channels/delivery-outcome.mjs';
+import { createFeishuAdapter } from '../src/channels/feishu/index.mjs';
 
-async function fixture(t, channel = 'feishu') {
+async function fixture(t, channel = 'feishu', feishuSource = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-result-notice-'));
   let db = createAssistantOrchestrationStore({ directory });
   t.after(async () => { db.close(); await rm(directory, { recursive: true, force: true }); });
   const source = channel === 'desktop' ? { channel, sessionId: 'router', messageId: 'human' }
     : channel === 'wecom' ? { channel, sourceType: 'group', accountId: 'bot', connectionId: channel, connectionRevision: 1,
       conversationId: 'chat', chatId: 'chat', topicId: null, messageId: 'human', replyRequestId: 'req-original', mentioned: true }
-    : { channel, sourceType: 'direct', appId: 'app', conversationId: 'chat', chatId: 'chat', messageId: 'human' };
+    : { channel, sourceType: 'direct', appId: 'app', conversationId: 'chat', chatId: 'chat', messageId: 'human', ...feishuSource };
   const { trigger } = db.ingest({ dedupeKey: 'human', thread: { id: 'thread', source: { type: channel, id: channel === 'wecom' ? 'thread' : 'router' } },
     source, actor: { kind: 'human', id: 'owner' }, content: 'original task', mode: 'direct', gate: { allowed: true, strength: 'explicit' } });
   const task = db.createTask({ threadId: 'thread', target: 'task', sourceTriggerIds: [trigger.id], mandate: { source } });
@@ -52,18 +53,39 @@ test('external Router reply reuses the direct ledger, deduplicates and confirms 
   assert.deepEqual(f.db.deliveries(f.task.id), []);
 });
 
-test('Router channel delivery uses the existing adapter and immutable public text', async t => {
-  const f = await fixture(t);
-  f.db.enqueueRouterReply(f.input);
-  let sends = 0;
+test('Router sends Markdown with artifact links through the original Feishu thread', async t => {
+  const f = await fixture(t, 'feishu', { sourceType: 'topic', topicId: 'discussion', replyInThread: true });
+  const text = '### 结果\n\n[下载产物](https://files.example.test/result.zip?version=1&format=zip)';
+  const row = f.db.enqueueRouterReply({ ...f.input, messages: [{ ...f.input.messages[0], text }] });
+  const connection = { enabled: true, appId: 'app', appSecretRef: 'secret-ref', chatIds: ['chat'] };
+  const sends = [];
+  const adapter = createFeishuAdapter({ getConfig: () => connection,
+    credentials: { resolve: async () => ({ value: 'secret' }) },
+    ingest() {},
+    authorizeConnection: async input => { assert.deepEqual(input, { operation: 'send', source: f.source }); },
+    fetcher: async (url, options) => {
+      if (url.includes('/auth/')) return Response.json({ code: 0, tenant_access_token: 'token', expire: 3600 });
+      sends.push({ url, method: options.method, body: JSON.parse(options.body) });
+      return Response.json({ code: 0, data: { message_id: 'external' } });
+    } });
+  t.after(() => adapter.dispose());
   const shutdown = new AbortController();
   const delivery = createDirectReplyDelivery({ database: f.db, signal: shutdown.signal,
-    readPolicy: async () => ({ connection: { enabled: true, appId: 'app', chatIds: ['chat'] } }),
-    getAdapter: () => ({ send: async input => { sends++; assert.deepEqual(input.source, f.source);
-      assert.equal(input.text, 'Public Router reply'); return { status: 'accepted', messageId: 'external' }; } }) });
+    readPolicy: async () => ({ connection }), getAdapter: () => adapter });
   await delivery.tick();
-  assert.equal(sends, 1);
-  assert.equal(f.db.results(f.task.id)[0].reply.receipt.messageId, 'external');
+  await delivery.tick();
+  assert.equal(sends.length, 1);
+  const [sent] = sends;
+  assert.equal(sent.url, 'https://open.feishu.cn/open-apis/im/v1/messages/human/reply');
+  assert.equal(sent.method, 'POST');
+  assert.equal(sent.body.msg_type, 'post');
+  assert.equal(sent.body.reply_in_thread, true);
+  assert.deepEqual(JSON.parse(sent.body.content), { zh_cn: { content: [[{ tag: 'md', text }]] } });
+  const receipt = f.db.results(f.task.id)[0].reply.receipt;
+  assert.equal(receipt.messageId, 'external');
+  assert.equal(receipt.idempotencyKey, `direct-reply:${row.id}`);
+  assert.equal(receipt.uuid, sent.body.uuid);
+  assert.equal(f.db.assignments(f.task.id)[0].attempts, 1);
   assert.equal(f.db.learningSources().items.length, 1);
 });
 

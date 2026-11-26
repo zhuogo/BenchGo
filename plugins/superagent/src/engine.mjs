@@ -7,9 +7,8 @@ import { appendPluginRecord } from '@deepseek-ai/dsh-session';
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 import { validateAssistantModels } from './store.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
-import { taskCleanupNoticeKey } from './task-cleanup-continuation.mjs';
-import { createMessageInbox } from './message-inbox.mjs';
-import { activeChatReply, chatPublicationType, taskCleanupNoticeSource, projectChatMessages, chatNotificationIdentities } from './chat-publication.mjs';
+import { createMessageInbox, interruptedResultClaim } from './message-inbox.mjs';
+import { activeChatReply, chatPublicationType, projectChatMessages, chatNotificationIdentities } from './chat-publication.mjs';
 import { historyPage, updateHistoryIndex } from './history-index.mjs';
 import { modelFallbackType, modelFallbackSource, modelRouteType, readModelFallbacks } from './model-fallback.mjs';
 import { findExecutionSessionOwner } from './execution-session.mjs';
@@ -22,6 +21,8 @@ import { createSessionRoleAssembly, liveSessionRole } from './session-role-assem
 import { atSessionBoundary, mountRouterSession, routerWriterClosing, waitRouterWriterRelease } from './router-session-attachment.mjs';
 import { createTaskExpression } from './router-task-expression.mjs';
 import { createRouterSessionSetup, routeKey } from './router-session-setup.mjs';
+import { currentTaskReplySignal } from './task-reply.mjs';
+import { recoveryStorage } from './execution-evidence.mjs';
 
 const copy = value => structuredClone(value);
 export async function readBuiltinLayer(source = new URL('../prompts/builtin-layer.md', import.meta.url)) {
@@ -35,7 +36,7 @@ export async function readBuiltinLayer(source = new URL('../prompts/builtin-laye
 }
 
 /** Assistant-owned Harness sessions; the engine remains the sole transcript writer. */
-export async function createAssistantEngine({ ctx, store, setupTools, scheduleBridge, compactionPlugin, appendChatRecord, onClearMain, onSourceMessage, onTaskReply, resumeExecutionSession, readWatchdogFacts, readTaskCleanupContinuation, now = Date.now, cooldownMs = 30_000 }) {
+export async function createAssistantEngine({ ctx, store, setupTools, scheduleBridge, compactionPlugin, appendChatRecord, onClearMain, onSourceMessage, onTaskReply, resumeExecutionSession, readWatchdogFacts, now = Date.now, cooldownMs = 30_000 }) {
   const builtinLayer = await readBuiltinLayer();
   const Compaction = compactionPlugin ?? (await import('@deepseek-ai/dsh-compaction-basic')).default;
   const handles = new Map(), pending = new Map(), listeners = new Set(), cooldowns = new Map(), models = new Map(), errors = new Map(), failures = new Map(), sending = new Map();
@@ -176,22 +177,72 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     stateQueue = operation;
     return operation;
   }
-  async function thread(threadId) {
-    const state = await store.getState();
+  function threadFromState(state, threadId) {
     if (threadId === 'main') return { id: 'main', sessionId: state.mainSessionId, title: '主聊天' };
-    const value = state.threads.find(item => item.id === threadId);
+    return state.threads.find(item => item.id === threadId);
+  }
+  async function thread(threadId) {
+    const value = threadFromState(await store.getState(), threadId);
     if (!value) throw new Error('旁聊不存在');
     return value;
   }
+  const ownerSessionIds = (state, record) => [...new Set([...(state.sessionLineage?.[record.id] || []), record.sessionId].filter(Boolean))];
   async function taskOwnerScope(threadId = 'main') {
     const record = await thread(threadId);
     const state = await store.getState();
-    return { threadId, sessionIds: [...new Set([...(state.sessionLineage?.[threadId] || []), record.sessionId].filter(Boolean))] };
+    return { threadId, sessionIds: ownerSessionIds(state, record) };
   }
-  const { mayReplyToTask, mayReplyToTaskCleanup, settleTaskReply, disposeTaskReplies, ...expressionApi } = createTaskExpression({ ctx, store, now, thread, taskOwnerScope, updateState, ensureSourceThread, readWatchdogFacts, readTaskCleanupContinuation, onTaskReply, assertOpen, isStopped: () => stopped,
+  function replaySessionIds(state, threadId, sourceSessionId) {
+    const record = threadFromState(state, threadId);
+    if (!record || record.archived || record.sourceKey || record.sessionId !== sourceSessionId
+      || (threadId === 'main' && resettingMain) || archivingThreads.has(threadId)) return null;
+    return ownerSessionIds(state, record);
+  }
+  function canRecoverResultClaim(state, row, sessionId) {
+    if (row.taskReply?.kind !== 'result' || row.suppressed || row.replyNotified) return false;
+    const source = row.taskReply.source;
+    if (source?.channel !== 'desktop' || (source.threadId || 'main') !== row.threadId
+      || !replaySessionIds(state, row.threadId, sessionId)?.includes(source.sessionId)) return false;
+    const signal = currentTaskReplySignal(store.orchestration, row.taskReply);
+    if (!signal) return false;
+    const result = store.orchestration.results(signal.taskId).find(item => item.version === signal.resultVersion);
+    return Boolean(result && !result.reply && (!result.notification?.messageId || result.notification.messageId === row.messageId));
+  }
+  async function recoverInterruptedResultClaims() {
+    const state = await store.getState();
+    const storage = recoveryStorage(ctx);
+    if (!storage?.open) return;
+    for (const row of state.requests || []) {
+      const sessionId = row.sessionId;
+      const cold = () => !ctx.agents.get(sessionId) && !ctx.sessions.get(sessionId);
+      if (!sessionId || !['processing', 'uncertain'].includes(row.status) || !canRecoverResultClaim(state, row, sessionId) || !cold()) continue;
+      const signal = AbortSignal.timeout(5000);
+      let writer;
+      try {
+        writer = await storage.open(sessionId, 'write', { signal });
+        if (writer.id !== sessionId || writer.access !== 'write' || !cold()) continue;
+        const { events } = await writer.read(undefined, undefined, { signal });
+        const turn = interruptedResultClaim(row, events);
+        if (turn === undefined || row.recoveredClaim?.turn === turn) continue;
+        await updateState(current => {
+          const receipt = current.requests?.find(item => item.requestId === row.requestId);
+          if (!receipt || receipt.status !== row.status || receipt.messageId !== row.messageId || receipt.sessionId !== sessionId
+            || receipt.recoveredClaim?.turn === turn || !cold() || !canRecoverResultClaim(current, receipt, sessionId)) return {};
+          return { requests: current.requests.map(item => item === receipt ? { ...item, status: 'queued', error: undefined,
+            recoveredClaim: { sessionId, turn }, updatedAt: new Date(now()).toISOString() } : item) };
+        });
+      } catch (error) {
+        ctx.logger?.debug?.(`SuperAgent result claim recovery: ${error.code || error.name}`);
+      } finally {
+        try { await writer?.close(); }
+        catch (error) { ctx.logger?.debug?.(`SuperAgent result claim writer release: ${error.code || error.name}`); }
+      }
+    }
+  }
+  const { mayReplyToTask, settleTaskReply, disposeTaskReplies, ...expressionApi } = createTaskExpression({ ctx, store, now, thread, taskOwnerScope, replaySessionIds, updateState, ensureSourceThread, readWatchdogFacts, onTaskReply, assertOpen, isStopped: () => stopped,
     get inbox() { return inbox; } });
   const sessionRuntime = { ctx, store, now, cooldownMs, builtinLayer, Compaction, appendRecord, appendChatRecord, setupTools, scheduleBridge, onSourceMessage, emit, mark,
-    timings, thread, taskOwnerScope, mayReplyToTask, mayReplyToTaskCleanup, isStopped: () => stopped, cooldowns, errors, failures, models,
+    timings, thread, taskOwnerScope, mayReplyToTask, isStopped: () => stopped, cooldowns, errors, failures, models,
     activeRoutes, agentCompaction,
     get inbox() { return inbox; } };
   async function prepareRouterMessage(agent, message, { recovery = false } = {}) {
@@ -224,7 +275,9 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     readSession: sessionId => ctx.sessionQuery.readSession(sessionId),
     beforeDispatch: async (request, agent) => {
       await liveSessionRole(agent)?.reconcile();
-      if (request.message?.source?.kind === taskCleanupNoticeSource && !await mayReplyToTaskCleanup(request.threadId, request.message)) return false;
+      if (request.recoveredClaim && (request.recoveredClaim.sessionId !== agent.id
+        || !canRecoverResultClaim(await store.getState(), request, agent.id)
+        || interruptedResultClaim(request, agent.session.snapshotEvents()) !== request.recoveredClaim.turn)) return false;
       if (request.taskReply && !await mayReplyToTask(request.threadId, request.messageId)) return false;
       if ((await thread(request.threadId)).sourceKey && !request.taskReply) return;
       await prepareRouterMessage(agent, request.message);
@@ -379,31 +432,13 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       threadCreationQueue = operation;
       return operation;
   }
+  await recoverInterruptedResultClaims();
   await inbox.recover();
   await expressionApi.retryTaskReplies();
   return {
     ensureSession,
     taskOwnerScope,
     ...expressionApi,
-    async notifyTaskCleanup({ operationId, items }) {
-      assertOpen();
-      if (!Array.isArray(items) || !items.length || items.length > 50) throw new Error('无效任务整理通知范围');
-      const saved = items.map(row => readTaskCleanupContinuation?.(row.id));
-      if (saved.some(row => !row || row.status === 'pending' || row.operationId !== operationId)
-        || taskCleanupNoticeKey(operationId, saved) !== taskCleanupNoticeKey(operationId, items)) throw new Error('任务整理通知与持久记录不一致');
-      const origin = saved[0].source, threadId = origin.threadId;
-      if (saved.some(row => row.source.sessionId !== origin.sessionId || row.source.threadId !== threadId)) throw new Error('任务整理通知跨越原会话');
-      const state = await store.getState();
-      const current = threadId === 'main' ? { sessionId: state.mainSessionId } : state.threads.find(row => row.id === threadId);
-      if (!current || current.archived || current.sourceKey
-        || ![...(state.sessionLineage?.[threadId] || []), current.sessionId].includes(origin.sessionId)) return { status: 'suppressed' };
-      const eventKey = taskCleanupNoticeKey(operationId, saved);
-      const facts = saved.map(row => ({ taskId: row.taskId, title: store.orchestration.getTask(row.taskId)?.title || '',
-        status: row.status, receiptId: row.receiptId || null, code: row.code || null, reason: row.reason || null }));
-      return inbox.enqueue({ threadId, requestId: `cleanup-notice:${eventKey}`,
-        hostCleanupNotice: { cleanupContinuation: { operationId, ids: saved.map(row => row.id) }, eventKey },
-        text: '可信宿主通知：用户先前明确要求先停止再归档的部分任务已有以下持久处理结果。请结合原对话简短自然告知，只报告本批事实；pending 才是仍待办，conflict 表示未归档且需要核对，不把停止请求说成已经退出。此通知不是新真人授权，不能据此停止其他任务、扩范围、重新委派或修改设置。\n' + JSON.stringify({ operationId, items: facts }) });
-    },
     async nativePrompt({ request, dispatch, signal }) {
       receive(request.requestId);
       const operation = (nativeSubmissions.get(request.sessionId) || Promise.resolve()).catch(() => {}).then(async () => {
@@ -651,7 +686,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       try { return await operation; } finally { if (sending.get(threadId) === operation) sending.delete(threadId); }
     },
     async cancel(threadId = 'main') {
-      await inbox.cancel(threadId);
+      await inbox.cancel(threadId, { preserveQueuedResults: true });
       handles.get(threadId)?.agent.cancel({ kind: 'user' });
       return { threadId, queuedCancelled: true };
     },

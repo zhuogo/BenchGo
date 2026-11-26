@@ -3,15 +3,8 @@ import { WebSocket } from 'ws';
 import { isIP } from 'node:net';
 import { createPublicKey, randomBytes, sign } from 'node:crypto';
 import { remoteAgent } from '../devices/remote.mjs';
-import { RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_CHUNK_BYTES as CHUNK, RELAY_VOICE_PATH as VOICE, relayHostClaim, relayPathAllowed } from './relay-protocol.mjs';
+import { RELAY_CONTROL_PATH as CONTROL, RELAY_DATA_PATH as DATA, RELAY_CHUNK_BYTES as CHUNK, RELAY_VOICE_PATH as VOICE, RELAY_HTTP_REUSE_HEADER, relayHostClaim, relayPathAllowed, sendRelayFrame as send } from './relay-protocol.mjs';
 
-const MAX_BUFFERED = 256 * 1024;
-const fail = message => Object.assign(new Error(message), { status: 502 });
-const send = async (ws, value, options = {}) => {
-  while (ws.readyState === WebSocket.OPEN && ws.bufferedAmount > MAX_BUFFERED) await new Promise(resolve => setTimeout(resolve, 5));
-  if (ws.readyState !== WebSocket.OPEN) throw fail('中继数据通道已关闭');
-  await new Promise((resolve, reject) => ws.send(value, options, error => error ? reject(error) : resolve()));
-};
 const targetOrigin = target => new URL(target.url).origin;
 function validate(options) {
   const { relayUrl, token, target } = options;
@@ -41,7 +34,7 @@ export function createRelayHost(options) {
   const relayId = 'sha256:' + target.pin;
   const publicKey = options.hostKey && createPublicKey(options.hostKey).export({ type: 'spki', format: 'der' }).toString('base64url');
   const controlHeaders = () => {
-    const headers = { authorization: 'Bearer ' + options.token };
+    const headers = { authorization: 'Bearer ' + options.token, [RELAY_HTTP_REUSE_HEADER]: '1' };
     if (!publicKey) return headers;
     const expires = Date.now() + 45_000, nonce = randomBytes(16).toString('base64url');
     const proof = sign('sha256', Buffer.from(relayHostClaim(relay, relayId, expires, nonce)), options.hostKey).toString('base64url');
@@ -57,37 +50,64 @@ export function createRelayHost(options) {
     if (ws.readyState === WebSocket.OPEN) void send(ws, JSON.stringify({ type: 'error', error: '目标 Link 请求失败' })).catch(() => {});
     ws.close(1011, 'upstream failed'); lastError = error?.message || '目标 Link 请求失败'; options.onError?.(new Error(lastError));
   };
-  const httpTransaction = (ws, input) => {
+  function awaitHttpRequest(ws) {
+    ws.once('message', (raw, binary) => {
+      let input;
+      if (!binary && raw.length <= 16 * 1024) try { input = JSON.parse(raw.toString()); } catch {}
+      if (input?.type !== 'http' || input.reuse !== true) return ws.close(1002, 'invalid HTTP request');
+      httpTransaction(ws, input);
+    });
+  }
+  function httpTransaction(ws, input) {
     if (!relayPathAllowed(input.method, input.path)) { ws.close(1008); return; }
     const endpoint = new URL(input.path, target.url);
-    if (endpoint.origin !== target.url || !['GET', 'HEAD', 'POST'].includes(input.method)) { ws.close(1008); return; }
-    let ended = false, cancelled = false;
-    const onUpstreamError = error => { if (!ended && !cancelled) failRequest(ws, error); };
+    if (endpoint.origin !== target.url) { ws.close(1008); return; }
+    let active = true, requestEnded = false;
+    const resumeUpload = () => ws.resume();
+    const release = () => {
+      active = false;
+      upstream.off('drain', resumeUpload);
+      ws.off('message', onMessage);
+      ws.off('close', cancel);
+      ws.off('error', cancel);
+    };
+    const cancel = () => { release(); upstream.destroy(); };
+    const onUpstreamError = error => {
+      if (!active) return;
+      cancel();
+      failRequest(ws, error);
+    };
     const upstream = request(endpoint, { agent, method: input.method, headers: { ...headersFor(input, target), ...sourceHeaders(input) }, timeout: 120_000 }, response => {
-      void send(ws, JSON.stringify({ type: 'response', status: response.statusCode, headers: response.headers })).catch(error => upstream.destroy(error));
-      response.on('data', chunk => {
-        response.pause();
-        (async () => {
+      void (async () => {
+        await send(ws, JSON.stringify({ type: 'response', status: response.statusCode, headers: response.headers }));
+        for await (const chunk of response) {
           for (let offset = 0; offset < chunk.length; offset += CHUNK) await send(ws, chunk.subarray(offset, offset + CHUNK), { binary: true });
-          response.resume();
-        })().catch(error => response.destroy(error));
-      });
-      response.once('end', () => { ended = true; void send(ws, JSON.stringify({ type: 'end' })).catch(() => {}); });
-      response.once('error', onUpstreamError);
+        }
+        if (!active) return;
+        const uploadComplete = requestEnded && upstream.writableFinished;
+        const reuse = input.reuse === true && uploadComplete;
+        release();
+        if (!uploadComplete) upstream.destroy();
+        if (reuse) { awaitHttpRequest(ws); ws.resume(); }
+        await send(ws, JSON.stringify({ type: 'end', ...(reuse && { reuse }) })).catch(() => ws.terminate());
+      })().catch(onUpstreamError);
     });
     upstream.on('timeout', () => upstream.destroy(new Error('upstream timeout')));
     upstream.on('error', onUpstreamError);
-    ws.on('message', (raw, binary) => {
-      if (binary) {
-        if (!upstream.write(raw)) { ws.pause(); upstream.once('drain', () => ws.resume()); }
+    const onMessage = (raw, binary) => {
+      if (binary && !requestEnded) {
+        if (!upstream.write(raw) && !ws.isPaused) { ws.pause(); upstream.once('drain', resumeUpload); }
         return;
       }
-      let frame; try { frame = JSON.parse(raw.toString()); } catch { upstream.destroy(new Error('invalid relay frame')); return; }
-      if (frame.type === 'request-end') upstream.end(); else upstream.destroy(new Error('unexpected relay frame'));
-    });
-    const cancel = () => { cancelled = true; upstream.destroy(); };
+      let frame;
+      if (!binary) try { frame = JSON.parse(raw.toString()); } catch {}
+      if (requestEnded || frame?.type !== 'request-end') return upstream.destroy(new Error('unexpected relay frame'));
+      requestEnded = true;
+      upstream.end();
+    };
+    ws.on('message', onMessage);
     ws.once('close', cancel); ws.once('error', cancel);
-  };
+  }
   const voiceTransaction = (ws, input) => {
     if (input.path !== VOICE || typeof input.cookie !== 'string' || input.cookie.length > 4096) { ws.close(1008); return; }
     const endpoint = new URL(input.path, target.url); endpoint.protocol = 'wss:';

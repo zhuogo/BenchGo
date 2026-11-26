@@ -36,16 +36,18 @@ async function freePort() {
 async function host(t, name, projects, assistant, stored = {}, serviceContext = {}) {
   const root = await mkdtemp(join(tmpdir(), 'benchgo-cross-device-')), directory = join(root, 'link');
   await mkdir(directory);
+  await writeFile(join(root, 'index.html'), '<html><head></head></html>');
   await writeFile(join(directory, 'devices.json'), JSON.stringify({ name, host: '127.0.0.1', port: 0, ...stored }));
   const routes = [];
   const ctx = {
+    webServer: { renderIndex: html => html },
     ...serviceContext,
     get: key => key === 'assistant' ? assistant : serviceContext.get?.(key),
     workspaceRegistry: { list: () => projects },
     connection: { fetch: { register: value => { routes.push(value); return () => {}; } } },
     effect: fn => fn(),
   };
-  const start = () => mountLink(ctx, { directory, env: {}, testRelayConnection: async () => ({ ok: true, multipleHosts: true }),
+  const start = () => mountLink(ctx, { directory, workbenchRoot: root, env: {}, testRelayConnection: async () => ({ ok: true, multipleHosts: true }),
     ...serviceContext.linkConfig });
   let link = await start();
   t.after(async () => { await link.close(); await rm(root, { recursive: true, force: true }); });

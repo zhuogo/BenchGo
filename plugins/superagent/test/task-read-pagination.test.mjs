@@ -120,6 +120,21 @@ test('fragment continuation uses stable record identity even after a newer resul
   assert.throws(() => f.access.read('one', 'owner', { section: 'results', textOffset: 1, limit: 1 }), /recordId/);
 });
 
+test('blank record fields are optional on snapshot reads while fragments require the returned hash', async t => {
+  const f = await fixture(t);
+  f.task('query-target');
+  for (const section of ['progress', 'overview', 'results']) {
+    assert.deepEqual(f.access.read('query-target', 'owner', { section, recordId: ' \t', expectedHash: '' }),
+      f.access.read('query-target', 'owner', { section }));
+  }
+  assert.throws(() => f.access.read('query-target', 'owner', { section: 'progress', recordId: 'opaque:1' }), { code: 'TASK_QUERY_INPUT' });
+  const fragment = { section: 'results', recordId: 'result:1', textOffset: 1, limit: 1 };
+  for (const fields of [{}, { expectedHash: ' \t' }, { expectedHash: 'invalid' },
+    { expectedHash: 'a'.repeat(64), recordId: '' }, { expectedHash: 'a'.repeat(64), limit: 2 }]) {
+    assert.throws(() => f.access.read('query-target', 'owner', { ...fragment, ...fields }), { code: 'TASK_QUERY_INPUT' });
+  }
+});
+
 test('assignments, runs, unanswered questions and deliveries share bounded independent evidence pages', async t => {
   const f = await fixture(t); f.task('evidence');
   const assignment = f.database.createAssignment('evidence', { text: '执行要求' });

@@ -1,5 +1,5 @@
 import { createHash, createPublicKey, sign, verify } from 'node:crypto';
-import { readDeviceInfo } from './routes.mjs';
+import { openRemoteWorkbench } from './routes.mjs';
 import { remoteJson } from './remote.mjs';
 
 const fail = (message, status = 403) => Object.assign(new Error(message), { status });
@@ -106,23 +106,19 @@ export function createGroupAssets({ group, store, identity, getCenter, request, 
     if (input.command === 'workspace') {
       if (row.kind === 'ssh' && !row.hostId) throw fail('此 SSH 服务器可从终端访问', 409);
       const target = await center.assetTarget(row.id);
-      const info = await readDeviceInfo(target);
-      if (!info.hostId || row.hostId && row.hostId !== info.hostId) throw fail('目标主机身份已变化', 409);
-      if (!info.groupAssetLease) throw fail('请更新目标主机上的 BenchGo 以打开共享工作台', 409);
-      const routes = info.routes?.filter(route => !loopback(route.url));
-      const entry = loopback(target.url) ? routes?.[0] : target;
-      if (!entry) throw fail(row.kind === 'ssh' ? '服务器当前只提供 SSH 隧道，可从组内设备卡片打开终端' : '目标工作台暂未提供可从组内设备访问的路线', 409);
       assertMember(device);
-      const { headers, value } = await remoteJson(target, '/link/api/workbench', { groupAssetLease: true });
-      const cookie = headers['set-cookie']?.find(value => value.startsWith('dsh_link_workbench='));
-      if (value.groupAssetLease !== true || !cookie) throw fail('请更新目标主机上的 BenchGo 以打开共享工作台', 409);
-      for (const [key, lease] of leases) if (lease.expires <= Date.now()) leases.delete(key);
+      const { hostId, routes: discovered, cookie } = await openRemoteWorkbench({ ...target, hostId: row.hostId || target.hostId }, { groupAssetLease: true });
       const key = cookie.split(';', 1)[0];
       const lease = { target, member: device.id, assetId: row.id, expires: Date.now() + 120_000 };
-      try { assertMember(device); }
-      catch (error) { await closeLease(key, lease); throw error; }
+      const routes = discovered?.filter(route => !loopback(route.url));
+      const entry = loopback(target.url) ? routes?.[0] : target;
+      try {
+        if (!entry) throw fail(row.kind === 'ssh' ? '服务器当前只提供 SSH 隧道，可从组内设备卡片打开终端' : '目标工作台暂未提供可从组内设备访问的路线', 409);
+        assertMember(device);
+      } catch (error) { await closeLease(key, lease); throw error; }
+      for (const [key, lease] of leases) if (lease.expires <= Date.now()) leases.delete(key);
       leases.set(key, lease);
-      return { url: entry.url, pin: entry.pin || '', relayTarget: entry.relayTarget || '', hostId: info.hostId, cookie, routes };
+      return { url: entry.url, pin: entry.pin || '', relayTarget: entry.relayTarget || '', hostId, cookie, routes };
     }
     if (!terminalActions.has(input.command) || row.kind !== 'ssh') throw fail('此资产不支持该操作');
     if (input.command === 'serverTerminal') {

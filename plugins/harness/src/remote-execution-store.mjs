@@ -88,18 +88,17 @@ export function openRemoteExecutionStore(directory) {
     archiveSession(row, archived) {
       if (Boolean(row.sessionArchived) === archived) return;
       row.sessionArchived = archived;
-      if (archived) {
-        row.sessionArchiveInstructionRevision = row.receivedInstructionRevision;
-        row.sessionArchiveCursor = Number(db.prepare('INSERT INTO execution_session_archives(execution_id,principal,at,instruction_revision) VALUES(?,?,?,?)')
-          .run(row.id, row.principal, new Date().toISOString(), row.sessionArchiveInstructionRevision).lastInsertRowid);
-      }
+      row.sessionArchiveInstructionRevision = row.receivedInstructionRevision;
+      row.sessionArchiveCursor = Number(db.prepare('INSERT INTO execution_session_archives(execution_id,principal,at,instruction_revision) VALUES(?,?,?,?)')
+        .run(row.id, row.principal, new Date().toISOString(), row.sessionArchiveInstructionRevision).lastInsertRowid);
       save(row);
     },
     sessionArchives(principal, after, limit) {
       return db.prepare(`SELECT a.id AS cursor,a.at,a.instruction_revision,e.payload FROM execution_session_archives a JOIN executions e ON e.id=a.execution_id
         WHERE a.principal=? AND a.id>? ORDER BY a.id LIMIT ?`).all(principal, after, limit).map(item => {
         const row = JSON.parse(item.payload);
-        return { cursor: item.cursor, at: item.at, executionId: row.id, sessionId: row.sessionId, identity: row.identity, instructionRevision: item.instruction_revision };
+        return { cursor: item.cursor, at: item.at, executionId: row.id, sessionId: row.sessionId, identity: row.identity, instructionRevision: item.instruction_revision,
+          state: { archived: Boolean(row.sessionArchived), cursor: row.sessionArchiveCursor, instructionRevision: row.sessionArchiveInstructionRevision } };
       });
     },
     owned(id, principal) { const row = get(id); if (!row || row.principal !== principal) throw executionError('EXECUTION_NOT_FOUND', '执行实例不存在或不属于当前认证设备', 404); return row; },

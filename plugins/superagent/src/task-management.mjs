@@ -1,5 +1,5 @@
 import { normalizeTaskTitle } from './task-title.mjs';
-import { taskPresentation, taskIsArchived, taskIsSettled } from './task-archive.mjs';
+import { taskPresentation, taskIsSettled } from './task-archive.mjs';
 
 function activityTime(row) {
   for (const value of [row.updatedAt, row.createdAt]) {
@@ -26,14 +26,23 @@ export function createTaskManagement({ database, orchestration, goals, onTaskRen
     return (stored.completed || stored.deleted) && (!settled(kind, row) || stored.executionRevision !== executionRevision(kind, row))
       ? { ...stored, completed: false, deleted: false } : stored;
   };
-  const project = (kind, rows, { archived } = {}) => rows.map(row => {
-    const taskMeta = meta(kind, row);
-    return { ...row, ...(kind === 'task' ? { archived: taskIsArchived(row, taskMeta),
-      cleanup: taskMeta.archived && taskMeta.cleanupReceiptId ? { id: taskMeta.cleanupReceiptId, archivedAt: taskMeta.archivedAt, version: taskMeta.version } : null } : {}), taskMeta, taskCanOrganize: settled(kind, row) };
-  })
-    .filter(row => kind === 'task' ? archived === undefined || row.archived === archived : !row.taskMeta.deleted)
-    // Stable sort retains the source order when activity timestamps are equal.
-    .sort((a, b) => activityTime(b) - activityTime(a));
+  const project = (kind, rows, { archived } = {}) => {
+    // One bounded lookup for the whole page: per-row receipt reads would scan
+    // the receipt table once per archived Task.
+    const archivedIds = kind === 'task' ? rows.filter(row => row.archived === true).map(row => row.id) : [];
+    const pointers = archivedIds.length && orchestration.archivePointers
+      ? orchestration.archivePointers(archivedIds) : new Map();
+    return rows.map(row => {
+      const taskMeta = meta(kind, row);
+      // The archive pointer is the latest durable receipt, never a local flag.
+      const receipt = kind === 'task' && row.archived ? pointers.get(row.id) || null : null;
+      return { ...row, ...(kind === 'task' ? { archived: row.archived === true,
+        cleanup: receipt ? { id: receipt.receiptId, archivedAt: receipt.createdAt, version: taskMeta.version } : null } : {}), taskMeta, taskCanOrganize: settled(kind, row) };
+    })
+      .filter(row => kind === 'task' ? archived === undefined || row.archived === archived : !row.taskMeta.deleted)
+      // Stable sort retains the source order when activity timestamps are equal.
+      .sort((a, b) => activityTime(b) - activityTime(a));
+  };
   function update({ kind, id, operation, title, version }) {
     if (!['task', 'goal', 'evaluation'].includes(kind) || typeof id !== 'string' || !id) throw new Error('无效任务标识');
     if (!['rename', 'complete', 'reopen', 'delete'].includes(operation)) throw new Error('无效任务操作');
@@ -61,10 +70,12 @@ export function createTaskManagement({ database, orchestration, goals, onTaskRen
     if (kind === 'task' && operation === 'rename') onTaskRename?.(id);
     return result;
   }
-  const cleanup = name => (...args) => database.taskCleanup[name](...args);
+  const cleanup = name => (...args) => orchestration.taskCleanup[name](...args);
   return { project, update,
+    isArchivedTask: id => orchestration.getTask(id)?.archived === true,
     previewCleanup: cleanup('previewCleanup'), getCleanupPreview: cleanup('getCleanupPreview'),
     commitCleanup: cleanup('commitCleanup'), previewRestore: cleanup('previewRestore'), restoreCleanup: cleanup('restoreCleanup'),
     createCleanupConfirmation: cleanup('createConfirmation'), cleanupHistory: cleanup('cleanupHistory'),
-    cleanupReceiptByRequest: cleanup('receiptForRequest') };
+    cleanupReceiptByRequest: cleanup('receiptForRequest'), latestArchiveReceipt: cleanup('latestArchiveReceipt'),
+    archivePointers: cleanup('archivePointers') };
 }

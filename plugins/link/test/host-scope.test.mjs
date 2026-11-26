@@ -39,6 +39,7 @@ test('real Link HTTP requests can save settings after HMR remount and listener r
   await writeFile(join(directory, 'devices.json'), JSON.stringify({ name: 'Scope test', host: '127.0.0.1', port: 0 }));
   const ctx = {
     root, get() {}, effect: fn => fn(), workspaceRegistry: { list: () => [] },
+    webServer: { renderIndex: html => html },
     connection: {
       fetch: { register: route => { routes.set(route.path, route); return () => {}; } },
       createPeer: options => ({ principal: options.principal, async dispose() {} }),
@@ -72,11 +73,12 @@ test('real Link HTTP requests can save settings after HMR remount and listener r
     assert.deepEqual(saved.value, { preference });
     assert.equal(received.at(-1), approved.value.deviceId);
   }
-  link = await mountLink(ctx, { directory, env: {} });
+  await writeFile(join(directory, 'index.html'), '<html></html>');
+  link = await mountLink(ctx, { directory, workbenchRoot: directory, env: {} });
   await saveTheme('light');
   await link.close();
   const replacement = await hmr.run(true, () => import('../src/index.mjs?reload-test'));
-  link = await hmr.run(true, () => replacement.mountLink({ ...ctx }, { directory, env: {} }));
+  link = await hmr.run(true, () => replacement.mountLink({ ...ctx }, { directory, workbenchRoot: directory, env: {} }));
   await saveTheme('dark');
   await hmr.run(true, () => link.admin({ action: 'configure', host: '127.0.0.1', port: 0 }));
   await saveTheme('light');
@@ -85,7 +87,7 @@ test('real Link HTTP requests can save settings after HMR remount and listener r
   // the scope even for sockets already created by that transaction.
   await link.close();
   const hotRoot = {};
-  link = await hmr.run(true, () => mountLink({ ...ctx, root: hotRoot }, { directory, env: {} }));
+  link = await hmr.run(true, () => mountLink({ ...ctx, root: hotRoot }, { directory, workbenchRoot: directory, env: {} }));
   const status = await routes.get('/api/commander-link').fetch(new Request('http://127.0.0.1/api/commander-link', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }),
   }));

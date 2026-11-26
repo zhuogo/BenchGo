@@ -1,5 +1,5 @@
 import { isChatUserMessage, readAdmittedQuestionReply } from '../src/question-reply.mjs';
-import { isTaskResultReplyRequest } from '../../base/shared/public-chat-record.mjs';
+import { isTaskResultReplyRequest, isUserStoppedTurn } from '../../base/shared/public-chat-record.mjs';
 
 /** Display only facts in the official projection; never inspect private tool arguments. */
 export function conversationActivity(session = {}, chat, pendingInteraction, history) {
@@ -59,7 +59,7 @@ function activeIdentity(history, rows, turn, users, boundary) {
     && Number.isFinite(node.seq)) {
     const priorEnd = Math.max(-1, ...[...(rows.turnEnds || [])].filter(([ended]) => ended < turn).map(([, seq]) => seq));
     return node.seq > priorEnd && (!active || active.turn === turn && active.requestId === node.messageId)
-      ? { turn, requestId: node.messageId, seq: node.seq, time: node.time } : null;
+      ? { turn, requestId: node.messageId, seq: node.seq, time: node.time, internal: true } : null;
   }
   if (active && !boundary) return active.turn === turn && users.has(active.requestId)
     ? { ...active, seq: users.get(active.requestId).seq } : null;
@@ -106,14 +106,20 @@ function ordinaryReply(history, chat, users, published, running, make, publicati
         `:${request.turn}:${part.step ?? part.messageId}`, part.seq));
     }
   }
-  if (turn?.end ? turn.end.data?.reason?.kind !== 'completed' && !publication : !running && !publication) return prior;
+  const reason = turn?.end?.data?.reason;
+  const stopped = isUserStoppedTurn(reason);
+  if (!publication && (turn?.end ? reason?.kind !== 'completed' && !stopped : !running)) return prior;
   const active = activeIdentity(history, rows, turn?.turn ?? rows.partial?.turn, users, turn);
   if (!active || published.has(active.requestId)) return prior;
+  if (stopped && active.internal && !publication) return prior;
+  // The official interrupted node can arrive before turn/end. Bridge the live
+  // partial to that durable node using the same request and step identity.
+  const retainInterrupted = !active.internal && !publication && (stopped || !turn?.end && running);
   const nodes = (rows.nodes || []).filter(node => node.kind === 'assistant' && node.turn === active.turn
-    && node.messageId && !node.interrupted && !node.parentCallId && Number.isFinite(node.seq)
+    && node.messageId && (!node.interrupted || retainInterrupted) && !node.parentCallId && Number.isFinite(node.seq)
     && node.seq > (active.seq ?? turn?.start?.seq ?? Infinity) && node.seq < (turn?.end?.seq ?? Infinity)
     && (!publication || Number.isSafeInteger(publication.step) && node.step < publication.step));
-  const parts = nodes.map(node => make(active.requestId, publicText(node.blocks), !turn?.end && !publication, node.time,
+  const parts = nodes.map(node => make(active.requestId, publicText(node.blocks), !turn?.end && !publication && !node.interrupted, node.time,
     `:${active.turn}:${node.step ?? node.messageId}`, node.seq)).filter(row => row.text.trim());
   const partial = rows.partial;
   const step = turn?.steps?.at(-1);

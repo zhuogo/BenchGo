@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 export function createAssistantAssignmentWorker({
   database, execute, readPolicy, validateMandate, onResult,
   workerId = `assignment-worker-${randomUUID()}`, leaseMs = 60_000,
-  intervalMs = 5_000, concurrency = 1, getConcurrency, logger,
+  intervalMs = 5_000, logger,
 } = {}) {
   if (!database?.claimAssignments || !database?.renewAssignment) throw new Error('Assignment worker requires a database');
   for (const callback of [execute, readPolicy, validateMandate, onResult]) {
@@ -12,7 +12,6 @@ export function createAssistantAssignmentWorker({
   }
   if (!Number.isSafeInteger(leaseMs) || leaseMs < 1000) throw new Error('Invalid assignment lease');
   if (!Number.isSafeInteger(intervalMs) || intervalMs < 100) throw new Error('Invalid assignment interval');
-  if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error('Invalid assignment concurrency');
   let stopped = false, timer = null, running = null;
   const controllers = new Set();
   const active = new Map();
@@ -96,13 +95,9 @@ export function createAssistantAssignmentWorker({
     const batch = running ||= (async () => {
       if (!database.hasAssignmentWork()) return [];
       const policy = await readPolicy();
-      const configured = getConcurrency ? await getConcurrency() : concurrency;
-      if (!Number.isSafeInteger(configured) || configured < 1) throw new Error('Invalid assignment concurrency');
       if (stopped) return [];
-      const capacity = Math.max(0, configured - active.size);
-      if (!capacity) return [];
       const assignments = database.claimAssignments(workerId, {
-        leaseMs, limit: capacity,
+        leaseMs, limit: null,
         validateMandate: (mandate, context) => validateMandate(mandate, { ...context, policy }) === true,
       });
       return assignments.map(assignment => {

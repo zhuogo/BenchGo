@@ -17,6 +17,14 @@ const unavailableResponse = error => Response.json({
   code: 'COMMANDER_UNAVAILABLE',
 }, { status: 503, headers: { 'cache-control': 'no-store' } });
 
+export async function readDismissedHarnessIds(directory) {
+  try {
+    const saved = JSON.parse(await readFile(join(directory, 'dismissed-harness.json'), 'utf8'));
+    if (!Array.isArray(saved) || saved.some(id => typeof id !== 'string' || !id || id.length > 200)) throw new Error('Invalid dismissed Harness session list');
+    return [...new Set(saved)];
+  } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+}
+
 /** Shared project/navigation API; optional native operations use the live Harness service. */
 export async function mountWeb(ctx, options = {}) {
   let dispatch, failure;
@@ -41,12 +49,7 @@ async function initializeWeb(ctx, { directory, getCommander = () => ctx.get('com
   const projects = projectActions(ctx, { directory });
   const recent = recentWorkspaceActions(ctx, directory);
   const dismissedPath = join(directory, 'dismissed-harness.json');
-  let deletedHarnessIds = [];
-  try {
-    const saved = JSON.parse(await readFile(dismissedPath, 'utf8'));
-    if (!Array.isArray(saved) || saved.some(id => typeof id !== 'string' || !id || id.length > 200)) throw new Error('Invalid dismissed Harness session list');
-    deletedHarnessIds = [...new Set(saved)];
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  let deletedHarnessIds = await readDismissedHarnessIds(directory);
   let dismissWrites = Promise.resolve();
   ctx.effect(() => () => dismissWrites);
   const capabilities = { fonts: { available: false } };

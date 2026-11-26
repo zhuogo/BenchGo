@@ -46,7 +46,8 @@ export function createDirectReplyDelivery({ database, readPolicy, getAdapter, si
       const canRefreshWindow = !ownerReply && trigger.actor.kind === 'human' &&
         target.connectionId && Number.isSafeInteger(target.connectionRevision) &&
         (target.accountId || target.appId) && target.messageId === trigger.source.messageId;
-      await sendSourceDelivery({ send: () => adapter.send({ source: sendTarget, text: row.text, idempotencyKey: `direct-reply:${row.id}` }),
+      await sendSourceDelivery({ send: () => adapter.send({ source: sendTarget, text: row.text, idempotencyKey: `direct-reply:${row.id}`,
+        ...(routerReply && target.channel === 'feishu' && { format: 'markdown' }) }),
         finish: options => database.finishDirectReply(row.id, { owner, ...options }), onDelivered, waitForReplyWindow: Boolean(canRefreshWindow) });
       } finally { lease.stop(); }
     }

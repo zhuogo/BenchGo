@@ -1,15 +1,15 @@
-import { taskCleanupNoticeSource, projectChatMessages } from './chat-publication.mjs';
+import { projectChatMessages } from './chat-publication.mjs';
 import { approvalReminderSignal, currentApprovalReminderSignal } from './approval-reminder.mjs';
-import { currentTaskReplySignal, taskReplySignal, taskReplySource } from './task-reply.mjs';
+import { taskReplyMessageSource } from './message-inbox.mjs';
+import { currentTaskReplySignal, taskReplyInstruction, taskReplySignal, taskReplySource } from './task-reply.mjs';
 import { channelSessionKey } from './channel-policy.mjs';
 import { readAssessmentPolicy, validateTaskMandate } from './assessment-policy.mjs';
 import { watchdogRouterSignal, inspectWatchdogRouterSignal, watchdogNoticeCurrent } from './watchdog-router-signal.mjs';
 import { hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../base/shared/public-chat-record.mjs';
-import { taskCleanupNoticeKey } from './task-cleanup-continuation.mjs';
 
 /** Admit task facts into the existing Router inbox; replies use ordinary conversation history. */
 export function createTaskExpression(runtime) {
-  const { ctx, store, now, thread, taskOwnerScope, updateState, ensureSourceThread, readWatchdogFacts, assertOpen, isStopped } = runtime;
+  const { ctx, store, now, thread, taskOwnerScope, replaySessionIds, updateState, ensureSourceThread, readWatchdogFacts, assertOpen, isStopped } = runtime;
   async function mayReplyToTask(threadId, messageId) {
     const [state, policy, ownerScope, currentThread] = await Promise.all([
       store.getState(), readAssessmentPolicy(store, ctx.workspaceRegistry, threadId), taskOwnerScope(threadId), thread(threadId),
@@ -44,23 +44,6 @@ export function createTaskExpression(runtime) {
     try { return inspectWatchdogRouterSignal(store.orchestration, signal, await readWatchdogFacts?.(), { now: now() }); }
     catch { return { valid: false, reason: 'execution-facts-unavailable' }; }
   }
-  async function mayReplyToTaskCleanup(threadId, message) {
-    const source = message?.source;
-    if (source?.kind !== taskCleanupNoticeSource) return false;
-    if (source.cleanupContinuation) {
-      const { operationId, ids } = source.cleanupContinuation;
-      if (!Array.isArray(ids) || !ids.length || ids.length > 50 || new Set(ids).size !== ids.length) return false;
-      const saved = ids.map(id => runtime.readTaskCleanupContinuation?.(id));
-      const state = await store.getState();
-      const current = threadId === 'main' ? { sessionId: state.mainSessionId } : state.threads.find(row => row.id === threadId);
-      if (!current) return false;
-      const sessionIds = [...(state.sessionLineage?.[threadId] || []), current.sessionId];
-      return saved.every(row => row && row.status !== 'pending' && row.operationId === operationId
-        && row.source.threadId === threadId && sessionIds.includes(row.source.sessionId))
-        && !current.archived && !current.sourceKey && taskCleanupNoticeKey(operationId, saved) === source.eventKey;
-    }
-    return false;
-  }
   async function definitelyUnstartedExpression(threadId, row) {
     if (row.status !== 'failed' || row.sessionId || row.suppressed || !row.messageId
       || !['result', 'state', 'watchdog'].includes(row.taskReply?.kind) || row.message?.id !== row.messageId
@@ -82,6 +65,73 @@ export function createTaskExpression(runtime) {
     }
     const current = ((await store.getState()).requests || []).find(item => item.requestId === row.requestId);
     return current?.messageId === row.messageId && current.status === 'failed' && !current.sessionId && !current.suppressed;
+  }
+  async function retryUnsentTaskResult({ taskId, eventKey } = {}) {
+    assertOpen();
+    const skipped = reason => ({ status: 'skipped', reason });
+    if (typeof taskId !== 'string' || !taskId || typeof eventKey !== 'string' || !eventKey) return skipped('invalid-identity');
+    const requestId = `task-reply:${eventKey}`;
+    function inspect(state, expectedMessageId) {
+      const row = (state.requests || []).find(item => item.requestId === requestId);
+      const signal = row?.taskReply, source = row?.message?.source;
+      if (signal?.kind !== 'result' || signal.taskId !== taskId || signal.eventKey !== eventKey
+        || !row.messageId || row.message?.id !== row.messageId || (expectedMessageId && row.messageId !== expectedMessageId)
+        || source?.kind !== taskReplySource || source.replyKind !== 'result' || source.eventKey !== eventKey || source.taskId !== taskId)
+        return { reason: 'request-unavailable' };
+      if (row.suppressed || row.replyNotified || row.sessionId || !['queued', 'cancelled'].includes(row.status))
+        return { reason: 'already-submitted' };
+      const current = currentTaskReplySignal(store.orchestration, signal);
+      if (!current) return { reason: 'result-superseded' };
+      const result = store.orchestration.results(taskId).find(item => item.version === current.resultVersion);
+      if (result?.reply) return { reason: 'already-published' };
+      if (!result || result.notification?.messageId && result.notification.messageId !== row.messageId)
+        return { reason: 'result-unavailable' };
+      const origin = current.source;
+      const sessionIds = origin?.channel === 'desktop' && origin.sessionId && row.threadId === (origin.threadId || 'main')
+        && replaySessionIds(state, row.threadId, origin.sessionId);
+      if (!sessionIds) return { reason: 'conversation-unavailable' };
+      return { row, signal: current, sessionIds };
+    }
+    const { reason, row, sessionIds } = inspect(await store.getState());
+    if (reason) return skipped(reason);
+    const accepted = { status: 'accepted', messageId: row.messageId };
+    if (row.status === 'queued') { void runtime.inbox.drain(row.threadId); return accepted; }
+
+    // A bound request or any recorded admission, preparation or publication
+    // is evidence that this identity has already reached a Router session.
+    const recorded = events => events.some(({ type, data }) => data?.messageId === row.messageId
+      || data?.requestId === row.messageId || data?.taskReplyEventKey === eventKey
+      || (type === 'user/message' && (data?.id === row.messageId || data?.source?.eventKey === eventKey)));
+    const liveRecorded = sessionId => {
+      const live = ctx.sessions.get(sessionId);
+      return live && recorded(live.snapshotEvents());
+    };
+    try {
+      for (const sessionId of sessionIds) {
+        if (liveRecorded(sessionId) || recorded((await ctx.sessionQuery.readSession(sessionId)).events)) return skipped('already-recorded');
+      }
+    } catch { return skipped('session-unavailable'); }
+
+    // Serialize with inbox and conversation updates. The same message can be
+    // requeued once, even when two recovery calls read the cancelled receipt.
+    let outcome;
+    await updateState(state => {
+      const next = inspect(state, row.messageId);
+      if (next.reason) { outcome = skipped(next.reason); return {}; }
+      if (next.sessionIds.length !== sessionIds.length || next.sessionIds.some(id => !sessionIds.includes(id)) || isStopped()) {
+        outcome = skipped('conversation-changed'); return {};
+      }
+      if (sessionIds.some(liveRecorded)) { outcome = skipped('already-recorded'); return {}; }
+      outcome = accepted;
+      if (next.row.status === 'queued') return {};
+      const message = { ...next.row.message, source: taskReplyMessageSource(next.signal, row.threadId),
+        content: [{ type: 'text', text: taskReplyInstruction(next.signal) }] };
+      return { requests: state.requests.map(item => item.requestId === requestId
+        ? { ...item, message, taskReply: next.signal, status: 'queued', error: undefined, updatedAt: new Date(now()).toISOString() }
+        : item) };
+    });
+    if (outcome.status === 'accepted') void runtime.inbox.drain(row.threadId);
+    return outcome;
   }
   async function retryTaskExpression(threadId, row, signal, { allowStarted = false } = {}) {
     if (row.status !== 'failed' && !(allowStarted && row.status === 'processed' && row.sessionId)
@@ -140,7 +190,7 @@ export function createTaskExpression(runtime) {
     return operation;
   }
   return {
-    mayReplyToTask, mayReplyToTaskCleanup, settleTaskReply,
+    mayReplyToTask, settleTaskReply, retryUnsentTaskResult,
     async disposeTaskReplies() { await Promise.allSettled([...completing.values()]); },
     async notifyWatchdogSignal(observation, { principal } = {}) {
       assertOpen();
@@ -192,10 +242,6 @@ export function createTaskExpression(runtime) {
     },
     async notifyTaskResult(delivery) {
       assertOpen();
-      if (delivery?.payload?.suppressionReason === 'router-action-already-replied'
-        || delivery?.payload?.publication?.systemState?.state === 'action_verified'
-        || store.orchestration?.assignments(delivery?.taskId)?.some(row => (row.executor || row.payload?.executor) === 'router-action'))
-        return { status: 'suppressed', reason: 'router-action-already-replied' };
       const signal = taskReplySignal(store.orchestration, delivery);
       if (!signal) return { status: 'suppressed', reason: 'task-superseded' };
       let threadId;

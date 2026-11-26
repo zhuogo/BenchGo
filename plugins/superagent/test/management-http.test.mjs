@@ -33,7 +33,17 @@ async function fixture(t) {
     readConfig: () => store.getConfig(), readConnection: channel => store.connections.read(channel), readLearning: () => store.memory.learning() });
   let http = createHttp();
   store.orchestration.createThread({ id: 'main', source: { type: 'desktop', id: 'owner' } });
-  const task = id => { store.orchestration.createTask({ id, threadId: 'main', target: id, mandate: {} }); return store.orchestration.cancelTask(id); };
+  const archivedSessions = new Set();
+  store.orchestration.installArchiveRuntime({
+    archive: id => archivedSessions.add(id), unarchive: id => archivedSessions.delete(id), archivedSessionIds: () => [...archivedSessions],
+  });
+  const task = id => {
+    store.orchestration.createTask({ id, threadId: 'main', target: id, mandate: {} });
+    const assignment = store.orchestration.createAssignment(id, {});
+    const [claimed] = store.orchestration.claimAssignments('worker', { validateMandate: () => true, assignmentId: assignment.id });
+    store.orchestration.prepareRun(claimed.id, { owner: claimed.owner, fence: claimed.fence, sessionId: `session-${id}`, directory });
+    return store.orchestration.cancelTask(id);
+  };
   return { directory, store, database, tasks, task, get settings() { return settings; }, get http() { return http; },
     async reopenManagement() {
       await settings.close(); settings = createSettingsManagement({ directory: join(directory, 'settings') });
@@ -45,11 +55,11 @@ test('management HTTP derives owner authority only from its trusted Peer', async
   const f = await fixture(t);
   for (const peer of [undefined, {}, { principal: { kind: 'channel', id: 'desktop-owner' } }, { principal: { kind: 'worker' } }]) {
     const forged = { actor: { kind: 'owner', id: 'desktop-owner' }, principal: { kind: 'owner' }, confirmed: true, confirmedBy: true };
-    await assert.rejects(f.http.patchAssistant({ ...forged, patch: { workerConcurrency: 3 } }, peer), { code: 'OWNER_REQUIRED' });
+    await assert.rejects(f.http.patchAssistant({ ...forged, patch: { maintenance: { intervalHours: 3 } } }, peer), { code: 'OWNER_REQUIRED' });
     await assert.rejects(f.http.dispatch({ ...forged, action: 'settingsCatalog' }, peer), { code: 'OWNER_REQUIRED' });
-    assert.throws(() => f.http.cleanup({ ...forged, action: 'taskCleanupPreview' }, peer), { code: 'OWNER_REQUIRED' });
+    await assert.rejects(f.http.cleanup({ ...forged, action: 'taskCleanupPreview' }, peer), { code: 'OWNER_REQUIRED' });
   }
-  assert.equal((await f.store.getConfig()).workerConcurrency, 2);
+  assert.equal((await f.store.getConfig()).maintenance.intervalHours, 6);
   assert.equal(f.tasks.cleanupHistory().length, 0);
 });
 
@@ -74,60 +84,62 @@ test('settings HTTP freezes exact safety changes, blocks prohibited paths and pr
   const catalog = await f.http.dispatch({ action: 'settingsCatalog', adapterId: ref.adapterId }, owner);
   assert.equal(Object.hasOwn(catalog.entries.find(entry => entry.namespace === ref.namespace).schema.properties, 'cardHtml'), false);
   await assert.rejects(f.http.patchAssistant({ patch: { cardMotion: false }, revision: current.backendRevision }, owner), { code: 'SETTINGS_SCHEMA_REJECTED' });
-  await f.http.patchAssistant({ patch: { workerConcurrency: 3 }, revision: current.backendRevision }, owner);
+  await assert.rejects(f.http.patchAssistant({ patch: { workerConcurrency: 3 }, revision: current.backendRevision }, owner), { code: 'SETTINGS_SCHEMA_REJECTED' });
+  await f.http.patchAssistant({ patch: { maintenance: { intervalHours: 3 } }, revision: current.backendRevision }, owner);
   const saved = await f.store.getConfig();
-  assert.equal(saved.workerConcurrency, 3);
+  assert.equal(saved.maintenance.intervalHours, 3);
+  assert.equal(Object.hasOwn(saved, 'workerConcurrency'), false);
   assert.equal(saved.capabilities.proactive, true);
   assert.equal(Object.hasOwn(saved, 'cardMotion'), false);
 });
 
 test('page Save retries reuse the same request without another configuration write', async t => {
   const f = await fixture(t), initial = await f.store.getConfig();
-  const input = { patch: { workerConcurrency: 4 }, revision: initial.revision, requestId: 'save-retry' };
+  const input = { patch: { maintenance: { intervalHours: 4 } }, revision: initial.revision, requestId: 'save-retry' };
   const first = await f.http.patchAssistant(input, owner);
   const repeated = await f.http.patchAssistant(input, owner);
   assert.deepEqual(repeated, first);
   assert.equal((await f.store.getConfig()).revision, initial.revision + 1);
-  await assert.rejects(f.http.patchAssistant({ ...input, patch: { workerConcurrency: 5 } }, owner), { code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
+  await assert.rejects(f.http.patchAssistant({ ...input, patch: { maintenance: { intervalHours: 5 } } }, owner), { code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
   await f.reopenManagement();
   assert.deepEqual(await f.http.patchAssistant(input, owner), first);
-  await assert.rejects(f.http.patchAssistant({ ...input, patch: { workerConcurrency: 5 } }, owner), { code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
+  await assert.rejects(f.http.patchAssistant({ ...input, patch: { maintenance: { intervalHours: 5 } } }, owner), { code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
   assert.equal((await f.store.getConfig()).revision, initial.revision + 1);
-  const noRevision = { patch: { workerConcurrency: 5 }, requestId: 'save-without-revision' };
+  const noRevision = { patch: { maintenance: { intervalHours: 5 } }, requestId: 'save-without-revision' };
   const second = await f.http.patchAssistant(noRevision, owner);
   assert.deepEqual(await f.http.patchAssistant(noRevision, owner), second);
   await f.reopenManagement();
   assert.deepEqual(await f.http.patchAssistant(noRevision, owner), second);
-  await assert.rejects(f.http.patchAssistant({ ...noRevision, patch: { workerConcurrency: 6 } }, owner), { code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
+  await assert.rejects(f.http.patchAssistant({ ...noRevision, patch: { maintenance: { intervalHours: 6 } } }, owner), { code: 'SETTINGS_IDEMPOTENCY_CONFLICT' });
   assert.equal((await f.store.getConfig()).revision, initial.revision + 2);
 });
 
 test('cleanup HTTP binds manifest and operation type, archives only its subset, and restores with CAS', async t => {
   const f = await fixture(t); f.task('one'); f.task('two');
   const call = input => f.http.cleanup(input, owner);
-  const preview = call({ action: 'taskCleanupPreview', taskIds: ['one', 'two'] });
+  const preview = await call({ action: 'taskCleanupPreview', taskIds: ['one', 'two'] });
   const archive = { action: 'taskCleanupCommit', previewId: preview.previewId, manifestHash: preview.manifestHash,
     selectedTaskIds: ['one'], requestId: 'archive-http' };
-  assert.throws(() => call({ ...archive, manifestHash: 'different', confirmedBy: true }), { code: 'CLEANUP_CONFLICT' });
-  assert.throws(() => call({ ...archive, action: 'taskCleanupRestore' }), { code: 'CLEANUP_CONFLICT' });
-  assert.throws(() => call({ ...archive, selectedTaskIds: ['missing'] }), { code: 'CLEANUP_CONFIRMATION_REQUIRED' });
+  await assert.rejects(call({ ...archive, manifestHash: 'different', confirmedBy: true }), { code: 'CLEANUP_CONFLICT' });
+  await assert.rejects(call({ ...archive, action: 'taskCleanupRestore' }), { code: 'CLEANUP_CONFLICT' });
+  await assert.rejects(call({ ...archive, selectedTaskIds: ['missing'] }), { code: 'CLEANUP_CONFIRMATION_REQUIRED' });
   assert.throws(() => f.tasks.update({ kind: 'task', id: 'two', operation: 'delete', version: 0 }), { code: 'CLEANUP_PREVIEW_REQUIRED' });
-  const archived = call(archive);
-  assert.deepEqual(call(archive), archived);
-  assert.throws(() => call({ ...archive, selectedTaskIds: ['two'] }), { code: 'IDEMPOTENCY_CONFLICT' });
+  const archived = await call(archive);
+  assert.deepEqual(await call(archive), archived);
+  await assert.rejects(call({ ...archive, selectedTaskIds: ['two'] }), { code: 'IDEMPOTENCY_CONFLICT' });
   assert.deepEqual(f.store.orchestration.listTasks({ archived: false }).map(row => row.id), ['two']);
-  let restore = call({ action: 'taskCleanupRestorePreview', taskIds: ['one'] });
+  let restore = await call({ action: 'taskCleanupRestorePreview', taskIds: ['one'] });
   let restoreInput = { action: 'taskCleanupRestore', previewId: restore.previewId, manifestHash: restore.manifestHash,
     selectedTaskIds: ['one'], requestId: 'restore-http' };
-  assert.throws(() => call({ ...restoreInput, action: 'taskCleanupCommit' }), { code: 'CLEANUP_CONFLICT' });
-  f.tasks.update({ kind: 'task', id: 'one', operation: 'rename', title: 'Changed', version: 1 });
-  assert.throws(() => call(restoreInput), { code: 'CLEANUP_CONFLICT' });
-  restore = call({ action: 'taskCleanupRestorePreview', taskIds: ['one'] });
+  await assert.rejects(call({ ...restoreInput, action: 'taskCleanupCommit' }), { code: 'CLEANUP_CONFLICT' });
+  f.tasks.update({ kind: 'task', id: 'one', operation: 'rename', title: 'Changed', version: 0 });
+  await assert.rejects(call(restoreInput), { code: 'CLEANUP_CONFLICT' });
+  restore = await call({ action: 'taskCleanupRestorePreview', taskIds: ['one'] });
   restoreInput = { ...restoreInput, previewId: restore.previewId, manifestHash: restore.manifestHash };
-  const restored = call(restoreInput);
-  assert.deepEqual(call(restoreInput), restored);
+  const restored = await call(restoreInput);
+  assert.deepEqual(await call(restoreInput), restored);
   assert.equal(f.database.meta('task-presentation:task:one').title, 'Changed');
-  assert.equal(call({ action: 'taskCleanupHistory', taskId: 'one' }).history.length, 2);
+  assert.equal((await call({ action: 'taskCleanupHistory', taskId: 'one' })).history.length, 2);
 });
 
 test('settings HTTP read and history redact secrets and reject secret or blocked edits', async t => {

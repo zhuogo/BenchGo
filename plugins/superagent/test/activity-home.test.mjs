@@ -116,8 +116,8 @@ test('home and drawer share requests; background pages pause and last unsubscrib
   const stopHome = store.subscribe(() => {}), stopDrawer = store.subscribe(() => {});
   await flush();
   assert.deepEqual(calls.map(call => call.action), ['tasks', 'tasks', 'goalList']);
-  assert.deepEqual(calls[0].args, { archived: false });
-  assert.deepEqual(calls[1].args, { archived: true });
+  assert.deepEqual(calls[0].args, { archived: false, limit: 1000, offset: 0 });
+  assert.deepEqual(calls[1].args, { archived: true, limit: 1000, offset: 0 });
   assert.equal(store.getSnapshot().rows.length, 2);
   assert.equal(env.timers.size, 1);
   env.document.hidden = true; env.document.dispatchEvent(new Event('visibilitychange'));

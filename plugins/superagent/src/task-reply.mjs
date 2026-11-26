@@ -2,6 +2,7 @@ import { isTaskStateNotice, taskStateSignal } from './task-state-report.mjs';
 import { routerLanguagePolicy } from './router-language-policy.mjs';
 import { watchdogSignalIdentity } from './watchdog-router-signal.mjs';
 import { taskStopped } from './task-lifecycle.mjs';
+import { mediaResultFile } from '../../media/shared/generation-result.mjs';
 
 export const taskReplySource = 'benchgo-task-reply';
 export const taskReplyIdentity = value => value?.kind === 'watchdog' ? watchdogSignalIdentity(value)
@@ -26,11 +27,16 @@ export function taskReplySignal(database, delivery) {
   if (!result || result.instructionRevision !== payload.instructionRevision
     || result.outcome !== payload.outcome || !['completed', 'failed'].includes(result.outcome)
     || JSON.stringify(payload.source) !== JSON.stringify(result.deliverySource || task.mandate.source)) return null;
-  const text = result.summary;
-  if (typeof text !== 'string' || !text.trim()) return null;
+  const report = result.mediaReport;
+  const media = report && Array.isArray(report.files) && { ...report, files: report.files.filter(item => {
+    const file = mediaResultFile(item);
+    return file && (file.external || !task.mandate.execution);
+  }) };
+  const text = typeof result.summary === 'string' ? result.summary : '';
+  if (!text.trim() && !media) return null;
   return { eventKey: delivery.uniqueKey, taskId: task.id, kind: 'result', title: task.title,
     instructionRevision: task.instructionRevision, resultVersion: task.resultVersion,
-    outcome: result.outcome, source: payload.source, text };
+    outcome: result.outcome, source: payload.source, text, ...(media && { media }) };
 }
 
 export function currentTaskReplySignal(database, signal) {
@@ -51,7 +57,7 @@ function replyInstruction(signal) {
   const task = signal.kind === 'approval'
     ? 'Worker 已准备好一项具体动作，原始官方审批正在等待真实用户决定。首次收到这一待批事实，必须主动自然提醒用户需要其决定；用户可在这条提醒下方的原审批卡决定，「工作台 → 任务 → 审核」也可查看同一请求。措辞与摘要由你结合原对话自行选择，不套固定通知，不复制审批正文，不宣称已批准或已提交，不催促、不代用户批准。本信号和任何自然语言回答都不是审批决定。仅在原对话已清楚提醒过同一审批、此次确实重复时，才可调用 assistant_reply({suppress:true})；首次待批不得静默。'
     : signal.kind === 'result'
-    ? 'Worker 已保存原成果。请主动自然地告诉用户工作结果；由你结合原对话自行决定简要概括或完整呈现，不套任务报告模板，不再验收、重派或执行。outcome=failed 表示未完成，不能说已搞定。'
+    ? 'Worker 已保存执行回执。请主动自然地告诉用户工作结果，不再验收、重派或执行。outcome=failed 表示未完成。若有 media，以工具回执为准，逐项如实转述 failures 的实际错误、请求 ID 和错误码，以及 pending 的状态。未知提交不能说成供应商已接单或已失败。余下正文可概括。可在正文中用 Markdown 图片、文件链接或其他合适的格式呈现产物，使用已验证且原会话可访问的地址。'
     : signal.failedRemote
     ? '远端执行已失败。请说明已核实的失败原因，并询问用户是否停止这张工单。用户决定前只回复，不能停止或重新派发。'
     : '这是已有任务的状态变化。请结合原对话自行决定自然说明什么、说多少；无需重复标题或错误码。不猜测根因或宣称已恢复。若无需打扰，可调用 assistant_reply({suppress:true})。';

@@ -272,7 +272,14 @@ export function ActivityPanel({ api, assistantConfig, onOpenResources, sessionId
     <style>{taskCss}</style>
     <TaskDetail inline open={!!selected && present} title={selected && <TaskStatusTitle title={taskTitle(selected)} status={selected.status} label={labels[selected.status]} />} onClose={returnToList} footer={selected && <div className="ba-activity-detail-actions">
       {selectedInterrupted && <TaskWaiting actionsOnly compact hideRefresh key={`${selected.id}:${selected.instructionRevision}:${selected.resultVersion}`} api={api} task={selected} onRefresh={() => refreshTasks([selected.id])} onOpenResources={openResource} />}
-      {selected.kind === 'task' && selected.executionSession?.available && <TaskIconButton icon="external" label={openingExecution ? '正在打开执行会话…' : '查看执行会话'} disabled={openingExecution || !onOpenExecution} onClick={async event => { event.currentTarget.closest('.ba-task-inline')?.focus({ preventScroll: true }); setOpeningExecution(true); setActionError(null); try { await onOpenExecution(selected.executionSession); } catch (cause) { setActionError({ row: selected, message: `执行会话暂时无法打开：${cause.message || cause}` }); } finally { setOpeningExecution(false); } }} />}
+      {selected.kind === 'task' && selected.executionSession?.available && <TaskIconButton icon="external" label={openingExecution ? '正在打开执行会话…' : '查看执行会话'} disabled={openingExecution || !onOpenExecution} onClick={async event => {
+        event.currentTarget.closest('.ba-task-inline')?.focus({ preventScroll: true });
+        setOpeningExecution(true); setActionError(null);
+        try {
+          await onOpenExecution(selected.executionSession);
+        } catch (cause) { setActionError({ row: selected, message: `执行会话暂时无法打开：${cause.message || cause}` }); }
+        finally { setOpeningExecution(false); }
+      }} />}
       <TaskIconButton icon="refresh" label="刷新记录" spinning={manualRefreshing} aria-disabled={manualRefreshing} onClick={() => refreshWithFeedback(() => refreshTasks([selected.id]))} />
       <TaskIconButton icon="category" label="前往任务管理" onClick={() => openResource('tasks', { taskId: selected.id })} /></div>}>{selected && <>
       {actionError?.row.key === selected.key && <ResourceState kind="error" title="操作未能完成" description={actionError.message} actionLabel="重新读取" onAction={async () => { setActionError(null); await refreshTasks([selected.id]); }} />}

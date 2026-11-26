@@ -98,7 +98,7 @@ export function quietChatRows(history = {}, threadId = 'main', session = {}, cha
     seenSeq.add(node.seq);
     if (node.messageId) admittedMessages.add(node.messageId);
     const content = (node.content || []).filter(block => ['text', 'image', 'file'].includes(block.type));
-    rows.push({ key: `live-user:${node.seq}`, role: 'user', seq: node.seq, rpcId: requestId, time: node.time,
+    rows.push({ key: `live-user:${node.seq}`, ...(node.messageId ? { id: node.messageId } : {}), role: 'user', seq: node.seq, rpcId: requestId, time: node.time,
       text: content.filter(block => block.type === 'text').map(block => block.text).join('\n'), content, provisional: true });
   }
   for (const [target, placement] of [['next-step', 'steering'], ['next-turn', 'queued']]) {

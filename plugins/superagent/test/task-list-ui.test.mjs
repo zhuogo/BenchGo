@@ -34,9 +34,10 @@ test('goal deletion retains its versioned update contract', async () => {
   assert.deepEqual(h.archived, []);
   assert.deepEqual(h.restored, []);
 });
-test('terminal tasks open archive review with the exact row instead of deleting it', async () => {
-  for (const state of [{ status: 'completed' }, { status: 'waiting', executionControl: { stopped: true } }]) {
-    const h = harness(), row = { id: 't1', ...state, instructionRevision: 2, taskMeta: { version: 4 }, taskCanOrganize: true };
+test('tasks with an execution session open archive review with the exact row instead of deleting it', async () => {
+  for (const state of [{ status: 'completed' }, { status: 'waiting', executionControl: { stopped: true } }, { status: 'running' }]) {
+    const h = harness(), row = { id: 't1', ...state, instructionRevision: 2, taskMeta: { version: 4 }, taskCanOrganize: true,
+      executionSession: { sessionId: 'session-t1' } };
     const nodes = h.render({ row }), archive = nodes.find(n => n.props.icon === 'archive');
     assert.equal(archive.props.label, '归档');
     assert.equal(archive.props.disabled, false);
@@ -96,17 +97,19 @@ test('completed tasks show a read-only status icon and preserve details without 
   assert(nodes.some(n => n.props.className === 'ba-task-open'));
   assert.equal(nodes.some(n => /is-complete/.test(n.props.className || '')), false);
 });
-test('active work cannot be completed or archived from the list', () => {
-  const nodes = harness().render({ row: { id: 't1', status: 'running', taskCanOrganize: false } });
+test('active work cannot be completed from the list but can still be archived', () => {
+  const nodes = harness().render({ row: { id: 't1', status: 'running', taskCanOrganize: false,
+    executionSession: { sessionId: 'session-t1' } } });
   assert.equal(nodes.some(n => n.props.type === 'checkbox'), false);
-  assert.equal(nodes.find(n => n.props.icon === 'archive').props.disabled, true);
+  assert.equal(nodes.find(n => n.props.icon === 'archive').props.disabled, false, 'archival stops the work itself');
   assert.equal(nodes.some(n => n.props.icon === 'trash'), false);
 });
-test('archive requires terminal state and settled execution even when presentation is editable', () => {
-  for (const status of ['running', 'waiting', undefined]) {
+test('only a Task with no execution session cannot be archived', () => {
+  for (const status of ['running', 'waiting', 'completed', undefined]) {
     const nodes = harness().render({ row: { id: 't1', status, taskCanOrganize: true } });
-    assert.equal(nodes.find(n => n.props.icon === 'archive').props.disabled, true, `cannot archive ${status}`);
+    assert.equal(nodes.find(n => n.props.icon === 'archive').props.disabled, true, `nothing to archive for ${status}`);
   }
-  const nodes = harness().render({ row: { id: 't1', status: 'waiting', executionControl: { stopped: true }, taskCanOrganize: false } });
-  assert.equal(nodes.find(n => n.props.icon === 'archive').props.disabled, true);
+  const nodes = harness().render({ row: { id: 't1', status: 'waiting', executionControl: { stopped: true }, taskCanOrganize: false,
+    executionSession: { sessionId: 'session-t1' } } });
+  assert.equal(nodes.find(n => n.props.icon === 'archive').props.disabled, false);
 });

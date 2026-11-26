@@ -9,7 +9,6 @@ import { readAssessmentPolicy } from '../src/assessment-policy.mjs';
 import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 import { createDesktopTaskAccess } from '../src/desktop-task-access.mjs';
 import { createRouterTools } from '../src/router-tools.mjs';
-import { createTaskCleanupContinuation } from '../src/task-cleanup-continuation.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { taskReplyInstruction, taskReplySignal } from '../src/task-reply.mjs';
@@ -68,9 +67,13 @@ async function fixture(t, { external = false } = {}) {
     async tick() { clock += 100000; await owner.tick(); },
     async restartOwner() { await owner.stop(); owner = create(); },
     offline(value) { offline = value; },
+    // Organization delegates to the official registry, exactly as the Host does.
     get taskCleanup() {
-      runtimeStore ??= createAssistantRuntimeStore({ filename: store.paths.database });
-      return runtimeStore.taskCleanup;
+      const archive = archives ?? this.archive();
+      database.installArchiveRuntime({ archivedSessionIds: () => [],
+        archive: (sessionId, target) => archive.archiveTask({ taskId: target.taskId, worker: { ...target, sessionId }, requestId: target.requestId }),
+        unarchive: (sessionId, target) => archive.unarchiveTask({ taskId: target.taskId, worker: { ...target, sessionId }, requestId: target.requestId }) });
+      return database.taskCleanup;
     },
     archive() {
       runtimeStore ??= createAssistantRuntimeStore({ filename: store.paths.database });
@@ -78,11 +81,6 @@ async function fixture(t, { external = false } = {}) {
         signal: new AbortController().signal, wake() {} });
       archives = archive;
       return archive;
-    },
-    cleanup() {
-      runtimeStore ??= createAssistantRuntimeStore({ filename: store.paths.database });
-      const taskManagement = createTaskManagement({ database: runtimeStore, orchestration: database });
-      return createTaskCleanupContinuation({ database: runtimeStore, orchestration: database, taskManagement });
     },
     scheduler() {
       return runtime ||= createOrchestrationRuntime({ ctx, store, execute: async () => assert.fail('Remote work must use B') });
@@ -368,7 +366,7 @@ test('archiving from the task owner persists both records before the official Wo
     assert.equal(worker.sessionId, instance.agent.id);
     assert.deepEqual(await archive.archiveTask({ taskId: app.task.id, worker, requestId: 'archive-worker' }), { archived: true });
     assert.equal(app.database.getTask(app.task.id).archived, true);
-    assert.equal(app.database.getTask(app.task.id).executionControl.stopped, false);
+    assert.equal(app.database.getTask(app.task.id).executionControl.stopped === true, false);
     assert.equal(app.official.services.workspaceRegistry.archivedSessionIds.includes(worker.sessionId), true);
     assert.equal(instance.disposed, undefined);
   } finally { release(); }
@@ -388,11 +386,17 @@ test('the original task host catches up with a Worker archived while disconnecte
   await archive.tick();
   assert.equal(app.database.getTask(app.task.id).archived, false);
   app.offline(false);
+  const persist = app.database.recordRemoteTaskArchive;
+  app.database.recordRemoteTaskArchive = () => { throw new Error('Temporary archive write failure'); };
+  try {
+    await app.archive().tick();
+    assert.equal(app.database.getTask(app.task.id).archived, false);
+  } finally { app.database.recordRemoteTaskArchive = persist; }
   await app.archive().tick();
   assert.equal(app.database.getTask(app.task.id).archived, true);
-  const receipt = app.database.getTask(app.task.id).cleanup;
+  await registry.unarchiveSession(instance.agent.id);
   await app.archive().tick();
-  assert.deepEqual(app.database.getTask(app.task.id).cleanup, receipt);
+  assert.equal(app.database.getTask(app.task.id).archived, false);
 });
 
 test('a delayed archive on an older requirement does not archive the revised task', async t => {
@@ -412,59 +416,24 @@ test('replaying the same archive command after restore will not rearchive the Wo
   await instance.step(); await app.tick();
   const archive = app.archive(), worker = archive.describeTask(app.task.id);
   const input = { taskId: app.task.id, worker, requestId: 'same-archive' };
+  const scope = { owner: 'desktop-owner', mode: 'global' }, ids = [app.task.id];
+  const cleanup = app.taskCleanup;
+  const confirm = (preview, callId) => cleanup.createConfirmation({ previewId: preview.previewId, manifestHash: preview.manifestHash,
+    ids, actorId: scope.owner, source: { sessionId: 'owner-session', callId } });
+  const first = cleanup.previewCleanup({ scope, ids });
+  const receipt = await cleanup.commitCleanup({ previewId: first.previewId, ids, confirmedBy: confirm(first, 'archive'), requestId: 'archive' });
+  assert.equal(registry.archivedSessionIds.includes(worker.sessionId), true);
+  // A direct replay must still resolve to the remote session's current state.
   assert.deepEqual(await archive.archiveTask(input), { archived: true });
   await waitFor(() => instance.disposed); await app.tick();
-  const previous = app.taskCleanup.cleanupHistory({ taskId: app.task.id })[0];
-  const scope = { owner: 'desktop-owner', mode: 'global' }, ids = [app.task.id];
-  const preview = app.taskCleanup.previewRestore({ scope, receiptId: previous.receiptId, ids });
-  const confirmedBy = app.taskCleanup.createConfirmation({ previewId: preview.previewId, manifestHash: preview.manifestHash,
-    ids, actorId: scope.owner, source: { sessionId: 'owner-session', callId: 'restore' } });
-  app.taskCleanup.restoreCleanup({ previewId: preview.previewId, ids, confirmedBy, requestId: 'restore' });
-  await registry.unarchiveSession(worker.sessionId);
+  const restore = cleanup.previewRestore({ scope, receiptId: receipt.receiptId, ids });
+  await cleanup.restoreCleanup({ previewId: restore.previewId, ids, confirmedBy: confirm(restore, 'restore'), requestId: 'restore' });
+  assert.equal(app.database.getTask(app.task.id).archived, false);
   assert.deepEqual(await archive.archiveTask(input), { archived: false });
   assert.equal(registry.archivedSessionIds.includes(worker.sessionId), false);
   assert.deepEqual(await archive.archiveTask({ ...input, requestId: 'new-archive' }), { archived: true });
   assert.equal(registry.archivedSessionIds.includes(worker.sessionId), true);
-  assert.notEqual(app.taskCleanup.cleanupHistory({ taskId: app.task.id })[0].receiptId, previous.receiptId);
-});
-
-for (const completedOffline of [false, true]) test(`offline stop and archive settles the local Task when the peer ${completedOffline ? 'completes offline' : 'is still running'}`, async t => {
-  const app = await fixture(t);
-  const instance = app.official.instances[0];
-  await instance.step();
-  await app.tick();
-  app.offline(true);
-  await app.tick();
-  const cleanup = app.cleanup();
-  const operation = cleanup.start({ ids: [app.task.id] }, {
-    agent: { id: 'owner-session' },
-    instruction: { message: { id: 'archive-offline', source: { kind: 'user' },
-      content: [{ type: 'text', text: '停止并归档。' }] } },
-  });
-  await cleanup.tick();
-  assert.equal(cleanup.pending({ operationId: operation.operationId }).items[0].status, 'completed');
-  const archived = app.database.getTask(app.task.id);
-  assert.equal(archived.archived, true);
-  assert.equal(archived.executionControl.stopped, true);
-  assert.equal(app.database.runs(app.assignment.id)[0].state, 'cancelled');
-  const cancel = app.database.remoteControlCommand(app.assignment.id);
-  assert.equal(cancel.state, 'pending');
-  await app.tick();
-  assert.equal(app.database.remoteControlCommand(app.assignment.id).state, 'pending');
-  if (completedOffline) {
-    await instance.finish();
-    await waitFor(() => instance.disposed);
-  }
-  await app.restartOwner();
-  app.offline(false);
-  await app.tick();
-  await waitFor(() => instance.disposed);
-  const sent = app.calls.filter(row => row.operation === 'control' && row.control === 'cancel');
-  assert.deepEqual(sent.map(row => row.requestId), [cancel.requestId, cancel.requestId]);
-  assert.equal(app.database.remoteControlCommand(app.assignment.id).state, 'receipted');
-  if (completedOffline) assert.equal(app.database.remoteControlCommand(app.assignment.id).receipt.code, 'EXECUTION_INACTIVE');
-  assert.equal(app.database.getTask(app.task.id).archived, true);
-  assert.equal(app.database.results(app.task.id).length, 0);
+  assert.equal(app.calls.filter(row => row.operation === 'submit').length, 1);
 });
 
 for (const first of ['revision', 'question']) test(`official ${first} first does not hold a pending revision behind an old question`, async t => {

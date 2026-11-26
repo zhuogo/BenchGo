@@ -1,7 +1,7 @@
 import { assertTaskStatus, assignmentExecutionUncertain, taskExecutionBlocked, taskStopped, taskPaused, executionStatusText } from './task-lifecycle.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { migrateTaskStorage } from './task-storage-migration.mjs';
-import { taskArchiveSql, taskExecutionExitedSql, taskIsArchived, taskPresentationKey } from './task-archive.mjs';
+import { taskArchiveSql, taskExecutionExitedSql } from './task-archive.mjs';
 import { installTaskCleanupStore } from './task-cleanup-store.mjs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -48,9 +48,18 @@ const awaitingAnswer = `EXISTS (
     AND a.state IN ('claimed','waiting') AND r.state IN ('submitted','running','verifying','waiting')
     AND json_extract(r.payload,'$.sessionId')=q.session_id
 )`;
-const taskSelect = `SELECT sa_tasks.*, ${awaitingAnswer} AS awaiting_answer FROM sa_tasks`;
+const archivedFlag = `EXISTS (SELECT 1 FROM sa_task_archive arch WHERE arch.task_id=sa_tasks.id)`;
+const taskSelect = `SELECT sa_tasks.*, ${awaitingAnswer} AS awaiting_answer, ${archivedFlag} AS archived FROM sa_tasks`;
 const taskStatus = `CASE WHEN status='running' AND ${awaitingAnswer} THEN 'waiting' ELSE status END`;
 const safeLimit = (value, fallback, max) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
+/** Latest Run session per Task: the one carrying archival identity. */
+function archiveSessionCandidates(db) {
+  return db.prepare(`SELECT a.task_id AS taskId, json_extract(r.payload,'$.sessionId') AS sessionId, json_extract(a.payload,'$.executor') AS executor
+    FROM sa_runs r JOIN sa_assignments a ON a.id=r.assignment_id WHERE r.fence=a.fence
+    AND a.id=(SELECT latest.id FROM sa_assignments latest WHERE latest.task_id=a.task_id ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1)
+    AND r.id=(SELECT latest.id FROM sa_runs latest WHERE latest.assignment_id=a.id AND latest.fence=a.fence ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1)`)
+    .all().filter(row => row.sessionId);
+}
 
 /**
  * Durable single-machine SuperAgent orchestration control plane.
@@ -139,7 +148,20 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
       seq INTEGER PRIMARY KEY AUTOINCREMENT, outbox_id TEXT NOT NULL REFERENCES sa_outbox(id), payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sa_subscription_applied(
       trigger_id TEXT PRIMARY KEY REFERENCES sa_triggers(id), assignment_id TEXT NOT NULL REFERENCES sa_assignments(id),
-      session_id TEXT NOT NULL, message_id TEXT NOT NULL, applied_at TEXT NOT NULL);`);
+      session_id TEXT NOT NULL, message_id TEXT NOT NULL, applied_at TEXT NOT NULL);
+    -- Derived projection of the official Workspace archive set onto Tasks. Never
+    -- an independent intent: only worker-archive writes it from observed facts.
+    CREATE TABLE IF NOT EXISTS sa_task_archive(
+      task_id TEXT PRIMARY KEY REFERENCES sa_tasks(id), session_id TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS sa_task_archive_session ON sa_task_archive(session_id);
+    -- A remote device owns its own archive set, so an authenticated receipt is
+    -- the only local observation of it. Kept apart from the derived projection.
+    CREATE TABLE IF NOT EXISTS sa_task_archive_remote(
+      task_id TEXT PRIMARY KEY REFERENCES sa_tasks(id), session_id TEXT NOT NULL, updated_at TEXT NOT NULL,
+      archived INTEGER NOT NULL DEFAULT 1, cursor INTEGER NOT NULL DEFAULT 0);`);
+  const remoteArchiveColumns = new Set(db.prepare('PRAGMA table_info(sa_task_archive_remote)').all().map(row => row.name));
+  if (!remoteArchiveColumns.has('archived')) db.exec('ALTER TABLE sa_task_archive_remote ADD COLUMN archived INTEGER NOT NULL DEFAULT 1');
+  if (!remoteArchiveColumns.has('cursor')) db.exec('ALTER TABLE sa_task_archive_remote ADD COLUMN cursor INTEGER NOT NULL DEFAULT 0');
   let closed = false, executionFacts;
   const sentDeliveryListeners = new Set(), resultNotificationListeners = new Set();
   // A store call made inside another store transaction joins it; the outermost scope commits or rolls back everything.
@@ -154,11 +176,22 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
     executionFacts?.flushExecutionFactChanges();
     return result;
   };
-  const taskCleanup = installTaskCleanupStore({ db, transaction: tx });
+  // The official Workspace registry owns archival; the host installs the exact
+  // calls here so no store method has to guess what an archive means. The
+  // projection is rebuilt from the observed set after each exact call.
+  let archiveSession = null, unarchiveSession = null, archiveSetReader = () => [];
+  const requireArchive = () => {
+    if (typeof archiveSession !== 'function' || typeof unarchiveSession !== 'function')
+      throw Object.assign(new Error('官方会话归档服务尚未就绪'), { code: 'ARCHIVE_UNAVAILABLE' });
+    return { archive: archiveSession, unarchive: unarchiveSession };
+  };
+  const taskCleanup = installTaskCleanupStore({ db, transaction: tx,
+    archive: async (sessionId, target) => { await requireArchive().archive(sessionId, target); api.syncTaskArchive(archiveSetReader()); },
+    unarchive: async (sessionId, target) => { await requireArchive().unarchive(sessionId, target); api.syncTaskArchive(archiveSetReader()); } });
   let hostIdentity;
   try { hostIdentity = initializeOwnerHostId(db, ownerHostId); } catch (error) { db.close(); throw error; }
   const executionExited = db.prepare(`SELECT ${taskExecutionExitedSql()} AS exited FROM sa_tasks WHERE id=?`);
-  const taskMetadata = db.prepare('SELECT value FROM task_meta WHERE key=?');
+  const archivedTaskOf = db.prepare('SELECT 1 FROM sa_task_archive WHERE task_id=?');
   const threadRow = threadId => db.prepare('SELECT * FROM sa_threads WHERE id=?').get(threadId);
   const triggerRow = triggerId => db.prepare('SELECT * FROM sa_triggers WHERE id=?').get(triggerId);
   const threadValue = row => row && ({ id: row.id, source: { type: row.source_type, id: row.source_id }, metadata: parse(row.metadata), createdAt: row.created_at });
@@ -173,7 +206,9 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
     return { id: row.id, ownerHostId: hostIdentity, threadId: row.thread_id, title: normalizeTaskTitle(row.title, row.target),
       target: row.target, acceptance: row.acceptance, instructionRevision: row.instruction_revision, adjustmentOfTaskId: row.adjustment_of_task_id || null,
       liveSummary: taskLiveSummary(row, status), status, executionExited: exited, executionControl,
-      archived: taskIsArchived({ executionExited: exited, status, instructionRevision: row.instruction_revision, executionControl }, parse(taskMetadata.get(taskPresentationKey(row.id))?.value || '{}')),
+      // Rows read through taskSelect carry the projection column; raw domain
+      // rows resolve it on demand so no caller can invent an archived state.
+      archived: row.archived === undefined ? !!archivedTaskOf.get(row.id) : row.archived === 1,
       pauseReason: row.pause_reason ? parse(row.pause_reason) : null, continuationWait: row.continuation_wait ? parse(row.continuation_wait) : null,
       mandate: { ...api.currentTaskMandate(row.id, parse(row.mandate)), target: row.target, acceptance: row.acceptance },
       createdByDecision: row.created_by_decision, createdAt: row.created_at, updatedAt: row.updated_at, resultVersion: row.result_version };
@@ -264,6 +299,15 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
   const api = {
     path,
     ownerHostId: () => hostIdentity,
+    /** The host installs the official Workspace registry calls here. */
+    installArchiveRuntime({ archive, unarchive, archivedSessionIds } = {}) {
+      if (typeof archive !== 'function' || typeof unarchive !== 'function') throw new TypeError('Archive runtime requires official archive and unarchive calls');
+      if (typeof archivedSessionIds !== 'function') throw new TypeError('Archive runtime requires the official archive set reader');
+      archiveSession = archive; unarchiveSession = unarchive; archiveSetReader = archivedSessionIds;
+    },
+    taskCleanup,
+    latestArchiveReceipt: taskId => taskCleanup.latestArchiveReceipt(taskId),
+    archivePointers: taskIds => taskCleanup.archivePointers(taskIds),
     onSentDelivery(listener) {
       if (typeof listener !== 'function') throw new TypeError('Delivery observer must be a function');
       sentDeliveryListeners.add(listener);
@@ -272,19 +316,20 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
     hasActiveExecution: () => !!db.prepare("SELECT 1 FROM sa_assignments WHERE state IN ('claimed','uncertain') LIMIT 1").get(),
     // These read-only probes avoid rebuilding policy/documents while idle. The
     // transactional claim and renewal still perform the authoritative checks.
-    hasAssignmentWork: ({ now = Date.now() } = {}) => !!db.prepare("SELECT 1 FROM sa_assignments WHERE state='queued' OR (state='claimed' AND lease_until<=?) LIMIT 1").get(now),
+    hasAssignmentWork: ({ now = Date.now() } = {}) => !!db.prepare(`SELECT 1 FROM sa_assignments a JOIN sa_tasks ON sa_tasks.id=a.task_id
+      WHERE (a.state='queued' AND NOT ${taskArchiveSql()}) OR (a.state='claimed' AND a.lease_until<=?) LIMIT 1`).get(now),
     hasAnsweredAttention: () => !!db.prepare("SELECT 1 FROM sa_assignments a JOIN sa_attentions q ON q.assignment_id=a.id WHERE a.state='waiting' AND COALESCE(json_extract(a.payload,'$.executor'),'')!='remote' AND q.answer_trigger_id IS NOT NULL LIMIT 1").get(),
     hasPendingResultRecovery: ({ now = Date.now() } = {}) => !!db.prepare(`SELECT 1 FROM sa_assignments a JOIN sa_runs r ON r.assignment_id=a.id AND r.fence=a.fence
       WHERE (a.state!='claimed' OR COALESCE(a.lease_until,0)<=?) AND r.state IN ('uncertain','cancelled','verifying','submitted','running','completed','failed')
       AND length(COALESCE(json_extract(r.payload,'$.evidence.summary'),''))>0
       AND COALESCE(json_extract(a.payload,'$.savedResultRecovery.nextAttemptAt'),0)<=?
       AND (json_extract(r.payload,'$.resultSaved') IS NULL OR json_extract(r.payload,'$.resultSaved.completionPending')=1 OR json_extract(r.payload,'$.resultSaved.notificationPending')=1) LIMIT 1`).get(now, now),
-    schedulingTasks: ({ limit = 1000 } = {}) => db.prepare(`SELECT t.* FROM sa_tasks t WHERE t.status!='completed' AND t.result_version=0
+    schedulingTasks: () => db.prepare(`SELECT t.* FROM sa_tasks t WHERE t.status!='completed' AND t.result_version=0
       AND COALESCE(json_extract(t.execution_control,'$.pauseRequested'),0)!=1 AND COALESCE(json_extract(t.execution_control,'$.paused'),0)!=1
       AND COALESCE(json_extract(t.execution_control,'$.stopRequested'),0)!=1 AND COALESCE(json_extract(t.execution_control,'$.stopped'),0)!=1
       AND (t.continuation_wait IS NULL OR json_extract(t.continuation_wait,'$.stage')='scheduling')
       AND NOT EXISTS (SELECT 1 FROM sa_assignments a WHERE a.task_id=t.id)
-      ORDER BY t.created_at,t.rowid LIMIT ?`).all(safeLimit(limit, 1000, 1000)).map(taskValue),
+      ORDER BY t.created_at,t.rowid`).all().map(taskValue),
     transaction: tx,
     createThread(input) { return tx(() => createThread(input)); },
     getThread(threadId) { return threadValue(threadRow(id(threadId, 'threadId'))); },
@@ -476,7 +521,56 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
     },
     createTask(input) { return tx(() => insertTask(input)); },
     getTask(taskId) { return taskValue(db.prepare(`${taskSelect} WHERE id=?`).get(id(taskId, 'taskId'))); },
-    currentArchiveWorker({ sessionId, device } = {}) {
+    /** The latest Run session representing a Task; archival is keyed by it. */
+    taskArchiveSession(taskId) {
+      return db.prepare(`SELECT json_extract(r.payload,'$.sessionId') AS sessionId FROM sa_runs r
+        JOIN sa_assignments a ON a.id=r.assignment_id WHERE a.task_id=? AND r.fence=a.fence
+        ORDER BY a.created_at DESC,a.rowid DESC,r.created_at DESC,r.rowid DESC LIMIT 1`).get(id(taskId, 'taskId'))?.sessionId || null;
+    },
+    /**
+     * Replace the projection from the authoritative official archive set. The
+     * caller passes observed ids only; this never decides archival on its own.
+     */
+    syncTaskArchive(archivedSessionIds) {
+      if (!Array.isArray(archivedSessionIds)) throw new Error('Archive projection requires observed session ids');
+      const archived = new Set(archivedSessionIds.filter(value => typeof value === 'string' && value));
+      return tx(() => {
+        const at = new Date().toISOString();
+        const remoteArchived = new Map(db.prepare('SELECT task_id,session_id FROM sa_task_archive_remote WHERE archived=1').all().map(row => [row.task_id, row.session_id]));
+        const seen = new Set();
+        for (const row of archiveSessionCandidates(db)) {
+          const taskId = row.taskId, sessionId = row.sessionId;
+          seen.add(taskId);
+          const wanted = row.executor === 'remote' ? remoteArchived.get(taskId) === sessionId : archived.has(sessionId);
+          const current = db.prepare('SELECT session_id FROM sa_task_archive WHERE task_id=?').get(taskId)?.session_id;
+          if (wanted && current !== sessionId)
+            db.prepare('INSERT INTO sa_task_archive(task_id,session_id,updated_at) VALUES (?,?,?) ON CONFLICT(task_id) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at')
+              .run(taskId, sessionId, at);
+          else if (!wanted && current !== undefined) db.prepare('DELETE FROM sa_task_archive WHERE task_id=?').run(taskId);
+        }
+        for (const taskId of db.prepare('SELECT task_id FROM sa_task_archive').all().map(row => row.task_id))
+          if (!seen.has(taskId)) db.prepare('DELETE FROM sa_task_archive WHERE task_id=?').run(taskId);
+        return db.prepare('SELECT COUNT(*) AS count FROM sa_task_archive').get().count;
+      });
+    },
+    /**
+     * A remote device owns its own session archive set. Its authenticated
+     * receipt is that set's observation for this Task, so it is remembered here
+     * and re-applied whenever the local projection is rebuilt.
+     */
+    recordRemoteTaskArchive(taskId, sessionId, { archived, cursor, archivedSessionIds = archiveSetReader() }) {
+      id(taskId, 'taskId'); id(sessionId, 'sessionId');
+      if (typeof archived !== 'boolean' || !Number.isSafeInteger(cursor) || cursor < 0) throw new Error('Invalid remote archive state');
+      return tx(() => {
+        db.prepare(`INSERT INTO sa_task_archive_remote(task_id,session_id,updated_at,archived,cursor) VALUES (?,?,?,?,?)
+          ON CONFLICT(task_id) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at,archived=excluded.archived,cursor=excluded.cursor
+          WHERE sa_task_archive_remote.session_id<>excluded.session_id OR sa_task_archive_remote.cursor<excluded.cursor
+            OR (sa_task_archive_remote.cursor=excluded.cursor AND sa_task_archive_remote.archived=1 AND excluded.archived=0)`)
+          .run(taskId, sessionId, new Date().toISOString(), Number(archived), cursor);
+        return api.syncTaskArchive(archivedSessionIds);
+      });
+    },
+    currentArchiveWorker({ sessionId, device, requireCurrentRevision = true } = {}) {
       if (typeof sessionId !== 'string' || !sessionId) return null;
       const remote = device && api.remoteExecutionBySession(sessionId);
       if (device && (!remote || remote.deviceId !== device.deviceId || remote.hostId !== device.hostId || remote.authorizationId !== device.authorizationId)) return null;
@@ -488,45 +582,9 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
       if (!owned) return null;
       const task = api.getTask(owned.task_id), assignment = api.getAssignment(owned.assignment_id);
       const run = api.runs(assignment.id).find(item => item.id === owned.run_id);
-      if (!task || assignment.instructionRevision !== task.instructionRevision && run.instructionRevision !== task.instructionRevision) return null;
+      if (!task || requireCurrentRevision && assignment.instructionRevision !== task.instructionRevision && run.instructionRevision !== task.instructionRevision) return null;
       if (remote && (remote.assignmentId !== assignment.id || remote.runId !== run.id || remote.fence !== assignment.fence)) return null;
       return { task, assignment, run, remote };
-    },
-    archiveWorkerTask({ sessionId, device, executionId, identity, instructionRevision, requestId }) {
-      return tx(() => {
-        const current = api.currentArchiveWorker({ sessionId, device });
-        if (!current) return null;
-        const { task, assignment, run, remote } = current;
-        if (instructionRevision !== undefined && instructionRevision !== task.instructionRevision) return null;
-        if (device && (instructionRevision === undefined || remote.executionId !== executionId || identity?.ownerHostId !== hostIdentity || identity.taskId !== task.id
-          || identity.assignmentId !== assignment.id || identity.runId !== run.id || identity.fence !== assignment.fence)) return null;
-        const previous = taskCleanup.receiptForRequest(requestId);
-        if (previous || task.archived) return previous;
-        const stopped = task.executionExited ? task : cancelTaskInternal(task.id);
-        return taskCleanup.archiveWorkerTask(stopped, { sessionId, requestId });
-      });
-    },
-    /** Identity guard for an exact stop-and-organize intent, independent of normal execution progress. */
-    taskCleanupExecutionStamp(taskId, { excludeTriggerId, legacy = false } = {}) {
-      id(taskId, 'taskId');
-      if (excludeTriggerId !== undefined) id(excludeTriggerId, 'excludeTriggerId');
-      // A single SQL snapshot also avoids mixing identities across a concurrent
-      // claim/input transaction. State, leases, stop controls and applied receipts
-      // deliberately do not participate. Remote Run owners are observer leases.
-      const row = db.prepare(`SELECT pause_reason,
-        (SELECT json_group_array(json_array(id,fence)) FROM
-          (SELECT id,fence FROM sa_assignments WHERE task_id=sa_tasks.id ORDER BY id)) AS assignments,
-        (SELECT json_group_array(json_array(id,fence,owner)) FROM
-          (SELECT r.id,r.fence,CASE WHEN ?=0 AND json_extract(a.payload,'$.executor')='remote' THEN NULL ELSE r.owner END AS owner
-            FROM sa_runs r JOIN sa_assignments a ON a.id=r.assignment_id
-            WHERE a.task_id=sa_tasks.id ORDER BY r.id)) AS runs,
-        (SELECT json_group_array(json_array(id,trigger_id,kind,fingerprint,snapshot_hash)) FROM
-          (SELECT id,trigger_id,kind,fingerprint,benchgo_cleanup_snapshot_hash(snapshot) AS snapshot_hash
-            FROM sa_task_inputs WHERE task_id=sa_tasks.id AND trigger_id IS NOT ? ORDER BY id)) AS inputs
-        FROM sa_tasks WHERE id=?`).get(legacy ? 1 : 0, excludeTriggerId ?? null, taskId);
-      if (!row) throw fail('TASK_NOT_FOUND', 'Task does not exist');
-      const digest = createHash('sha256').update(json([taskId, row.pause_reason, row.assignments, row.runs, row.inputs])).digest('hex');
-      return legacy ? digest : `v2:${digest}`;
     },
     cancelTask(taskId, { detachRemote = false } = {}) {
       return tx(() => cancelTaskInternal(taskId, detachRemote));
@@ -759,7 +817,7 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         if (!task || !row || row.id !== assignmentId || row.fence !== fence || parse(row.payload).executor !== 'remote' || !api.remoteExecution(row.id))
           throw fail('REMOTE_EXECUTION_IDENTITY_CHANGED', 'Remote execution identity changed');
         if (api.remoteExecution(row.id).phase !== 'failed' || !['failed', 'completed'].includes(row.state)
-          || task.status !== 'waiting' || taskExecutionBlocked(task))
+          || task.status !== 'waiting' || task.archived || taskExecutionBlocked(task))
           throw fail('REMOTE_REDISPATCH_DENIED', 'Only an ended remote execution of a Task that is not stopped can be dispatched again');
         if (typeof validateMandate !== 'function' || validateMandate(copy(task.mandate)) !== true) throw fail('MANDATE_REVOKED', 'Worker authorization changed');
         return redispatchRemote(task, row, now);
@@ -777,7 +835,7 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
           if (existing.task_id !== taskId || existing.payload !== json(payload) || existing.priority !== priority) throw fail('ASSIGNMENT_CONFLICT', 'Assignment identity already describes different work');
           return assignmentValue(existing);
         }
-        if (taskExecutionBlocked(api.getTask(taskId))) throw fail('TASK_CLOSED', 'Closed Task cannot be assigned');
+        if (archivedTaskOf.get(taskId) || taskExecutionBlocked(taskValue(task))) throw fail('TASK_CLOSED', 'Closed Task cannot be assigned');
         if (payload.instructionRevision !== task.instruction_revision) throw fail('INSTRUCTION_REVISION_CONFLICT', 'Assignment requirements are stale');
         db.prepare('INSERT INTO sa_assignments(id,task_id,payload,state,priority,created_at,updated_at) VALUES (?,?,?,\'queued\',?,?,?)').run(assignmentId, taskId, json(payload), priority, now, now);
         return assignmentValue(db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(assignmentId));
@@ -795,6 +853,7 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         if (!row || run.fence !== row.fence) throw fail('FENCING_CONFLICT', 'Original Worker execution is no longer current');
         if (row.state === 'claimed' && row.lease_until > now) throw fail('FENCING_CONFLICT', 'Original Worker still has an active execution owner');
         const task = api.getTask(row.task_id), payload = parse(row.payload);
+        if (task.archived) throw fail('TASK_ARCHIVED', 'Restore the Worker session before resuming the task');
         if (taskStopped(task) || payload.stopRequest) throw fail('TASK_STOPPED', 'The original Worker task was stopped');
         if (taskPaused(task)) throw fail('TASK_PAUSED', 'Resume the paused task before sending execution input');
         if (validateMandate(copy(task.mandate), { taskId: task.id, assignmentId: row.id }) !== true) throw fail('MANDATE_REVOKED', 'Worker authorization changed');
@@ -809,7 +868,7 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
         return assignmentValue(db.prepare('SELECT * FROM sa_assignments WHERE id=?').get(row.id));
       });
     },
-    claimAssignments(owner, { limit = 1, leaseMs = 60000, now = Date.now(), validateMandate, assignmentId, includeReserved = false } = {}) {
+    claimAssignments(owner, { limit = 1, leaseMs = 60000, now = Date.now(), validateMandate, assignmentId } = {}) {
       id(owner, 'assignment owner');
       if (typeof validateMandate !== 'function') throw new Error('Mechanical claim requires current Mandate validation');
       if (!Number.isSafeInteger(now) || !Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new Error('Invalid assignment lease');
@@ -821,11 +880,12 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
           db.prepare("UPDATE sa_tasks SET status=?,updated_at=? WHERE id=? AND status!='completed'").run(savedResultPending(row) ? 'running' : 'waiting', timestamp(now), row.task_id);
           db.prepare("UPDATE sa_runs SET state='uncertain',updated_at=? WHERE assignment_id=? AND fence=? AND state IN ('prepared','submitted','running','verifying')").run(timestamp(now), row.id, row.fence);
         }
-        const filters = ["a.state='queued'", "t.status!='completed'", "COALESCE(json_extract(t.execution_control,'$.pauseRequested'),0)=0", "COALESCE(json_extract(t.execution_control,'$.paused'),0)=0", "COALESCE(json_extract(t.execution_control,'$.stopRequested'),0)=0", "COALESCE(json_extract(t.execution_control,'$.stopped'),0)=0"];
+        const filters = ["a.state='queued'", "sa_tasks.status!='completed'", `NOT ${taskArchiveSql()}`, "COALESCE(json_extract(sa_tasks.execution_control,'$.pauseRequested'),0)=0", "COALESCE(json_extract(sa_tasks.execution_control,'$.paused'),0)=0", "COALESCE(json_extract(sa_tasks.execution_control,'$.stopRequested'),0)=0", "COALESCE(json_extract(sa_tasks.execution_control,'$.stopped'),0)=0"];
         const queryArgs = [];
-        if (!includeReserved) filters.push("COALESCE(json_extract(a.payload,'$.executor'),'') NOT IN ('model-action','router-action')");
         if (assignmentId !== undefined) { filters.push('a.id=?'); queryArgs.push(id(assignmentId, 'assignmentId')); }
-        const rows = db.prepare(`SELECT a.*,t.mandate FROM sa_assignments a JOIN sa_tasks t ON t.id=a.task_id WHERE ${filters.join(' AND ')} ORDER BY a.priority DESC,a.created_at,a.id LIMIT ?`).all(...queryArgs, safeLimit(limit, 1, 100));
+        // SQLite uses a negative LIMIT to select all eligible rows.
+        const rowLimit = limit === null ? -1 : safeLimit(limit, 1, 100);
+        const rows = db.prepare(`SELECT a.* FROM sa_assignments a JOIN sa_tasks ON sa_tasks.id=a.task_id WHERE ${filters.join(' AND ')} ORDER BY a.priority DESC,a.created_at,a.id LIMIT ?`).all(...queryArgs, rowLimit);
         const claimed = [];
         for (let row of rows) {
           api.applyQueuedTaskRevisionInTransaction(row.id, { now });
@@ -1561,7 +1621,6 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
   Object.assign(api, installEvalDispositionStore({ db, tx, api }));
   Object.assign(api, installDesktopTaskStore({ db, tx, api, insertTask }));
   Object.assign(api, installTaskRevisions({ db, tx, api, insertTask }));
-  Object.assign(api, installRouterActionStore({ db, tx, api, insertTask }));
   const directReplyStore = installDirectReplyStore({ db, tx, api });
   Object.assign(api, directReplyStore.api);
   Object.assign(api, installWorkerExecutionStore({ db, tx, api }));
@@ -1574,6 +1633,8 @@ export function createAssistantOrchestrationStore({ directory, filename, ownerHo
   initializeRemoteExecutionFacts(db);
   Object.assign(api, executionFacts);
   Object.assign(api, installExecutionSummaryStore({ db, tx }));
+  try { Object.assign(api, installRouterActionStore({ db, tx, api })); }
+  catch (error) { db.close(); throw error; }
   // These public writes return only after their transaction commits. Observer
   // failures can never roll back a receipt or cause the transport to resend.
   for (const name of ['finishOutbox', 'reconcileOutbox', 'finishDirectReply', 'reconcileDirectReply']) {

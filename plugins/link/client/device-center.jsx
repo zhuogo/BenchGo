@@ -884,6 +884,7 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
         }
       }
       setModal(null); await refresh();
+      return true;
     } catch (reason) {
       if (serverManagement && device.sshManaged && reason.code === 'SSH_AUTH_REQUIRED') {
         setModal({ type: 'reconnect', device, returnTo: 'workbench' });
@@ -920,7 +921,15 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
   }, [frames, data.devices, activeId, busy, error, select, switchReady]);
-  const added = useCallback(async device => { await refresh(); if (device?.id && !device.pairingNotice) await select(device); else { setModal(null); setShowDevices(true); } }, [refresh, select]);
+  const added = useCallback(async device => {
+    if (device?.id && !device.pairingNotice) {
+      if (!await select(device)) await refresh();
+    } else {
+      setModal(null);
+      setShowDevices(true);
+      await refresh();
+    }
+  }, [refresh, select]);
   const modalDevice = data.devices.find(item => item.id === modal?.device?.id) || modal?.device;
   const active = data.devices.find(item => item.id === activeId);
   // Keep the owner device in the same list so every device shares one scan path.

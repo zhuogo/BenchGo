@@ -3,7 +3,9 @@ import { registerRouterScheduleTools } from './router-schedule-tools.mjs';
 import { assertRouterMemoryTool } from './memory-tool-policy.mjs';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { taskStates } from './task-lifecycle.mjs';
-import { desktopTaskManagementScope } from './desktop-task-management-authority.mjs';
+import { desktopTaskManagementScope, isDesktopTaskManagementScope } from './desktop-task-management-authority.mjs';
+import { optionalTaskRecordField, taskQueryInputError } from './desktop-task-access.mjs';
+import { desktopTaskOwnerScope } from './desktop-task-owner.mjs';
 import { routerAdmissionLanguagePolicy } from './router-language-policy.mjs';
 import { registerConversationManagement } from './conversation-management.mjs';
 import { profileDocuments } from './profile-documents.mjs';
@@ -17,12 +19,43 @@ const string = { type: 'string' };
 const object = { type: 'object', additionalProperties: true };
 const isManualSideThread = thread => !!thread && thread.id !== 'main' && !thread.sourceKey
   && (!thread.source || thread.source.channel === 'desktop');
+const taskQueryHistoryLimit = 64;
+const taskQueryStallLimit = 3;
+const pausedTaskQuery = { code: 'TASK_QUERY_PAUSED',
+  message: '本回合的工单查询已暂停。依据已有信息回复，并明确仍待核实的事实。尚在执行时等待结果通知。' };
+
+function taskQueryKey(op, id, filters, ownerScope) {
+  const owner = isDesktopTaskManagementScope(ownerScope) ? 'global' : desktopTaskOwnerScope(ownerScope);
+  owner?.sessionIds?.sort();
+  const fields = op === 'list' ? ['status', 'projectId', 'archived', 'query', 'createdAfter', 'createdBefore', 'channel', 'sessionId'] : [];
+  const options = Object.fromEntries(fields.map(field => [field, filters[field]]));
+  options.offset = filters.offset === undefined ? 0 : filters.offset;
+  options.limit = filters.limit === undefined ? (op === 'list' ? 20 : 10) : filters.limit;
+  if (op === 'get') {
+    const { section = 'overview', textLimit = 4000, textOffset = 0, recordId, expectedHash } = filters;
+    Object.assign(options, { section, textLimit, textOffset, recordId: optionalTaskRecordField(recordId), expectedHash: optionalTaskRecordField(expectedHash) });
+  }
+  return JSON.stringify({ owner, op, id: op === 'get' ? id : undefined, options });
+}
+
+function unchangedTaskQuery(snapshot, section) {
+  const tasks = snapshot.tasks ?? (snapshot.task ? [snapshot.task] : []);
+  const resultReads = section === 'results' ? [] : tasks.filter(task => task.status === 'completed' && (task.result?.version ?? task.resultVersion) > 0)
+    .map(task => ({ op: 'get', id: task.id, section: 'results', recordId: `result:${task.result?.version ?? task.resultVersion}`, limit: 1 }));
+  return { code: 'TASK_QUERY_UNCHANGED', resultReads,
+    message: '相同查询无新增信息。本回合结束重复查询。按需读取已有结果或沿原有分页指针读取下一页；依据已知事实回复，尚在执行时等待结果通知。' };
+}
 
 /** Registers the Router-only tools for one owned conversation. `runtime.engine` is read lazily: the engine is created after this. */
 export function createRouterTools(runtime) {
   const { ctx, commander, store, database, shutdown, historySearch, readLedger, goals, orchestrationRuntime, settings, projectSchedules, pet, desktopDelegation,
-    taskChanges, desktopTasks, taskControl, taskManagement, cleanupContinuations, modelActions, mediaTools = [], capabilities, deviceStatus, auxiliary, deviceTools } = runtime;
+    taskChanges, desktopTasks, taskControl, taskManagement, modelActions, capabilities, deviceStatus, auxiliary, deviceTools } = runtime;
   return (scope, { threadId, record, agent: ownerAgent, toolEnabled = () => true }) => {
+    let taskQueryTurn;
+    let stalledTaskQueries = 0;
+    const taskQueries = new Map();
+    const currentTaskQueryTurn = () => ctx.agents?.turnBoundaryOf?.(ownerAgent.session)?.openTurnStartSeq;
+    const taskQueryPaused = turn => turn === taskQueryTurn && stalledTaskQueries >= taskQueryStallLimit;
     const activeRouterThread = async exec => {
       const state = await store.getState();
       const thread = threadId === 'main' ? { sessionId: state.mainSessionId } : state.threads.find(row => row.id === threadId);
@@ -57,20 +90,14 @@ export function createRouterTools(runtime) {
         messageId: instruction.message.id, callId: exec.callId, excerpt: excerpt.slice(0, 6000), excerptTruncated: excerpt.length > 6000 } };
     };
     const managementScope = () => desktopTaskManagementScope({ ctx, store, agent: ownerAgent, threadId });
-    const register = (name, description, properties, required, execute) => {
+    const register = (name, description, properties, required, execute, enabled = () => true) => {
       const definition = { name, description, parameters: { type: 'object', properties, required, additionalProperties: false }, output,
         async execute(args, exec) { exec.signal?.throwIfAborted(); assertRouterMemoryTool({ name, args, agent: exec.agent, ownerAgent }); return execute(args, exec); },
       };
-      const dispose = scope.tools.register(definition, { when: () => toolEnabled(name) });
+      const dispose = scope.tools.register(definition, { when: () => toolEnabled(name) && enabled() });
       return dispose;
     };
-    for (const { execute, when, ...definition } of mediaTools) {
-      const { name } = definition;
-      scope.tools.register({ ...definition, execute: ['media_video_status', 'media_audio_voices'].includes(name) ? execute
-        : (args, exec) => modelActions.execute({ name, args, exec, ownerAgent, threadId }),
-      }, { when: context => toolEnabled(name) && (!when || when(context)) });
-    }
-    registerConversationManagement({ ctx, scope, agent: ownerAgent, register, settings, taskManagement, cleanupContinuations, threadId, store });
+    registerConversationManagement({ ctx, scope, agent: ownerAgent, register, settings, taskManagement, threadId, store });
     if (isManualSideThread(record)) register('assistant_rename_thread', 'Rename the current BenchGo side chat when the user explicitly asks to change this conversation’s title. Use the requested title as given and call directly, without a Worker or another confirmation. Confirm the saved title only after this tool succeeds.', {
       title: { type: 'string', minLength: 1, maxLength: 200 },
     }, ['title'], async ({ title }, exec) => {
@@ -111,7 +138,7 @@ export function createRouterTools(runtime) {
       return orchestrationRuntime.manageExecution({ taskId, operation, assignmentId: identity.assignmentId,
         fence: identity.fence, instructionRevision: identity.instructionRevision });
     });
-    register('assistant_tasks', 'Read Tasks directly; no investigation Worker is needed. A current local owner main/manual-side turn can query all sources; internal turns retain their logical conversation scope. list returns bounded summaries and result pointers. Narrow historical references with literal query (display title, requirements or acceptance), createdAfter inclusive / createdBefore exclusive timezone-qualified ISO times, channel and source sessionId; combine status, projectId and archived before pagination. Omit archived for both current and archived history. list limit defaults to 20, at most 100; follow nextOffset. get requires id and defaults to a bounded overview, NOT all evidence. Read exact requirements before revising; section=requirements/results/revisions/assignments/runs/attentions/deliveries pages records with offset and limit (default 10, at most 50). textLimit is a whole-page content budget (default 4000, at most 12000). Short records retain value; long records return encoding=json fragments with identity, text, totalCharacters and nextRead. Follow returned nextRead with recordId, textOffset, limit=1 and expectedHash to retrieve the unchanged record completely; TASK_READ_CONFLICT means read a fresh pointer rather than stitching changed versions. taskMeta.version supports rename; cleanup.id supports restore. For an Attention, read its full exact question/options and preserve its id for ask_user_question. Saved results support natural delivery, not redispatch or extra content review. Attention answers and structured revisions require their own authorization. Read only.', {
+    register('assistant_tasks', 'Read Tasks directly; no investigation Worker is needed. A current local owner main/manual-side turn can query all sources; internal turns retain their logical conversation scope. list returns bounded summaries and result pointers. Narrow historical references with literal query (display title, requirements or acceptance), createdAfter inclusive / createdBefore exclusive timezone-qualified ISO times, channel and source sessionId; combine status, projectId and archived before pagination. Omit archived for both current and archived history. list limit defaults to 20, at most 100; follow nextOffset. get requires id and defaults to a bounded overview. Read exact requirements before revising; section=requirements/results/revisions/assignments/runs/attentions/deliveries pages records with offset and limit (default 10, at most 50). textLimit is a whole-page content budget (default 4000, at most 12000). When a relevant task reports completed with a saved result version, read it directly with op=get, section=results, recordId=result:<version>, limit=1, then reply based on the evidence. If it is still running, report its known status and wait for the completion notification. TASK_QUERY_UNCHANGED means stop repeating the same query this turn; use a supplied resultReads entry or the previously returned page pointer if needed. Correct invalid parameters before retrying. Short records retain value; long records return encoding=json fragments with identity, text, totalCharacters and nextRead. Follow returned nextRead with recordId, textOffset, limit=1 and expectedHash to retrieve the unchanged record completely; TASK_READ_CONFLICT means read a fresh pointer rather than stitching changed versions. taskMeta.version supports rename; cleanup.id supports restore. For an Attention, read its full exact question/options and preserve its id for ask_user_question. Attention answers and structured revisions require their own authorization. Read only.', {
       op: { type: 'string', enum: ['list', 'get'] }, id: string, status: { type: 'string', enum: taskStates }, projectId: string, archived: { type: 'boolean' },
       query: string, createdAfter: string, createdBefore: string, channel: string, sessionId: string,
       section: { type: 'string', enum: ['overview', 'progress', 'requirements', 'results', 'revisions', 'assignments', 'runs', 'attentions', 'deliveries'],
@@ -121,13 +148,44 @@ export function createRouterTools(runtime) {
     }, [], async ({ op = 'list', id, ...filters }, exec) => {
       if (exec.agent !== ownerAgent) throw new Error('只有总助手当前会话可查询任务');
       const ownerScope = await managementScope() || await runtime.engine.taskOwnerScope(threadId);
-      if (op === 'list') return desktopTasks.query(ownerScope, filters);
-      if (op === 'get') {
-        if (typeof id !== 'string' || !id.trim()) throw new Error('查询任务详情需要 id');
-        return { task: desktopTasks.read(id, ownerScope, filters) };
+      exec.signal?.throwIfAborted();
+      const turn = currentTaskQueryTurn();
+      if (turn !== taskQueryTurn) {
+        taskQueries.clear();
+        taskQueryTurn = turn;
+        stalledTaskQueries = 0;
       }
-      throw new Error('未知任务查询操作');
-    });
+      if (taskQueryPaused(turn)) return pausedTaskQuery;
+      const query = () => {
+        if (op === 'list') return desktopTasks.query(ownerScope, filters);
+        if (op !== 'get') throw taskQueryInputError('未知任务查询操作');
+        if (typeof id !== 'string' || !id.trim()) throw taskQueryInputError('查询任务详情需要 id');
+        return { task: desktopTasks.read(id, ownerScope, filters) };
+      };
+      if (turn == null) return query();
+      const key = taskQueryKey(op, id, filters, ownerScope);
+      const previous = taskQueries.get(key);
+      if (previous?.inputError) {
+        stalledTaskQueries++;
+        if (taskQueryPaused(turn)) return pausedTaskQuery;
+        throw taskQueryInputError(`${previous.inputError}。本回合已处理相同参数，请按提示修正。`);
+      }
+      if (!previous && taskQueries.size >= taskQueryHistoryLimit) taskQueries.delete(taskQueries.keys().next().value);
+      try {
+        const snapshot = query();
+        const hash = createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+        taskQueries.set(key, { hash });
+        if (previous?.hash !== hash) {
+          stalledTaskQueries = 0;
+          return snapshot;
+        }
+        stalledTaskQueries++;
+        return taskQueryPaused(turn) ? pausedTaskQuery : unchangedTaskQuery(snapshot, op === 'get' ? filters.section : undefined);
+      } catch (error) {
+        if (error?.code === 'TASK_QUERY_INPUT') taskQueries.set(key, { inputError: error.message });
+        throw error;
+      }
+    }, () => !taskQueryPaused(currentTaskQueryTurn()));
     register('assistant_learn', 'Queue bounded learning from the current conversation when the user asks to learn or summarize reusable knowledge. Shares the /learn pipeline; queued is not saved.', {}, [], async (_args, exec) => {
       const { source } = await ownerInstruction(exec);
       return store.learning.request({ scope: source.sessionId, eventId: source.messageId, source, entry: 'natural-language' });
@@ -194,12 +252,12 @@ export function createRouterTools(runtime) {
     register(ssh.name, ssh.description, ssh.parameters.properties, [], ssh.execute);
     register('assistant_device_status', 'Read ONLY INBOUND paired devices allowed to access THIS machine and recorded authentication times for the local owner conversation. This is not the outgoing server directory: never use this list or an absent server here to diagnose a target server\'s permissions. Use assistant_devices / assistant_projects for outgoing servers, and target capability/connect results for a target rejection. Pairing approval grants all supported BenchGo collaboration and connection management; individual grants are not configured. devices is not pairing/revocation history or online status; liveConnections is unknown, and lastSeenAt is not complete access history. Unavailable does not mean no devices. External channel conversations cannot read these local details.', {}, [], (_args, exec) => deviceStatus({ agent: exec.agent, ownerAgent, threadId }));
     register('assistant_capabilities', 'Report the real assistant capabilities and explicit unavailable reasons directly. voiceInput, readAloud and realtimeVoice use shared Voice settings and resolved provider routes. Availability describes configured support, not a successful microphone or provider request. Do not infer support from a planned Design feature.', {}, [], capabilities);
-    register('assistant_delegate', routerAdmissionLanguagePolicy + ' Accept one business Task on THIS host and execute it on the selected device. Omit deviceId or use local for local work. The host uses the saved Worker queue, or the saved Router queue when the official Worker queue is empty. Codex and Claude require an explicitly configured compatible model. For a remote resource, supply its exact deviceId/projectId. When assistant_devices(deviceId) returns workerPreference.config, omit executionConfig and let the host use the configured Worker. When workerPreference is absent, executionConfig is optional: omit it and the host uses a model the target device offers, or choose one exact Harness and provider/model pair from the target catalog when the user names a model. Report a Worker configuration error or an empty catalog to the user. The peer only executes; all Task IDs, queries, controls, revisions and results remain on this host. Never use a remote path as a local project, silently switch devices, or fall back locally. When a short confirmation such as “开始执行” refers to agreed work, put the resolved request in text. Ask only if a material detail remains unresolved. The host binds the current real user message and request identity; ordinary dispatch needs no extra approval. projectId is optional for daily tasks. For follow-ups to an existing local Task use assistant_task_control supplement. Use assistant_task_change for structured changes and remote revisions. Once accepted, respond naturally about the work and share the result later; acceptance is not completion.', { deviceId: string, projectId: string, executionConfig: { type: 'object', additionalProperties: false, properties: { harness: { type: 'string', enum: ['official', 'codex', 'claude'] }, models: { type: 'array', minItems: 1, maxItems: 1, items: { type: 'object', additionalProperties: false, properties: { providerId: string, modelId: string, params: object }, required: ['providerId', 'modelId'] } } }, required: ['harness', 'models'] }, title: string, text: string, acceptance: string, duplicateOfTaskId: string }, ['text'], (args, exec) => desktopDelegation.delegate(args, exec, { ownerAgent, threadId }));
+    register('assistant_delegate', routerAdmissionLanguagePolicy + ' Accept one business Task on THIS host and execute it on the selected device. Omit deviceId or use local for local work. The host uses the saved Worker queue, or the saved Router queue when the official Worker queue is empty. Codex and Claude require an explicitly configured compatible model. For a remote resource, supply its exact deviceId/projectId. When assistant_devices(deviceId) returns workerPreference.config, omit executionConfig and let the host use the configured Worker. When workerPreference is absent, executionConfig is optional: omit it and the host uses a model the target device offers, or choose one exact Harness and provider/model pair from the target catalog when the user names a model. Report a Worker configuration error or an empty catalog to the user. The peer only executes; all Task IDs, queries, controls, revisions and results remain on this host. Never use a remote path as a local project, silently switch devices, or fall back locally. When a short confirmation such as “开始执行” refers to agreed work, put the resolved request in text. Ask only if a material detail remains unresolved. The host binds the current real user message and request identity; ordinary dispatch needs no extra approval. Use this tool for requested media generation and put all items from a media batch in one Task. Preserve the exact media model and settings in text. The execution model is the Worker chat model. projectId is optional for daily tasks. For follow-ups to an existing local Task use assistant_task_control supplement. Use assistant_task_change for structured changes and remote revisions. Once accepted, respond naturally about the work and share the result later; acceptance is not completion.', { deviceId: string, projectId: string, executionConfig: { type: 'object', additionalProperties: false, properties: { harness: { type: 'string', enum: ['official', 'codex', 'claude'] }, models: { type: 'array', minItems: 1, maxItems: 1, items: { type: 'object', additionalProperties: false, properties: { providerId: string, modelId: string, params: object }, required: ['providerId', 'modelId'] } } }, required: ['harness', 'models'] }, title: string, text: string, acceptance: string, duplicateOfTaskId: string }, ['text'], (args, exec) => desktopDelegation.delegate(args, exec, { ownerAgent, threadId }));
     register('assistant_task_control', 'On the current explicit local owner instruction, pause or cancel one exact Task from any conversation/channel. Use supplement to send follow-ups, questions and continuation, including ordinary goal changes for a local official Worker. Preserve the original mandate and source. Put the actionable message in text, resolving references such as “按刚才说的改” from the current conversation. Preserve the user wording when exact wording matters. The host records the real source separately. Set resume=true only when the owner requests continuing paused work now. A pending message may wake the original session after its previous turn ends. The host verifies the applied goal. When a supplement is accepted, reply in one natural sentence about the requested change. Omit routine delivery confirmation, cursor, timestamps and session details. If the user wants delivery confirmed, or a failure or delay affects what happens next, explain the practical status. Select a specific Task and Attention using assistant_tasks; clarify ambiguous references. User requests to pause, including uncertain work, MUST use operation=pause and confirm its saved lifecycle receipt. executionControl.pauseRequested means the pause intent is saved; executionControl.paused confirms the executor acknowledged a safe pause. Both keep the Task waiting. answer requires attentionId and forwards the current original human message unchanged as the answer, never infers consent or expands permission. For structured changes to project or authority use assistant_task_change. For remote tasks use the supported supplement or revision path. A supplement receipt confirms the original Task inbox saved the message. Claim that execution has adopted the change only when confirmed by execution. executionControl.stopRequested is not yet executionControl.stopped; both keep the Task waiting.', { id: string, operation: { type: 'string', enum: ['supplement', 'answer', 'pause', 'cancel'] }, attentionId: string, text: string, resume: { type: 'boolean' } }, ['id', 'operation'], async (args, exec) => taskControl.control(args, exec, { ownerAgent, threadId, ownerScope: await runtime.engine.taskOwnerScope(threadId), managementScope: await managementScope() }));
     register('assistant_task_change', 'Use for structured changes, linked adjustments and target changes for remote or external Workers. Send ordinary changes for a local official Worker with assistant_task_control supplement. In this tool, set target to the complete updated requirements when changing the goal and use reason only to explain the change. When a Task on another device has finished or failed, use revise for new requirements on the same Task: a new execution on the same device uses those requirements and preserves prior results. Use adjustment when the user asks for a separate linked Task. Ordinary revisions need no extra approval. The host captures the current revision and request identity from the real user input. Active execution applies the complete ordinary revision at the next tool boundary without interrupting the current tool; paused work receives revisions without resuming. adjustment creates a new linked Task; the completed original and its results remain unchanged. Read the actual requirement and acceptance before proposing a change.', { id: string, operation: { type: 'string', enum: ['revise', 'adjustment'] }, reason: string, target: string, acceptance: string, projectId: string }, ['id', 'operation', 'reason'], async (args, exec) => taskChanges.change(args, exec, { ownerAgent, threadId, router: true, ownerScope: await runtime.engine.taskOwnerScope(threadId) }));
     register('assistant_summarize', 'Summarize bounded source text. Read only; derived text is not original evidence and is not saved as memory.', { text: { type: 'string', minLength: 1, maxLength: 60000 } }, ['text'], (args, exec) => auxiliary.summarize({ ...args, threadId, signal: exec.signal }));
     register('assistant_analyze_image', 'Inspect a raster image from assistant artifacts. file must be a relative artifact name, never a host path or URL. Preserve the image source reference.', { file: string, question: string }, ['file', 'question'], (args, exec) => auxiliary.analyzeImage({ ...args, threadId, signal: exec.signal }));
-    register('assistant_pet', 'Read catalog and active draft. For AI appearance design, first call catalog and keep appearanceToken before generation. Preview manifest version 1 with name and avatar ("current" to build on the current draft/appearance, {builtin:"benchgo"} with optional expression/palette/decorations from catalog, or "media/<filename>" from generate_image). Optional expressions, palettes and decorations are ID-to-media-image maps; palettes/decorations reference full visual variants. Optional actions map new IDs to {label,duration,frames,expression?}; duration 120–1800 ms, 2–12 frames with strictly increasing at from 0 to 1 and bounded x/y percent, rotate degrees, scale, opacity. Bindings map idle, acknowledge, focus, waiting or completed to compatible action IDs or none. Send manifest and original appearanceToken in op=preview. Reuse compatible catalog entries. When useful and configured, use assistant_analyze_image to check consistency. Keep the draft available for preview. Legacy preview accepts builtin pet or artifactPath media/<filename> with optional expression. op=express plays an available expression or action once. Apply/restore require explicit user intent, current revision, and the existing approval/Task path. Appearance is separate from identity, permissions and task status.', { op: { type: 'string', enum: ['catalog', 'preview', 'apply', 'restore', 'express'] }, pet: object, artifactPath: string, manifest: object, appearanceToken: string, draftId: string, revision: { type: 'integer' }, default: { type: 'boolean' }, expression: string, action: string }, ['op'], async (args, exec) => {
+    register('assistant_pet', 'Read catalog and active draft. For AI appearance design, first call catalog and keep appearanceToken before generation. Preview manifest version 1 with name and avatar ("current" to build on the current draft/appearance, {builtin:"benchgo"} with optional expression/palette/decorations from catalog, or "media/<filename>" from a completed Worker image receipt). Optional expressions, palettes and decorations are ID-to-media-image maps; palettes/decorations reference full visual variants. Optional actions map new IDs to {label,duration,frames,expression?}; duration 120–1800 ms, 2–12 frames with strictly increasing at from 0 to 1 and bounded x/y percent, rotate degrees, scale, opacity. Bindings map idle, acknowledge, focus, waiting or completed to compatible action IDs or none. Send manifest and original appearanceToken in op=preview. Reuse compatible catalog entries. When useful and configured, use assistant_analyze_image to check consistency. Keep the draft available for preview. Legacy preview accepts builtin pet or artifactPath media/<filename> with optional expression. op=express plays an available expression or action once. Apply/restore require explicit user intent and the current revision. Report the result in the current conversation after the tool returns. Appearance is separate from identity, permissions and task status.', { op: { type: 'string', enum: ['catalog', 'preview', 'apply', 'restore', 'express'] }, pet: object, artifactPath: string, manifest: object, appearanceToken: string, draftId: string, revision: { type: 'integer' }, default: { type: 'boolean' }, expression: string, action: string }, ['op'], async (args, exec) => {
       if (args.op === 'catalog') return pet.catalog();
       if (args.op === 'preview') return pet.preview(args, { source: 'ai' });
       if (args.op === 'express') return pet.express(args);

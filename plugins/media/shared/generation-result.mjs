@@ -4,7 +4,10 @@ const artifactPath = 'api/benchgo/media/artifact?file=';
 
 export const mediaArtifactUrl = filename => artifactPath + encodeURIComponent(filename);
 
+export const mediaResultItems = result => Array.isArray(result?.results) ? result.results : [result];
+
 export function mediaModelResult(result) {
+  if (Array.isArray(result?.results)) return { ...result, results: result.results.map(mediaModelResult) };
   if (!mediaResultFile(result)) return result;
   const { url, externalUrl, ...receipt } = result;
   return { ...receipt, delivery: 'Shown in the conversation. Do not embed or link it again.' };

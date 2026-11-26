@@ -90,6 +90,8 @@ test('stopping distinguishes the action fence from executor exit and trusts only
   assert.equal(overdue.label, '等待');
   assert.match(overdue.reason, /仍未确认退出/);
   assert.equal(overdue.executionNotice.escalated, true);
+  assert.equal(taskWaiting({ ...task, archived: true, executionControl: { stopRequested: true }, execution }).label, waiting.executionNotice.label);
+  assert.equal(taskWaiting({ ...task, archived: true, executionControl: { stopped: true } }).label, '已停止');
   assert.equal(taskExecutionNotice({ ...task, status: 'waiting' }), null, 'missing facts do not invent attempts or deadlines');
   assert.equal(taskWaiting({ ...task, status: 'waiting' }).label, '等待');
 });

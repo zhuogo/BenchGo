@@ -103,14 +103,10 @@
 .ba-home .ba-home-section h2 { margin: 0; font-size: 14px; font-weight: 650; }
 .ba-home-section[data-tone=attention] h2 { color: var(--home-coral); }
 .ba-home-section[data-tone=active] h2 { color: var(--home-green); }
-.ba-home-task { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--home-line); min-width: 0; }
+.ba-home-task { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--home-line); }
 .ba-home-task:last-child { border-bottom: 0; }
-.ba-home-task-mark { width: 7px; height: 7px; flex: none; border: 1px solid var(--home-green); border-radius: 2px 1px 3px 1px; margin-top: 8px; transform: rotate(-9deg); }
-.ba-home-section[data-tone=attention] .ba-home-task-mark { border-color: var(--home-coral); }
-.ba-home-task > div { min-width: 0; flex: 1; }
-.ba-home-task strong { display: block; font-size: 13px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
-.ba-home-task p { display: flex; flex-wrap: wrap; gap: 12px; margin: 4px 0 0; color: var(--home-muted); font-size: 11px; line-height: 1.6; }
-.ba-home-task-detail { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; margin-top: 4px; overflow: hidden; overflow-wrap: anywhere; color: var(--home-muted); font-size: 12px; line-height: 1.6; }
+.ba-home-task-status { flex: none; min-inline-size: 4em; color: var(--home-muted); font-size: 11px; line-height: 1.6; }
+.ba-home-task strong { min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
 
 .ba-home-starters {
   display: grid;

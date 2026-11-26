@@ -42,7 +42,7 @@ function ModelSetupDock() {
   </div>;
 }
 
-function FixedChatView({ useSession, useConversation, useInput, useProjection, useAccess, inputActions }) {
+function FixedChatView({ useSession, useConversation, useInput, useProjection, inputActions }) {
   const home = useContext(HomeContext);
   const petError = useContext(PetErrorContext);
   const openFile = useMemo(() => createReplyFileOpener(home?.ctx, home?.sessionId, { api: home?.api, threadId: home?.threadId }), [home?.ctx, home?.sessionId, home?.api, home?.threadId]);
@@ -56,12 +56,6 @@ function FixedChatView({ useSession, useConversation, useInput, useProjection, u
   const input = useInput(value => value);
   const inbox = useProjection?.('inbox');
   const continuation = useProjection?.('conversationContinuation');
-  const promptAllowed = useAccess?.('session/prompt') === true;
-  const composerBlock = home?.ctx?.conversation?.blocks?.storeFor(home.sessionId);
-  const blocked = useSyncExternalStore(
-    listener => composerBlock?.subscribe(listener) || (() => {}),
-    () => !!composerBlock?.getSnapshot(),
-  );
   const designIntent = useSyncExternalStore(petDesignIntent.subscribe, petDesignIntent.getSnapshot);
   useEffect(() => {
     if (!isRetiredPetDraft(input)) return;
@@ -72,7 +66,7 @@ function FixedChatView({ useSession, useConversation, useInput, useProjection, u
     && (session.blank || session.awaitingFirstTurn)
     && quietChatRows(home.history, home.threadId, session, conversation.views?.get('chat'), inbox).length === 0;
   // Keep the official content factory/composer; never mount its raw execution transcript.
-  return <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0} aria-label="聊天记录">{designIntent && home && designIntent.threadId === home.threadId && <div className="ba-note" role="status">{designIntent.kind === 'refine' ? '请在输入框说明希望继续调整的地方。' : '请在输入框描述你希望的形象。'}<Button variant="ghost" type="button" className="ba-quiet" onClick={() => petDesignIntent.clear()}>关闭提示</Button></div>}{showHome && <AssistantHome {...home} input={input} inputActions={inputActions} />}{home && <QuietChat key={sessionId} home={home} session={session} chat={conversation.views?.get('chat')} inbox={inbox} input={input} continuation={continuation} promptAllowed={promptAllowed} composerBlocked={blocked} onOpenFile={openFile} loadImage={loadImage} petError={petError} />}</div></div>;
+  return <div className="ba-chat-viewport"><div className="ba-chat-feed" data-assistant-scroll="" tabIndex={0} aria-label="聊天记录">{designIntent && home && designIntent.threadId === home.threadId && <div className="ba-note" role="status">{designIntent.kind === 'refine' ? '请在输入框说明希望继续调整的地方。' : '请在输入框描述你希望的形象。'}<Button variant="ghost" type="button" className="ba-quiet" onClick={() => petDesignIntent.clear()}>关闭提示</Button></div>}{showHome && <AssistantHome {...home} input={input} inputActions={inputActions} />}{home && <QuietChat key={sessionId} home={home} session={session} chat={conversation.views?.get('chat')} inbox={inbox} input={input} continuation={continuation} onOpenFile={openFile} loadImage={loadImage} petError={petError} />}</div></div>;
 }
 
 function PetConversationStatus({ home, session, chat, renderSlot, setError }) {

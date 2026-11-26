@@ -41,6 +41,7 @@ import { mountWorkbenchRightbarLifecycle } from '../workbench/client/rightbar-li
 import { mountWorkbenchSessionSurface } from '../workbench/client/session-surface.jsx';
 import { mountSessionMascot } from './session-mascot.jsx';
 import { mountChatFeedback } from './chat-feedback.jsx';
+import { preservePanelOnSessionArchive } from './workspace-navigation.mjs';
 
 const names = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', opencode: 'OpenCode', gemini: 'Gemini CLI', grok: 'Grok Build', mcode: 'MiniMax Code', deepseek: 'DeepSeek' };
 const liveStates = new Set(['running', 'connecting', 'waiting']);
@@ -120,6 +121,7 @@ export function apply(ctx) {
 }
 
 function mountBaseUi(ctx) {
+  ctx.effect(() => preservePanelOnSessionArchive(ctx));
   mountBrand(ctx);
   mountSessionMascot(ctx);
   mountChatFeedback(ctx);

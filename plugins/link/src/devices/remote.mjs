@@ -60,7 +60,7 @@ export function remoteAgent(target, { maxSockets = 64, maxFreeSockets = 2 } = {}
 export function remoteJson(target, path, input, { agent, token = target.authorize?.() ?? target.token, cookie, signal, timeout = 20000 } = {}) {
   const own = !agent; agent ??= remoteAgent(target);
   return new Promise((resolve, reject) => {
-    const req = request(new URL(path, upstreamOrigin(target)), { method: input === undefined ? 'GET' : 'POST', agent, signal, timeout, headers: { ...relayTargetHeaders(target), ...(input === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: 'Bearer ' + token } : {}), ...(cookie ? { cookie } : {}) } }, res => {
+    const req = request(new URL(path, upstreamOrigin(target)), { method: input === undefined ? 'GET' : 'POST', agent, signal, headers: { ...relayTargetHeaders(target), ...(input === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: 'Bearer ' + token } : {}), ...(cookie ? { cookie } : {}) } }, res => {
       const chunks = []; let bytes = 0;
       res.on('data', chunk => { bytes += chunk.length; if (bytes > 1024 * 1024) req.destroy(new Error('主机响应过大')); else chunks.push(chunk); });
       res.on('error', reject);
@@ -75,7 +75,10 @@ export function remoteJson(target, path, input, { agent, token = target.authoriz
         resolve({ value, headers: res.headers });
       });
     });
-    req.on('error', reject); req.on('timeout', () => req.destroy(Object.assign(new Error('连接超时，请检查主机是否在线'), { code: 'ETIMEDOUT' })));
+    const deadline = setTimeout(() => req.destroy(Object.assign(new Error('连接超时，请检查主机是否在线'), { code: 'ETIMEDOUT' })), timeout);
+    deadline.unref();
+    req.once('close', () => clearTimeout(deadline));
+    req.on('error', reject);
     req.end(JSON.stringify(input));
   }).finally(() => { if (own) agent.destroy(); });
 }

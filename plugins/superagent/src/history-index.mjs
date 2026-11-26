@@ -1,4 +1,4 @@
-import { MEDIA_PRESENTATION, mediaArtifactUrl, mediaResultFile, NATIVE_MEDIA_RESULT } from '../../media/shared/generation-result.mjs';
+import { MEDIA_PRESENTATION, mediaArtifactUrl, mediaResultFile, mediaResultItems, NATIVE_MEDIA_RESULT } from '../../media/shared/generation-result.mjs';
 
 const mediaTools = new Set(['assistant_generate_image', 'generate_image', 'generate_video', 'generate_audio', 'media_video_status']);
 
@@ -52,7 +52,9 @@ export function updateHistoryIndex(events, index = { watermark: 0, mediaCalls: n
       try {
         const value = event.data.meta?.[MEDIA_PRESENTATION]
           ?? JSON.parse(message.content.filter(block => block.type === 'text').map(block => block.text).join(''));
-        addFile(index, historyFile(group.name, value), event, message.id, group);
+        for (const item of mediaResultItems(value)) {
+          addFile(index, historyFile(group.name, item), event, Array.isArray(value?.results) ? `${message.id}:${item?.requestId}` : message.id, group);
+        }
       } catch { /* Invalid or incomplete tool results have no file. */ }
     } else if (event.type === NATIVE_MEDIA_RESULT && event.ignorable === true) {
       addFile(index, mediaResultFile(event.data), event, `native:${event.seq}`,

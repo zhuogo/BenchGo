@@ -268,9 +268,10 @@ export function createRemoteAssignmentExecutor({ ctx, database, readPolicy, comm
     if (!remote.hasMore && !ended(remote.phase)) {
       const task = database.getTask(assignment.taskId), policy = await readPolicy();
       const revoked = assignment.authorizationRevoked || !validateTaskMandate(task.mandate, { policy });
+      const archived = task.archived || remote.observed?.sessionArchived === true;
       const desired = revoked || taskStopped(task) ? 'cancel' : taskPaused(task) ? 'pause'
-        : remote.phase === 'paused' || remote.observed?.pauseRequested ? 'resume' : null;
-      if (!revoked && !taskStopped(task) && !taskPaused(task) && remote.phase !== 'uncertain') {
+        : !archived && (remote.phase === 'paused' || remote.observed?.pauseRequested) ? 'resume' : null;
+      if (!archived && !revoked && !taskStopped(task) && !taskPaused(task) && remote.phase !== 'uncertain') {
         enqueueInputs(assignment);
         for (const entry of database.remoteCommands(assignment.id, { state: 'pending', operation: 'input', limit: desired === 'resume' ? 200 : 4 })) {
           await send(assignment, entry, requestSignal);
@@ -304,6 +305,11 @@ export function createRemoteAssignmentExecutor({ ctx, database, readPolicy, comm
       }
       if (database.getAssignment(assignment.id)?.state === 'claimed') {
         database.confirmExecutionStopped(assignment.id, ownership(assignment));
+        const task = database.getTask(assignment.taskId);
+        if (remote.phase === 'cancelled' && remote.observed?.cancelRequested === true
+          && remote.observed.sessionArchiveCursor > 0 && remote.observed.sessionArchiveInstructionRevision === task.instructionRevision) {
+          database.cancelTask(task.id);
+        }
         if (database.getAssignment(assignment.id)?.state === 'claimed') database.finishAssignment(assignment.id, {
           ...ownership(assignment), status: remote.phase === 'completed' ? 'completed' : remote.phase === 'failed' ? 'failed' : 'cancelled' });
       }

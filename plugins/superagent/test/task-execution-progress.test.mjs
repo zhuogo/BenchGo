@@ -358,7 +358,7 @@ test('runtime evidence uses the shared source and domain commit signals with red
   turn(session); call(session); result(session); end(session); await f.progress.dispose();
   const { createOrchestrationRuntime } = await import('../src/orchestration-runtime.mjs');
   const runtime = createOrchestrationRuntime({ ctx: f.host.ctx,
-    store: { orchestration: f.database, paths: { workspace: f.directory }, getConfig: async () => ({ workerConcurrency: 1 }) },
+    store: { orchestration: f.database, paths: { workspace: f.directory }, getConfig: async () => ({}) },
     execute: async () => { throw new Error('Evidence reads must not execute a Worker'); } });
   try {
     await runtime.executionFacts.ready;
@@ -391,7 +391,7 @@ test('official live jobs prove only execution-owned background work, without inv
   f.host.ctx.jobs.attachController('execution-facts-test');
   const { createOrchestrationRuntime } = await import('../src/orchestration-runtime.mjs');
   const runtime = createOrchestrationRuntime({ ctx: f.host.ctx,
-    store: { orchestration: f.database, paths: { workspace: f.directory }, getConfig: async () => ({ workerConcurrency: 1 }) },
+    store: { orchestration: f.database, paths: { workspace: f.directory }, getConfig: async () => ({}) },
     execute: async () => { throw new Error('Evidence reads must not execute a Worker'); } });
   function start(owner) {
     const done = Promise.withResolvers();

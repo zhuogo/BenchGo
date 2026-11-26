@@ -40,7 +40,7 @@ async function fixture() {
           if(control.state==='error'||control.fail) throw Error('测试连接暂不可用');
           if(name==='tasks') return {tasks:control.state==='empty'?[]:[task]};
           if(name==='goalList') return {goals:[]};
-          if(name==='state') return {config:{revision:1,workerConcurrency:2}};
+          if(name==='state') return {config:{revision:1}};
           if(name==='taskResume') return control.blocked ? {queued:false,code:'MANDATE_REVOKED'} : {queued:true};
           return {};
         };
@@ -183,7 +183,10 @@ test('real waiting controls and chat/task connection states remain actionable an
     await page.getByLabel('主助手对话', { exact: true }).waitFor();
     assert.equal(await page.getByText('系统定时记录', { exact: true }).count(), 0);
     assert.equal(await page.getByLabel('定时任务状态', { exact: true }).count(), 0);
-    await scenario('chat', 'home');
+    await scenario('chat', 'home', { attentions: [question] });
+    const briefTask = page.locator('.ba-home-task');
+    await briefTask.waitFor();
+    assert.deepEqual(await briefTask.locator(':scope > *').allTextContents(), ['等待', '核验工作结果']);
     await button('管理任务').first().click();
     assert((await calls()).some(([name, next]) => name === 'resources' && next === 'tasks'));
     await scenario('tasks');

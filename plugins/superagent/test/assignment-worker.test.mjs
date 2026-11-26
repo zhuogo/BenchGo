@@ -143,12 +143,12 @@ test('a produced failure draft survives unavailable diagnostic reads without bec
   assert.equal(saved.summary, 'Partial failure report');
 });
 
-test('a free slot starts new work while another execution remains busy', async t => {
+test('new work starts while another execution remains busy', async t => {
   let release, firstStarted;
   const began = new Promise(resolve => { firstStarted = resolve; });
   const held = new Promise(resolve => { release = resolve; });
   let count = 0;
-  const { database, worker } = fixture(t, { concurrency: 2,
+  const { database, worker } = fixture(t, {
     execute: async () => { if (++count === 1) { firstStarted(); await held; } return { text: 'done' }; },
     onResult: async () => {},
   });
@@ -163,7 +163,7 @@ test('a free slot starts new work while another execution remains busy', async t
   release(); await first;
 });
 
-test('a persisted remote handoff releases its slot without committing or finishing the Task', async t => {
+test('a persisted remote handoff returns without committing or finishing the Task', async t => {
   const database = createAssistantOrchestrationStore({ filename: ':memory:' });
   t.after(() => database.close());
   database.createThread({ id: 'thread', source: { type: 'desktop', id: 'owner' } });
@@ -171,7 +171,7 @@ test('a persisted remote handoff releases its slot without committing or finishi
   const remote = database.createTask({ threadId: 'thread', target: 'remote work', mandate: { execution } });
   database.createAssignment(remote.id, { id: 'remote-assignment', executor: 'remote', execution });
   let commits = 0, submissions = 0;
-  const worker = createAssistantAssignmentWorker({ database, concurrency: 1, readPolicy: async () => ({}), validateMandate: () => true,
+  const worker = createAssistantAssignmentWorker({ database, readPolicy: async () => ({}), validateMandate: () => true,
     execute: async assignment => {
       if (assignment.executor !== 'remote') return { summary: 'local result' };
       submissions++;

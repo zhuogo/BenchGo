@@ -47,7 +47,7 @@ test('legacy configuration defaults to no auxiliary without changing its revisio
 
 test('removed credential pools are rejected explicitly and never stored', async t => {
   const { store, open } = await fixture(t);
-  const before = await store.updateConfig({ models: [{ providerId: 'opaque/provider-A', modelId: 'Exact/model' }], workerConcurrency: 3 });
+  const before = await store.updateConfig({ models: [{ providerId: 'opaque/provider-A', modelId: 'Exact/model' }], maintenance: { intervalHours: 3 } });
   for (const keyPools of [null, {}, [], [{ providerId: 'one', candidates: ['two'] }]]) {
     await assert.rejects(store.updateConfig({ keyPools }), { code: 'KEY_POOL_REMOVED' });
     assert.deepEqual(await store.getConfig(), before);
@@ -56,7 +56,7 @@ test('removed credential pools are rejected explicitly and never stored', async 
   const saved = await (await open()).getConfig();
   assert.equal(Object.hasOwn(saved, 'keyPools'), false);
   assert.equal(saved.models[0].modelId, 'Exact/model');
-  assert.equal(saved.workerConcurrency, 3);
+  assert.equal(saved.maintenance.intervalHours, 3);
 });
 
 test('invalid auxiliary configuration is atomic and cannot silently accept unsupported capabilities or credentials', async t => {

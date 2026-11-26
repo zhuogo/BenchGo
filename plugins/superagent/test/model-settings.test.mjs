@@ -30,7 +30,7 @@ test('model editor saves and reloads capability choices and routes opaque model 
   const main = { providerId: 'Main/Exact', modelId: 'Main:opaque', options: { maxTokens: 333 } };
   const aux = { providerId: 'Aux/Exact', modelId: 'Aux:opaque', options: { maxTokens: 222 } };
   const worker = { providerId: 'Worker/Exact', modelId: 'Worker:opaque', options: { maxTokens: 111, reasoningEffort: 'ultra' } };
-  const base = await store.updateConfig({ models: [main], workerModels: [worker], workerConcurrency: 3 });
+  const base = await store.updateConfig({ models: [main], workerModels: [worker], maintenance: { intervalHours: 3 } });
   const workerPatch = identityConfigPatch({ ...base, workerHarness: 'codex' }, base);
   assert.deepEqual(workerPatch, { workerHarness: 'codex' });
   await store.updateConfig(workerPatch);
@@ -46,7 +46,7 @@ test('model editor saves and reloads capability choices and routes opaque model 
   const config = await store.getConfig();
   assert.deepEqual(config.models, [main]);
   assert.deepEqual(config.workerModels, [worker]);
-  assert.equal(config.workerConcurrency, 3);
+  assert.equal(config.maintenance.intervalHours, 3);
   assert.deepEqual(config.auxiliary, draft.auxiliary);
   const seen = [];
   const llm = { async *stream(request) { seen.push([request.provider, request.model, request.maxTokens]); yield { type: 'text-delta', text: 'ok' }; yield { type: 'finish', reason: { kind: 'stop' } }; } };
@@ -69,7 +69,7 @@ test('Worker-only edits survive reload and clearing the Worker preserves other r
   const router = { providerId: 'Router/@', modelId: 'Exact: Router/01' };
   const workers = [{ providerId: 'Worker/@', modelId: 'Exact: Worker/02', options: { reasoningEffort: 'ultra', maxTokens: 700 } }, { providerId: 'Worker/Backup', modelId: 'Exact: Worker/03' }];
   const auxiliary = { models: [{ providerId: 'Aux/@', modelId: 'Exact: Aux/04' }], capabilities: ['summary', 'review'] };
-  const base = await store.updateConfig({ models: [router], auxiliary, capabilities: { proactive: true }, workerConcurrency: 3 });
+  const base = await store.updateConfig({ models: [router], auxiliary, capabilities: { proactive: true } });
   const patch = identityConfigPatch({ ...base, workerModels: workers }, base);
   assert.deepEqual(Object.keys(patch), ['workerModels']);
   await store.updateConfig(patch, { revision: base.revision });
@@ -79,7 +79,6 @@ test('Worker-only edits survive reload and clearing the Worker preserves other r
   assert.deepEqual(config.models, [router]);
   assert.deepEqual(config.auxiliary, auxiliary);
   assert.deepEqual(config.capabilities, { proactive: true });
-  assert.equal(config.workerConcurrency, 3);
   assert.equal(Object.hasOwn(config, 'keyPools'), false);
   assert.deepEqual(roleModels(undefined, config, 'worker'), workers);
   for (const workerModels of [null, {}, [{ providerId: 'p' }], [workers[0], workers[0]], [{ ...workers[0], apiKey: 'secret' }]]) {

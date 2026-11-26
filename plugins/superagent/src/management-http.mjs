@@ -54,17 +54,50 @@ export function createManagementHttp({ settings, taskManagement, profileId, read
     return readback();
   }
   const scope = { owner: 'desktop-owner', mode: 'global' };
-  function cleanup(input, peer) {
+  async function archiveWorkerTask({ taskId, worker, requestId }, peer, workerArchive) {
+    const actor = managementOwner(peer);
+    if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 200)
+      throw fail('CLEANUP_INPUT_INVALID', '归档请求标识无效');
+    const keys = ['sessionId', 'assignmentId', 'runId', 'fence', 'instructionRevision'];
+    const expected = worker && Object.fromEntries(keys.map(key => [key, worker[key]]));
+    if (!expected || worker.taskId !== taskId)
+      throw fail('CLEANUP_CONFLICT', '工单执行已变化，请重新确认', 409);
+    const previous = taskManagement.cleanupReceiptByRequest(requestId);
+    const current = workerArchive.describeTask(taskId);
+    const matches = current?.taskId === taskId && keys.every(key => current[key] === expected[key]);
+    if (!previous && !matches) throw fail('CLEANUP_CONFLICT', '工单执行已变化，请重新确认', 409);
+    const preview = previous ? taskManagement.getCleanupPreview(previous.previewId) : taskManagement.previewCleanup({ scope, ids: [taskId] });
+    const frozen = preview.items.find(row => row.id === taskId);
+    if (!frozen || keys.some(key => frozen[key] !== expected[key])) {
+      const exclusion = preview.excluded?.find(row => row.id === taskId);
+      throw fail(exclusion?.code || 'CLEANUP_CONFLICT', exclusion?.reason || '工单执行已变化，请重新确认', 409);
+    }
+    const source = { sessionId: 'desktop-owner-page', callId: requestId, worker: expected };
+    const ids = [taskId];
+    const confirmedBy = taskManagement.createCleanupConfirmation({ previewId: preview.previewId,
+      manifestHash: preview.manifestHash, ids, actorId: actor.id, source });
+    const receipt = await taskManagement.commitCleanup({ previewId: preview.previewId, ids, confirmedBy, requestId });
+    const item = receipt.items.find(row => row.id === taskId);
+    if (item?.outcome === 'failed') throw fail(item.code, item.reason, 409);
+    return { archived: item?.archived === true && taskManagement.isArchivedTask(taskId)
+      && taskManagement.latestArchiveReceipt(taskId)?.receiptId === receipt.receiptId };
+  }
+  async function cleanup(input, peer) {
     managementOwner(peer);
     if (input.action === 'taskCleanupPreview') return taskManagement.previewCleanup({ scope, ids: input.taskIds });
     if (input.action === 'taskCleanupRestorePreview') {
       const ids = input.taskIds;
       if (!Array.isArray(ids) || !ids.length) throw fail('CLEANUP_INPUT_INVALID', '请选择需要恢复展示的任务');
-      const rows = taskManagement.cleanupHistory({ taskId: ids[0] });
-      const receipt = rows.find(row => row.operation === 'archive'
-        && ids.every(id => row.items.some(item => item.id === id)));
-      if (!receipt) throw fail('CLEANUP_RECEIPT_NOT_FOUND', '归档记录不存在');
-      return { excluded: [], ...taskManagement.previewRestore({ scope, receiptId: receipt.receiptId, ids }) };
+      // Each Task carries its own current archive pointer. Scanning history by
+      // one Task's id could pick an older receipt that no longer governs it.
+      const receipts = new Set(ids.map(id => {
+        const latest = taskManagement.latestArchiveReceipt(id);
+        if (!latest) throw fail('CLEANUP_RECEIPT_NOT_FOUND', '归档记录不存在');
+        return latest.receiptId;
+      }));
+      if (receipts.size !== 1) throw fail('CLEANUP_CONFLICT', '所选任务的归档记录不同，请分开恢复');
+      const [receiptId] = receipts;
+      return { excluded: [], ...taskManagement.previewRestore({ scope, receiptId, ids }) };
     }
     if (input.action === 'taskCleanupHistory') return { history: taskManagement.cleanupHistory(input) };
     const preview = taskManagement.getCleanupPreview(input.previewId);
@@ -75,7 +108,7 @@ export function createManagementHttp({ settings, taskManagement, profileId, read
     const confirmedBy = taskManagement.createCleanupConfirmation({ previewId: preview.previewId,
       manifestHash: preview.manifestHash, ids, actorId: 'desktop-owner', source });
     const args = { previewId: preview.previewId, ids, confirmedBy, requestId: input.requestId };
-    return input.action === 'taskCleanupRestore' ? taskManagement.restoreCleanup(args) : taskManagement.commitCleanup(args);
+    return input.action === 'taskCleanupRestore' ? await taskManagement.restoreCleanup(args) : await taskManagement.commitCleanup(args);
   }
   return {
     patchAssistant: (input, peer) => patch({ adapterId: 'superagent', namespace: 'superagent', patch: input.patch,
@@ -85,6 +118,7 @@ export function createManagementHttp({ settings, taskManagement, profileId, read
     patchLearning: (input, peer) => patch({ adapterId: 'superagent', namespace: 'superagent-learning',
       patch: input.patch, revision: input.expectedHash, requestId: input.requestId, peer, readback: readLearning }),
     cleanup,
+    archiveWorkerTask,
     async dispatch(input, peer) {
       const manager = available(), actor = pageActor(peer);
       switch (input.action) {

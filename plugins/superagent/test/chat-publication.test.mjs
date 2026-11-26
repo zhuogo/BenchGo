@@ -1,7 +1,7 @@
 import { channelMessageRecordType } from '../src/channel-session-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activeChatReply, chatPublicationType, taskCleanupNoticeSource, installChatPublication, projectChatMessages, chatNotificationIdentities } from '../src/chat-publication.mjs';
+import { activeChatReply, chatPublicationType, installChatPublication, projectChatMessages, chatNotificationIdentities } from '../src/chat-publication.mjs';
 import { taskReplySource } from '../src/task-reply.mjs';
 import { chatPublicationRecordOf, hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../base/shared/public-chat-record.mjs';
 
@@ -242,24 +242,34 @@ test('incomplete or cross-request approval sources never attach a card to a natu
   assert.equal(projectChatMessages([boundApprovalNotice(), publication])[0].approval, undefined);
 });
 
-test('execution scope notices hide their source, publish only after current host validation, and restore one natural reply', async () => {
-  for (const allowed of [true, false]) {
-    const notice = { ...user, data: { ...user.data, id: 'execution-notice', source: { kind: taskCleanupNoticeSource, triggerId: 'native', taskId: 'same-task' },
-      content: [{ type: 'text', text: 'PRIVATE_EXPANSION_ORIGINAL' }] } };
-    const events = [start(), notice, answer([{ type: 'text', text: '新增范围需要你确认。' }])];
-    assert.equal(activeChatReply(events).requestId, 'execution-notice');
-    assert.deepEqual(projectChatMessages([...events, end()]), []);
-    let stopping;
-    const agent = { session: { snapshotEvents: () => events } };
-    installChatPublication({ on: (_name, handler) => { stopping = handler; }, tools: { register() {} } }, agent,
-      { canPublish: async request => { assert.equal(request.source.triggerId, 'native'); return allowed; },
-        appendRecord: (_session, type, data) => events.push({ type, data, ignorable: true, seq: events.length }) });
-    await stopping({ agent, turn: 1 }); await stopping({ agent, turn: 1 });
-    const restored = projectChatMessages(JSON.parse(JSON.stringify([...events, end()])));
-    assert.equal(restored.length, allowed ? 1 : 0);
-    if (allowed) assert.equal(restored[0].text, '新增范围需要你确认。');
-    assert.doesNotMatch(JSON.stringify(restored), /PRIVATE_EXPANSION_ORIGINAL/);
-  }
+test('legacy execution scope drafts stay private even when they follow a human request within a turn', async () => {
+  const notice = { ...user, data: { ...user.data, id: 'execution-notice', source: { kind: 'benchgo-execution-input', triggerId: 'native', taskId: 'same-task' },
+    content: [{ type: 'text', text: 'PRIVATE_EXPANSION_ORIGINAL' }] } };
+  const events = [start(), user, notice, answer([{ type: 'text', text: 'PRIVATE_DRAFT' }])];
+  const completed = [...events, end()];
+  assert.deepEqual(projectChatMessages(completed).map(row => [row.role, row.text]), [['user', 'question']]);
+  assert.deepEqual(chatNotificationIdentities(completed, completed.at(-1)), []);
+  assert.equal(activeChatReply(events), null);
+  let stopping, tool;
+  const agent = { session: { snapshotEvents: () => events } };
+  installChatPublication({ on: (_name, handler) => { stopping = handler; }, tools: { register(value) { tool = value; } } }, agent,
+    { canPublish: async () => true, appendRecord: () => assert.fail('legacy notices cannot publish new replies') });
+  await stopping({ agent, turn: 1 });
+  assert.throws(() => tool.execute({ text: 'PRIVATE_DRAFT' }, { agent, concludeTurn() {} }), { code: 'CHAT_PUBLICATION_REJECTED' });
+});
+
+test('legacy execution scope notices restore only the final reply already recorded for their own request', () => {
+  const notice = { ...user, seq: 2, data: { ...user.data, id: 'execution-notice', source: { kind: 'benchgo-execution-input', triggerId: 'native', taskId: 'same-task' },
+    content: [{ type: 'text', text: 'PRIVATE_EXPANSION_ORIGINAL' }] } };
+  const draft = { ...answer([{ type: 'text', text: 'PRIVATE_DRAFT' }]), seq: 3 };
+  draft.data.step = 1;
+  const call = { type: 'tool/call', seq: 4, data: { name: 'assistant_reply', turn: 1, step: 2 } };
+  const publication = reply(5, { requestId: notice.data.id, text: '新增范围需要你确认。' });
+  const events = [start(), { ...user, seq: 1 }, notice, draft, call, publication, { ...publication, seq: 6 }, { ...end(), seq: 7 }];
+  const restored = projectChatMessages(JSON.parse(JSON.stringify(events)));
+  assert.deepEqual(restored.map(row => [row.role, row.text]), [['user', 'question'], ['assistant', '新增范围需要你确认。']]);
+  assert.equal(restored[1].requestId, notice.data.id);
+  assert.doesNotMatch(JSON.stringify(restored), /PRIVATE/);
 });
 
 test('usage comes only from final model request and exposes numeric allowlist', () => {

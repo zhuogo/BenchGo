@@ -2,9 +2,9 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { openDeviceRegistry, normalizeTarget } from './registry.mjs';
-import { remoteJson } from './remote.mjs';
+import { probeRemote, remoteJson } from './remote.mjs';
 import { createDeviceResources, deviceConnectionFailure } from './resources.mjs';
-import { readDeviceInfo, selectRoute } from './routes.mjs';
+import { selectRoute } from './routes.mjs';
 import { createDeviceProxy } from './proxy.mjs';
 import { createServerManager } from '../server/manager.mjs';
 import { verifyReturnRoute } from '../pairing/return.mjs';
@@ -228,16 +228,23 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
       let proxy = proxies.get(id);
       if (!proxy) {
         const lease = await groupAssets.call(asset, 'workspace');
+        await probeRemote(lease);
         const published = publicOrigin ? registerProxy() : null;
-        proxy = await createDeviceProxy(lease, { webRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}),
-          parentOrigin: [origin, publicOrigin, ...parents].filter(Boolean).join(' '),
-          workbenchLease: () => groupAssets.call(asset, 'workspace') });
+        try {
+          proxy = await createDeviceProxy(lease, { webRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}),
+            parentOrigin: [origin, publicOrigin, ...parents].filter(Boolean).join(' '),
+            workbenchLease: () => groupAssets.call(asset, 'workspace') });
+        } catch (error) {
+          published?.remove();
+          throw error;
+        }
         const previous = proxies.get(id);
-        if (previous) await proxy.close();
+        if (previous) { published?.remove(); await proxy.close(); }
         else { published?.attach(proxy); proxies.set(id, proxy); }
         proxy = previous ?? proxy;
       }
-      return { device: asset, url: await proxy.enter({ verifyPage: true }) };
+      await proxy.refresh();
+      return { device: asset, url: proxy.enter() };
     }
     if (input.action === 'resources') return resources.resources(input);
     if (input.action === 'callDevice') return resources.callDevice(input);
@@ -305,13 +312,12 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
         let url, activeRoute, freshInfo;
         try {
           const accept = async (target, route) => {
-              const info = route?.kind !== 'ssh' ? await readDeviceInfo(target) : undefined;
               const previous = proxies.get(id), routeKey = JSON.stringify([target.url, target.pin, target.relayTarget]);
               let proxy = previous?.routeKey === routeKey && previous.target === savedTarget ? previous : undefined;
               const published = !proxy && publicOrigin ? registerProxy() : null;
               try {
                 if (!proxy) proxy = await createDeviceProxy(target, { webRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}), parentOrigin: [origin, publicOrigin, ...parents].filter(Boolean).join(' '), onSuccess: () => markSuccess(id, savedTarget), onFailure: error => markFailure(id, savedTarget, error) });
-                url = await proxy.enter({ verifyPage: true });
+                else await proxy.refresh();
                 if (closed || registry.get(id) !== savedTarget) throw fail('设备连接已更新，请重试', 409);
                 if (proxy !== previous) {
                   proxy.routeKey = routeKey;
@@ -319,8 +325,9 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
                   published?.attach(proxy); proxies.set(id, proxy);
                   await previous?.close();
                 }
+                url = proxy.enter();
                 activeRoute = route ?? { kind: 'direct' };
-                freshInfo = info;
+                freshInfo = route?.kind === 'ssh' ? undefined : proxy.admission;
               } catch (error) {
                 if (proxy !== previous) await proxy?.close();
                 published?.remove();
@@ -328,6 +335,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
               }
           };
           await workbenchRoute(savedTarget, {
+            connectFirst: true,
             onHealth: (route, health, details) => registry.markRouteHealth(id, route.relayId || route.url, health, { ...details, lastError: details.lastError?.slice(0, 200) }),
             accept,
           });

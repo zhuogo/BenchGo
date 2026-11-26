@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { request } from 'node:https';
@@ -11,14 +11,15 @@ import { listen } from '../src/transport/server.mjs';
 
 async function setup(t) {
   const directory = await mkdtemp(join(tmpdir(), 'link-sessions-')), identity = await loadIdentity(directory);
-  const ctx = { connection: {
+  await writeFile(join(directory, 'index.html'), '<html></html>');
+  const ctx = { webServer: { renderIndex: html => html }, connection: {
     createPeer: () => ({ async dispose() {} }),
     createSharedFetchHandler: () => ({ fetch: () => Response.json({ ok: true }) }),
   } };
   const f = { directory, identity };
   f.start = async () => {
     f.store = await openStore(directory);
-    f.workbench = createWorkbench(ctx, f.store);
+    f.workbench = createWorkbench(ctx, f.store, { workbenchRoot: directory });
     f.server = await listen({ identity, config: { host: '127.0.0.1', port: 0 }, store: f.store, workbench: f.workbench, onError() {} });
   };
   f.call = (path, { token, cookie } = {}) => new Promise((resolve, reject) => {

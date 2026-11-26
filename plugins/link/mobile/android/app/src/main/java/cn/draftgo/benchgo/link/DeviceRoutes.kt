@@ -5,7 +5,13 @@ import org.json.JSONObject
 import java.io.IOException
 import java.net.URI
 import java.security.cert.CertificateException
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
 
 internal data class DeviceRoute(
     val url: String,
@@ -84,23 +90,47 @@ internal fun <T> connectOnDeviceRoute(
     routes: List<DeviceRoute>,
     cooling: (DeviceRoute) -> Boolean,
     onFailure: (DeviceRoute) -> Unit,
+    scheduler: ScheduledExecutorService? = null,
+    probe: ((DeviceRoute) -> Call)? = null,
     connect: (DeviceRoute) -> T,
 ): T {
     var lastFailure: IOException? = null
-    var skippedCooling = false
-    for (route in routes) {
-        if (route.kind == "relay" && cooling(route)) {
-            skippedCooling = true
-            continue
+    val available = routes.filterNot { it.kind == "relay" && cooling(it) }
+    val pending = mutableMapOf<Int, CompletableFuture<IOException?>>()
+    val cancel = mutableListOf<() -> Unit>()
+    try {
+        for ((index, route) in available.withIndex()) {
+            if (scheduler != null && probe != null) for (offset in 1..2) {
+                val next = available.getOrNull(index + offset) ?: break
+                pending.getOrPut(index + offset) {
+                    val call = probe(next)
+                    val result = CompletableFuture<IOException?>()
+                    val timer = scheduler.schedule({
+                        call.enqueue(object : Callback {
+                            override fun onFailure(call: Call, e: IOException) { result.complete(e) }
+                            override fun onResponse(call: Call, response: Response) {
+                                response.use {
+                                    result.complete(if (it.code in 502..504) RouteHttpFailure(it.code, "连接暂不可用") else null)
+                                }
+                            }
+                        })
+                    }, 100L * offset, TimeUnit.MILLISECONDS)
+                    cancel.add { timer.cancel(false); call.cancel() }
+                    result
+                }
+            }
+            try {
+                pending[index]?.get()?.let { throw it }
+                return connect(route)
+            } catch (error: IOException) {
+                if (generateSequence<Throwable>(error) { it.cause }.take(12).any { it is SSLException || it is CertificateException } ||
+                    error is RouteHttpFailure && error.status !in 502..504) throw error
+                lastFailure = error
+                if (route.kind == "relay") onFailure(route)
+            }
         }
-        try {
-            return connect(route)
-        } catch (error: IOException) {
-            if (generateSequence<Throwable>(error) { it.cause }.take(12).any { it is SSLException || it is CertificateException } ||
-                error is RouteHttpFailure && error.status !in 502..504) throw error
-            lastFailure = error
-            if (route.kind == "relay") onFailure(route)
-        }
+    } finally {
+        cancel.forEach { it() }
     }
-    throw lastFailure ?: if (skippedCooling) RelayRoutesCooling() else IOException("无可用连接路由")
+    throw lastFailure ?: if (available.size < routes.size) RelayRoutesCooling() else IOException("无可用连接路由")
 }

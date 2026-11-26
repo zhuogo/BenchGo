@@ -12,7 +12,7 @@ import { nativeModelConfig } from '../../base/shared/runtime-setting-fields.mjs'
 import plugin from '../../base/package.json' with { type: 'json' };
 
 export const REMOTE_EXECUTION_VERSION = 2;
-export const REMOTE_EXECUTION_OPERATIONS = Object.freeze(['catalog', 'submit', 'get', 'input', 'control', 'ack', 'archive', 'archives']);
+export const REMOTE_EXECUTION_OPERATIONS = Object.freeze(['catalog', 'submit', 'get', 'input', 'control', 'ack', 'archive', 'unarchive', 'archives']);
 const required = (value, label, max = 512) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(value)) throw executionError('INVALID_EXECUTION_REQUEST', `${label}无效`, 400);
   return value;
@@ -73,6 +73,7 @@ export function remoteExecutionEvidence(log, row) {
 /** An authenticated host submits execution instances; no SuperAgent or Task database is involved. */
 export async function createRemoteExecutionService({ ctx, directory, commander = getService(ctx, 'commander'), maxConcurrent = 4 }) {
   const store = openRemoteExecutionStore(directory), live = new Map(), officialProgressOwners = new Map(), jobs = new Set(), recoveries = new Map();
+  const archiveRequests = new Set();
   let closed = false;
   const llm = getService(ctx, 'llm'), agents = getService(ctx, 'agents'), query = getService(ctx, 'sessionQuery');
   const registry = getService(ctx, 'workspaceRegistry');
@@ -804,23 +805,33 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
       if (!id && input.operation === 'get' && input.requestId) id = store.receipt(subject, input.requestId, undefined)?.executionId;
       let row = store.owned(required(id, '执行 ID'), subject);
       if (input.identity && executionFingerprint(row.identity) !== executionFingerprint(input.identity)) throw executionError('EXECUTION_IDENTITY_CHANGED', '执行身份不一致', 403);
-      if (input.operation === 'archive') {
+      if (input.operation === 'archive' || input.operation === 'unarchive') {
+        const archived = input.operation === 'archive';
         if (!input.identity || input.sessionId !== row.sessionId || !row.sessionOwned) throw executionError('EXECUTION_IDENTITY_CHANGED', '会话归属无法核验', 409);
         required(input.requestId, '请求 ID');
         if (store.receipt(subject, input.requestId, input)) return response(row, input);
         store.assertFence(row);
         revision(input.instructionRevision);
-        if (input.instructionRevision !== row.receivedInstructionRevision) throw executionError('EXECUTION_REVISION_CONFLICT', '工单要求已变更，请重新确认归档', 409);
-        if (row.config.harness === 'official') await registry.archiveSession(row.sessionId, { stopActivity: true });
-        else await commander.archive(row.sessionId, true, { stopActivity: true });
-        recordArchive(row.sessionId);
-        row = store.get(id);
-        if (!store.receipt(subject, input.requestId, input)) {
-          if (!row.sessionArchived || row.sessionArchiveInstructionRevision !== input.instructionRevision)
-            throw executionError('EXECUTION_REVISION_CONFLICT', '会话的归档记录与当前工单要求版本不一致', 409);
-          store.recordCommand(subject, input, id, { instructionRevision: row.sessionArchiveInstructionRevision, sessionArchiveCursor: row.sessionArchiveCursor });
-        }
-        return response(row, input);
+        if (input.instructionRevision !== row.receivedInstructionRevision) throw executionError('EXECUTION_REVISION_CONFLICT', '工单要求已变更，请重新确认会话操作', 409);
+        if (archiveRequests.has(id)) throw executionError('EXECUTION_ARCHIVE_PENDING', '会话整理正在提交，请稍后重试');
+        archiveRequests.add(id);
+        try {
+          if (row.config.harness === 'official') {
+            if (archived) await registry.archiveSession(row.sessionId, { stopActivity: true });
+            else await registry.unarchiveSession(row.sessionId);
+            recordArchive(row.sessionId, registry.archivedSessionIds.includes(row.sessionId));
+          } else {
+            await commander.archive(row.sessionId, archived, archived ? { stopActivity: true } : {});
+            recordArchive(row.sessionId, Boolean(commander.executionSession(row.id)?.archived));
+          }
+          row = store.get(id);
+          store.assertFence(row);
+          if (Boolean(row.sessionArchived) !== archived || row.receivedInstructionRevision !== input.instructionRevision
+            || archived && row.sessionArchiveInstructionRevision !== input.instructionRevision)
+            throw executionError('EXECUTION_REVISION_CONFLICT', '会话状态与当前工单要求版本不一致', 409);
+          store.recordCommand(subject, input, id, { instructionRevision: input.instructionRevision, sessionArchiveCursor: row.sessionArchiveCursor ?? 0 });
+          return response(row, input);
+        } finally { archiveRequests.delete(id); }
       }
       if (input.operation === 'get') { if (row.phase === 'uncertain') row = await recover(id); return response(store.get(id), input); }
       store.assertFence(row);
@@ -833,6 +844,7 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
       if (input.operation === 'control') {
         if (!['pause', 'resume', 'cancel'].includes(input.control)) throw executionError('INVALID_EXECUTION_CONTROL', '不支持的执行控制', 422);
         if (input.control === 'resume') {
+          if (row.sessionArchived || archiveRequests.has(id)) throw executionError('EXECUTION_ARCHIVE_PENDING', '会话正在整理或已归档，请先恢复会话');
           if (row.phase !== 'paused' || live.has(id)) throw executionError('EXECUTION_NOT_PAUSED', '执行实例尚未处于可恢复的暂停边界');
           if (live.size >= maxConcurrent) throw executionError('EXECUTION_CAPACITY', '执行并发已满', 429);
           store.tx(() => {
@@ -854,6 +866,7 @@ export async function createRemoteExecutionService({ ctx, directory, commander =
       active(row);
       if (!['revision', 'context', 'answer'].includes(input.kind)) throw executionError('INVALID_EXECUTION_INPUT', '不支持的执行输入类型', 422);
       required(input.text, '输入文本', 100000); revision(input.instructionRevision);
+      if (input.kind === 'revision' && archiveRequests.has(id)) throw executionError('EXECUTION_REVISION_PENDING', '会话整理尚未提交，请保留请求 ID 稍后重试');
       if (input.kind === 'revision' ? input.instructionRevision <= row.receivedInstructionRevision
         : input.kind === 'context' ? input.instructionRevision > row.receivedInstructionRevision : input.instructionRevision !== row.receivedInstructionRevision) throw executionError('EXECUTION_REVISION_CONFLICT', '输入要求版本不匹配');
       if (input.kind === 'revision' && row.receivedInstructionRevision !== row.appliedInstructionRevision) throw executionError('EXECUTION_REVISION_PENDING', '上一要求版本尚未到达官方应用边界，请保留请求 ID 稍后重试');

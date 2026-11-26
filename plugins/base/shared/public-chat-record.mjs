@@ -2,6 +2,10 @@
 export const chatPublicationType = 'plugin:benchgo-plugin/chat-publication';
 export const channelMessageRecordType = 'plugin:benchgo-plugin/channel-message';
 
+export function isUserStoppedTurn(reason) {
+  return reason?.kind === 'aborted' && reason.reason?.kind === 'user';
+}
+
 /** Host signal identity is independent of the transport's descriptive source label. */
 export function isHostReplyRequest(request) {
   const source = request?.source;

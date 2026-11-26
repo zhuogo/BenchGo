@@ -2,10 +2,20 @@ package cn.draftgo.benchgo.link
 
 import java.io.IOException
 import java.net.SocketTimeoutException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLHandshakeException
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DeviceRoutesTest {
@@ -50,6 +60,29 @@ class DeviceRoutesTest {
                 }
             }
             assertSame(failure, result)
+        }
+    }
+
+    @Test fun startsBackupProbesBeforeThePreferredRouteFinishes() {
+        val started = CountDownLatch(2)
+        val scheduler = Executors.newSingleThreadScheduledExecutor()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            assertNull(chain.request().header("Authorization"))
+            started.countDown()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK").body("{}".toResponseBody()).build()
+        }.build()
+        try {
+            val chosen = connectOnDeviceRoute(listOf(direct, primary, spare), { false }, {}, scheduler,
+                { client.newCall(Request.Builder().url(it.url + "/link/api/info").build()) }) { route ->
+                assertSame(direct, route)
+                assertTrue(started.await(3, TimeUnit.SECONDS))
+                route
+            }
+            assertSame(direct, chosen)
+        } finally {
+            scheduler.shutdownNow()
+            client.dispatcher.executorService.shutdownNow()
         }
     }
 }

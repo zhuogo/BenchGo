@@ -38,12 +38,22 @@ async function fixture(t) {
     assert.deepEqual(JSON.parse(JSON.stringify(value)), value, 'official output must be lossless JSON');
     return value;
   };
-  store.orchestration.createThread({ id: 'external', source: { type: 'feishu', id: 'source' } });
-  store.orchestration.createTask({ id: 'finished', threadId: 'external', title: '整理文档', target: '完成发布文档',
-    mandate: { source: { channel: 'feishu', sessionId: 'other-source' } } });
-  store.orchestration.updateTask('finished', { status: 'completed' });
-  store.orchestration.createTask({ id: 'running', threadId: 'external', target: '仍在处理的工作',
-    mandate: { source: { channel: 'feishu', sessionId: 'other-source' } } });
+  const orchestration = store.orchestration;
+  const archivedSessions = new Set();
+  orchestration.installArchiveRuntime({
+    archive: id => archivedSessions.add(id), unarchive: id => archivedSessions.delete(id), archivedSessionIds: () => [...archivedSessions],
+  });
+  orchestration.createThread({ id: 'external', source: { type: 'feishu', id: 'source' } });
+  const task = (id, target, title) => {
+    orchestration.createTask({ id, threadId: 'external', title, target,
+      mandate: { source: { channel: 'feishu', sessionId: 'other-source' } } });
+    const assignment = orchestration.createAssignment(id, {});
+    const [claimed] = orchestration.claimAssignments('worker', { validateMandate: () => true, assignmentId: assignment.id });
+    orchestration.prepareRun(assignment.id, { owner: claimed.owner, fence: claimed.fence, sessionId: `worker-${id}`, directory });
+  };
+  task('finished', '完成发布文档', '整理文档');
+  orchestration.updateTask('finished', { status: 'completed' });
+  task('running', '仍在处理的工作');
   return { store, events, run, approvals };
 }
 
@@ -58,8 +68,8 @@ test('registered Router tools rename, archive, read receipts and restore cross-s
   const detail = (await f.run('assistant_tasks', { op: 'get', id: row.id })).task;
   assert.equal(detail.title, '发布文档'); assert.equal(detail.target, '完成发布文档');
   const preview = await f.run('assistant_task_cleanup', { op: 'preview', ids: [row.id, 'running'] });
-  assert.deepEqual(preview.items.map(item => item.id), [row.id]);
-  assert.equal(preview.excluded[0].code, 'EXECUTION_PENDING');
+  assert.deepEqual(preview.items.map(item => item.id), [row.id, 'running'], 'a running Task is archivable too');
+  assert.deepEqual(preview.excluded, []);
   const input = { op: 'commit', previewId: preview.previewId, ids: [row.id] };
   const receipt = await f.run('assistant_task_cleanup', input);
   assert.equal(receipt.operation, 'archive'); assert.equal(receipt.confirmedBy.source.messageId, 'owner-input');

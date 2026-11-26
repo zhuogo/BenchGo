@@ -87,7 +87,6 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
   const remoteExecutor = createRemoteAssignmentExecutor({ ctx, database, readPolicy, commitResult, signal: shutdown.signal, now });
   const worker = createAssistantAssignmentWorker({
     database, readPolicy, validateMandate: validateTaskMandate, logger: ctx.logger,
-    getConcurrency: async () => (await store.getConfig()).workerConcurrency ?? 2,
     execute: (assignment, context) => assignment.executor === 'remote' || context.task.mandate?.execution
       ? remoteExecutor.execute(assignment, context) : executeTask(assignment, context),
     onResult: async (result, context) => {
@@ -193,7 +192,7 @@ export function createOrchestrationRuntime({ ctx, store, feishu, channels, deliv
       await currentPolicy();
       database.queueAnsweredAttention({ validateMandate: mandate => validateTaskMandate(mandate, { policy }) });
     }
-    for (const task of database.schedulingTasks({ limit: 1000 })) {
+    for (const task of database.schedulingTasks()) {
       shutdown.signal.throwIfAborted();
       if (taskExecutionBlocked(task) || task.continuationWait && task.continuationWait.stage !== 'scheduling' || task.resultVersion > 0) continue;
       if (database.assignments(task.id).length) continue;

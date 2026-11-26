@@ -9,11 +9,14 @@ const sections = ['requirements', 'results', 'revisions', 'assignments', 'runs',
 const detailSections = ['progress', ...sections];
 const sourceIdentity = source => Object.fromEntries(['channel', 'sessionId', 'threadId', 'deviceId', 'messageId']
   .filter(key => typeof source?.[key] === 'string').map(key => [key, source[key]]));
+export const taskQueryInputError = message => Object.assign(new Error(message), { code: 'TASK_QUERY_INPUT' });
+export const optionalTaskRecordField = value => typeof value === 'string' && !value.trim() ? undefined : value;
+
 function recordFragment({ identity, value }, { section, textLimit, textOffset = 0, expectedHash }) {
   const serialized = JSON.stringify(value), totalCharacters = serialized.length;
   const contentHash = createHash('sha256').update(serialized).digest('hex');
   if (expectedHash !== undefined && expectedHash !== contentHash) throw Object.assign(new Error('任务记录已变化，请重新读取该记录'), { code: 'TASK_READ_CONFLICT' });
-  if (textOffset > totalCharacters) throw new Error('记录正文偏移超出范围');
+  if (textOffset > totalCharacters) throw taskQueryInputError('记录正文偏移超出范围');
   if (!textOffset && totalCharacters <= textLimit) return { identity, value, truncated: false };
   const nextTextOffset = textOffset + textLimit < totalCharacters ? textOffset + textLimit : null;
   return { identity, encoding: 'json', text: serialized.slice(textOffset, textOffset + textLimit), textOffset,
@@ -67,9 +70,9 @@ export function createDesktopTaskAccess(database, taskManagement, readProgress) 
   };
   return {
     query(ownerSessionId, { status, projectId, archived, query, createdAfter, createdBefore, channel, sessionId, limit = 20, offset = 0 } = {}) {
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('任务查询 limit 必须为 1 到 100');
-      if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('任务查询 offset 必须为非负整数');
-      if (archived !== undefined && typeof archived !== 'boolean') throw new Error('任务查询 archived 必须为布尔值');
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw taskQueryInputError('任务查询 limit 必须为 1 到 100');
+      if (!Number.isSafeInteger(offset) || offset < 0) throw taskQueryInputError('任务查询 offset 必须为非负整数');
+      if (archived !== undefined && typeof archived !== 'boolean') throw taskQueryInputError('任务查询 archived 必须为布尔值');
       const scope = isDesktopTaskManagementScope(ownerSessionId) ? undefined : desktopTaskOwnerScope(ownerSessionId);
       if (scope && !scope.sessionIds.length) return { tasks: [], nextOffset: null };
       const rows = database.listTasks({ ...(scope ? { ownerSessionIds: scope.sessionIds, ownerThreadId: scope.threadId } : {}), status, projectId, archived, query, createdAfter, createdBefore, channel, sessionId, limit: limit + 1, offset, newestFirst: true });
@@ -89,14 +92,19 @@ export function createDesktopTaskAccess(database, taskManagement, readProgress) 
       };
     },
     read(id, ownerSessionId, { section = 'overview', offset = 0, limit = 10, textLimit = 4000, textOffset = 0, recordId, expectedHash } = {}) {
-      if (!['overview', ...detailSections].includes(section)) throw new Error('无效任务详情分区');
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('任务详情 limit 必须为 1 到 50');
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(textOffset) || textOffset < 0) throw new Error('任务详情偏移必须为非负整数');
-      if (!Number.isSafeInteger(textLimit) || textLimit < 1 || textLimit > 12000) throw new Error('任务详情 textLimit 必须为 1 到 12000');
-      if (textOffset && (!recordId || limit !== 1)) throw new Error('分段续读须提供稳定 recordId 并使用 limit=1');
-      if (expectedHash !== undefined && (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/u.test(expectedHash) || !recordId || limit !== 1)) throw new Error('记录版本校验须提供有效 expectedHash、recordId 并使用 limit=1');
-      if (section === 'overview' && (offset || textOffset || recordId !== undefined)) throw new Error('概览不接受记录偏移，请选择具体详情分区');
-      if (section === 'progress' && (offset || textOffset || recordId !== undefined)) throw new Error('执行进展按当前快照读取，无需记录偏移');
+      recordId = optionalTaskRecordField(recordId);
+      expectedHash = optionalTaskRecordField(expectedHash);
+      if (!['overview', ...detailSections].includes(section)) throw taskQueryInputError('无效任务详情分区');
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw taskQueryInputError('任务详情 limit 必须为 1 到 50');
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(textOffset) || textOffset < 0) throw taskQueryInputError('任务详情偏移必须为非负整数');
+      if (!Number.isSafeInteger(textLimit) || textLimit < 1 || textLimit > 12000) throw taskQueryInputError('任务详情 textLimit 必须为 1 到 12000');
+      if (recordId !== undefined && typeof recordId !== 'string') throw taskQueryInputError('无效 recordId');
+      if ((textOffset || expectedHash !== undefined)
+        && (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/u.test(expectedHash) || !recordId || limit !== 1)) {
+        throw taskQueryInputError('分段续读须提供有效 expectedHash、recordId 并使用 limit=1');
+      }
+      if (section === 'overview' && (offset || textOffset || recordId !== undefined)) throw taskQueryInputError('概览不接受记录偏移，请选择具体详情分区');
+      if (section === 'progress' && (offset || textOffset || recordId !== undefined)) throw taskQueryInputError('执行进展按当前快照读取，无需记录偏移');
       const raw = database.getTask(id);
       if (!raw) return null;
       const task = presentation(owned(raw, ownerSessionId));

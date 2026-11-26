@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { mediaModelResult, mediaResultFile } from '../../media/shared/generation-result.mjs';
+import { mediaModelResult, mediaResultFile, mediaResultItems } from '../../media/shared/generation-result.mjs';
 
 export const delegationSchema = { type: 'object', properties: {
   provider: { type: 'string', enum: ['codex', 'claude', 'pi', 'opencode', 'gemini', 'grok', 'mcode'] },
@@ -72,7 +72,9 @@ export class DelegationBridge {
       const userText = session.parentId ? undefined : Object.values(session.receipts ?? {})
         .find(input => input.receipt.turnId === turnId && (input.kind ?? 'prompt') === 'prompt')?.text;
       const result = await media.executeNative({ sessionId: id, callId: turnId + ':' + callId, name, args, signal: controller.signal, userText });
-      if (live() && mediaResultFile(result)) this.commander.event(id, 'media.result', result);
+      for (const item of mediaResultItems(result)) {
+        if (live() && mediaResultFile(item)) this.commander.event(id, 'media.result', item);
+      }
       return mediaModelResult(result);
     } finally {
       this.commander.off('event', listener);

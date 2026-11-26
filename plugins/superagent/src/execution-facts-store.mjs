@@ -168,18 +168,23 @@ export function installExecutionFactsStore({ db, tx }) {
             'taskStateEventKey',json_extract(${payload},'$.taskStateEventKey')))); END;`);
       }
     }
-    for (const table of ['task_meta', 'assistant_goals']) {
+    for (const table of ['task_meta', 'assistant_goals', 'sa_task_archive']) {
       if (!currentTables.has(table)) continue;
       for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
         const row = operation === 'DELETE' ? 'OLD' : 'NEW';
-        const presentation = table === 'task_meta';
-        const task = presentation ? `substr(${row}.key,${'task-presentation:task:'.length + 1})` : 'NULL';
-        const condition = presentation ? `${row}.key LIKE 'task-presentation:task:%'` : '1';
+        // The archive projection is a Task presentation fact: readers must
+        // observe it exactly like a rename, never through a stale snapshot.
+        const presentation = table !== 'assistant_goals';
+        const task = table === 'sa_task_archive' ? `${row}.task_id`
+          : presentation ? `substr(${row}.key,${'task-presentation:task:'.length + 1})` : 'NULL';
+        const condition = table === 'sa_task_archive' ? '1' : presentation ? `${row}.key LIKE 'task-presentation:task:%'` : '1';
         const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name);
         const changed = operation === 'UPDATE' ? ` AND (${columns.map(column => `OLD.${column} IS NOT NEW.${column}`).join(' OR ')})` : '';
         const data = presentation ? `json_object('operation','${operation.toLowerCase()}')`
           : `json_object('goalId',${row}.id,'operation','${operation.toLowerCase()}')`;
-        db.exec(`CREATE TRIGGER IF NOT EXISTS sa_execution_fact_${table}_${operation.toLowerCase()}
+        // Archive rows can move between Tasks, so the trigger name is explicit.
+        const name = `sa_execution_fact_${table}_${operation.toLowerCase()}`;
+        db.exec(`CREATE TRIGGER IF NOT EXISTS ${name}
           AFTER ${operation} ON ${table} WHEN ${condition}${changed}
           BEGIN INSERT INTO sa_execution_facts(task_id,kind,observed_at,data)
           VALUES (${task},'${presentation ? 'presentation' : 'goal'}',strftime('%Y-%m-%dT%H:%M:%fZ','now'),${data}); END;`);

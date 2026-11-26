@@ -135,6 +135,32 @@ test('route selection fails over relays in configured priority order and stops a
   assert.deepEqual(calls, [direct.url, relayOne.url, relayTwo.url]);
 });
 
+test('route probes overlap but admission stays ordered and unused probes are cancelled', { timeout: 3000 }, async () => {
+  const first = { ...relay, url: 'https://priority.test', relayId: 'priority', priority: 0 };
+  const second = { ...relay, url: 'https://backup.test', relayId: 'backup', priority: 1 };
+  const third = { ...relay, url: 'https://reserve.test', relayId: 'reserve', priority: 2 };
+  const started = Promise.withResolvers(), cancelled = Promise.withResolvers(), release = Promise.withResolvers();
+  const admitted = [];
+  const selected = selectRoute({ ...target, routes: [first, second, third] }, {
+    async probe(candidate, { signal }) {
+      assert.deepEqual(Object.keys(candidate).sort(), ['pin', 'url']);
+      if (candidate.url === first.url) await release.promise;
+      if (candidate.url === third.url) {
+        started.resolve();
+        await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+        cancelled.resolve();
+      }
+    },
+    accept: async candidate => { admitted.push(candidate.url); },
+  });
+  await started.promise;
+  assert.deepEqual(admitted, []);
+  release.resolve();
+  assert.equal((await selected).url, first.url);
+  await cancelled.promise;
+  assert.deepEqual(admitted, [first.url]);
+});
+
 test('route selection reports cooldown when every relay is cooling down', async () => {
   await assert.rejects(selectRoute({ ...target, routes: [{ ...relay, relayId: 'primary', cooldownUntil: Date.now() + 60_000 }] }, { probe: async () => assert.fail('cooling route must not be probed') }), error => error.code === 'ROUTES_COOLDOWN' && error.retryAt > Date.now());
 });

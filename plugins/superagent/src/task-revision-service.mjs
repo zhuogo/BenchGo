@@ -93,10 +93,24 @@ export function createTaskRevisionService({ ctx, store, database = store.orchest
       || digest(finalTask.executionControl) !== digest(task.executionControl)
       || digest(finalTask.mandate) !== digest(task.mandate)) throw Object.assign(new Error('确认期间原指令、任务或授权规则已变化'), { code: 'TASK_CHANGE_STALE' });
     const approvedBinding = digest([task.id, task.instructionRevision, mandate, difference]);
-    return database.changeTask(task.id, { operation: input.operation, expectedInstructionRevision: input.expectedInstructionRevision ?? task.instructionRevision,
+    const saved = database.changeTask(task.id, { operation: input.operation, expectedInstructionRevision: input.expectedInstructionRevision ?? task.instructionRevision,
       target, acceptance, reason: input.reason, requestKey, requestPayload, mandate, triggerId: trigger.id,
       model, validateMandate: value => validateTaskMandate(value, { policy: finalPolicy }),
       authorizeExpansion: request => approval && approvedBinding === digest([request.task.id, request.task.instructionRevision, request.mandate, request.difference]) ? approval : null });
+    // A revise continues the same Task, so work that resumes must never stay
+    // hidden in the archive. An adjustment creates its own Task and leaves the
+    // original archived, which needs nothing here.
+    if (input.operation === 'revise' && saved.id === task.id && saved.archived)
+      await restoreArchive(saved.id);
+    return saved;
+  }
+  /** Task archival follows the official session archive set; only its own API clears it. */
+  async function restoreArchive(taskId) {
+    const registry = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry;
+    const sessionId = database.taskArchiveSession(taskId);
+    if (!sessionId || typeof registry?.unarchiveSession !== 'function') return;
+    await registry.unarchiveSession(sessionId);
+    ctx.get?.('benchgoWorkerArchive')?.syncProjection?.();
   }
   return {
     change: (input, exec, options) => change(input, exec, options),

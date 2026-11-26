@@ -78,6 +78,7 @@ function validateConfig(value) {
   if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new Error('Unsupported assistant configuration version');
   delete value.cardHtml;
   delete value.cardMotion;
+  delete value.workerConcurrency;
   if (value.pet === undefined) value.pet = null;
   if (value.petPrevious === undefined) value.petPrevious = null;
   if (value.petHasPrevious === undefined) value.petHasPrevious = false;
@@ -88,14 +89,12 @@ function validateConfig(value) {
   if (value.workerModels === undefined) value.workerModels = [];
   if (value.workerHarness === undefined) value.workerHarness = 'official';
   if (!['official', 'codex', 'claude'].includes(value.workerHarness)) throw new Error('Invalid Worker Harness');
-  if (value.workerConcurrency === undefined) value.workerConcurrency = 2;
   if (value.maintenance === undefined) value.maintenance = { quietSeconds: 120, intervalHours: 6 };
   if (!object(value.maintenance) || Object.keys(value.maintenance).some(key => !['quietSeconds', 'intervalHours'].includes(key))) throw new Error('Invalid maintenance configuration');
   value.maintenance = { quietSeconds: 120, intervalHours: 6, ...value.maintenance };
   for (const [key, min, max] of [['quietSeconds', 10, 86400], ['intervalHours', 1, 168]]) {
     if (!Number.isSafeInteger(value.maintenance[key]) || value.maintenance[key] < min || value.maintenance[key] > max) throw new Error(`Invalid maintenance ${key}`);
   }
-  if (!Number.isSafeInteger(value.workerConcurrency) || value.workerConcurrency < 1) throw new Error('Worker 并发数量必须是正整数');
   validateAssistantModels(value.models);
   validateAssistantModels(value.workerModels);
   if (value.workerHarness !== 'official' && value.workerModels.length !== 1)
@@ -209,6 +208,7 @@ export async function createAssistantStore({ dataDirectory } = {}) {
       if (!options.petWrite && ['pet', 'petPrevious', 'petHasPrevious'].some(key => Object.hasOwn(patch, key))) throw new Error('请通过宠物预览与应用操作修改形象');
       if (Object.hasOwn(patch, 'cardHtml')) throw Object.assign(new Error('侧栏 HTML 名片设置已移除'), { code: 'CARD_HTML_REMOVED', status: 400 });
       if (Object.hasOwn(patch, 'cardMotion')) throw Object.assign(new Error('形象动效设置已移除'), { code: 'CARD_MOTION_REMOVED', status: 400 });
+      if (Object.hasOwn(patch, 'workerConcurrency')) throw Object.assign(new Error('Worker 并发设置已移除'), { code: 'WORKER_CONCURRENCY_REMOVED', status: 400 });
       if (Object.hasOwn(patch, 'keyPools')) throw Object.assign(new Error('凭据路由池已移除，请使用首选和备用模型'), { code: 'KEY_POOL_REMOVED', status: 400 });
       if (['image', 'video'].some(key => Object.hasOwn(patch, key))) throw Object.assign(new Error('图片和视频模型请在媒体设置中配置'), { code: 'MEDIA_SETTINGS_MOVED', status: 400 });
       const current = await readConfig();
@@ -274,6 +274,7 @@ export async function createAssistantStore({ dataDirectory } = {}) {
     for (const key of ['tts', 'asr']) if (value[key]) delete value[key].credentialRef;
     delete value.cardHtml;
     delete value.cardMotion;
+    delete value.workerConcurrency;
     delete value.image;
     delete value.video;
     delete value.revision;

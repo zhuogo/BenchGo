@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -10,7 +10,6 @@ import { createOrchestrationRuntime } from '../src/orchestration-runtime.mjs';
 import { executionEvidence } from '../src/execution-evidence.mjs';
 import { createAssistantRuntimeStore } from '../src/runtime-store.mjs';
 import { createTaskManagement } from '../src/task-management.mjs';
-import { createTaskCleanupContinuation } from '../src/task-cleanup-continuation.mjs';
 
 async function fixture(t, { send, execute, onDelivered, notifyTaskResult, maintainTasks, channel = 'desktop', ctx = {}, now, result: patch = {} } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'benchgo-direct-delivery-'));
@@ -36,6 +35,36 @@ async function fixture(t, { send, execute, onDelivered, notifyTaskResult, mainta
   const advance = async () => { for (let i = 0; i < 30; i++) { await runtime.tick(); await new Promise(resolve => setTimeout(resolve, 2)); if (notifications || sends || db.getAssignment('work').state === 'uncertain') break; } };
   return { runtime, db, store, task, source, original, advance, notifications: () => notifications, counts: () => ({ executions, sends }) };
 }
+
+test('more than one hundred local tasks start while the original Worker is still running', async t => {
+  const started = new Set();
+  const release = Promise.withResolvers();
+  const { db, store, runtime, task } = await fixture(t, {
+    execute: async assignment => {
+      started.add(assignment.taskId);
+      await release.promise;
+      return { summary: 'Done', completion: { kind: 'completed' } };
+    },
+  });
+  try {
+    await store.updateConfig({ workerModels: [{ providerId: 'fixture', modelId: 'worker' }] });
+    const config = JSON.parse(await readFile(store.paths.config, 'utf8'));
+    await writeFile(store.paths.config, JSON.stringify({ ...config, workerConcurrency: 2 }));
+    assert.equal(Object.hasOwn(await store.getConfig(), 'workerConcurrency'), false);
+
+    await runtime.tick();
+    for (let i = 0; i < 100 && !started.has(task.id); i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.deepEqual([...started], [task.id]);
+
+    const added = Array.from({ length: 101 }, (_, i) => db.createTask({ threadId: 'thread',
+      target: `Independent task ${i}`, mandate: task.mandate }));
+    await runtime.tick();
+    for (let i = 0; i < 100 && started.size < 102; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.deepEqual(started, new Set([task.id, ...added.map(item => item.id)]));
+    assert.equal(db.getAssignment('work').state, 'claimed');
+    assert.equal(db.results(task.id).length, 0);
+  } finally { release.resolve(); }
+});
 
 test('stop observes an early cleanup rejection while the scheduling cycle is still draining', () => {
   // The official Host treats unhandled rejections as fatal. Isolate that event
@@ -141,24 +170,6 @@ test('unavailable remote observations remain unknown instead of claiming that ex
   assert.equal(evidence.executionAlive.status, 'unknown');
   assert.equal(evidence.watermarks[0].complete, false);
   assert.equal(app.localReads(), 0);
-});
-
-test('authorized stop-and-archive maintenance runs before queued work can be claimed', async t => {
-  let cleanup;
-  const app = await fixture(t, { maintainTasks: () => cleanup.tick() });
-  const database = createAssistantRuntimeStore({ filename: app.store.paths.database });
-  try {
-    const taskManagement = createTaskManagement({ database, orchestration: app.db });
-    cleanup = createTaskCleanupContinuation({ database, orchestration: app.db, taskManagement });
-    const admitted = cleanup.start({ ids: [app.task.id] }, { agent: { id: 'controller-session' }, instruction: {
-      message: { id: 'stop-before-claim', source: { kind: 'user' }, content: [{ type: 'text', text: '停止并归档这项任务。' }] } } });
-    await app.runtime.tick();
-    assert.equal(app.db.getAssignment('work').state, 'cancelled');
-    assert.equal(app.db.getAssignment('work').fence, 0);
-    assert.equal(app.counts().executions, 0);
-    assert.equal(app.db.getTask(app.task.id).archived, true);
-    assert.equal(cleanup.pending({ operationId: admitted.operationId }).items[0].status, 'completed');
-  } finally { database.close(); }
 });
 
 test('missing Worker configuration is a concrete scheduling blocker that clears after configuration returns', async t => {

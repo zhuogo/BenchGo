@@ -3,9 +3,9 @@ import { Button } from '../../shared/client/ui/button.jsx';
 import typographyCss from '../../shared/client/chat-typography.css';
 import css from './quiet-chat.css';
 
-export function ChatNotice({ message, children, noticeKey, alert = true }) {
+export function ChatNotice({ message, children, noticeKey, alert = true, tone }) {
   return <article className="ba-chat-message" data-role="assistant" data-chat-key={noticeKey}>
-    <div className="ba-chat-body"><div className="ba-chat-content ba-chat-notice">
+    <div className="ba-chat-body"><div className="ba-chat-content ba-chat-notice" data-tone={tone}>
       {message && <p role={alert ? 'alert' : undefined}>{message}</p>}
       {children}
     </div></div>

@@ -14,6 +14,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.webkit.WebViewAssetLoader
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -387,6 +388,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
     private val directoryRefresh = java.util.concurrent.atomic.AtomicBoolean()
     @Volatile private var nextDirectoryRefresh = 0L
     private val executor = Executors.newFixedThreadPool(3)
+    private val routeScheduler = Executors.newSingleThreadScheduledExecutor()
     private val clients = ConcurrentHashMap<String, OkHttpClient>()
     private val pairs = ConcurrentHashMap<String, NativePair>()
     private val routeCooldowns = ConcurrentHashMap<String, ConcurrentHashMap<DeviceRoute, Long>>()
@@ -467,23 +469,45 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
             }) { "工作台路线已更新，请重新打开设备" }
             return cookie
         }
-        val request = Request.Builder().url(identity.url + "/link/api/workbench").header("Authorization", "Bearer ${authorization(identity)}").post("{}".toRequestBody("application/json".toMediaType())).build()
+        return workbenchSession(identity, client).second
+    }
+
+    private fun workbenchSession(identity: Identity, client: OkHttpClient): Pair<JSONObject, String> {
+        val expectedHost = identity.hostId.ifBlank { identity.relayTarget.ifBlank { if (identity.pin.isEmpty()) "" else "sha256:${identity.pin}" } }
+        val input = JSONObject()
+        if (expectedHost.isNotEmpty()) input.put("expectedHostId", expectedHost)
+        val request = Request.Builder().url(identity.url + "/link/api/workbench")
+            .header("Authorization", "Bearer ${authorization(identity)}")
+            .post(input.toString().toRequestBody("application/json".toMediaType())).build()
         return client.newCall(request).execute().use { result ->
             if (!result.isSuccessful) {
                 val message = runCatching { JSONObject(result.body?.string() ?: "{}").optString("error") }.getOrDefault("")
                 throw RouteHttpFailure(result.code, message.ifBlank { "工作台连接失败（HTTP ${result.code}）" })
             }
             val body = JSONObject(result.body?.string() ?: "{}")
-            require(body.optString("url") == "/link/workbench/") { "工作台地址无效" }
-            result.headers.values("Set-Cookie").singleOrNull { it.contains("Path=/link/workbench/", true) && it.contains("HttpOnly", true) }
+            val hostId = body.optString("hostId")
+            if (hostId.isEmpty() || body.optString("authorizationId").isEmpty() || body.optString("url") != "/link/workbench/")
+                throw RouteHttpFailure(409, "请更新目标主机上的 BenchGo 以打开工作台")
+            val pin = hostPin(hostId)
+            if (expectedHost.isNotEmpty() && expectedHost != hostId || identity.pin.isNotEmpty() && pin != identity.pin)
+                throw HostIdentityFailure()
+            val cookie = result.headers.values("Set-Cookie").singleOrNull { it.contains("Path=/link/workbench/", true) && it.contains("HttpOnly", true) }
                 ?: throw IllegalStateException("工作台未返回设备会话")
+            body to cookie
         }
+    }
+
+    private fun probeRoute(identity: Identity, route: DeviceRoute): Call {
+        val candidate = identity.copy(url = route.url, pin = route.pin, relayTarget = route.relayTarget)
+        val client = clientFor(candidate).newBuilder().connectTimeout(2, TimeUnit.SECONDS)
+            .callTimeout(2_500, TimeUnit.MILLISECONDS).retryOnConnectionFailure(false).build()
+        return client.newCall(Request.Builder().url(candidate.url + "/link/api/info").build())
     }
 
     private fun connectWorkbench(identity: Identity, isCurrent: () -> Boolean): Pair<Identity, String> {
         if (identity.assetOwner.isNotEmpty()) {
             val (target, cookie) = assetWorkspace(identity)
-            return connectOnDeviceRoute(orderedDeviceRoutes(target), { false }, {}) { route ->
+            return connectOnDeviceRoute(orderedDeviceRoutes(target), { false }, {}, routeScheduler, { probeRoute(target, it) }) { route ->
                 check(isCurrent()) { "连接已取消" }
                 val candidate = target.copy(url = route.url, pin = route.pin, relayTarget = route.relayTarget)
                 val client = clientFor(candidate).newBuilder().connectTimeout(2, TimeUnit.SECONDS)
@@ -501,43 +525,20 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
         val cooldowns = routeCooldowns.getOrPut(identity.id) { ConcurrentHashMap() }
         cooldowns.entries.removeIf { it.value <= System.currentTimeMillis() }
         return connectOnDeviceRoute(candidates, { route -> (cooldowns[route] ?: 0) > System.currentTimeMillis() },
-            { route -> cooldowns[route] = System.currentTimeMillis() + 10_000 }) { route ->
+            { route -> cooldowns[route] = System.currentTimeMillis() + 10_000 }, routeScheduler, { probeRoute(identity, it) }) { route ->
             check(isCurrent()) { "连接已取消" }
             val candidate = identity.copy(url = route.url, pin = route.pin, relayTarget = route.relayTarget)
             val client = clientFor(candidate).newBuilder().connectTimeout(2, TimeUnit.SECONDS)
                 .readTimeout(5, TimeUnit.SECONDS).callTimeout(6, TimeUnit.SECONDS).retryOnConnectionFailure(false).build()
-            val request = Request.Builder().url(candidate.url + "/link/api/info")
-                .header("Authorization", "Bearer ${authorization(candidate)}").get().build()
-            val info = client.newCall(request).execute().use { result ->
-                if (!result.isSuccessful) throw RouteHttpFailure(result.code, "连接探测失败（HTTP ${result.code}）")
-                JSONObject(result.body?.string() ?: "{}")
-            }
-            val hostId = info.optString("hostId")
-            if (candidate.relayTarget.isNotEmpty() && candidate.relayTarget != hostId) throw HostIdentityFailure()
-            if (hostId.isNotEmpty()) {
-                val pin = hostPin(hostId)
-                if (identity.hostId.isNotEmpty() && identity.hostId != hostId ||
-                    identity.pin.isNotEmpty() && identity.pin != pin ||
-                    candidate.pin.isNotEmpty() && candidate.pin != pin) throw HostIdentityFailure()
-            }
-            val discovered = if (hostId.isNotEmpty()) trustedRoutes(info.optJSONArray("routes"), hostId) else null
+            val (info, cookie) = workbenchSession(candidate, client)
+            val hostId = info.getString("hostId")
+            val discovered = trustedRoutes(info.optJSONArray("routes"), hostId)
             val name = info.optString("hostName").trim().take(100)
             check(isCurrent()) { "连接已取消" }
-            if (hostId.isNotEmpty()) store.refreshConnection(identity, name, discovered, hostId)
-            // Only the session handshake can be retried on another route. Workbench requests stay on their chosen origin.
-            val cookie = workbenchCookie(candidate, client)
-            val entry = Request.Builder().url(candidate.url + "/link/workbench/")
-                .header("Cookie", cookie.substringBefore(';')).head().build()
-            client.newCall(entry).execute().use { response ->
-                if (!response.isSuccessful) throw RouteHttpFailure(response.code, "工作台暂不可用（HTTP ${response.code}）")
-                require(response.header("Content-Type")?.startsWith("text/html", true) == true) { "工作台页面无效" }
-            }
-            if (isCurrent()) {
-                if (hostId.isEmpty()) store.refreshConnection(identity, name, null, "")
-                activeRoutes[identity.id] = route
-                cooldowns.remove(route)
-            }
-            candidate.copy(name = name.ifBlank { identity.name }, hostId = hostId.ifBlank { identity.hostId }) to cookie
+            store.refreshConnection(identity, name, discovered, hostId)
+            activeRoutes[identity.id] = route
+            cooldowns.remove(route)
+            candidate.copy(name = name.ifBlank { identity.name }, hostId = hostId) to cookie
         }
     }
 
@@ -553,11 +554,11 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
             target to client
         }
         val routes = orderedDeviceRoutes(host)
-        if (sync) return connectOnDeviceRoute(routes, { false }, {}) { route ->
+        if (sync) return connectOnDeviceRoute(routes, { false }, {}, routeScheduler, { probeRoute(host, it) }) { route ->
             val (target, client) = select(route)
             post(target, "/link/api/rpc", input, token, client)
         }
-        val (target, client) = connectOnDeviceRoute(routes, { false }, {}) { route ->
+        val (target, client) = connectOnDeviceRoute(routes, { false }, {}, routeScheduler, { probeRoute(host, it) }) { route ->
             val (candidate, transport) = select(route)
             val request = Request.Builder().url(candidate.url + "/link/api/info")
                 .header("Authorization", "Bearer $token").get().build()
@@ -889,6 +890,7 @@ class LinkBridge(private val context: MainActivity, private val onIdentity: (Str
         servers.close()
         appUpdates.close()
         executor.shutdownNow()
+        routeScheduler.shutdownNow()
         clients.values.forEach { it.dispatcher.executorService.shutdownNow(); it.connectionPool.evictAll() }
         clients.clear()
     }

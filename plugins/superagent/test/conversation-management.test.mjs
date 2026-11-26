@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { registerConversationManagement } from '../src/conversation-management.mjs';
 import { isRouterQuery } from '../src/model-fallback.mjs';
 
@@ -47,8 +50,149 @@ function fixture({ threadId = 'main', risk = false, approvalPolicy = 'ask' } = {
     setOutcome: value => { outcome = value; }, onApproval: hook => { approvalHook = hook; },
     settings: (args, execution = exec) => definitions.get('assistant_settings').execute(args, execution),
     manage: (args, execution = exec) => definitions.get('assistant_task_manage').execute(args, execution),
+    sessions: (args, execution = exec) => definitions.get('assistant_session_archive').execute(args, execution),
     cleanup: (args, execution = exec) => definitions.get('assistant_task_cleanup').execute(args, execution) };
 }
+
+async function sessionArchiveFixture(t) {
+  const f = fixture({ approvalPolicy: 'never' });
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-session-archive-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, 'dismissed-harness.json'), '["dismissed"]');
+  const row = (sessionId, updatedAt, options = {}) => ({ sessionId, updatedAt, projections: { values: { title: `Chat ${sessionId}` } }, ...options });
+  const items = [
+    row(f.agent.id, 20), row('new', 16), row('linked', 14), row('active', 13, { running: true }), row('pinned', 12),
+    row('old', 10), row('dismissed', 9), row('worker', 8), row('fork', 7, { parentSessionId: 'old' }),
+    row('subagent', 6, { parentSessionId: 'old', origin: 'subagent' }), row('archived', 5), row('unrelated', 4),
+  ];
+  const native = [
+    { id: 'link-peer', ownerSessionId: 'linked', updatedAt: 14, status: 'idle' },
+    { id: 'detached', ownerSessionId: 'commander-web:detached:test', title: 'Chat native', projectId: 'demo', updatedAt: 11, status: 'idle' },
+    { id: 'execution', executionId: 'exec', title: 'Execution', projectId: 'demo', updatedAt: 3, status: 'idle' },
+  ];
+  const writes = [];
+  const registry = { archivedSessionIds: ['archived'], pinnedSessionIds: ['pinned'],
+    list: () => [{ id: 'demo', title: '演示', sessionIds: items.filter(row => row.sessionId !== 'unrelated').map(row => row.sessionId) }],
+    async archiveSession(id, options) {
+      assert.equal(options, undefined, 'batch archive must use normal activity checks');
+      writes.push(`official:${id}`);
+      this.archivedSessionIds.push(id);
+    } };
+  const commander = {
+    list: () => structuredClone(native),
+    snapshot: id => structuredClone(native.find(row => row.id === id)),
+    async archive(id, value, options) {
+      assert.equal(value, true);
+      assert.equal(options, undefined);
+      writes.push(`native:${id}`);
+      native.find(row => row.id === id).archived = true;
+    },
+  };
+  f.ctx.benchgo = { directory };
+  f.ctx.workspaceRegistry = registry;
+  const get = f.ctx.get;
+  f.ctx.get = name => ({ sessionController: { list: async () => ({ items: structuredClone(items) }) },
+    commander, benchgoExecution: {} })[name] ?? get(name);
+  f.store.orchestration = { listSessionRoles: () => [{ sessionId: 'worker', role: 'worker' }],
+    executionProjections: () => [], listTasks: () => [] };
+  return { ...f, items, native, writes, registry, commander };
+}
+
+test('owner can batch archive a scoped Workbench preview under never and keep protected sessions', async t => {
+  const f = await sessionArchiveFixture(t);
+  const preview = await f.sessions({ op: 'preview', project: '演示', title: 'chat', keepLatest: 1,
+    before: '1970-01-01T00:00:00.015Z' });
+  assert.deepEqual(preview.items.map(row => row.id), ['official:linked', 'native:detached', 'official:old', 'official:fork']);
+  assert.equal(preview.protected, 2);
+  assert.deepEqual(f.writes, []);
+  const input = { op: 'archive', previewId: preview.previewId, all: true };
+  const results = await Promise.all([f.sessions(input), f.sessions(input)]);
+  assert.deepEqual(results[0], results[1]);
+  assert.equal(results[0].archived, 4);
+  assert.deepEqual(f.writes, ['official:linked', 'native:link-peer', 'native:detached', 'official:old', 'official:fork']);
+  assert.deepEqual(f.approvals, []);
+  assert.equal(isRouterQuery('assistant_session_archive', { op: 'preview' }), true);
+  assert.equal(isRouterQuery('assistant_session_archive', { op: 'archive' }), false);
+});
+
+test('Workbench archive rejects expanded and stale previews and preserves newly active chats', async t => {
+  const f = await sessionArchiveFixture(t);
+  const preview = await f.sessions({ op: 'preview', ids: ['official:old', 'official:linked', 'official:fork'] });
+  await assert.rejects(f.sessions({ op: 'archive', previewId: preview.previewId, ids: ['official:new'] }), { code: 'SESSION_ARCHIVE_SCOPE' });
+  f.items.find(row => row.sessionId === 'old').updatedAt = 30;
+  f.native.find(row => row.id === 'link-peer').status = 'waiting';
+  const result = await f.sessions({ op: 'archive', previewId: preview.previewId,
+    ids: ['official:old', 'official:linked', 'official:fork'] });
+  assert.equal(result.archived, 1);
+  assert.equal(result.skipped, 2);
+  assert.deepEqual(f.writes, ['official:fork']);
+  f.events.at(-1).data.id = 'human-2';
+  await assert.rejects(f.sessions({ op: 'archive', previewId: preview.previewId, all: true }), { code: 'MANAGEMENT_STALE_INSTRUCTION' });
+  await assert.rejects(f.sessions({ op: 'preview' }, { ...f.exec, agent: {} }), { code: 'MANAGEMENT_OWNER_REQUIRED' });
+});
+
+test('Workbench archive retries only an incomplete target and finishes native synchronization', async t => {
+  const f = await sessionArchiveFixture(t);
+  const archive = f.commander.archive.bind(f.commander);
+  f.commander.archive = async () => { throw new Error('write interrupted'); };
+  const preview = await f.sessions({ op: 'preview', ids: ['official:linked', 'official:old'] });
+  const input = { op: 'archive', previewId: preview.previewId, all: true };
+  const result = await f.sessions(input);
+  assert.equal(result.archived, 1);
+  assert.equal(result.partial, 1);
+  f.commander.archive = archive;
+  assert.equal((await f.sessions(input)).archived, 2);
+  assert.deepEqual(f.writes, ['official:linked', 'official:old', 'native:link-peer']);
+});
+
+test('Workbench archive uses the native tool executor and persists recoverable official archive state', async t => {
+  const { loadRolePackage } = await import('./role-host-fixture.mjs');
+  const load = name => loadRolePackage('core/agent-loop', name);
+  const { Context } = await load('@deepseek-ai/cordis');
+  const ctx = new Context();
+  t.after(() => ctx.fiber.dispose());
+  for (const name of ['session', 'session-projection', 'system-prompt', 'tools', 'agent']) {
+    await ctx.plugin((await load(`@deepseek-ai/dsh-${name}`)).default);
+  }
+  await ctx.plugin(await loadRolePackage('core/tool-executor-native', '@deepseek-ai/dsh-tool-executor-native'));
+  const f = await sessionArchiveFixture(t);
+  const loadWorkspace = name => loadRolePackage('workspace/workspace', `@deepseek-ai/dsh-${name}`);
+  const { SESSION_FORMAT_VERSION } = await loadWorkspace('session');
+  const { DomainFacility } = await loadWorkspace('storage-domain');
+  const root = join(f.ctx.benchgo.directory, 'storages');
+  await ctx.plugin((await loadWorkspace('storage')).default);
+  await ctx.plugin(await loadRolePackage('storage/storage-json', '@deepseek-ai/dsh-storage-json'), { root });
+  const domain = new DomainFacility(ctx, { backend: 'json' });
+  ctx.storage.mount('domain', domain);
+  ctx.provide('storageDomain', domain);
+  ctx.provide('sessionPersistence', { list: async () => [{
+    header: { id: 'old', version: SESSION_FORMAT_VERSION, cwd: f.ctx.benchgo.directory, createdAt: 10, isSeeded: false },
+    revision: 'persisted-old',
+  }] });
+  await ctx.plugin((await loadWorkspace('workspace')).default);
+  f.ctx.workspaceRegistry = ctx.workspaceRegistry;
+  const name = 'assistant_session_archive';
+  const { description, properties, required } = f.definitions.get(name);
+  ctx.tools.register({ name, description, parameters: { type: 'object', properties, required, additionalProperties: false },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+    execute: args => f.sessions(args) });
+  const invoke = async args => {
+    const signal = new AbortController().signal;
+    const batch = await ctx.tools.execute({ signal, calls: [{ type: 'tool-call', id: args.op, name, arguments: JSON.stringify(args) }] });
+    const result = batch.results[0].result;
+    assert.equal(result.isError, false, JSON.stringify(result));
+    return JSON.parse(result.content[0].text);
+  };
+  const preview = await invoke({ op: 'preview', ids: ['official:old'] });
+  assert.equal(preview.total, 1);
+  assert.equal((await invoke({ op: 'archive', previewId: preview.previewId, all: true })).archived, 1);
+  const storedArchives = async () => JSON.parse(await readFile(join(root, 'workspace.json'), 'utf8')).global.archivedSessionIds;
+  assert.deepEqual(await storedArchives(), ['old']);
+  assert.equal((await invoke({ op: 'preview', ids: ['official:old'] })).total, 0);
+  await ctx.workspaceRegistry.unarchiveSession('old');
+  assert.deepEqual(await storedArchives(), []);
+  assert.equal((await invoke({ op: 'preview', ids: ['official:old'] })).total, 1);
+});
 
 const prepare = f => f.settings({ op: 'prepare', adapterId: 'any-plugin', namespace: 'opaque.namespace', expectedRevision: 3,
   ops: [{ op: 'set', path: ['arbitrary', '0', 'modelId'], value: 'opaque/model:id' }] });
@@ -157,8 +301,8 @@ test('approval revalidates original human and authoritative local session before
 
 test('cleanup previews globally, then binds the exact selected subset to the real owner instruction', async () => {
   const f = fixture();
-  assert.equal(await f.cleanup({ op: 'preview', includeUnsettled: true }), f.preview);
-  assert.deepEqual(f.calls[0].args, { includeUnsettled: true, scope: { owner: 'desktop-owner', mode: 'global' } });
+  assert.equal(await f.cleanup({ op: 'preview' }), f.preview);
+  assert.deepEqual(f.calls[0].args, { scope: { owner: 'desktop-owner', mode: 'global' } });
   assert.deepEqual(await f.cleanup({ op: 'commit', previewId: 'preview', ids: ['two'], requestId: 'archive-1' }), { receiptId: 'receipt' });
   assert.equal(f.approvals.length, 0);
   const token = f.calls.find(call => call.op === 'createCleanupConfirmation').args;
@@ -190,8 +334,6 @@ test('cleanup projects compatible ID parameters and rejects duplicates before di
     { op: 'commit', previewId: 'preview' },
     { op: 'restore', receiptId: 'receipt' },
     { op: 'restore', previewId: 'restore-preview' },
-    { op: 'stop-and-archive' },
-    { op: 'cancel', operationId: 'operation' },
   ]) {
     await assert.rejects(f.cleanup({ ...input, ids: ['one', 'one'] }), { code: 'CLEANUP_SCOPE_DENIED' });
   }

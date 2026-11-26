@@ -3,13 +3,14 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { request } from 'node:https';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, createHash } from 'node:crypto';
-import { remoteAgent, remoteJson, relayTargetHeaders, upstreamOrigin } from './remote.mjs';
+import { remoteAgent, relayTargetHeaders, upstreamOrigin } from './remote.mjs';
+import { openRemoteWorkbench } from './routes.mjs';
 const secret = () => randomBytes(32).toString('base64url');
 /** Each host has its own origin. Remote scripts cannot read the device centre. */
 export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuccess, webRoot, publicOrigin, publicPrefix = '', workbenchLease } = {}) {
   const agent = remoteAgent(target), tickets = new Map(), sessions = new Set(), sockets = new Set();
   const remoteOrigin = upstreamOrigin(target);
-  let origin, remoteCookie, closed = false, leaseUntil = 0, renewing;
+  let origin, remoteCookie, closed = false, leaseUntil = 0, renewing, admission;
   const upstream = async () => {
     if (workbenchLease) {
       if (leaseUntil > Date.now()) return;
@@ -21,24 +22,12 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
       }).finally(() => { renewing = undefined; });
       return renewing;
     }
-    const { headers } = await remoteJson(target, '/link/api/workbench', {}, { agent });
-    const cookie = headers['set-cookie']?.find(value => value.startsWith('dsh_link_workbench='))?.split(';')[0];
-    if (!cookie) throw new Error('主机未签发工作台授权');
-    remoteCookie = cookie;
+    renewing ??= openRemoteWorkbench(target, { agent }).then(({ cookie, ...info }) => {
+      remoteCookie = cookie.split(';', 1)[0];
+      admission = info;
+    }).finally(() => { renewing = undefined; });
+    return renewing;
   };
-  const checkPage = () => new Promise((resolve, reject) => {
-    const req = request(new URL('/link/workbench/', remoteOrigin), {
-      agent, method: 'HEAD', timeout: 5000, headers: { ...relayTargetHeaders(target), cookie: remoteCookie },
-    }, res => {
-      res.resume();
-      const status = res.statusCode;
-      if (status === 200 && res.headers['content-type']?.startsWith('text/html')) { resolve(); return; }
-      reject(Object.assign(new Error('工作台入口暂不可用'), { status }));
-    });
-    req.on('error', reject);
-    req.on('timeout', () => req.destroy(Object.assign(new Error('工作台入口连接超时'), { code: 'ETIMEDOUT' })));
-    req.end();
-  });
   try { await upstream(); }
   catch (error) { agent.destroy(); throw error; }
   const server = createServer(async (req, res) => {
@@ -162,9 +151,9 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
   origin = 'http://127.0.0.1:' + server.address().port;
   return {
     origin,
-    async enter({ verifyPage = false } = {}) {
-      await upstream();
-      if (verifyPage) await checkPage();
+    get admission() { return admission; },
+    refresh: upstream,
+    enter() {
       for (const [ticket, expires] of tickets) if (expires < Date.now()) tickets.delete(ticket);
       const ticket = secret(); tickets.set(ticket, Date.now() + 60000);
       return (publicOrigin || origin) + publicPrefix + '/enter?ticket=' + ticket;

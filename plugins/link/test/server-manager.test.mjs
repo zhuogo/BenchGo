@@ -295,7 +295,7 @@ test('server workbench verification requires pinned TLS, valid token, cookie and
     if (req.url === '/link/api/workbench') {
       if (req.headers.authorization !== 'Bearer good-token') { res.writeHead(401); res.end('{"error":"invalid token"}'); return; }
       res.writeHead(200, cookie ? { 'set-cookie': 'dsh_link_workbench=session; HttpOnly; Secure; Path=/link/workbench/' } : {});
-      res.end('{"url":"/link/workbench/"}'); return;
+      res.end(JSON.stringify({ url: '/link/workbench/', hostId: 'sha256:' + identity.pin, authorizationId: 'ssh-device' })); return;
     }
     assert.equal(req.headers.cookie, 'dsh_link_workbench=session');
     assert.equal(req.headers.authorization, undefined);
@@ -311,7 +311,7 @@ test('server workbench verification requires pinned TLS, valid token, cookie and
   ready = true; await verifyServerWorkbench(target);
   const proxy = await createDeviceProxy(target);
   try {
-    const page = await fetch(await proxy.enter({ verifyPage: true }));
+    const page = await fetch(await proxy.enter());
     assert.equal(page.status, 200);
     assert.match(await page.text(), /<html>workbench<\/html>/);
   } finally { await proxy.close(); }

@@ -56,6 +56,16 @@ async function writeChunk(res, chunk, signal) {
 /** Same installed UI and Gateway, admitted exclusively by a paired device. */
 export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCenter, resourceNavigation } = {}) {
   const peers = new Map();
+  const resolveAsset = async path => {
+    const root = await realpath(frontendRoot(ctx, workbenchRoot));
+    let asset;
+    try { asset = await realpath(join(root, decodeURIComponent(path || 'index.html'))); } catch (error) { if (error.code === 'ENOENT') throw fail('未找到', 404); throw error; }
+    const child = relative(root, asset);
+    if (child === '..' || child.startsWith('..' + sep) || resolve(root, child) !== asset) throw fail('未找到', 404);
+    const entry = await stat(asset);
+    if (!entry.isFile()) throw fail('未找到', 404);
+    return { asset, size: entry.size };
+  };
   const realtime = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
   let closed = false;
   const authenticate = req => {
@@ -106,6 +116,12 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
   };
   const begin = async (device, res, { groupAssetLease } = {}) => {
     if (closed) throw fail('Link 已关闭', 503);
+    try {
+      const { size } = await resolveAsset('');
+      if (!size || typeof ctx.webServer?.renderIndex !== 'function') throw new Error('missing entry');
+    } catch { throw fail('网页工作台尚未就绪', 503); }
+    if (closed) throw fail('Link 已关闭', 503);
+    if ((store.principal?.(device.id) ?? store.state.devices.find(row => row.id === device.id))?.tokenHash !== device.tokenHash) throw fail('设备授权已失效，请重新配对', 401);
     const token = randomBytes(32).toString('base64url');
     const age = groupAssetLease ? 120_000 : SESSION_AGE;
     await store.saveWorkbenchSession(digest(token), { id: device.id, tokenHash: device.tokenHash, expires: Date.now() + age });
@@ -249,11 +265,7 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
         const bytes = await readFile(new URL('workbench.js', webRoot));
         res.writeHead(200, { ...headers, 'content-type': mime['.js'] }); res.end(req.method === 'HEAD' ? undefined : bytes); return;
       }
-      const root = await realpath(frontendRoot(ctx, workbenchRoot));
-      let asset;
-      try { asset = await realpath(join(root, decodeURIComponent(path || 'index.html'))); } catch (error) { if (error.code === 'ENOENT') throw fail('未找到', 404); throw error; }
-      const child = relative(root, asset);
-      if (child === '..' || child.startsWith('..' + sep) || resolve(root, child) !== asset || !(await stat(asset)).isFile()) throw fail('未找到', 404);
+      const { asset } = await resolveAsset(path);
       let data = await readFile(asset);
       let policy = headers['content-security-policy'];
       if (path === '' || path === 'index.html') {

@@ -58,6 +58,60 @@ test('official video lookup requires a receipt from the current conversation', a
   assert.equal(video.url, 'api/benchgo/media/artifact?file=movie.mp4');
 });
 
+test('batch tool variants share settings and return separate presentation and video receipts', async () => {
+  const calls = [];
+  const generation = { getSettings: async () => settings, async generateBatch(input) {
+    calls.push(input);
+    return { requestId: input.requestId, results: [
+      { requestId: 'first', status: 'completed', filename: 'first.png', mimeType: 'image/png' },
+      { requestId: 'second', status: 'error', error: { code: 'MEDIA_SUBMISSION_UNCERTAIN', message: 'Unknown' } },
+    ] };
+  }, videoStatus: async ({ requestId }) => ({ requestId, jobId: 'upstream', status: 'completed', filename: 'movie.mp4' }) };
+  const tools = mediaToolDefinitions({ generation });
+  const image = tools.find(tool => tool.name === 'generate_image');
+  const reply = await image.execute({ prompt: 'draw spring', count: 2 }, execution([]));
+  assert.deepEqual(calls[0].prompts, ['draw spring', 'draw spring']);
+  assert.equal(reply.results[0].url, 'api/benchgo/media/artifact?file=first.png');
+  assert.deepEqual(image.output.presentationMeta({}, reply), { benchgoMedia: reply });
+  assert.doesNotMatch(image.output.render({}, reply)[0].text, /api\/benchgo/);
+  assert.equal(reply.results[1].error.code, 'MEDIA_SUBMISSION_UNCERTAIN');
+  await assert.rejects(image.execute({ prompt: 'a', prompts: ['a', 'b'] }, execution([])), /optional count/);
+  const videoStatus = tools.find(tool => tool.name === 'media_video_status');
+  const video = await videoStatus.execute({ requestId: 'video-2' }, execution(receipt({ results: [{ requestId: 'video-2', jobId: 'upstream' }] })));
+  assert.equal(video.url, 'api/benchgo/media/artifact?file=movie.mp4');
+});
+
+test('media tools accept single-prompt placeholders and preserve explicit batch intent', async () => {
+  const calls = [];
+  const generation = { getSettings: async () => ({ ...settings, video: settings.image, audio: settings.image }),
+    async generate(input) { calls.push(input); return { status: 'completed' }; },
+    async generateBatch(input) { calls.push(input); return { results: [] }; },
+  };
+  const [image, video, audio] = mediaToolDefinitions({ generation });
+  const prompt = '一只坐在阳光下草地上的金毛寻回犬幼崽。';
+  const padded = { count: 1, format: 'png', mask: '', model: '', operation: 'generate', prompt,
+    prompts: [prompt, ''], providerId: '', quality: '', references: [], size: '1024x1024' };
+  const native = createNativeMediaTools(generation);
+  await image.execute(padded, execution([]), { requestId: 'router-image' });
+  await native.executeNative({ sessionId: 'native-chat', callId: 'image-call', name: image.name, args: { ...padded, prompts: [] } });
+  for (const call of calls) {
+    assert.deepEqual([call.kind, call.prompt, call.size, call.format], ['image', prompt, '1024x1024', 'png']);
+    for (const field of ['mask', 'quality', 'model', 'providerId', 'prompts']) assert.equal(call[field], undefined, field);
+  }
+  assert.equal(calls[0].requestId, 'router-image');
+  const batch = ['第一项', '第二项', '第三项'];
+  for (const tool of [image, video, audio]) {
+    await tool.execute({ prompt: '', count: 1, prompts: batch }, execution([]));
+    assert.deepEqual(calls.at(-1).prompts, batch);
+    await tool.execute({ prompt: '描述', count: 2, prompts: [] }, execution([]));
+    assert.deepEqual(calls.at(-1).prompts, ['描述', '描述']);
+    await assert.rejects(tool.execute({ prompt: '描述', prompts: ['不同描述', ''] }, execution([])), { code: 'MEDIA_INVALID' });
+    await assert.rejects(tool.execute({ prompts: ['描述', ''] }, execution([])), { code: 'MEDIA_INVALID' });
+    await assert.rejects(tool.execute({ count: 2, prompts: batch }, execution([])), { code: 'MEDIA_INVALID' });
+  }
+  assert.equal(calls.length, 8);
+});
+
 test('audio tools only override configured voice with a selection in the current user message', async () => {
   const routes = [{ providerId: 'test', modelId: 'test-tts', voices: [{ name: 'Story', description: '低音女声' }], defaultVoice: 'Story' }];
   const generation = {

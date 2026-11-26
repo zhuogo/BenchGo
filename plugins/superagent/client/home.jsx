@@ -19,8 +19,8 @@ function ActivitySection({ title, rows, tone, onOpenResources }) {
   return <section className="ba-home-section" data-tone={tone}>
     <header><h2>{title}</h2><Tooltip label="管理任务" side="top" delayMs={350} portal><Button variant="ghost" type="button" className="ba-home-resource" aria-label="管理任务" onClick={() => onOpenResources('tasks')}><UIIcon name="schedules" size={18} /></Button></Tooltip></header>
     <div>{rows.map(row => <article className="ba-home-task" key={row.key}>
-      <span className="ba-home-task-mark" aria-hidden="true" />
-      <div><strong>{row.title}</strong><p><span>{activityLabels[row.status] || row.status || '状态未知'}</span><span>{row.phase}</span></p>{row.detail && <div className="ba-home-task-detail">{row.detail}</div>}</div>
+      <span className="ba-home-task-status">{activityLabels[row.status] || row.status || '状态未知'}</span>
+      <strong>{row.title}</strong>
     </article>)}</div>
   </section>;
 }

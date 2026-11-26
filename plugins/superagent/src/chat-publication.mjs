@@ -1,19 +1,20 @@
 import { channelMessageRecordOf, channelMessageRecordType } from './channel-session-record.mjs';
-import { chatPublicationRecordOf, hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest } from '../../base/shared/public-chat-record.mjs';
+import { chatPublicationRecordOf, hostReplyPublicationOf, isHostReplyRequest, isTaskResultReplyRequest, isUserStoppedTurn } from '../../base/shared/public-chat-record.mjs';
 import { appendPluginRecord } from '@deepseek-ai/dsh-session';
+import { mediaResultFile, NATIVE_MEDIA_RESULT } from '../../media/shared/generation-result.mjs';
 import { fallbackRequestIds, readModelFallbacks, modelFallbackType } from './model-fallback.mjs';
 import { questionBatch, questionAnswers, questionReplyText, readQuestionReply } from './question-reply.mjs';
 import { approvalChatBinding } from './approval-chat-binding.mjs';
 import { routerRecoveryRequests, routerRecoverySource } from './router-recovery.mjs';
 
 export const chatPublicationType = 'plugin:benchgo-plugin/chat-publication';
-export const taskCleanupNoticeSource = 'benchgo-execution-input';
 const fail = message => Object.assign(new Error(message), { code: 'CHAT_PUBLICATION_REJECTED' });
 const userEvent = (event, events) => event.type === 'user/message' && (event.data?.source?.kind === 'user' || readQuestionReply(event.data, events));
-const internalReply = isHostReplyRequest;
+// Retired execution prompts still delimit replies when replaying old transcripts.
+export const isLegacyExecutionInput = request => request?.source?.kind === 'benchgo-execution-input';
+const internalReply = request => isHostReplyRequest(request) || isLegacyExecutionInput(request);
 const conversationalReply = request => !internalReply(request) || isTaskResultReplyRequest(request);
-const cleanupReply = request => request?.source?.kind === taskCleanupNoticeSource;
-const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && (internalReply(event.data) || cleanupReply(event.data));
+const replyEvent = (event, events) => userEvent(event, events) || event.type === 'user/message' && internalReply(event.data);
 const isRetryEvent = event => event.type === 'user/message' && event.data.source?.kind === 'retry' && event.data.content?.length === 0;
 // Resolve internal notices to their original identity so they cannot
 // accidentally become a reply to the preceding human message.
@@ -22,7 +23,7 @@ const replyContinuations = events => {
   if (events.some(event => event.type === 'user/message' && event.data?.source?.kind === routerRecoverySource)) {
     for (const [noticeId, requestId] of routerRecoveryRequests(events, result).requests) result.set(noticeId, requestId);
   }
-  const states = new Set(events.filter(event => event.type === 'user/message' && (internalReply(event.data) || cleanupReply(event.data))).map(event => event.data.id));
+  const states = new Set(events.filter(event => event.type === 'user/message' && internalReply(event.data)).map(event => event.data.id));
   for (const plan of readModelFallbacks(events).values()) {
     if (!plan.cancelled && states.has(plan.requestId)
       && events.some(event => event.type === 'user/message' && event.data?.id === plan.message.id
@@ -49,6 +50,12 @@ const replyContinuations = events => {
   return result;
 };
 const textBlocks = content => (content || []).filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => ({ type: 'text', text: block.text }));
+function withMediaFailures(text, request) {
+  if (!isTaskResultReplyRequest(request) || !request.source.mediaFailures?.length) return text;
+  const failures = request.source.mediaFailures.filter(detail => !text.includes(detail));
+  if (!failures.length) return text;
+  return [text, ...failures.map(detail => '> ' + detail.replace(/[\\`*_\[\]<>]/gu, '\\$&').replace(/\r?\n/gu, '\n> '))].filter(Boolean).join('\n\n');
+}
 const publicUsage = value => {
   const entries = ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens']
     .filter(key => Number.isFinite(value?.[key]) && value[key] >= 0).map(key => [key, value[key]]);
@@ -88,18 +95,22 @@ export function projectChatMessages(events, { approvalForRequest } = {}) {
   }
   users.clear();
   let turn, request, lastAssistant, publicParts = [];
-  const appendParts = (requestId, beforeStep = Infinity) => {
-    for (const part of publicParts) {
-      if (beforeStep !== Infinity && !(Number.isSafeInteger(part.data.step) && part.data.step < beforeStep)) continue;
-      const text = textBlocks(part.data.message.content).map(block => block.text).join('\n');
+  const appendParts = (requestId, { beforeStep = Infinity, stopped = false } = {}) => {
+    const parts = publicParts.filter(part => (stopped || !part.data.interrupted)
+      && (beforeStep === Infinity || Number.isSafeInteger(part.data.step) && part.data.step < beforeStep));
+    for (const part of parts) {
+      const original = textBlocks(part.data.message.content).map(block => block.text).join('\n');
+      const text = beforeStep === Infinity && part === parts.at(-1) ? withMediaFailures(original, requests.get(requestId)) : original;
       const usage = publicUsage(part.data.usage);
       rows.push({ seq: part.seq, id: `reply:${requestId}:${part.data.turn}:${part.data.step ?? part.data.message.id}`,
-        role: 'assistant', kind: 'final', requestId, segment: true, text, content: [{ type: 'text', text }], time: part.time, ...(usage ? { usage } : {}) });
+        role: 'assistant', kind: 'final', requestId, segment: true, text, content: [{ type: 'text', text }], time: part.time,
+        ...(stopped ? { interrupted: true } : {}), ...(usage ? { usage } : {}) });
     }
+    return parts.length > 0;
   };
   const asked = new Map(), answered = new Set();
   const finishRequestParts = () => {
-    if (request?.id && !internalReply(request) && !cleanupReply(request)
+    if (request?.id && !internalReply(request)
       && !explicit.has(request.id) && !published.has(request.id)) appendParts(request.id);
     publicParts = [];
   };
@@ -124,7 +135,7 @@ export function projectChatMessages(events, { approvalForRequest } = {}) {
       users.add(event.data.id);
       request = event.data;
       lastAssistant = undefined; publicParts = [];
-      if (internalReply(request) || cleanupReply(request)) continue;
+      if (internalReply(request)) continue;
       const question = readQuestionReply(event.data, events);
       if (question) {
         const row = { seq: event.seq, id: event.data.id, role: 'user', kind: 'question-reply', ...question,
@@ -161,9 +172,10 @@ export function projectChatMessages(events, { approvalForRequest } = {}) {
       published.add(row.requestId);
       const publicationCall = events.findLast(item => item.seq < event.seq && item.type === 'tool/call'
         && item.data?.name === 'assistant_reply' && item.data.turn === turn && !item.data.parentCallId);
-      if (request?.id === row.requestId) appendParts(row.requestId, publicationCall?.data?.step ?? -Infinity);
+      if (request?.id === row.requestId && conversationalReply(request)) appendParts(row.requestId, { beforeStep: publicationCall?.data?.step ?? -Infinity });
       const usage = request?.id === row.requestId ? publicUsage(lastAssistant?.data?.usage) : undefined;
-      rows.push({ seq: event.seq, id: `reply:${row.requestId}`, role: 'assistant', kind: 'final', requestId: row.requestId, text: row.text, content: [{ type: 'text', text: row.text }], time: event.time, ...(usage ? { usage } : {}) });
+      const text = withMediaFailures(row.text, requests.get(row.requestId));
+      rows.push({ seq: event.seq, id: `reply:${row.requestId}`, role: 'assistant', kind: 'final', requestId: row.requestId, text, content: [{ type: 'text', text }], time: event.time, ...(usage ? { usage } : {}) });
     } else if (event.type === 'tool/call' && event.data?.name === 'ask_user_question' && !event.data.parentCallId) {
       const questions = questionBatch(event.data.arguments);
       if (questions) asked.set(String(event.data.callId), questions);
@@ -174,16 +186,21 @@ export function projectChatMessages(events, { approvalForRequest } = {}) {
         text: questionReplyText(questions, answers), content: [{ type: 'text', text: questionReplyText(questions, answers) }], time: event.time });
       if (answers) answered.add(callId);
     } else if (event.type === 'assistant/message' && turn !== undefined && event.data?.turn === turn
-      && !event.data.interrupted && !event.data.parentCallId && event.data.message?.source?.kind === 'model') {
-      lastAssistant = event;
+      && !event.data.parentCallId && event.data.message?.source?.kind === 'model') {
+      if (!event.data.interrupted) lastAssistant = event;
       const text = textBlocks(event.data.message.content).map(block => block.text).join('\n');
       if (text.trim()) publicParts.push(event);
     } else if (event.type === 'turn/end') {
-      if (turn !== undefined && event.data?.turn === turn && event.data?.reason?.kind === 'completed'
-        && request?.id && conversationalReply(request) && !cleanupReply(request) && !explicit.has(request.id) && !published.has(request.id)) {
-        if (publicParts.length) {
+      if (turn !== undefined && event.data?.turn === turn && request?.id && !explicit.has(request.id) && !published.has(request.id)) {
+        if (isUserStoppedTurn(event.data.reason) && !internalReply(request)) {
+          appendParts(request.id, { stopped: true });
+        } else if (event.data.reason?.kind === 'completed' && conversationalReply(request) && appendParts(request.id)) {
           published.add(request.id);
-          appendParts(request.id);
+        } else if (event.data.reason?.kind === 'completed' && isTaskResultReplyRequest(request) && request.source.mediaFailures?.length) {
+          published.add(request.id);
+          const text = withMediaFailures('', request);
+          rows.push({ seq: event.seq, id: `reply:${request.id}`, role: 'assistant', kind: 'final', requestId: request.id,
+            text, content: [{ type: 'text', text }], time: event.time });
         }
       }
       turn = undefined; request = undefined; lastAssistant = undefined; publicParts = [];
@@ -201,7 +218,7 @@ export function chatNotificationIdentities(events, event) {
   // Ordinary human turns are self-contained and never fold old conversation history.
   const source = tail.some(row => row.type === modelFallbackType
     || row.type === 'user/message' && !['user', 'runtime-context'].includes(row.data?.source?.kind)) ? events : tail;
-  const rows = projectChatMessages(source).filter(row => row.role === 'assistant' && row.text?.trim()
+  const rows = projectChatMessages(source).filter(row => row.role === 'assistant' && !row.interrupted && row.text?.trim()
     && (event.type === chatPublicationType ? row.requestId === event.data?.requestId : row.seq >= (tail[0]?.seq ?? 0)));
   return [...new Map(rows.map(row => row.kind === 'channel-message' ? [`channel:${row.mirrorKey}`, { mirrorKey: row.mirrorKey }]
     : [`request:${row.requestId}`, { requestId: row.requestId }])).values()];
@@ -209,29 +226,30 @@ export function chatNotificationIdentities(events, event) {
 
 /** Only the owner Router can publish; Worker/tool output has no publication authority. */
 export function installChatPublication(scope, agent, { onPublish, canPublish, appendRecord = appendPluginRecord } = {}) {
-  const permitted = request => !(internalReply(request) || cleanupReply(request)) || (canPublish ? canPublish(request) : false);
+  const permitted = request => !isLegacyExecutionInput(request) && (!internalReply(request) || (canPublish ? canPublish(request) : false));
   scope.on?.('agent/turn-stopping', async ({ agent: subject, turn, signal }) => {
     if (subject !== agent) return;
     const events = agent.session.snapshotEvents(), active = activeChatReply(events, { includeInternal: true });
     const request = events.find(event => event.type === 'user/message' && event.data?.id === active?.requestId)?.data;
     if (isTaskResultReplyRequest(request)) {
-      if (active.turn !== turn || events.some(event => event.type === chatPublicationType && event.data?.kind === 'final' && event.data.requestId === request.id)) return;
+      if (active.turn !== turn) return;
       if (!await permitted(request)) {
+        if (events.some(event => event.type === chatPublicationType && event.data?.kind === 'final' && event.data.requestId === request.id)) return;
         signal?.throwIfAborted();
         appendRecord(agent.session, chatPublicationType, { kind: 'final', requestId: request.id,
           taskReplyEventKey: request.source.eventKey, suppressed: true });
+        return;
       }
-      return;
-    }
-    if (cleanupReply(request)) {
-      if (active.turn !== turn || events.some(event => event.type === chatPublicationType && event.data?.kind === 'final' && event.data.requestId === request.id)) return;
-      const last = events.findLast(event => event.type === 'assistant/message' && event.data?.turn === turn)?.data?.message;
-      if (last?.source?.kind !== 'model' || last.content?.some(block => block.type === 'tool-call')) return;
-      const text = textBlocks(last.content).map(block => block.text).join('\n');
-      if (!text.trim() || text.length > 16000 || !await permitted(request)) return;
-      signal?.throwIfAborted();
-      appendRecord(agent.session, chatPublicationType, { kind: 'final', requestId: request.id, text });
-      onPublish?.({ requestId: request.id });
+      const groupId = `task-media:${request.source.eventKey}`;
+      const delivered = new Set(events.filter(event => event.type === NATIVE_MEDIA_RESULT && event.data?.groupId === groupId)
+        .map(event => mediaResultFile(event.data)?.url));
+      for (const item of request.source.media ?? []) {
+        const file = mediaResultFile(item);
+        if (!file || delivered.has(file.url)) continue;
+        signal?.throwIfAborted();
+        appendRecord(agent.session, NATIVE_MEDIA_RESULT, { ...item, groupId });
+        delivered.add(file.url);
+      }
       return;
     }
     if (internalReply(request) && !isTaskResultReplyRequest(request)) {

@@ -46,7 +46,7 @@ async function fixture() {
           let value={};
           if(input.action==='tasks')value={tasks:window.resourceState==='empty'||input.archived?[]:rows};
           if(input.action==='goalList')value={goals};
-          if(input.action==='state')value={config:{revision:1,workerConcurrency:2}};
+          if(input.action==='state')value={config:{revision:1}};
           if(input.action==='catalog')value={projects:[{id:'project',title:'正式项目',available:true}]};
           return new Response(JSON.stringify(value),{status:200,headers:{'content-type':'application/json'}});
         };
@@ -174,7 +174,7 @@ test('task heading aligns category tabs and icon tools remain usable in four res
     for (const width of [1440, 390]) for (const [state, title] of [['loading', '正在读取任务'], ['error', '任务暂时无法读取'], ['empty', '暂无任务'], ['data', '检索并汇总 2026']]) {
       await render(state, width); await page.getByText(title, { exact: true }).waitFor();
       assert(await page.getByRole('tablist', { name: '工作分类', exact: true }).isVisible());
-      for (const label of ['归档已结束任务', '定时任务', '设置']) {
+      for (const label of ['归档任务', '定时任务']) {
         const button = page.getByRole('button', { name: label, exact: true });
         assert(await button.isVisible()); assert.equal((await button.textContent()).trim(), '', label + ' is an icon action');
       }
@@ -182,11 +182,11 @@ test('task heading aligns category tabs and icon tools remain usable in four res
       assert.equal(await page.getByText('查看执行进展，确认结果与下一步。', { exact: true }).count(), 0);
       assert.equal(await page.locator('.ba-task-count').count(), 0, 'task totals do not add a separate toolbar label');
       const controls = page.locator('.ba-task-view-controls');
-      assert(await controls.getByRole('button', { name: '归档已结束任务', exact: true }).isVisible(), 'batch archive reuses the former count position');
+      assert(await controls.getByRole('button', { name: '归档任务', exact: true }).isVisible(), 'batch archive reuses the former count position');
       const actions = page.locator('.ba-task-list-actions');
-      assert.equal(await actions.getByRole('button', { name: '归档已结束任务', exact: true }).count(), 0);
+      assert.equal(await actions.getByRole('button', { name: '归档任务', exact: true }).count(), 0);
       const tools = await actions.getByRole('button').allTextContents();
-      assert.deepEqual(tools.map(text => text.trim()), ['', ''], 'the action row contains schedule and settings');
+      assert.deepEqual(tools.map(text => text.trim()), [''], 'the action row contains the schedule button');
       assert.equal(await page.getByRole('button', { name: '添加目标', exact: true }).count(), 0);
       for (const label of ['当前任务', '已归档', '列表', '看板']) {
         const tab = controls.getByRole('tab', { name: label, exact: true });
@@ -331,9 +331,7 @@ test('task heading aligns category tabs and icon tools remain usable in four res
     await schedule.hover(); await page.getByRole('tooltip').getByText('定时任务', { exact: true }).waitFor();
     await capture('tooltip-mobile-dark');
     await schedule.click(); assert((await page.evaluate(() => window.calls)).some(input => input.panel === 'schedules'));
-    await page.getByRole('button', { name: '设置', exact: true }).click();
-    assert((await page.evaluate(() => window.calls)).some(input => input.action === 'state'));
-    await page.keyboard.press('Escape');
+    assert.equal(await page.getByRole('button', { name: '设置', exact: true }).count(), 0);
     const categories = page.getByRole('tablist', { name: '工作分类', exact: true });
     await categories.getByRole('tab', { name: '任务', exact: true }).focus(); await page.keyboard.press('ArrowRight');
     assert.equal(await categories.getByRole('tab', { name: '审核', exact: true }).getAttribute('aria-selected'), 'true');

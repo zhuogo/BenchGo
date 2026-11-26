@@ -69,18 +69,20 @@ test('active work cannot be hidden or marked completed; metadata writes validate
   assert.equal(metadata.size, 0);
 });
 
-test('a new execution does not inherit manual archive or legacy completion markers', () => {
+test('a new execution does not inherit a legacy completion marker and archival stays the official fact', () => {
   const saved = new Map();
   const row = { id: 't', status: 'waiting', executionControl: { stopped: true }, instructionRevision: 1 };
   const database = { transaction: fn => fn(), meta: key => saved.get(key), setMeta: (key, value) => saved.set(key, value) };
   const tasks = createTaskManagement({ database, orchestration: { getTask: () => row } });
-  database.setMeta('task-presentation:task:t', { version: 2, completed: true, executionRevision: 1, archived: true, archiveRevision: 1 });
-  assert.equal(tasks.project('task', [row], { archived: true }).length, 1);
+  database.setMeta('task-presentation:task:t', { version: 2, completed: true, executionRevision: 1 });
+  assert.equal(tasks.project('task', [row], { archived: false }).length, 1, 'an unarchived Task stays in the current list');
+  row.archived = true;
+  assert.equal(tasks.project('task', [row], { archived: true }).length, 1, 'archival comes from the official projection');
+  assert.equal(tasks.project('task', [row], { archived: false }).length, 0, 'an archived Task leaves the current list');
+  // A new execution never clears archival and never inherits the old completion.
   row.status = 'running'; row.executionControl = {}; row.instructionRevision = 2;
-  assert.equal(tasks.project('task', [row], { archived: false }).length, 1);
+  assert.equal(tasks.project('task', [row])[0].archived, true, 'archival is not derived from requirements');
   assert.equal(tasks.project('task', [row])[0].taskMeta.completed, false);
-  row.status = 'waiting'; row.executionControl = { stopped: true };
-  assert.equal(tasks.project('task', [row], { archived: false }).length, 1, 'old archive revision cannot hide a new execution');
   tasks.update({ kind: 'task', id: 't', operation: 'rename', title: 'New execution', version: 2 });
   assert.equal(tasks.project('task', [row])[0].taskMeta.title, 'New execut');
 });

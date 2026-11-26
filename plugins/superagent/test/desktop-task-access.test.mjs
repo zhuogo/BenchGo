@@ -18,11 +18,22 @@ async function managedFixture(t) {
   const management = createTaskManagement({ database, orchestration });
   const access = createDesktopTaskAccess(orchestration, management);
   const scope = { owner: 'desktop-owner', mode: 'global' };
+  const archivedSessions = new Set();
+  orchestration.installArchiveRuntime({
+    archive: id => archivedSessions.add(id), unarchive: id => archivedSessions.delete(id), archivedSessionIds: () => [...archivedSessions],
+  });
   const task = id => orchestration.createTask({ id, threadId: 'owner', title: `原始标题 ${id}`, target: `完成 ${id}`,
     mandate: { source: { channel: 'desktop', sessionId: 'owner' } } });
+  const stoppedTask = id => {
+    task(id);
+    const assignment = orchestration.createAssignment(id, {});
+    const [claimed] = orchestration.claimAssignments('worker', { validateMandate: () => true, assignmentId: assignment.id });
+    orchestration.prepareRun(assignment.id, { owner: claimed.owner, fence: claimed.fence, sessionId: `session-${id}`, directory });
+    orchestration.cancelTask(id);
+  };
   const confirm = preview => management.createCleanupConfirmation({ previewId: preview.previewId, manifestHash: preview.manifestHash,
     ids: preview.items.map(row => row.id), actorId: 'desktop-owner', source: { sessionId: 'owner', messageId: 'human-cleanup' } });
-  return { orchestration, database, management, access, scope, task, confirm };
+  return { orchestration, database, management, access, scope, task, stoppedTask, confirm };
 }
 
 test('managed task reads return renamed presentation and current version without changing execution', async t => {
@@ -47,13 +58,14 @@ test('managed task reads return renamed presentation and current version without
 
 test('managed archive filtering precedes paging and exposes restore pointers in list and detail', async t => {
   const f = await managedFixture(t);
-  for (const id of ['a', 'b', 'c', 'd']) { f.task(id); f.orchestration.cancelTask(id); }
+  for (const id of ['a', 'b', 'c', 'd']) f.stoppedTask(id);
   const originals = f.orchestration.listTasks();
   const order = f.access.query('owner').tasks.map(row => row.id);
   const selected = [order[0], order[2]], visible = [order[1], order[3]];
   const preview = f.management.previewCleanup({ scope: f.scope, ids: selected });
-  const receipt = f.management.commitCleanup({ previewId: preview.previewId, ids: preview.items.map(row => row.id),
+  const receipt = await f.management.commitCleanup({ previewId: preview.previewId, ids: selected,
     confirmedBy: f.confirm(preview), requestId: 'archive-access' });
+  assert.equal(receipt.status, 'completed');
   const first = f.access.query('owner', { archived: false, limit: 1 });
   const second = f.access.query('owner', { archived: false, limit: 1, offset: first.nextOffset });
   assert.equal(first.nextOffset, 1);
@@ -66,21 +78,22 @@ test('managed archive filtering precedes paging and exposes restore pointers in 
   assert.deepEqual([...archivedFirst.tasks, ...archivedSecond.tasks].map(row => row.id), selected);
   for (const row of [...archivedFirst.tasks, ...archivedSecond.tasks, f.access.read(selected[0], 'owner')]) {
     assert.equal(row.archived, true);
-    assert.equal(row.taskMeta.version, 1);
+    assert.equal(row.taskMeta.version, 0);
     assert.equal(row.cleanup.id, receipt.receiptId);
     assert.equal(row.cleanup.archivedAt, receipt.createdAt);
-    assert.equal(row.cleanup.version, 1);
+    assert.equal(row.cleanup.version, 0);
   }
   assert.equal(f.access.query('owner').tasks.length, 4, 'omitting archived preserves the full history query');
   assert.throws(() => f.access.query('owner', { archived: 'false' }), /archived/);
   const restore = f.management.previewRestore({ scope: f.scope, receiptId: archivedFirst.tasks[0].cleanup.id });
-  f.management.restoreCleanup({ previewId: restore.previewId, ids: restore.items.map(row => row.id),
+  const restoredReceipt = await f.management.restoreCleanup({ previewId: restore.previewId, ids: selected,
     confirmedBy: f.confirm(restore), requestId: 'restore-access' });
+  assert.equal(restoredReceipt.status, 'completed');
   assert.deepEqual(f.access.query('owner', { archived: true }).tasks, []);
   assert.deepEqual(f.access.query('owner', { archived: false }).tasks.map(row => row.id), order);
   const restored = f.access.read(selected[0], 'owner');
   assert.equal(restored.cleanup, null);
-  assert.equal(restored.taskMeta.version, 2);
+  assert.equal(restored.taskMeta.version, 0);
   assert.deepEqual(f.orchestration.listTasks(), originals, 'presentation organization preserves the original tasks and execution state');
 });
 

@@ -124,7 +124,7 @@
       "sub": "创建分派、领取续租与动作许可",
       "symbol": "createOrchestrationRuntime() / createAssistantAssignmentWorker()",
       "plain": "后台服务把任务交给 Worker，执行边界核对领取身份、租约和工单状态。",
-      "role": "orchestration-runtime 每秒巡检并为新任务创建 Assignment，assignment-worker 按并发上限（默认 2）领取并续租，Worker 的普通工具由 Harness 原生执行。BenchGo 自有外部动作遵循对应动作服务的许可。叫停立即通知执行会话取消。 已明确授权的停止后归档在同一巡检派工前维护：核对原来源、精确任务、版本与执行身份，复用停止输入，真正退出后归档；重启可续办，不新增timer，通知只表达事实。 跨设备已接线：A 的同一编排按 Task 的执行位置选择本地或远端适配，不在 A 启动第二个 Worker；远端派发前持久保存稳定请求和执行身份。B 只核验委托和本机容量、接收执行，不运行 B 的业务编排。",
+      "role": "orchestration-runtime 每秒巡检并为新任务创建 Assignment，assignment-worker 领取所有可执行任务并续租，Worker 的普通工具由 Harness 原生执行。BenchGo 自有外部动作遵循对应动作服务的许可。叫停立即通知执行会话取消。 已明确授权的停止后归档在同一巡检派工前维护：核对原来源、精确任务、版本与执行身份，复用停止输入，真正退出后归档；重启可续办，不新增timer，通知只表达事实。 跨设备已接线：A 的同一编排按 Task 的执行位置选择本地或远端适配，不在 A 启动第二个 Worker；远端派发前持久保存稳定请求和执行身份。B 只核验委托和本机容量、接收执行，不运行 B 的业务编排。",
       "input": "当前任务、要求/授权版本、待执行分派",
       "output": "有效 Assignment/Run 或等待原因",
       "sources": [

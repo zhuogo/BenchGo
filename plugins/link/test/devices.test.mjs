@@ -191,7 +191,10 @@ test('successful resource reads recover proxy failures and device lifecycle clos
     if (req.url === '/link/api/workbench') {
       req.resume();
       res.writeHead(200, { 'set-cookie': 'dsh_link_workbench=private-cookie; HttpOnly; Secure; Path=/link/workbench/' });
-      res.end('{}'); return;
+      res.end(JSON.stringify({ url: '/link/workbench/', hostId: 'sha256:' + identity.pin, authorizationId: 'paired-a', routes: [
+        { kind: 'direct', url: 'https://' + req.headers.host, pin: identity.pin },
+        { kind: 'relay', relayId: 'backup', url: 'https://backup.test', priority: 1 },
+      ] })); return;
     }
     if (failPage) { req.socket.destroy(); return; }
     res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><head></head><body>Remote</body></html>');
@@ -252,7 +255,7 @@ test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persi
   let authorizationId = 'paired-sidebar';
   const server = createServer({ key: identity.key, cert: identity.cert }, async (req, res) => {
     if (req.url === '/link/api/info') { assert.equal(req.headers.authorization, 'Bearer private-token'); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ hostName: 'Legacy host', hostId, authorizationId })); return; }
-    if (req.url === '/link/api/workbench') { assert.equal(req.headers.authorization, 'Bearer private-token'); authenticated++; res.writeHead(200, { 'set-cookie': 'dsh_link_workbench=private-cookie; HttpOnly; Secure; Path=/link/workbench/' }); res.end(JSON.stringify({ url: '/link/workbench/' })); return; }
+    if (req.url === '/link/api/workbench') { assert.equal(req.headers.authorization, 'Bearer private-token'); authenticated++; res.writeHead(200, { 'set-cookie': 'dsh_link_workbench=private-cookie; HttpOnly; Secure; Path=/link/workbench/' }); res.end(JSON.stringify({ url: '/link/workbench/', hostId, authorizationId })); return; }
     assert.equal(req.headers.cookie, 'dsh_link_workbench=private-cookie'); assert.equal(req.headers.authorization, undefined);
     if (req.url.endsWith('/remote/open')) { res.writeHead(200, { 'content-type': 'application/x-ndjson' }); res.write('{"type":"ready"}\n'); const interval = setInterval(() => res.write('{"type":"heartbeat"}\n'), 200); res.on('close', () => clearInterval(interval)); return; }
     res.writeHead(200, { 'content-type': 'text/html', 'content-security-policy': "default-src 'self'; frame-ancestors 'none'", 'set-cookie': 'should-not-escape=1' }); res.end('<html><head><base href="/link/workbench/"></head><body>ok</body></html>');
@@ -263,6 +266,7 @@ test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persi
   let successfulProxyRequests = 0;
   const proxy = await createDeviceProxy(target, { parentOrigin: 'http://127.0.0.1:4444', onSuccess: () => { successfulProxyRequests++; } }); t.after(() => proxy.close());
   const login = await fetch(await proxy.enter(), { redirect: 'manual' }), path = login.headers.get('location');
+  assert.equal(authenticated, 1, 'opening the proxy uses one admission request');
   const response = await fetch(proxy.origin + path); assert.equal(response.headers.get('set-cookie'), null); assert.match(await response.text(), /href="\/s\/[A-Za-z0-9_-]+\/link\/workbench\//); assert.equal(successfulProxyRequests, 1, 'successful proxy responses notify the device center');
   assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'self' http:\/\/127.0.0.1:4444 dsh-app:/);
   const publicProxy = await createDeviceProxy(target, { parentOrigin: 'https://owner.test', publicOrigin: 'https://work.test', publicPrefix: '/p/cloud-route' });
@@ -310,7 +314,7 @@ async function voiceProxy(t, { delay = 0 } = {}) {
   const server = createServer({ key: identity.key, cert: identity.cert }, (req, res) => {
     assert.equal(req.url, '/link/api/workbench'); assert.equal(req.headers.authorization, 'Bearer private-token');
     res.writeHead(200, { 'set-cookie': 'dsh_link_workbench=voice-cookie; HttpOnly; Secure; Path=/link/workbench/' });
-    res.end('{"url":"/link/workbench/"}');
+    res.end(JSON.stringify({ url: '/link/workbench/', hostId: 'sha256:' + identity.pin, authorizationId: 'voice-device' }));
   });
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {

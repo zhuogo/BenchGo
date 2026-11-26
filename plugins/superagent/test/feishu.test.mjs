@@ -112,18 +112,21 @@ test('disabled saved connection can verify and paginate joined chats without sen
 test('history is anchored, bounded to the same chat and fails visibly on permission errors', async () => {
   const current = config(), source = normalizeFeishuEvent(event(), current).source;
   const row = (message_id, chat_id = 'chat') => ({ message_id, chat_id, create_time: '1780000000000', msg_type: 'text', body: { content: JSON.stringify({ text: message_id }) }, sender: { id: 'owner', sender_type: 'user' } });
+  const text = '[下载产物](https://files.example.test/result.zip)';
+  const before = { ...row('before'), msg_type: 'post', body: { content: JSON.stringify({ content: [[{ tag: 'md', text }]] }) } };
   let failHistory = false, revoked = false;
   const adapter = createFeishuAdapter({ allowUnboundAuthorization: true, getConfig: () => current, credentials: { resolve: async () => ({ value: 'secret' }) }, ingest() {}, fetcher: async url => {
     if (url.includes('/auth/')) return Response.json({ code: 0, tenant_access_token: 'token', expire: 7200 });
     if (url.includes('/messages?')) {
       if (revoked) current.chatIds = ['other'];
-      return Response.json(failHistory ? { code: 99991672 } : { code: 0, data: { items: [row('before'), row('foreign', 'foreign')] } });
+      return Response.json(failHistory ? { code: 99991672 } : { code: 0, data: { items: [before, row('foreign', 'foreign')] } });
     }
     return Response.json({ code: 0, data: { items: [row('message')] } });
   } });
   const result = await adapter.readContext({ source });
   assert.equal(result.status, 'available');
   assert.deepEqual(result.messages.map(row => row.messageId), ['message', 'before']);
+  assert.equal(result.messages[1].text, text);
   failHistory = true;
   assert.equal((await adapter.readContext({ source })).status, 'partial');
   failHistory = false; revoked = true;
@@ -167,8 +170,11 @@ test('configuration contains references only and rejects inline secrets', () => 
 
 test('rich text is readable and unsupported attachments are not presented as parsed content', () => {
   const input = event(); input.event.message.message_type = 'post';
-  input.event.message.content = JSON.stringify({ zh_cn: { title: '项目说明', content: [[{ tag: 'text', text: '参考 ' }, { tag: 'a', text: '文档', href: 'https://example.test' }]] } });
-  assert.equal(normalizeFeishuEvent(input, config()).text, '项目说明\n参考 文档 (https://example.test)');
+  const text = '[下载产物](https://files.example.test/result.zip)';
+  input.event.message.content = JSON.stringify({ zh_cn: { title: '项目说明', content: [
+    [{ tag: 'text', text: '参考 ' }, { tag: 'a', text: '文档', href: 'https://example.test' }], [{ tag: 'md', text }],
+  ] } });
+  assert.equal(normalizeFeishuEvent(input, config()).text, `项目说明\n参考 文档 (https://example.test)\n${text}`);
   input.event.message.message_type = 'file'; input.event.message.content = JSON.stringify({ file_key: 'private-resource-key' });
   const normalized = normalizeFeishuEvent(input, config());
   assert.match(normalized.text, /暂不支持/); assert.doesNotMatch(normalized.text, /private-resource-key/);
@@ -251,6 +257,7 @@ test('reply retains stable UUID, exact source, and accepted differs from deliver
   assert.equal(first.status, 'accepted'); assert.equal(first.uuid, second.uuid);
   assert.equal(f.calls.filter(call => call.url.includes('/auth/')).length, 1);
   const sent = JSON.parse(f.calls.at(-1).options.body);
+  assert.equal(sent.msg_type, 'text');
   assert.equal(JSON.parse(sent.content).text, input.text);
   assert.equal(f.calls.at(-1).url.endsWith('/message/reply'), true);
   await assert.rejects(f.adapter.send({ ...input, source: { ...source, appId: 'other' } }), /连接/);
@@ -258,6 +265,20 @@ test('reply retains stable UUID, exact source, and accepted differs from deliver
   assert.equal(f.calls.filter(call => call.url.includes('/auth/')).length, 2);
   f.current.enabled = false;
   await assert.rejects(f.adapter.send(input), /未启用/);
+});
+test('rich replies display Feishu mention tags as text and fall back when the encoded post is too large', async t => {
+  const f = fixture(), source = normalizeFeishuEvent(event(), config()).source;
+  t.after(() => f.adapter.dispose());
+  await f.adapter.send({ source, text: '结果 <at user_id="all">全员</at>', format: 'markdown', idempotencyKey: 'mention' });
+  const post = JSON.parse(f.calls.at(-1).options.body);
+  assert.equal(post.msg_type, 'post');
+  assert.equal(JSON.parse(post.content).zh_cn.content[0][0].text, '结果 &lt;at user_id="all">全员&lt;/at>');
+
+  const text = '<at>'.repeat(4_500);
+  await f.adapter.send({ source, text, format: 'markdown', idempotencyKey: 'large' });
+  const plain = JSON.parse(f.calls.at(-1).options.body);
+  assert.equal(plain.msg_type, 'text');
+  assert.equal(JSON.parse(plain.content).text, text);
 });
 test('transport failure is explicit and never exposes provider response secrets', async () => {
   const f = fixture({ fetcher: async () => Response.json({ code: 999, msg: 'secret-value' }, { status: 403 }) });

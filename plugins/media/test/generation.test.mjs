@@ -243,13 +243,55 @@ test('unknown submission survives a restart and never falls through', async t =>
   let requests = 0;
   const { service, create } = await fixture(t, () => {
     requests++;
-    throw Error('connection closed');
+    throw new TypeError('fetch failed', { cause: Object.assign(new Error('private socket details'), { code: 'ECONNRESET' }) });
   });
   await service.updateSettings({ image: setting(route('primary-image'), route('second-image')) }, 0);
   const args = { kind: 'image', prompt: 'portrait', requestId: 'uncertain' };
-  await assert.rejects(service.generate(args), { code: 'MEDIA_SUBMISSION_UNCERTAIN' });
-  await assert.rejects((await create()).generate(args), { code: 'MEDIA_SUBMISSION_UNCERTAIN' });
+  let diagnostic;
+  await assert.rejects(service.generate(args), error => {
+    assert.equal(error.code, 'MEDIA_SUBMISSION_UNCERTAIN');
+    assert.match(error.message, /ECONNRESET.*ms.*primary-image.*uncertain/u);
+    assert.doesNotMatch(error.message, /private socket details/u);
+    diagnostic = error.message;
+    return true;
+  });
+  await assert.rejects((await create()).generate(args), { code: 'MEDIA_SUBMISSION_UNCERTAIN', message: diagnostic });
   assert.equal(requests, 1);
+});
+
+for (const [kind, modelId, path] of [
+  ['image', 'primary-image', '/images/generations'],
+  ['video', 'video-exact', '/videos'],
+  ['audio', 'speech-exact', '/audio/speech'],
+]) test(`${kind} batches submit concurrently, preserve order and replay each receipt after restart`, { timeout: 15000 }, async t => {
+  const requests = new Map();
+  let ready;
+  const bothSubmitted = new Promise(resolve => { ready = resolve; });
+  const { service, create } = await fixture(t, async (url, init) => {
+    assert.equal(new URL(url).pathname, '/v1' + path);
+    const prompt = kind === 'video' ? init.body.get('prompt') : JSON.parse(init.body)[kind === 'audio' ? 'input' : 'prompt'];
+    requests.set(prompt, (requests.get(prompt) || 0) + 1);
+    if (requests.size === 2) ready();
+    await bothSubmitted;
+    if (kind === 'image' && prompt === 'second item') throw new Error('connection lost');
+    if (kind === 'image') return imageReply();
+    if (kind === 'video') return Response.json({ id: prompt === 'first item' ? 'job-1' : 'job-2', status: 'queued' });
+    return new Response(Buffer.from('ID3mock'), { headers: { 'content-type': 'audio/mpeg' } });
+  });
+  await service.updateSettings({ [kind]: setting(route(modelId)) }, 0);
+  const args = { kind, requestId: 'batch', prompts: ['first item', 'second item'] };
+  const first = await service.generateBatch(args);
+  assert.deepEqual(first.results.map(item => item.requestId), ['batch-1', 'batch-2']);
+  assert.equal(first.results[0].status, kind === 'video' ? 'queued' : 'completed');
+  if (kind === 'image') assert.equal(first.results[1].error.code, 'MEDIA_SUBMISSION_UNCERTAIN');
+  if (kind === 'video') assert.deepEqual(first.results.map(item => item.jobId), ['job-1', 'job-2']);
+  if (kind === 'audio') assert.notEqual(first.results[0].filename, first.results[1].filename);
+  const reopened = await create();
+  const replayed = await reopened.generateBatch(args);
+  assert.deepEqual(replayed.results.map(item => item.error?.code ?? item.status), first.results.map(item => item.error?.code ?? item.status));
+  assert.deepEqual([...requests.values()], [1, 1]);
+  await assert.rejects(reopened.generateBatch({ ...args, prompts: [...args.prompts].reverse() }), { code: 'MEDIA_REQUEST_CONFLICT' });
+  await assert.rejects(reopened.generate({ kind, requestId: args.requestId, prompt: 'first item' }), { code: 'MEDIA_REQUEST_CONFLICT' });
 });
 
 test('video persists one job and retries a failed download through that job after reopen', async t => {

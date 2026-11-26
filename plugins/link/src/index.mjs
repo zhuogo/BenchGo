@@ -25,7 +25,7 @@ import { settingsSnapshot, settingsFingerprint, assertSettingsExpected, applySet
 import { captureHostScope, hostScope } from '../../base/shared/host-scope.mjs';
 import { useIntegrationToken } from '../../base/shared/integration-token.mjs';
 
-const executionOperations = ['catalog','submit','get','input','control','ack','archive','archives'];
+const executionOperations = ['catalog','submit','get','input','control','ack','archive','unarchive','archives'];
 
 /** Owner admin uses Harness Connection; remote devices get a distinct TLS carrier. */
 export function mountLink(ctx, config = {}) {

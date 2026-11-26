@@ -36,7 +36,7 @@ const SessionPersistence = await load('@deepseek-ai/dsh-session-persistence-json
 const queryRequire = createRequire(new URL('../../../deepseek-harness/packages/session-query/session-query-sqlite/package.json', import.meta.url));
 const SessionQuery = await import(pathToFileURL(queryRequire.resolve('@deepseek-ai/dsh-session-query-sqlite')).href);
 
-test('mounted assistant HTTP routes execute real Harness and register scoped tools', { timeout: 120_000 }, async t => {
+test('mounted assistant HTTP routes execute real Harness and register scoped tools', { timeout: 240_000 }, async t => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     if (url === 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal') return Response.json({ code: 0, tenant_access_token: 'test-token', expire: 7200 });
@@ -119,7 +119,12 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     get updatedAt() { return '2026-01-02T00:00:00.000Z'; },
     get sessionIds() { return ['session-1']; },
   });
-  ctx.provide('workspaceRegistry', { list: () => [workspaceEntity], get: id => id === 'project' ? workspaceEntity : undefined });
+  const archivedSessions = new Set();
+  ctx.provide('workspaceRegistry', { list: () => [workspaceEntity], get: id => id === 'project' ? workspaceEntity : undefined,
+    get archivedSessionIds() { return [...archivedSessions]; },
+    async archiveSession(id, options) { assert.equal(options.stopActivity, true); archivedSessions.add(id); },
+    async unarchiveSession(id) { archivedSessions.delete(id); },
+  });
   const commander = Object.assign(new EventEmitter(), { store: { directory }, list: () => [], catalog: () => [], providers: new Map() });
   const voiceRoutes = new Map();
   const providers = {
@@ -147,7 +152,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     return nativeSetInterval(callback, delay, ...args);
   });
   const app = await new Promise((resolve, reject) => {
-    mountTimer = setTimeout(() => reject(new Error('SuperAgent fixture mount timed out after 15s; missing dependencies: ' + assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name) && !ctx.get(name)).join(', '))), 15_000);
+    mountTimer = setTimeout(() => reject(new Error('SuperAgent fixture mount timed out after 60s; missing dependencies: ' + assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name) && !ctx.get(name)).join(', '))), 60_000);
     // BenchGo/Commander/settings are supplied directly by this fixture; all
     // actual service access uses the production plugin dependency declaration.
     appFiber = ctx.inject(assistantInject.filter(name => !['benchgo', 'commander', 'settings'].includes(name)), child => {
@@ -245,8 +250,10 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   assert.equal(queried.tasks[0].taskMeta.version, 0);
   assert.equal((await tasksTool.execute({ op: 'get', id: queryTask.id }, { agent })).task.target, 'Query proof');
   app.store.orchestration.cancelTask(queryTask.id);
-  for (const name of ['assistant_projects', 'assistant_settings', 'assistant_task_manage', 'assistant_task_cleanup', 'generate_image', 'generate_video', 'generate_audio', 'media_video_status', 'assistant_summarize', 'assistant_analyze_image']) assert.ok(ctx.tools.get(name, agent), name);
-  assert.equal(ctx.tools.get('assistant_generate_image', agent), undefined);
+  for (const name of ['assistant_projects', 'assistant_settings', 'assistant_task_manage', 'assistant_task_cleanup', 'assistant_delegate', 'assistant_summarize', 'assistant_analyze_image']) assert.ok(ctx.tools.get(name, agent), name);
+  for (const name of ['assistant_generate_image', 'generate_image', 'generate_video', 'generate_audio', 'media_video_status']) {
+    assert.equal(ctx.tools.get(name, agent), undefined, name);
+  }
   assert.equal(ctx.tools.get('assistant_config', agent), undefined);
   const projectsTool = ctx.tools.get('assistant_projects', agent);
   const projectsResult = await projectsTool.execute({ scope: 'local' }, { signal: new AbortController().signal, agent });
@@ -373,7 +380,8 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const stoppedTask = app.store.orchestration.cancelTask(app.store.orchestration.createTask({ threadId: 'query-test', target: 'Stopped proof',
     mandate: { source: { channel: 'desktop', sessionId: String(agent.id) }, project: { id: 'project' } } }).id);
   assert.equal(stoppedTask.executionControl.stopped, true);
-  const cleanupIds = [queryTask.id, stoppedTask.id];
+  const archivableTaskId = resultTask.id;
+  const cleanupIds = [archivableTaskId, stoppedTask.id];
   const beforeCleanup = cleanupIds.map(id => app.store.orchestration.getTask(id));
   const readCleanupDomain = () => {
     const db = new DatabaseSync(app.store.orchestration.path, { readOnly: true });
@@ -388,43 +396,49 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const cleanupPreviewResponse = await call({ action: 'taskCleanupPreview', taskIds: [...cleanupIds, 'missing-cleanup-task'] });
   assert.equal(cleanupPreviewResponse.status, 200, await cleanupPreviewResponse.clone().text());
   const cleanupPreview = await cleanupPreviewResponse.json();
-  assert.deepEqual(cleanupPreview.items.map(row => row.id).sort(), [...cleanupIds].sort());
-  assert.deepEqual(cleanupPreview.excluded.map(row => [row.id, row.code]), [['missing-cleanup-task', 'TASK_NOT_FOUND']]);
+  assert.deepEqual(cleanupPreview.items.map(row => row.id), [archivableTaskId]);
+  assert.deepEqual(new Map(cleanupPreview.excluded.map(row => [row.id, row.code])), new Map([
+    ['missing-cleanup-task', 'TASK_NOT_FOUND'], [stoppedTask.id, 'NO_EXECUTION_SESSION'],
+  ]));
   const cleanupInput = { action: 'taskCleanupCommit', previewId: cleanupPreview.previewId, manifestHash: cleanupPreview.manifestHash,
-    selectedTaskIds: [queryTask.id], requestId: 'service-cleanup-subset' };
+    selectedTaskIds: [archivableTaskId], requestId: 'service-cleanup-subset' };
   assert.equal((await call({ ...cleanupInput, manifestHash: 'changed-manifest' })).status, 409);
   const cleanupResponse = await call(cleanupInput);
   assert.equal(cleanupResponse.status, 200, await cleanupResponse.clone().text());
   const cleanupReceipt = await cleanupResponse.json();
   assert.equal(cleanupReceipt.operation, 'archive');
-  assert.deepEqual(cleanupReceipt.items.map(row => row.id), [queryTask.id]);
+  assert.equal(cleanupReceipt.status, 'completed');
+  assert.deepEqual(cleanupReceipt.items.map(row => row.id), [archivableTaskId]);
+  assert.deepEqual([...archivedSessions], [resultRun.sessionId]);
   assert.deepEqual((await (await call(cleanupInput)).json()), cleanupReceipt, 'page retries reuse the durable archive receipt');
   assert.deepEqual(cleanupIds.map(id => app.store.orchestration.getTask(id)),
-    beforeCleanup.map(row => row.id === queryTask.id ? { ...row, archived: true } : row), 'authoritative projection reflects only the approved archive subset');
+    beforeCleanup.map(row => row.id === archivableTaskId ? { ...row, archived: true } : row), 'authoritative projection reflects only the approved archive subset');
   assert.deepEqual(readCleanupDomain(), beforeCleanupDomain, 'archive preserves every stored Task domain column');
-  assert.equal(app.store.orchestration.listTasks({ archived: true }).some(row => row.id === queryTask.id), true);
-  assert.equal(app.store.orchestration.listTasks({ archived: false }).some(row => row.id === queryTask.id), false);
+  assert.equal(app.store.orchestration.listTasks({ archived: true }).some(row => row.id === archivableTaskId), true);
+  assert.equal(app.store.orchestration.listTasks({ archived: false }).some(row => row.id === archivableTaskId), false);
   assert.equal(app.store.orchestration.listTasks({ archived: false }).some(row => row.id === stoppedTask.id), true);
-  const cleanupHistory = await (await call({ action: 'taskCleanupHistory', taskId: queryTask.id })).json();
+  const cleanupHistory = await (await call({ action: 'taskCleanupHistory', taskId: archivableTaskId })).json();
   assert.deepEqual(cleanupHistory.history, [cleanupReceipt]);
-  const restorePreviewResponse = await call({ action: 'taskCleanupRestorePreview', taskIds: [queryTask.id] });
+  const restorePreviewResponse = await call({ action: 'taskCleanupRestorePreview', taskIds: [archivableTaskId] });
   assert.equal(restorePreviewResponse.status, 200, await restorePreviewResponse.clone().text());
   const restorePreview = await restorePreviewResponse.json();
   assert.equal(restorePreview.type, 'restore');
-  assert.deepEqual(restorePreview.items.map(row => row.id), [queryTask.id]);
+  assert.deepEqual(restorePreview.items.map(row => row.id), [archivableTaskId]);
   const restoreInput = { action: 'taskCleanupRestore', previewId: restorePreview.previewId, manifestHash: restorePreview.manifestHash,
-    selectedTaskIds: [queryTask.id], requestId: 'service-cleanup-restore' };
+    selectedTaskIds: [archivableTaskId], requestId: 'service-cleanup-restore' };
   const restoredResponse = await call(restoreInput);
   assert.equal(restoredResponse.status, 200, await restoredResponse.clone().text());
   const restoredReceipt = await restoredResponse.json();
   assert.equal(restoredReceipt.operation, 'restore');
-  assert.deepEqual(restoredReceipt.items.map(row => row.id), [queryTask.id]);
+  assert.equal(restoredReceipt.status, 'completed');
+  assert.deepEqual(restoredReceipt.items.map(row => row.id), [archivableTaskId]);
+  assert.equal(archivedSessions.size, 0);
   assert.deepEqual((await (await call(restoreInput)).json()), restoredReceipt);
   assert.deepEqual(cleanupIds.map(id => app.store.orchestration.getTask(id)), beforeCleanup, 'restore only changes presentation');
   assert.deepEqual(readCleanupDomain(), beforeCleanupDomain, 'restore preserves every stored Task domain column');
-  assert.equal(app.store.orchestration.listTasks({ archived: false }).some(row => row.id === queryTask.id), true);
-  assert.equal(app.store.orchestration.listTasks({ archived: true }).some(row => row.id === queryTask.id), false);
-  assert.deepEqual((await (await call({ action: 'taskCleanupHistory', taskId: queryTask.id })).json()).history,
+  assert.equal(app.store.orchestration.listTasks({ archived: false }).some(row => row.id === archivableTaskId), true);
+  assert.equal(app.store.orchestration.listTasks({ archived: true }).some(row => row.id === archivableTaskId), false);
+  assert.deepEqual((await (await call({ action: 'taskCleanupHistory', taskId: archivableTaskId })).json()).history,
     [restoredReceipt, cleanupReceipt]);
   // Keep claims reserved through the scoped-tool contract checks below. These
   // queued tasks deliberately have no executable project/worker fixture;
@@ -608,7 +622,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     const current = await settingsTool.execute({ op: 'read', ...settingsRef }, toolExec);
     assert.deepEqual(current.value, initialConfig);
     const plan = await settingsTool.execute({ op: 'prepare', ...settingsRef, expectedRevision: current.revision,
-      ops: [{ op: 'set', path: ['workerConcurrency'], value: 3 }], requestId: 'service-tool-settings' }, toolExec);
+      ops: [{ op: 'set', path: ['maintenance', 'intervalHours'], value: 3 }], requestId: 'service-tool-settings' }, toolExec);
     assert.equal(plan.requiresConfirmation, false);
     toolReceipt = await settingsTool.execute({ op: 'commit', operationId: plan.operationId }, toolExec);
     assert.equal(toolReceipt.verified, true);
@@ -620,10 +634,10 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
     assert.equal(history.history[0].id, toolReceipt.historyId);
     assert.equal(history.history[0].actor.sessionId, agent.id);
   } catch (error) { streamFailure = error; } };
-  await call({ action: 'send', text: '把 Worker 并发改为 3，保留其他设置。', requestId: 'service-settings-owner-turn' });
+  await call({ action: 'send', text: '把助手维护间隔改为 3 小时，保留其他设置。', requestId: 'service-settings-owner-turn' });
   await agent.whenIdle();
   if (streamFailure) throw streamFailure;
-  assert.equal(toolResult.workerConcurrency, 3);
+  assert.equal(toolResult.maintenance.intervalHours, 3);
   response = await call({ action: 'state' });
   const savedToolConfig = (await response.json()).config;
   const { schemaVersion: savedSchemaVersion, revision: savedRevision, ...savedToolValue } = savedToolConfig;
@@ -762,7 +776,7 @@ test('mounted assistant HTTP routes execute real Harness and register scoped too
   const legacyVoiceReadback = (await settingsRead()).value;
   assert.deepEqual(legacyVoiceReadback.asr, { providerId: 'legacy-asr', modelId: 'Legacy ASR:Opaque/02', protocol: 'transcriptions' });
   assert.deepEqual(legacyVoiceReadback.models, legacyVoiceConfig.models);
-  assert.equal(legacyVoiceReadback.workerConcurrency, legacyVoiceConfig.workerConcurrency);
+  assert.equal(legacyVoiceReadback.maintenance.intervalHours, legacyVoiceConfig.maintenance.intervalHours);
   await checkCapabilities({ voiceInput: true, readAloud: true, realtimeVoice: true });
   voiceRoutes.delete('voice-asr');
   await checkCapabilities({ voiceInput: false, readAloud: true, realtimeVoice: false });

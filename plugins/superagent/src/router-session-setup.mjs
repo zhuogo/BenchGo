@@ -7,7 +7,7 @@ import { canFallback } from './routing.mjs';
 import { validateAssistantModels } from './store.mjs';
 import { recordDesktopTrigger } from './desktop-trigger.mjs';
 import { captureRouterTools, installRouterFailureConvergence, installRouterPermissionGate } from './router-permissions.mjs';
-import { activeChatReply, taskCleanupNoticeSource, installChatPublication } from './chat-publication.mjs';
+import { activeChatReply, installChatPublication, isLegacyExecutionInput } from './chat-publication.mjs';
 import { modelFallbackType, modelFallbackSource, modelRouteType, readModelFallbacks, fallbackCallSignature, requestExecutionEvents, dispatchedCallSignatures, isRouterQuery } from './model-fallback.mjs';
 import { routerRecoverySource } from './router-recovery.mjs';
 import { executionEffects, isReadOnlyTool } from './execution-effects.mjs';
@@ -23,7 +23,7 @@ const replyToolEnabled = (_kind, name) => name === 'assistant_reply';
 /** Assembles one Router conversation on its official Agent: model routing and fallback, prompt sections, tools, gates and turn hooks. */
 export function createRouterSessionSetup(runtime, { threadId, record, role, recoveredEvidence, presets }) {
   const { ctx, store, now, cooldownMs, builtinLayer, Compaction, appendRecord, appendChatRecord, setupTools, scheduleBridge, onSourceMessage, emit, mark,
-    timings, thread, taskOwnerScope, mayReplyToTask, mayReplyToTaskCleanup, isStopped, cooldowns, errors, failures, models, activeRoutes,
+    timings, thread, taskOwnerScope, mayReplyToTask, isStopped, cooldowns, errors, failures, models, activeRoutes,
     agentCompaction } = runtime;
   const routerContext = createRouterContext({ store, sessionId: record.sessionId });
   let contextText = '', selection, replyTurn, failedPlan, claimedMessages = [], currentTurn, resumeFallback;
@@ -64,6 +64,7 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
     });
     scope.on('agent/inbox/claimed', ({ message, turn }) => {
       if (currentTurn !== turn) { currentTurn = turn; claimedMessages = []; replyTurn = undefined; }
+      if (isLegacyExecutionInput(message)) return;
       claimedMessages.push(message);
       if (message.source?.kind === 'user' || message.source?.kind === 'retry') {
         errors.delete(threadId);
@@ -199,24 +200,27 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
     const redactContext = createContextRedactor(agent, 'benchgo-assistant-memory', store.memory);
     scope.systemPrompt.context({ name: 'benchgo-assistant-memory', order: 100, interpolate: false, text: () => contextText });
     scope.systemPrompt.section({ name: 'benchgo-assistant-name', order: -90, interpolate: false, text: 'IDENTITY.md defines your name; config.name is only a fallback. To rename on user request, discover the name path with assistant_settings catalog/read and prepare/commit that path.' });
-    scope.systemPrompt.section({ name: 'benchgo-assistant-pet', order: -89.5, interpolate: false, text: 'You are one SuperAgent assistant and its pet identity. Appearance, personality and memory are related but distinct. Use assistant_pet only if registered; inspect catalog IDs and preview appearance changes for the user before applying. Use available image tools for generation; report only supported capabilities. Expressions convey mood, not task completion.' });
+    scope.systemPrompt.section({ name: 'benchgo-assistant-pet', order: -89.5, interpolate: false, text: 'You are one SuperAgent assistant and its pet identity. Appearance, personality and memory are related but distinct. Use assistant_pet only if registered; inspect catalog IDs and preview appearance changes for the user before applying. Delegate image generation to a Worker; report only supported capabilities. Expressions convey mood, not task completion.' });
+    scope.systemPrompt.section({ name: 'benchgo-session-archive', order: -89.4, interpolate: false, text: 'Use assistant_session_archive for local Workbench chat archival and assistant_task_cleanup for Task history. For an explicit chat archive request with a clear scope, preview and apply directly in this turn using the owner tool.' });
     const inheritedTools = captureRouterTools(scope.tools, agent);
     await setupTools?.(scope, { agent, threadId, record, toolEnabled: expressionToolEnabled });
     const routerQuestions = installRouterQuestions(scope, agent, { database: store.orchestration, threadId, getOwnerScope: () => taskOwnerScope(threadId), appendRecord });
     installChatPublication(scope, agent, { appendRecord: appendChatRecord,
-      canPublish: request => isHostReplyRequest(request) ? mayReplyToTask(threadId, request.id)
-        : request.source?.kind === taskCleanupNoticeSource ? mayReplyToTaskCleanup(threadId, request) : false, onPublish: () => emit({ type: 'publication', threadId }) });
+      canPublish: request => isHostReplyRequest(request) ? mayReplyToTask(threadId, request.id) : false,
+      onPublish: () => emit({ type: 'publication', threadId }) });
     // A denied tool call remains a correctable official tool result, rather
     // than failing the conversation or borrowing Worker execution privileges.
     installRouterPermissionGate(scope, { agent, inherited: inheritedTools, controlled: captureRouterTools(scope.tools, agent), executor: new NativeToolExecutor(scope) });
     scope.systemPrompt.section({ name: 'benchgo-product-status', order: -88.5, interpolate: false, text: 'Answer BenchGo state questions with its registered read-only tools. For devices accessing BenchGo Link, use assistant_device_status: authorized devices and recorded access are not live online counts. Distinguish unavailable facts from empty results; broaden an investigation when the user requests it, not because an older conversation did.' });
-    scope.systemPrompt.section({ name: 'benchgo-media-delivery', order: -88.3, interpolate: false, text: 'For an explicitly requested image, video, or audio deliverable, use enabled media generation tools directly. Use image attachments and media artifact filenames from this conversation. Preserve the requested model, reference, or selection. Deliver the returned artifact link in this conversation. If a video is pending, report its requestId and query media_video_status for follow-ups.' });
+    scope.systemPrompt.section({ name: 'benchgo-media-delivery', order: -88.3, interpolate: false, text: 'For requested image, video or audio generation, call assistant_delegate once for the batch. Preserve the requested media model, provider, references, format and item count in the Task. The Worker calls the media tools and returns the files or actual errors. A dispatch receipt only means the Worker accepted the Task. Report the result when it arrives, including per-item failures and any unconfirmed submissions.' });
     scope.systemPrompt.section({ name: 'benchgo-configuration-boundary', order: -88.4, interpolate: false, text: 'BenchGo application configuration, including providers, models, defaults, credentials and plugin settings, belongs to Router management through assistant_settings catalog/read/prepare/commit and the official services. Delegate only connection discovery, read-only inspection and actual request verification to Workers; state explicitly that they must not edit application configuration through shell, scripts, file tools or aliases. Preserve unrelated values and use the exact current namespace, revision and returned application status. If the namespace or operation is unavailable, report the exact limitation; never bypass the service with a direct file edit. Describe the Worker portion and the Router-owned remainder in the delegation target, preserving any result conditions the user stated; include known exact paths, prior verified results and exact provider/model IDs. Treat those IDs as opaque: never guess aliases or silently substitute models. After a successful commit, verify the saved and reloaded selection and an actual request to that exact provider/model. If the current configuration already parses and the requested outcome has been verified, finish; do not add BOM removal, formatting cleanup, unrelated searches or additional configuration writes. PROFILE_CONFIG_DIRECT_WRITE or PROFILE_CONFIG_RESTORED means a configuration guard intervened: stop direct edits, report the receipt and use the official management path.' });
     scope.systemPrompt.section({ name: 'benchgo-chat-publication', order: -86, interpolate: false, text: 'Ordinary text streams visibly to the user. A brief acknowledgement can precede tools in the same turn; assistant_reply publishes and ends the turn, so use ordinary text when continuing work. Normal final text is published on successful turn completion. Avoid repeating acknowledgements or narrating each tool step; the UI shows activity. Report saved Worker results naturally when notified. Publishing a reply is not action approval; keep secrets and private reasoning out of visible text.' });
     scope.systemPrompt.section({ name: 'benchgo-router-tools', order: -88, interpolate: false, text: 'Use only the registered Router coordination and product-management tools. Delegate environment investigation and execution to the resource-owning device from the first exploratory action, including filesystem, shell, web, skill loading, plugins and MCP tool calls. Use assistant_delegate for project and Task work; the current host owns the only business Task. For a user request to maintain an SSH server, call assistant_server_ssh without arguments to find its registered deviceId, then call it with the deviceId and command. For a remote resource, resolve its exact deviceId/projectId through assistant_devices/assistant_projects and read assistant_devices(deviceId). Use the configured Worker on the target device when workerPreference.config is present, otherwise choose an exact Harness, provider and model from the target catalog when workerPreference is absent. Report workerPreference.error or an empty model list directly. The peer only executes and does not need SuperAgent. Use assistant_tasks for saved facts. Use assistant_task_control supplement to send actionable text to the original Task for follow-up instructions, questions, ordinary changes to the local official Worker goal, or continuation. Resolve references from the current conversation. Attach resume=true only when the user asks to continue paused work now. Reply naturally based on the actual receipt. Use assistant_task_change for structured changes, linked adjustments and remote or external Worker revisions. Never execute remote paths locally or fall back locally when the target is unavailable. Use registered status tools for product facts, schedule_* for reminders and scheduled work, assistant_settings for configuration, and ask_user_question when a user decision is needed. For MCP setup, first discover the active manager and its servers schema through assistant_settings catalog/read; preserve other entries and follow prepare/commit and the returned application status. Delegate other environment investigation, verification and plugin-provided MCP operations to a Worker; plugin_manager is a Worker capability. These are live capabilities: do not assume missing tools, require manual configuration edits or claim a host restart is necessary without checking actual settings and tool results. Report unavailable capabilities and approval-policy blocks exactly; do not bypass them with file or shell edits. Known task IDs can be used directly; resolve ambiguous references with assistant_tasks. For remote Codex and Claude Code Workers, pause, resume, supplement and revision require a target that supports native continuation. A running native Worker applies new input in the original session after an observed turn boundary. Report control receipts accurately. A saved request confirms delivery to the Task inbox. Use assistant_execution_manage to inspect or recover work on another device. Existing Attention replies keep their original question ID and options. After dispatch, let the Worker run and return to the conversation; completion notifications support follow-up without polling. For cleanup, use assistant_task_cleanup preview then commit the selected set through its single confirmation; the commit receipt already contains per-target results. Consult history when results need clarification, not as a compulsory extra step. Request IDs come from the host; multiple tasks from one message are supported. Tool schemas carry operation-specific details.' });
     scope.on('agent/pre-step', async (payload, next) => {
       timings.get(agent.id)?.steps.push({ step: payload.step, marks: {} });
       mark(agent.id, 'contextStarted');
+      const messages = (payload.messages || []).filter(message => !isLegacyExecutionInput(message));
+      if (payload.messages?.length && !messages.length) return { kind: 'reject' };
       // Retain the original private event, replacing only the model surface
       // after its expression turn. The current fallback keeps its materials.
       const visible = new Set(agent.session.surface.nodes);
@@ -232,15 +236,13 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
       const active = activeChatReply(agent.session.snapshotEvents(), { includeInternal: true });
       // Claimed steering is not in the transcript yet. A fresh human
       // message supersedes the prior internal expression's reply gates.
-      const incomingUser = payload.messages?.some(isChatUserMessage);
+      const incomingUser = messages.some(isChatUserMessage);
       const deferredNotices = new Set();
       if (incomingUser) {
-        for (const message of payload.messages) {
-          const kind = message.source?.kind;
-          if (!isHostReplyRequest(message) && kind !== taskCleanupNoticeSource) continue;
+        for (const message of messages) {
+          if (!isHostReplyRequest(message)) continue;
           deferredNotices.add(message.id);
-          const current = isHostReplyRequest(message) ? await mayReplyToTask(threadId, message.id)
-            : await mayReplyToTaskCleanup(threadId, message);
+          const current = await mayReplyToTask(threadId, message.id);
           // Keep valid notices at their original official inbox identity;
           // stale notices cannot reject or become the reply to new input.
           if (current) agent.inbox.append('next-turn', message);
@@ -248,22 +250,19 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
         claimedMessages = claimedMessages.filter(message => !deferredNotices.has(message.id));
       }
       const currentRequest = !incomingUser && agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.id === active?.requestId)?.data;
-      const cleanupNotice = !incomingUser && payload.messages?.find(message => message.source?.kind === taskCleanupNoticeSource)
-        || (currentRequest?.source?.kind === taskCleanupNoticeSource ? currentRequest : null);
-      if (cleanupNotice && !await mayReplyToTaskCleanup(threadId, cleanupNotice)) return { kind: 'reject' };
-      const internal = !incomingUser && payload.messages?.find(message => isHostReplyRequest(message)) || (isHostReplyRequest(currentRequest) ? currentRequest : null);
+      const internal = !incomingUser && messages.find(isHostReplyRequest) || (isHostReplyRequest(currentRequest) ? currentRequest : null);
       if (internal && !await mayReplyToTask(threadId, internal.id)) return { kind: 'reject' };
       if (currentThread.sourceKey && !internal) {
-        for (const message of payload.messages || []) {
+        for (const message of messages) {
           if (message.source?.kind !== 'user') continue;
           if (!onSourceMessage) throw new Error('Source conversation input routing is unavailable');
           await onSourceMessage({ thread: copy(currentThread), sessionId: agent.id, message });
         }
         return { kind: 'enter', messages: [] };
       }
-      await scheduleBridge?.ingestMessages({ sessionId: record.sessionId, threadId, messages: payload.messages });
-      if (scheduleBridge && payload.messages?.length && payload.messages.every(message => message.source?.kind === 'schedule')) return { kind: 'enter', messages: [] };
-      for (const message of payload.messages || []) {
+      await scheduleBridge?.ingestMessages({ sessionId: record.sessionId, threadId, messages });
+      if (scheduleBridge && messages.length && messages.every(message => message.source?.kind === 'schedule')) return { kind: 'enter', messages: [] };
+      for (const message of messages) {
         if (!isChatUserMessage(message) || !message.id) continue;
         if (message.source.kind === 'user-question-reply') {
           const reply = routerQuestions.read(message);
@@ -277,16 +276,17 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
         const text = (message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
         if (/^\/learn(?:\s|$)/u.test(text.trim())) store.learning?.request({ scope: record.sessionId, eventId: message.id, turnId: message.id, source, entry: 'command' });
       }
-      const incoming = (payload.messages || []).filter(isChatUserMessage)
+      const incoming = messages.filter(isChatUserMessage)
         .flatMap(message => message.source.kind === 'user-question-reply'
           ? [routerQuestions.read(message)?.text || '']
           : message.content.filter(block => block.type === 'text').map(block => block.text)).join('\n');
-      contextText = await routerContext({ incoming, messages: payload.messages || [] });
+      contextText = await routerContext({ incoming, messages });
       redactContext();
       mark(agent.id, 'contextReady', { contextCharacters: contextText.length });
       const decision = await next();
       return decision.kind === 'enter'
-        ? { ...decision, messages: decision.messages.filter(message => !deferredNotices.has(message.id) && (!scheduleBridge || message.source?.kind !== 'schedule')) }
+        ? { ...decision, messages: decision.messages.filter(message => !isLegacyExecutionInput(message)
+          && !deferredNotices.has(message.id) && (!scheduleBridge || message.source?.kind !== 'schedule')) }
         : decision;
     });
     scope.on('tools/execute', async (execution, next) => {
@@ -297,9 +297,6 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
         if (!replyToolEnabled(kind, execution.name))
           throw Object.assign(new Error('内部通知用于说明结果或等待原因，不能触发执行。'), { code: 'ROUTER_STATE_REPORT_ONLY' });
 
-      }
-      if (execution.agent === agent && request?.source?.kind === taskCleanupNoticeSource && !['assistant_reply', 'ask_user_question'].includes(execution.name)) {
-        throw Object.assign(new Error('任务整理通知只用于向用户反馈整理结果'), { code: 'ROUTER_CLEANUP_NOTICE_ONLY' });
       }
       const toolStarted = now();
       let result;
@@ -351,7 +348,7 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
         // The official stop shortcut cancels the same host Agent directly.
         // Converge it with the assistant Stop button before draining runtime.inbox.
         const reason = agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')?.data?.reason;
-        if (reason?.kind === 'aborted' && reason.reason?.kind === 'user') await runtime.inbox.cancel(threadId);
+        if (reason?.kind === 'aborted' && reason.reason?.kind === 'user') await runtime.inbox.cancel(threadId, { preserveQueuedResults: true });
         await runtime.inbox.settle(threadId);
       })().catch(error => {
         errors.set(threadId, error.message); emit({ type: 'error', threadId, message: error.message });

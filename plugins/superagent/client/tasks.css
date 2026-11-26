@@ -50,11 +50,5 @@
 .ba-goal-item>.ba-task-actions{flex:none;gap:2px}.ba-goal-edit{display:grid;gap:8px}.ba-goal-edit textarea{width:100%;min-width:0;resize:vertical}
 .ba-goal-error{color:var(--dsw-alias-state-error-primary,#b84549);font-size:13px;margin:6px 0 0}
 .ba-goal-fields .dowork-select{width:100%;min-height:40px;font-weight:400}
-.ba-worker-settings{--ba-line:color-mix(in srgb,var(--dsw-alias-label-primary,#171717) 12%,transparent);--ba-muted:var(--dsw-alias-label-secondary,#737373);display:grid;gap:12px!important;min-width:0;width:100%}
-.ba-worker-settings-intro{display:flex;align-items:flex-start;gap:12px;padding:16px;margin-bottom:8px;border:1px solid var(--ba-line);border-radius:12px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#315be8) 4%,var(--dsw-alias-bg-base,#fff))}
-.ba-worker-settings-intro>.cmd-ui-icon{color:var(--dsw-alias-state-business-primary,#315be8);margin-top:2px;flex:none}
-.ba-worker-settings-intro strong{font-size:14px;font-weight:600}.ba-worker-settings-intro p{margin:6px 0 0;color:var(--ba-muted);font-size:13px;line-height:1.65}
-.ba-worker-settings-input{position:relative}.ba-worker-settings-input input{box-sizing:border-box;width:100%;min-width:0;height:44px;padding:10px 76px 10px 12px!important;border:1px solid var(--ba-line);border-radius:8px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#171717);font:inherit;font-variant-numeric:tabular-nums}.ba-worker-settings-input>span{position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--ba-muted);pointer-events:none}
-.ba-worker-settings-status,.ba-worker-settings-error{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0;font-size:13px;color:var(--ba-muted)}.ba-worker-settings-error{color:var(--dsw-alias-state-error-primary,#b84549)}.ba-worker-settings-error>span{flex:1}.ba-worker-settings-error>.cmd-ui-icon{flex:none}
 @media(max-width:640px){.ba-task-actions{gap:6px}.ba-studio-body :is(.ba-tasks,.ba-goals) .ba-task-list-row{padding:14px}.ba-task-actions>.bg-ui-button{min-height:40px}.ba-task-state{white-space:normal}.ba-goal-item{gap:10px}.ba-goal-item>.ba-task-actions{flex-wrap:nowrap}}
 @media(prefers-reduced-motion:reduce){.ba-studio-body :is(.ba-tasks,.ba-goals) .ba-task-list-row{transition:none}}

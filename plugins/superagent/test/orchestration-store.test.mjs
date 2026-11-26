@@ -55,8 +55,10 @@ test('completed and stopped Tasks stay visible until an explicit manual archive 
   db.cancelTask(stopped.id);
   assert.equal(db.listTasks({ archived: false }).length, 4);
   assert.deepEqual(db.listTasks({ archived: true }), []);
+  // Archival is the official archive set projected onto the Task, never a
+  // local presentation flag.
   const raw = new DatabaseSync(db.path);
-  raw.prepare('INSERT INTO task_meta VALUES (?,?)').run('task-presentation:task:completed', JSON.stringify({ archived: true, archiveRevision: 1 }));
+  raw.prepare('INSERT INTO sa_task_archive VALUES (?,?,?)').run('completed', 'session-completed', new Date().toISOString());
   raw.close();
   assert.deepEqual(db.listTasks({ archived: true }).map(row => row.id), ['completed']);
   assert.equal(db.listTasks({ archived: false }).length, 3);
@@ -70,7 +72,7 @@ test('explicit archive scope is applied before paging and never implicitly hides
   db.createThread({ id: 'archive-paging', source: { type: 'desktop', id: 'owner' } });
   for (const [id, status] of [['first', 'waiting'], ['second', 'completed'], ['third', 'completed'], ['fourth', 'completed']]) db.createTask({ id, status, threadId: 'archive-paging', target: id, mandate: {} });
   const raw = new DatabaseSync(db.path);
-  for (const id of ['second', 'fourth']) raw.prepare('INSERT INTO task_meta VALUES (?,?)').run(`task-presentation:task:${id}`, JSON.stringify({ archived: true, archiveRevision: 1 }));
+  for (const id of ['second', 'fourth']) raw.prepare('INSERT INTO sa_task_archive VALUES (?,?,?)').run(id, `session-${id}`, new Date().toISOString());
   raw.close();
   assert.equal(db.listTasks({ archived: false, newestFirst: true, limit: 1 })[0].id, 'third');
   assert.equal(db.listTasks({ archived: false, newestFirst: true, limit: 1, offset: 1 })[0].id, 'first');

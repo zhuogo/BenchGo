@@ -12,7 +12,7 @@ const loopback = value => {
 };
 export function deviceIdentity(candidate, value) {
   const { hostId, authorizationId } = value ?? {};
-  const known = [candidate.hostId, candidate.pin && 'sha256:' + candidate.pin,
+  const known = [candidate.hostId, candidate.relayTarget, candidate.pin && 'sha256:' + candidate.pin,
     ...(candidate.routes?.filter(route => route.kind === 'direct').map(route => 'sha256:' + route.pin) ?? [])].filter(Boolean);
   if (hostId !== undefined && (typeof hostId !== 'string' || !/^sha256:[A-Za-z0-9+/]{43}=$/.test(hostId) || known.some(id => id !== hostId))
     || authorizationId !== undefined && (typeof authorizationId !== 'string' || !authorizationId || authorizationId.length > 256
@@ -25,9 +25,16 @@ export function deviceIdentity(candidate, value) {
   }
   return { hostId, authorizationId, routes };
 }
-export async function readDeviceInfo(candidate, { signal } = {}) {
-  const { value } = await remoteJson(candidate, '/link/api/info', undefined, { signal, timeout: 3500 });
-  return { ...deviceIdentity(candidate, value), ...(value.groupAssetLease === true ? { groupAssetLease: true } : {}) };
+export async function openRemoteWorkbench(candidate, { agent, groupAssetLease } = {}) {
+  const expectedHostId = candidate.hostId || candidate.relayTarget || (candidate.pin ? 'sha256:' + candidate.pin : undefined);
+  const { value, headers } = await remoteJson(candidate, '/link/api/workbench', {
+    expectedHostId, expectedAuthorizationId: candidate.authorizationId, ...(groupAssetLease && { groupAssetLease: true }),
+  }, { agent, timeout: 3500 });
+  const cookie = headers['set-cookie']?.find(value => value.startsWith('dsh_link_workbench='));
+  if (!cookie || value?.url !== '/link/workbench/' || !value.hostId || !value.authorizationId || groupAssetLease && value.groupAssetLease !== true) {
+    throw Object.assign(new Error('请更新目标主机上的 BenchGo 以打开工作台'), { status: 409 });
+  }
+  return { ...deviceIdentity(candidate, value), cookie };
 }
 /** Stable route order: direct first, then relays by configured priority. */
 export function orderRoutes(routes, now = Date.now()) {
@@ -38,12 +45,13 @@ export function orderRoutes(routes, now = Date.now()) {
   return [...direct, ...relay].filter(({ route }) => !cooling(route, now)).map(({ route }) => route);
 }
 /** Choose only among authenticated pairing candidates, before any business request is sent. */
-export async function selectRoute(target, { timeout = 2500, signal, probe = probeRemote, accept, onHealth } = {}) {
+export async function selectRoute(target, { timeout = 2500, signal, probe = probeRemote, accept, onHealth, connectFirst = false } = {}) {
   const routes = normalizeRoutes(target.routes);
   // Older pairings have one saved endpoint and retain their established trust policy.
   if (!routes?.length) {
     const candidate = { ...target, ...normalizeTarget(target) };
-    if (target.ssh) await probe(candidate, { timeout, signal });
+    if (target.ssh && !connectFirst) await probe(candidate, { timeout, signal });
+    signal?.throwIfAborted();
     await accept?.(candidate);
     return candidate;
   }
@@ -64,27 +72,68 @@ export async function selectRoute(target, { timeout = 2500, signal, probe = prob
       : Object.assign(new Error('目标未提供可用的设备连接地址，请在设备中心重新连接'), { code: 'OFFLINE' });
     throw error;
   }
-  let lastError, retryQueued = false;
   const attempts = [...ordered];
-  for (const route of attempts) {
-    signal?.throwIfAborted();
-    const candidate = { ...target, url: route.url, pin: route.kind === 'direct' ? route.pin : '', relayTarget: route.relayTarget };
-    try {
-      await probe({ url: candidate.url, pin: candidate.pin }, { timeout, signal });
-      await accept?.(candidate, route.kind === 'public' ? undefined : route);
+  const controller = new AbortController();
+  const probeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const preflights = new Map();
+  const preflight = (index, delay) => {
+    const pending = preflights.get(index);
+    if (pending) {
+      if (!delay) pending.start();
+      return pending.result;
     }
-    catch (error) {
+    const route = attempts[index];
+    const { promise: result, resolve } = Promise.withResolvers();
+    let timer, started = false;
+    const start = () => {
+      if (started) return;
+      started = true;
+      clearTimeout(timer);
+      probeSignal.removeEventListener('abort', cancel);
+      Promise.resolve().then(() => {
+        probeSignal.throwIfAborted();
+        return probe({ url: route.url, pin: route.kind === 'direct' ? route.pin : '' }, { timeout, signal: probeSignal });
+      }).then(() => resolve(null), resolve);
+    };
+    const cancel = () => { clearTimeout(timer); resolve(probeSignal.reason); };
+    preflights.set(index, { result, start });
+    if (delay) {
+      timer = setTimeout(start, delay);
+      probeSignal.addEventListener('abort', cancel, { once: true });
+    } else start();
+    return result;
+  };
+  let lastError, retryQueued = false;
+  try {
+    for (let index = 0; index < attempts.length; index++) {
       signal?.throwIfAborted();
-      const status = error.statusCode ?? error.status;
-      if ([401, 403].includes(status) || !unreachable.has(error.code) && !gatewayUnavailable.has(status)) throw error;
-      lastError = error;
-      // Try other admitted routes first, then retry one transient connection check.
-      if (!retryQueued && route.kind === 'relay' && transient.has(error.code)) { retryQueued = true; attempts.push(route); continue; }
-      if (route.kind === 'relay') await onHealth?.(route, 'unhealthy', { cooldownUntil: Date.now() + 10_000, lastError: error.message });
-      continue;
+      const route = attempts[index];
+      const candidate = { ...target, url: route.url, pin: route.kind === 'direct' ? route.pin : '', relayTarget: route.relayTarget };
+      const needsProbe = !connectFirst || index > 0;
+      const current = needsProbe ? preflight(index) : null;
+      for (let offset = 1; offset <= 2 && index + offset < ordered.length; offset++) preflight(index + offset, 100 * offset);
+      try {
+        if (current) {
+          const error = await current;
+          if (error) throw error;
+        }
+        signal?.throwIfAborted();
+        await accept?.(candidate, route.kind === 'public' ? undefined : route);
+        signal?.throwIfAborted();
+      } catch (error) {
+        signal?.throwIfAborted();
+        const status = error.statusCode ?? error.status;
+        if ([401, 403].includes(status) || !unreachable.has(error.code) && !gatewayUnavailable.has(status)) throw error;
+        lastError = error;
+        if (!retryQueued && route.kind === 'relay' && transient.has(error.code)) { retryQueued = true; attempts.push(route); continue; }
+        if (route.kind === 'relay') await onHealth?.(route, 'unhealthy', { cooldownUntil: Date.now() + 10_000, lastError: error.message });
+        continue;
+      }
+      if (route.kind === 'relay') await onHealth?.(route, 'healthy', { cooldownUntil: 0, lastError: null });
+      return candidate;
     }
-    if (route.kind === 'relay') await onHealth?.(route, 'healthy', { cooldownUntil: 0, lastError: null });
-    return candidate;
+  } finally {
+    controller.abort();
   }
   if (retryAt > Date.now() && Number.isFinite(retryAt)) throw recovering();
   throw lastError;

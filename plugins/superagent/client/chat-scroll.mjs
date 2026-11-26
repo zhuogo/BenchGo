@@ -116,6 +116,7 @@ export function createChatScroll({ scroller, content, sessionKey, onChange, redu
   for (const [name, handler] of Object.entries(events)) scroller.addEventListener(name, handler, { passive: true });
   return {
     bottom, resize,
+    holdPosition() { previousTop = scroller.scrollTop; interrupt(); },
     update(rows) {
       const users = rows.filter(row => row.role === 'user');
       const user = users.at(-1);

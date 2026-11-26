@@ -101,6 +101,8 @@ export function taskWaiting(task) {
   if (failed || control.stopped || snapshot.assignment?.state === 'blocked') actions.push({ kind: 'tasks', label: '调整要求' });
   actions.push({ kind: 'refresh', label: '刷新记录' });
   const answerable = uncertain || control.stopRequested || control.stopped ? null : attention;
-  return { status, label: answerable && !control.paused && !control.pauseRequested ? '等待答复' : taskLabels.waiting,
+  const label = control.stopped ? '已停止' : task.archived && control.stopRequested ? executionNotice.label
+    : answerable && !control.paused && !control.pauseRequested ? '等待答复' : taskLabels.waiting;
+  return { status, label,
     reason, actions, executionNotice, attention: answerable };
 }

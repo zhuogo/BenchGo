@@ -60,9 +60,9 @@ async function fixture() {
       slots: { inject(name, callback) { callback(); }, register(info, view) { Result = view; } },
     });
     window.renderArtifact = options => {
-      const { filename, mimeType, externalUrl, modelId, modelName, name = 'generate_image', native, replace, isError, second, metadata,
+      const { filename, mimeType, externalUrl, modelId, modelName, name = 'generate_image', native, replace, isError, second, metadata, results,
         url = externalUrl ?? 'api/benchgo/media/artifact?file=' + filename } = options;
-      const payload = { url, filename, mimeType, externalUrl, modelId, modelName };
+      const payload = results ? { results } : { url, filename, mimeType, externalUrl, modelId, modelName };
       const location = { kind: 'turn', turn: 1 };
       const call = native ? { type: 'plugin:benchgo-plugin/media-result', seq: 8, ignorable: true, data: payload }
         : { type: 'tool/call', seq: 7, data: { turn: 1, name, callId: 'call-1' } };
@@ -182,6 +182,13 @@ test('chat renders generated media outside the folded process and downloads thro
     await viewer.getByRole('img', { name: 'other.png' }).waitFor();
     await page.keyboard.press('Escape');
     await viewer.waitFor({ state: 'hidden' });
+    const batch = { metadata: true, results: [
+      { ...image, url: 'api/benchgo/media/artifact?file=cover.png' },
+      { requestId: 'failed-item', status: 'error' },
+      { ...image, filename: 'other.png', url: 'api/benchgo/media/artifact?file=other.png' },
+    ] };
+    assert.deepEqual(await render(batch), { groupTree: 'turn', seq: 8 });
+    await page.getByRole('button', { name: '展开 2 张图片' }).waitFor();
     await render({ native: true, filename: 'missing.png', mimeType: 'image/png' });
     await page.getByRole('alert').filter({ hasText: '图片加载失败' }).waitFor();
     await page.getByRole('button', { name: '重试加载图片' }).waitFor();

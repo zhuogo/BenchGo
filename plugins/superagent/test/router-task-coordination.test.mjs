@@ -4,7 +4,7 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import { createRouterTools } from '../src/router-tools.mjs';
 import { isDesktopTaskManagementScope } from '../src/desktop-task-management-authority.mjs';
 
-function fixture({ threadId = 'main' } = {}) {
+function fixture({ threadId = 'main', query, read, taskManagement = {} } = {}) {
   const events = [{ type: 'turn/start' }, { type: 'user/message', data: { id: 'real-owner-message', source: { kind: 'user' },
     content: [{ type: 'text', text: '先停止并归档选中的两个工单，保留成果。' }] } }];
   const agent = { id: 'current-router', status: 'running', session: { header: {}, snapshotEvents: () => structuredClone(events) } };
@@ -14,16 +14,10 @@ function fixture({ threadId = 'main' } = {}) {
   const store = { getState: async () => { await stateRead?.(); return state; } };
   const ctx = { get: name => name === 'approval' ? { overrideOf: () => 'never', request: async input => { approvals.push(input); return 'rejected'; } } : undefined,
     agents: { get: id => id === agent.id ? agent : undefined, currentInitiator: () => agent, turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } };
-  const continuation = { operationId: 'durable-operation', items: [{ taskId: 'one', status: 'pending' }], nextOffset: null };
-  createRouterTools({ ctx, store, shutdown: new AbortController(), taskManagement: {},
-    cleanupContinuations: {
-      start(args, owner) { calls.push({ method: 'start', args, owner }); return { operation: 'stop-and-archive', ...continuation }; },
-      pending(args) { calls.push({ method: 'pending', args }); return continuation; },
-      cancel(args) { calls.push({ method: 'cancel', args }); return { operationId: 'durable-operation', items: [{ taskId: 'one', status: 'cancelled' }] }; },
-    },
+  createRouterTools({ ctx, store, shutdown: new AbortController(), taskManagement,
     desktopTasks: {
-      query(ownerScope, filters) { calls.push({ method: 'query', ownerScope, filters }); return { tasks: [], nextOffset: null }; },
-      read(id, ownerScope, options) { calls.push({ method: 'read', id, ownerScope, options }); return { id, section: options.section || 'overview', records: [], nextOffset: null }; },
+      query(ownerScope, filters) { calls.push({ method: 'query', ownerScope, filters }); return query ? query(filters) : { tasks: [], nextOffset: null }; },
+      read(id, ownerScope, options) { calls.push({ method: 'read', id, ownerScope, options }); return read ? read(id, options) : { id, section: options.section || 'overview', records: [], nextOffset: null }; },
     },
     engine: { async taskOwnerScope(id) { calls.push({ method: 'ownerScope', threadId: id }); return { threadId: id, sessionIds: ['original-router', agent.id] }; } },
   })(
@@ -42,28 +36,14 @@ function fixture({ threadId = 'main' } = {}) {
   return { events, agent, state, ctx, exec, calls, approvals, definitions, run, onStateRead: hook => { stateRead = hook; } };
 }
 
-const continuationInputs = [
-  { op: 'stop-and-archive', ids: ['one', 'two'] },
-  { op: 'pending', operationId: 'durable-operation', taskId: 'one', status: 'pending', offset: 2, limit: 10 },
-  { op: 'cancel', operationId: 'durable-operation', ids: ['one'] },
+const cleanupInputs = [
+  { op: 'preview', ids: ['one'] },
+  { op: 'commit', previewId: 'archive-preview', ids: ['one'] },
+  { op: 'restore', receiptId: 'archive-receipt' },
+  { op: 'restore', previewId: 'restore-preview', ids: ['one'] },
 ];
 
-test('registered stop/archive follow-up operations bind the real local main or manual-side owner', async () => {
-  for (const threadId of ['main', 'manual-side']) {
-    const f = fixture({ threadId });
-    for (const input of continuationInputs) await f.run('assistant_task_cleanup', input);
-    assert.deepEqual(f.calls.map(row => row.method), ['start', 'pending', 'cancel']);
-    assert.deepEqual(f.calls[0].args, { ids: ['one', 'two'] });
-    assert.equal(f.calls[0].owner.agent, f.agent);
-    assert.equal(f.calls[0].owner.threadId, threadId);
-    assert.deepEqual(f.calls[0].owner.instruction, { turn: 0, message: f.events[1].data });
-    assert.deepEqual(f.calls[1].args, { operationId: 'durable-operation', taskId: 'one', status: 'pending', offset: 2, limit: 10 });
-    assert.deepEqual(f.calls[2].args, { operationId: 'durable-operation', ids: ['one'] });
-    assert.deepEqual(f.approvals, [], 'reversible product organization never asks a business approval under never');
-  }
-});
-
-test('stop/archive follow-up operations reject retained Workers, external sources and machine-only turns', async () => {
+test('archive and restore reject retained Workers, external sources and machine-only turns', async () => {
   const mutations = [
     f => { f.exec.agent = { ...f.agent, id: 'worker' }; },
     f => { f.agent.session.header.origin = 'subagent'; },
@@ -74,22 +54,20 @@ test('stop/archive follow-up operations reject retained Workers, external source
     f => { f.state.threads[0].archived = true; },
     f => { f.state.threads[0].sessionId = 'replaced-router'; },
   ];
-  for (const input of continuationInputs) for (const mutate of mutations) {
+  for (const input of cleanupInputs) for (const mutate of mutations) {
     const f = fixture({ threadId: 'manual-side' }); mutate(f);
     await assert.rejects(f.run('assistant_task_cleanup', input), { code: 'MANAGEMENT_OWNER_REQUIRED' });
     assert.deepEqual(f.calls, []);
   }
 });
 
-test('new cleanup operations reject forged host identity and stale instructions before forwarding', async () => {
-  for (const input of continuationInputs) {
-    for (const key of ['source', 'agent', 'instruction', 'confirmedBy', 'scope', 'requestId']) {
+test('archive and restore reject forged host identity and stale instructions before forwarding', async () => {
+  for (const input of cleanupInputs) {
+    for (const key of ['source', 'agent', 'instruction', 'confirmedBy', 'scope']) {
       const f = fixture();
       const tool = f.definitions.get('assistant_task_cleanup');
       const forged = { ...input, [key]: 'model-provided' };
-      // requestId belongs to commit/restore in the shared tool schema; the
-      // operation-specific host guard still rejects it for continuation ops.
-      if (key !== 'requestId') assert.notEqual(validateJsonSchemaValue(tool.parameters, forged).length, 0);
+      assert.notEqual(validateJsonSchemaValue(tool.parameters, forged).length, 0);
       await assert.rejects(tool.execute(forged, f.exec), { code: 'MANAGEMENT_INPUT' });
       assert.deepEqual(f.calls, []);
     }
@@ -97,6 +75,16 @@ test('new cleanup operations reject forged host identity and stale instructions 
     f.onStateRead(() => { f.events[1].data.content[0].text = '取消刚才的整理'; });
     await assert.rejects(f.run('assistant_task_cleanup', input), { code: 'MANAGEMENT_STALE_INSTRUCTION' });
     assert.deepEqual(f.calls, []);
+  }
+  for (const [prepare, commit] of [[cleanupInputs[0], cleanupInputs[1]], [cleanupInputs[2], cleanupInputs[3]]]) {
+    const preview = { previewId: commit.previewId, type: commit.op === 'restore' ? 'restore' : 'archive', manifestHash: 'frozen', items: [{ id: 'one' }] };
+    const f = fixture({ taskManagement: {
+      previewCleanup: () => preview, previewRestore: () => preview, getCleanupPreview: () => preview,
+      createCleanupConfirmation: () => assert.fail('a stale instruction must not receive a host confirmation'),
+    } });
+    assert.deepEqual(await f.run('assistant_task_cleanup', prepare), preview);
+    f.events[1].data.content[0].text = '取消刚才的整理';
+    await assert.rejects(f.run('assistant_task_cleanup', commit), { code: 'MANAGEMENT_STALE_INSTRUCTION' });
   }
 });
 
@@ -137,4 +125,39 @@ test('internal-only task reads fall back to logical ownership without inheriting
   assert.deepEqual(f.calls.map(row => row.method), ['ownerScope', 'read']);
   assert.equal(isDesktopTaskManagementScope(f.calls[1].ownerScope), false);
   assert.deepEqual(f.calls[1].ownerScope, { threadId: 'main', sessionIds: ['original-router', f.agent.id] });
+});
+
+test('assistant_tasks suppresses repeated invalid reads and allows corrected input and a new turn', async () => {
+  const f = fixture({ read(id, options) {
+    if (options.textOffset) throw Object.assign(new Error('提供有效 expectedHash'), { code: 'TASK_QUERY_INPUT' });
+    return { id, status: 'completed' };
+  } });
+  const query = { op: 'get', id: 'one', section: 'results', textOffset: 8, recordId: 'result:3', limit: 1 };
+  await assert.rejects(f.run('assistant_tasks', query), { code: 'TASK_QUERY_INPUT' });
+  await assert.rejects(f.run('assistant_tasks', { ...query, expectedHash: ' \t' }), /本回合已处理相同参数/);
+  assert.equal(f.calls.length, 1);
+  assert.equal((await f.run('assistant_tasks', { ...query, textOffset: 0 })).task.status, 'completed');
+  f.events.push({ type: 'turn/end' }, { type: 'turn/start' }, { ...f.events[1], data: { ...f.events[1].data, id: 'next-owner-message' } });
+  f.ctx.agents.turnBoundaryOf = () => ({ openTurnStartSeq: 3 });
+  await assert.rejects(f.run('assistant_tasks', query), { message: '提供有效 expectedHash' });
+  assert.equal(f.calls.length, 3);
+});
+
+test('assistant_tasks surfaces changed snapshots, flags duplicate polling and allows page and result pointers', async () => {
+  let task = { id: 'one', status: 'running', result: null };
+  const f = fixture({ query: ({ offset }) => offset ? { tasks: [], nextOffset: null } : { tasks: [task], nextOffset: 20 } });
+  assert.equal((await f.run('assistant_tasks', {})).tasks[0].status, 'running');
+  task = { ...task, status: 'completed', result: { taskId: 'one', version: 3 } };
+  const completed = await f.run('assistant_tasks', { op: 'list' });
+  assert.equal(completed.tasks[0].status, 'completed');
+  const duplicate = await f.run('assistant_tasks', { op: 'list', offset: 0, limit: 20 });
+  assert.equal(duplicate.code, 'TASK_QUERY_UNCHANGED');
+  assert.deepEqual(duplicate.resultReads, [{ op: 'get', id: 'one', section: 'results', recordId: 'result:3', limit: 1 }]);
+  assert.deepEqual(await f.run('assistant_tasks', {}), duplicate);
+  assert.equal(f.calls.length, 4);
+  assert.deepEqual(await f.run('assistant_tasks', { offset: completed.nextOffset }), { tasks: [], nextOffset: null });
+  assert.equal((await f.run('assistant_tasks', duplicate.resultReads[0])).task.id, 'one');
+  assert.equal(f.calls.length, 6);
+  task = { ...task, result: { taskId: 'one', version: 4 } };
+  assert.equal((await f.run('assistant_tasks', {})).tasks[0].result.version, 4);
 });

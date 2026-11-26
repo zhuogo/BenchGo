@@ -6,7 +6,16 @@ export const RELAY_DATA_PATH = '/__link/relay/data';
 export const RELAY_WORKBENCH_PATH = '/link/workbench/';
 export const RELAY_VOICE_PATH = '/link/workbench/api/voice/realtime';
 export const RELAY_CHUNK_BYTES = 48 * 1024;
+export const RELAY_HTTP_REUSE_HEADER = 'x-benchgo-relay-http-reuse';
 export const relayHostClaim = (origin, id, expires, nonce) => JSON.stringify(['benchgo-relay-host-v1', origin, id, expires, nonce]);
+
+// Each HTTP direction awaits its writes before reading more body data.
+export function sendRelayFrame(socket, value, options = {}) {
+  return new Promise((resolve, reject) => {
+    if (socket.readyState !== socket.OPEN) return reject(new Error('中继数据通道已关闭'));
+    socket.send(value, options, error => error ? reject(error) : resolve());
+  });
+}
 
 export function relayPathAllowed(method, path) {
   if (typeof method !== 'string' || typeof path !== 'string') return false;

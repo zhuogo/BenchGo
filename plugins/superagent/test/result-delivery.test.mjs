@@ -3,19 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resultOutbox, validateDelivery, deliverySuppression, systemStateDelivery } from '../src/result-delivery.mjs';
+import { validateDelivery, deliverySuppression, systemStateDelivery } from '../src/result-delivery.mjs';
 import { commitWorkerResult } from '../src/result-commit.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 
 const task = { id: 't', title: '原任务', target: '完整要求', instructionRevision: 2, resultVersion: 0, mandate: { source: { channel: 'desktop', sessionId: 'owner' } } };
 const result = { summary: '  原正文\n\n保留段落与结尾。\n', outcome: 'completed', evidenceRefs: [] };
 
-test('only synchronous Router action audits use a suppressed result outbox', () => {
-  const delivery = systemStateDelivery({ state: 'action_verified', code: 'ACTION_VERIFIED', stage: 'action' });
-  const audit = resultOutbox({ task, result, delivery });
-  assert.equal(audit.replyState, 'suppressed');
-  assert.equal(audit.suppressionReason, 'router-action-already-replied');
-  assert.throws(() => resultOutbox({ task, result }));
+test('delivery preserves long result text', () => {
   assert.equal(validateDelivery({ action: 'deliver', text: 'x'.repeat(20000) }).text.length, 20000);
 });
 

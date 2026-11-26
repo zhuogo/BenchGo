@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
 import { cleanupAssistant } from '../src/service-cleanup.mjs';
+import { createWorkerArchive } from '../src/worker-archive.mjs';
 import { DataOwner } from '../../base/shared/data-owner.mjs';
 import { mountAssistant } from '../src/service.mjs';
 
@@ -14,6 +16,25 @@ async function owned(t) {
   t.after(async () => { await owner.close().catch(() => {}); await rm(directory, { recursive: true, force: true }); });
   return { directory, owner };
 }
+
+test('Worker archive disposal removes its own listener and releases ownership for reload', async t => {
+  const { owner, directory } = await owned(t);
+  const commander = new EventEmitter();
+  const unrelated = () => {};
+  commander.on('session/archive', unrelated);
+  let scans = 0;
+  const archive = createWorkerArchive({
+    ctx: { workspaceRegistry: { archivedSessionIds: [] } }, commander,
+    orchestration: { syncTaskArchive: () => { scans++; } }, signal: new AbortController().signal,
+  });
+  commander.emit('session/archive', { archived: true });
+  assert.equal(scans, 2);
+  await cleanupAssistant({ stop: [() => archive.dispose()], release: () => owner.close() });
+  assert.deepEqual(commander.listeners('session/archive'), [unrelated]);
+  const next = new DataOwner(directory);
+  await next.open();
+  await next.close();
+});
 
 test('an unregister failure still closes stores and releases ownership for the next instance', async t => {
   const { owner, directory } = await owned(t);

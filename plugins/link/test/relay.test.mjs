@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { request as httpsRequest, createServer as createHttpsServer } from 'node:https';
-import { createSecureContext } from 'node:tls';
 import { connect as connectHttp2 } from 'node:http2';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -38,18 +37,25 @@ function request(port, path, { method = 'GET', body, token, cookie, headers = {}
   });
 }
 
-test('relay binds one Link host and streams pairing, workbench, and voice only', async t => {
+test('relay binds one Link host and streams pairing, workbench, and voice only', { timeout: 15_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'link-relay-'));
-  const targetDir = join(directory, 'target'), relayDir = join(directory, 'relay'), workbenchRoot = join(directory, 'workbench');
-  await mkdir(targetDir); await mkdir(relayDir); await mkdir(workbenchRoot);
+  const targetDir = join(directory, 'target'), workbenchRoot = join(directory, 'workbench');
+  await mkdir(targetDir); await mkdir(workbenchRoot);
   await writeFile(join(workbenchRoot, 'index.html'), '<!doctype html><html><head></head><body>real-workbench</body></html>');
   await mkdir(join(workbenchRoot, 'assets'));
   const asset = 'globalThis.relayCompression=true;\n'.repeat(2000);
   await writeFile(join(workbenchRoot, 'assets/large.js'), asset);
-  const targetIdentity = await loadIdentity(targetDir), relayIdentity = await loadIdentity(relayDir);
+  const targetIdentity = await loadIdentity(targetDir), relayIdentity = targetIdentity;
   const store = await openStore(join(directory, 'devices'));
   const relayPort = await freePort(), relayOrigin = `https://localhost:${relayPort}`;
   request.relayCert = relayIdentity.cert; request.relayOrigin = relayOrigin;
+  const dataUrl = `wss://localhost:${relayPort}/__link/relay/data`;
+  const setSocket = WebSocket.prototype.setSocket;
+  let dataConnections = 0;
+  t.mock.method(WebSocket.prototype, 'setSocket', function (...args) {
+    if (this.url === dataUrl) dataConnections++;
+    return setSocket.apply(this, args);
+  });
   const forwardedWorkbenchCookies = [];
   const cancelledRequest = Promise.withResolvers();
   const localRequestClosed = Promise.withResolvers();
@@ -59,7 +65,12 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
       createSharedFetchHandler: () => ({
         requestBodyMode: () => 'streaming',
         async fetch(request) {
-          if (new URL(request.url).pathname === '/api/stream/cancel') {
+          const path = new URL(request.url).pathname;
+          if (path === '/api/stream/hold') {
+            return new Response(new ReadableStream({ start(controller) { controller.enqueue(Buffer.from('ready\n')); } }));
+          }
+          if (path === '/api/stream/early') return new Response('early');
+          if (path === '/api/stream/cancel') {
             cancelledRequest.resolve();
             await new Promise(resolve => request.signal.addEventListener('abort', resolve, { once: true }));
             localRequestClosed.resolve();
@@ -107,9 +118,15 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
   await store.decide(pendingValue.requestId, true);
   const approval = await request(relayPort, '/link/api/pair/status', { method: 'POST', body: JSON.stringify(pendingValue), headers: { 'content-type': 'application/json' } });
   assert.equal(approval.status, 200);
+  assert.equal(dataConnections, 1, 'successive pairing requests should share one data connection');
   const approved = JSON.parse(approval.body), tokenValue = approved.token;
-  const opened = await request(relayPort, '/link/api/workbench', { method: 'POST', token: tokenValue, body: '{}', headers: { 'content-type': 'application/json' } });
+  const admit = body => request(relayPort, '/link/api/workbench', { method: 'POST', token: tokenValue, body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+  const refused = await admit({ expectedHostId: 'wrong-host', expectedAuthorizationId: approved.deviceId });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.headers['set-cookie'], undefined);
+  const opened = await admit({ expectedHostId: 'sha256:' + targetIdentity.pin, expectedAuthorizationId: approved.deviceId });
   assert.equal(opened.status, 200);
+  assert.equal(JSON.parse(opened.body).authorizationId, approved.deviceId);
   const cookie = (opened.headers['set-cookie']?.[0] || opened.headers['set-cookie']).split(';')[0];
   assert.match(cookie, /^dsh_link_workbench=/);
   const page = await request(relayPort, '/link/workbench/', { cookie: `${cookie}; dsh_owner=owner-secret` });
@@ -140,6 +157,29 @@ test('relay binds one Link host and streams pairing, workbench, and voice only',
     stream.on('error', reject); stream.on('end', () => resolve(status)); stream.resume();
   })));
   assert(startup.every(status => status === 200), 'a cold-start resource burst must not return capacity errors');
+
+  const subscriptions = Array.from({ length: 8 }, () => {
+    const stream = multiplexed.request({ ':path': '/link/workbench/api/stream/hold', origin: relayOrigin, cookie });
+    stream.resume();
+    return stream;
+  });
+  try {
+    await Promise.all(subscriptions.map(async stream => {
+      const [headers] = await once(stream, 'response');
+      assert.equal(headers[':status'], 200);
+    }));
+    const info = await request(relayPort, '/link/api/info');
+    assert.equal(info.status, 200, 'a short request must complete alongside eight open subscriptions');
+  } finally { for (const stream of subscriptions) stream.close(); }
+
+  const early = multiplexed.request({ ':method': 'POST', ':path': '/link/workbench/api/stream/early', origin: relayOrigin, cookie });
+  const earlyBody = [];
+  early.on('data', chunk => earlyBody.push(chunk));
+  early.write('incomplete upload');
+  await once(early, 'end');
+  assert.equal(Buffer.concat(earlyBody).toString(), 'early');
+  early.close();
+  assert.equal((await request(relayPort, '/link/api/info')).status, 200);
 
   const cancelled = multiplexed.request({ ':method': 'POST', ':path': '/link/workbench/api/stream/cancel', origin: relayOrigin, cookie });
   cancelled.end();
@@ -236,10 +276,11 @@ test('real relay isolates anonymous traffic and each verified device quota, incl
   const identity = await loadIdentity(directory), store = await openStore(join(directory, 'devices'));
   const relayPort = await freePort(), origin = `https://localhost:${relayPort}`;
   request.relayCert = identity.cert; request.relayOrigin = origin;
-  const workbench = createWorkbench({ connection: {
+  await writeFile(join(directory, 'index.html'), '<html></html>');
+  const workbench = createWorkbench({ webServer: { renderIndex: html => html }, connection: {
     createPeer: () => ({ dispose: async () => {} }),
     createSharedFetchHandler: () => ({ fetch: async () => Response.json({ ok: true }) }),
-  } }, store);
+  } }, store, { workbenchRoot: directory });
   const link = await listen({ identity, config: { host: '127.0.0.1', port: 0, publicUrl: '' }, store, workbench, dispatch: async () => ({ ok: true }), onError: () => {} });
   const secret = 'safe-test-relay-host-secret', relay = await createRelayServer({ host: '127.0.0.1', port: relayPort, identity, publicUrl: origin, token: secret });
   // Quota windows advance Date.now below; isolate the host's interval so a
@@ -414,25 +455,22 @@ test('read-only relay probe rejects authenticated H1-only public entrances and k
   assert.equal(JSON.stringify(value).includes(token), false);
   const rejected = await testRelayConnection({ url, token: 'wrong-secret' }, { ca: identity.cert });
   assert.equal(rejected.ok, false); assert.match(rejected.message, /拒绝认证/);
-  assert.deepEqual(requests, ['/__link/relay/probe', '/__link/relay/probe'], 'ALPN sends no HTTP requests and never registers a host');
+  assert.deepEqual(requests, ['/__link/relay/probe', '/__link/relay/probe'], 'each connection test sends exactly one read-only request');
 });
 
-test('public ALPN handshake shares the bounded relay probe timeout', { timeout: 5000 }, async t => {
+test('relay probe shares one deadline between TLS and the HTTP response', { timeout: 5000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'link-relay-alpn-timeout-'));
   const identity = await loadIdentity(directory), token = 'private-alpn-timeout-secret';
-  const secureContext = createSecureContext({ key: identity.key, cert: identity.cert });
-  const sockets = new Set(); let handshakes = 0;
-  const server = createHttpsServer({ key: identity.key, cert: identity.cert,
-    SNICallback(_name, done) { if (++handshakes === 1) done(null, secureContext); },
-  }, (_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ protocol: 'benchgo-link-relay', version: 1, authenticated: true }));
-  });
+  const sockets = new Set();
+  let handshakes = 0, requests = 0;
+  const server = createHttpsServer({ key: identity.key, cert: identity.cert }, () => { requests++; });
+  server.on('secureConnection', () => { handshakes++; });
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
   const value = await testRelayConnection({ url: `https://localhost:${server.address().port}`, token }, { ca: identity.cert, timeout: 250 });
-  assert.equal(handshakes, 2, 'authentication finished before the stalled public ALPN handshake');
+  assert.equal(handshakes, 1);
+  assert.equal(requests, 1);
   assert.equal(value.ok, false); assert.match(value.message, /超时/);
   assert.equal(JSON.stringify(value).includes(token), false);
 });

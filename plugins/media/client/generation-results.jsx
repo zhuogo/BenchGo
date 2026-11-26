@@ -2,20 +2,20 @@ import React from 'react';
 import { FileSaveButton } from '../../shared/client/file-save-button.jsx';
 import { ImageGallery } from '../../shared/client/image-gallery.jsx';
 import { ConversationMediaFile } from '../../shared/client/conversation-media.jsx';
-import { MEDIA_PRESENTATION, mediaResultFile, NATIVE_MEDIA_RESULT } from '../shared/generation-result.mjs';
+import { MEDIA_PRESENTATION, mediaResultFile, mediaResultItems, NATIVE_MEDIA_RESULT } from '../shared/generation-result.mjs';
 
 const NODE_KIND = 'benchgo-media-result';
 const names = new Set(['generate_image', 'generate_video', 'generate_audio', 'media_video_status']);
 
-function mediaFile({ message, meta }) {
-  if (message?.isError) return null;
-  if (meta?.[MEDIA_PRESENTATION]) return mediaResultFile(meta[MEDIA_PRESENTATION]);
-  if (message?.content?.length !== 1) return null;
+function mediaFiles({ message, meta }) {
+  if (message?.isError) return [];
+  if (meta?.[MEDIA_PRESENTATION]) return mediaResultItems(meta[MEDIA_PRESENTATION]).map(mediaResultFile).filter(Boolean);
+  if (message?.content?.length !== 1) return [];
   const [block] = message.content;
-  if (block?.type !== 'text' || typeof block.text !== 'string' || block.text.length > 16384) return null;
+  if (block?.type !== 'text' || typeof block.text !== 'string' || block.text.length > 16384) return [];
   let result;
-  try { result = JSON.parse(block.text); } catch { return null; }
-  return mediaResultFile(result);
+  try { result = JSON.parse(block.text); } catch { return []; }
+  return mediaResultItems(result).map(mediaResultFile).filter(Boolean);
 }
 
 const callIdOf = message => message?.source?.callId ?? message?.toolCallId;
@@ -32,10 +32,13 @@ function collect(state, event) {
     return { ...state, calls };
   }
   const message = event.data.message;
-  const file = event.type === NATIVE_MEDIA_RESULT ? mediaResultFile(event.data)
-    : event.data.meta?.[MEDIA_PRESENTATION] || state.calls.has(String(callIdOf(message))) ? mediaFile(event.data) : null;
-  if (!file || state.files.some(existing => existing.url === file.url)) return state;
-  return { ...state, files: [...state.files, file], seq: state.seq ?? event.seq };
+  const files = event.type === NATIVE_MEDIA_RESULT ? [mediaResultFile(event.data)].filter(Boolean)
+    : event.data.meta?.[MEDIA_PRESENTATION] || state.calls.has(String(callIdOf(message))) ? mediaFiles(event.data) : [];
+  if (!files.length) return state;
+  const unique = new Map(state.files.map(file => [file.url, file]));
+  for (const file of files) if (!unique.has(file.url)) unique.set(file.url, file);
+  if (unique.size === state.files.length) return state;
+  return { ...state, files: [...unique.values()], seq: state.seq ?? event.seq };
 }
 
 const definition = {
@@ -47,7 +50,7 @@ const definition = {
       ? { id: groupId(event, event.data.callId), role: 'start' } : null,
     'tool/result': event => {
       const callId = callIdOf(event.data?.message);
-      if (event.surfaceOp !== 'append' || event.data?.error || callId == null || !mediaFile(event.data)) return null;
+      if (event.surfaceOp !== 'append' || event.data?.error || callId == null || !mediaFiles(event.data).length) return null;
       return { id: groupId(event, callId), role: event.data.meta?.[MEDIA_PRESENTATION] ? 'start' : 'update' };
     },
   },

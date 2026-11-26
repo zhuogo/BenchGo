@@ -2,6 +2,7 @@ import { HarnessError } from '@deepseek-ai/dsh-llm';
 import { createHash } from 'node:crypto';
 import { currentHumanInstruction } from './desktop-delegation-service.mjs';
 import { requestSettingsApproval } from './approval.mjs';
+import { registerSessionArchive } from './session-archive.mjs';
 
 const fail = (code, message) => new HarnessError(`${code}: ${message}`, code);
 const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -16,7 +17,7 @@ function inputFor(input, fields) {
 }
 
 /** Only the mounted local Router can construct owner actors or approval capabilities. */
-export function registerConversationManagement({ ctx, scope, agent, register, settings, taskManagement, cleanupContinuations, threadId = 'main', store }) {
+export function registerConversationManagement({ ctx, scope, agent, register, settings, taskManagement, threadId = 'main', store }) {
   const prepared = new Map();
   const cleanupPrepared = new Map();
   const rememberCleanup = (preview, stamp) => {
@@ -28,7 +29,7 @@ export function registerConversationManagement({ ctx, scope, agent, register, se
   const liveInstruction = () => currentHumanInstruction(ctx, agent);
   async function authority(exec, expected) {
     exec?.signal?.throwIfAborted();
-    if (!agent || exec?.agent !== agent) throw fail('MANAGEMENT_OWNER_REQUIRED', '仅当前本机主人 Router 可管理设置和任务');
+    if (!agent || exec?.agent !== agent) throw fail('MANAGEMENT_OWNER_REQUIRED', '仅当前本机主人可通过总助手办理管理操作');
     const instruction = liveInstruction();
     if (!instruction?.message?.id
       || !(instruction.message.content || []).some(block => block.type === 'text' && block.text?.trim())) throw fail('MANAGEMENT_OWNER_REQUIRED', '未找到本轮用户输入；本次未提交。请回到原对话发送明确要求，勿换参数重复调用');
@@ -42,6 +43,7 @@ export function registerConversationManagement({ ctx, scope, agent, register, se
     if (fingerprint(liveInstruction()) !== stamp) throw fail('MANAGEMENT_STALE_INSTRUCTION', '主人指令已变化，请重试');
     return { stamp, instruction };
   }
+  registerSessionArchive({ ctx, store, agent, register, authority, inputFor, fail });
   async function approve(exec, stamp, toolName, plan) {
     await authority(exec, stamp);
     const approval = scope?.get?.('approval') ?? ctx.get?.('approval');
@@ -90,13 +92,11 @@ export function registerConversationManagement({ ctx, scope, agent, register, se
     return taskManagement.update({ kind: 'task', operation: 'rename', ...args });
   });
 
-  const cleanupFields = { preview: ['ids', 'includeUnsettled'], commit: ['previewId', 'ids', 'requestId'],
-    history: ['taskId', 'receiptId', 'limit'], restore: ['receiptId', 'previewId', 'ids', 'requestId'],
-    'stop-and-archive': ['ids'], pending: ['operationId', 'taskId', 'status', 'offset', 'limit'], cancel: ['operationId', 'ids'] };
-  register('assistant_task_cleanup', 'Organize Task history on the current explicit local owner instruction in main/manual side chat, across all sources. Remove/delete in this list context means reversible archive; preserve files, results and execution records and describe the actual effect naturally. No Worker, extra approval card or repeated consent is needed, including under never. Resolve exact targets from context and assistant_tasks; clarify only ambiguous scope. preview freezes exact ids; omit ids only for an explicit all-eligible request. commit needs a preview prepared for this same human instruction and an exact eligible subset. Unconsumed previews expire after 24 hours; changed tasks or instructions require a fresh preview. Ordinary archival excludes execution whose exit is unconfirmed and never authorizes stopping it. When an archive request is excluded with EXECUTION_PENDING, do not just report the refusal: ask the owner once whether to stop and archive those exact Tasks, and on an explicit yes call the returned next operation. ONLY when the user explicitly asks BOTH to stop AND archive, call stop-and-archive with exact ids: this durably queues the original request, preserves the stop/input audit and automatically archives after verified exit, including after restart; queued is not stopped or archived. No model polling or another user message is needed. pending reads this follow-up by operationId/taskId/status with limit/offset. cancel with operationId and optional ids revokes only its still-pending archival, never resumes stopped execution or undoes completed archival. Changed requirements, results, display versions, execution identities or later task-bound inputs invalidate the old intent instead of silently stopping or archiving new work. restore with receiptId prepares a restore preview; restore with previewId and exact ids restores its subset without execution. Find receipts through archived Tasks cleanup.id or history(taskId); history(receiptId) reads an exact durable receipt. Report only receipts and actual exclusions; never permanent deletion. Host notifications report already authorized outcomes, not new authority; never invent identity or confirmation flags.', {
-    op: { type: 'string', enum: Object.keys(cleanupFields) }, ids, includeUnsettled: { type: 'boolean' },
+  const cleanupFields = { preview: ['ids'], commit: ['previewId', 'ids', 'requestId'],
+    history: ['taskId', 'receiptId', 'limit'], restore: ['receiptId', 'previewId', 'ids', 'requestId'] };
+  register('assistant_task_cleanup', 'Organize Task history on the current explicit local owner instruction in main/manual side chat, across all sources. Remove/delete in this list context means reversible archive; preserve files, results and execution records and describe the actual effect naturally. This uses the same archive the workspace already uses: a Task whose execution is still running is archived and its own work is asked to stop in the same action, so you never need to wait for exit or queue a follow-up. No Worker, extra approval card or repeated consent is needed, including under never. Resolve exact targets from context and assistant_tasks; clarify only ambiguous scope. preview freezes exact ids and reports which entries would be stopped; omit ids only for an explicit all-eligible request. commit needs a preview prepared for this same human instruction and an exact subset. Unconsumed previews expire after 24 hours; changed tasks or instructions require a fresh preview. Archival never claims the execution already ended: state plainly that a running Task was archived and its work was asked to stop, and that stopping is confirmed only by later facts. Results remain unknown when a Task was uncertain. restore with receiptId prepares a restore preview; restore with previewId and exact ids restores its subset without execution. Find receipts through archived Tasks cleanup.id or history(taskId); history(receiptId) reads an exact durable receipt. Report only receipts and actual exclusions; never permanent deletion. Never invent identity or confirmation flags.', {
+    op: { type: 'string', enum: Object.keys(cleanupFields) }, ids,
     previewId: string, receiptId: string, requestId: string, taskId: string, limit: { type: 'integer', minimum: 1, maximum: 1000 },
-    operationId: string, status: { type: 'string', enum: ['pending', 'completed', 'cancelled', 'conflict'] }, offset: { type: 'integer', minimum: 0 },
   }, ['op'], async (input, exec) => {
     if (!Object.hasOwn(cleanupFields, input?.op)) throw fail('MANAGEMENT_INPUT', '无效任务清理操作');
     const args = inputFor(input, cleanupFields[input.op]);
@@ -104,12 +104,6 @@ export function registerConversationManagement({ ctx, scope, agent, register, se
     if (Array.isArray(args.ids) && new Set(args.ids).size !== args.ids.length)
       throw fail('CLEANUP_SCOPE_DENIED', '任务 ID 不能重复');
     if (!taskManagement) throw fail('CLEANUP_UNAVAILABLE', '任务清理服务当前不可用');
-    if (['stop-and-archive', 'pending', 'cancel'].includes(input.op)) {
-      if (!cleanupContinuations) throw fail('CLEANUP_UNAVAILABLE', '任务停止后归档服务当前不可用');
-      await authority(exec, stamp);
-      if (input.op === 'stop-and-archive') return cleanupContinuations.start(args, { agent, threadId, instruction });
-      return input.op === 'pending' ? cleanupContinuations.pending(args) : cleanupContinuations.cancel(args);
-    }
     if (input.op === 'preview') {
       const preview = await taskManagement.previewCleanup({ ...args, scope: globalScope });
       await authority(exec, stamp);
@@ -129,8 +123,9 @@ export function registerConversationManagement({ ctx, scope, agent, register, se
       const requestId = args.requestId || fingerprint([input.op, source, args.previewId, selected]);
       if (preview.consumedBy) {
         const previous = taskManagement.cleanupHistory({ receiptId: preview.consumedBy })[0];
-        if (previous?.requestId === requestId && fingerprint(previous.confirmedBy?.ids) === fingerprint(selected)) return previous;
-        throw fail('CLEANUP_PREVIEW_CONSUMED', '清单已处理；请读取归档回执，不要重复确认或扩大范围');
+        if (previous?.requestId !== requestId || fingerprint(previous.confirmedBy?.ids) !== fingerprint(selected))
+          throw fail('CLEANUP_PREVIEW_CONSUMED', '清单已处理；请读取归档回执，不要重复确认或扩大范围');
+        if (previous.status !== 'partial') return previous;
       }
       // Reversible presentation changes use this real owner instruction as
       // authority. The store still requires a host-only frozen-list capability.

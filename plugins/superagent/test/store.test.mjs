@@ -114,14 +114,14 @@ test('legacy HTML is ignored on reload and removed on the next settings write', 
   assert.deepEqual(imported.models, models);
 });
 
-test('retired appearance motion is ignored on read and legacy profile import, then removed on save', async t => {
+test('retired configuration is ignored on read and legacy profile import, then removed on save', async t => {
   const { store, openStore } = await fixture(t);
   const models = [{ providerId: 'exact/provider', modelId: 'Opaque/Model' }];
   const pet = { kind: 'builtin', assetId: 'builtin', expression: 'happy', palette: 'default', decorations: ['scarf'] };
   await store.updateConfig({ name: 'Legacy identity', models, pet }, { petWrite: true });
   const original = await store.getConfig();
   const disk = JSON.parse(await readFile(store.paths.config, 'utf8'));
-  await writeFile(store.paths.config, JSON.stringify({ ...disk, cardMotion: false }));
+  await writeFile(store.paths.config, JSON.stringify({ ...disk, cardMotion: false, workerConcurrency: 2 }));
   const restarted = await openStore();
   assert.deepEqual(await restarted.getConfig(), original);
   assert.equal(JSON.parse(await readFile(store.paths.config, 'utf8')).cardMotion, false);
@@ -130,10 +130,12 @@ test('retired appearance motion is ignored on read and legacy profile import, th
   }
   const bundle = await restarted.profileExport();
   assert.equal(Object.hasOwn(bundle.config, 'cardMotion'), false);
-  const saved = await restarted.updateConfig({ workerConcurrency: 3 }, { revision: original.revision });
-  assert.deepEqual(saved, { ...original, revision: original.revision + 1, workerConcurrency: 3 });
+  await assert.rejects(restarted.updateConfig({ workerConcurrency: 3 }), { code: 'WORKER_CONCURRENCY_REMOVED' });
+  const saved = await restarted.updateConfig({ maintenance: { intervalHours: 3 } }, { revision: original.revision });
+  assert.deepEqual(saved, { ...original, revision: original.revision + 1, maintenance: { ...original.maintenance, intervalHours: 3 } });
+  assert.equal(Object.hasOwn(JSON.parse(await readFile(store.paths.config, 'utf8')), 'workerConcurrency'), false);
   assert.equal(Object.hasOwn(JSON.parse(await readFile(store.paths.config, 'utf8')), 'cardMotion'), false);
-  await restarted.profileImport({ ...bundle, config: { ...bundle.config, cardMotion: 'legacy' } }, { apply: true, overwrite: true });
+  await restarted.profileImport({ ...bundle, config: { ...bundle.config, cardMotion: 'legacy', workerConcurrency: 2 } }, { apply: true, overwrite: true });
   assert.deepEqual(await restarted.getConfig(), { ...original, revision: saved.revision + 1 });
 });
 

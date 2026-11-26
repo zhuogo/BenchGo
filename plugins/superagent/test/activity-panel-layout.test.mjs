@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { sharedUiStyles } from '../../base/scripts/shared-ui.mjs';
+import { officialUiEntries } from '../../link/scripts/official-ui.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const webRequire = createRequire(new URL('../../../deepseek-harness/apps/web/package.json', import.meta.url));
@@ -35,7 +36,9 @@ async function fixture() {
         window.updateConfig = config => { assistantConfigSync.accept({...config,revision:++serial},assistantConfigSync.begin());setConfig(config); };
         return <ActivityProvider><style>{css}</style><div className="ba-root">
           <main className="ba-main fixture-chat"><header><h1>主聊天</h1><ActivityTrigger api={api}/></header><p>BenchGo · 看板组件验收</p><div className="ba-assistant-section" style={{width:200}}><div className="ba-assistant-heading"><AssistantCard name="BenchGo" status="running" action="focus" onOpen={()=>{}}/></div></div><div data-composer-seat style={{position:'absolute',bottom:0,left:0,right:0,zIndex:7,background:'white',padding:12}}><textarea aria-label="发送内容" defaultValue="保留草稿"/><button type="button" aria-label="发送消息" onClick={()=>window.sentMessages=(window.sentMessages||0)+1}>发送</button></div></main>
-          <ActivityPanel api={api} ctx={window.scenarioControl.state==='files'?fileContext:undefined} sessionId={['stream','files'].includes(window.scenarioControl.state)?'router-main':undefined} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}} onOpenExecution={session=>window.executionCalls.push(session)}/>
+          <ActivityPanel api={api} ctx={window.scenarioControl.state==='files'?fileContext:undefined} sessionId={['stream','files'].includes(window.scenarioControl.state)?'router-main':undefined} assistantConfig={config} onOpenResources={(tab,selection)=>{window.resourceCalls.push(tab);window.resourceSelections.push(selection);}} onOpenExecution={session=>{
+            window.executionCalls.push(session);
+          }}/>
         </div></ActivityProvider>;
       }
       window.renderScenario = (state='data', supplied=true) => {
@@ -145,7 +148,7 @@ async function fixture() {
     ` },
     bundle:true, write:false, outdir:join(root,'artifacts','unused-activity-test-output'), format:'iife', jsx:'automatic',
     nodePaths:[join(root,'plugins/base/node_modules'),join(root,'deepseek-harness/apps/web/node_modules')],
-    alias:{react:dirname(webRequire.resolve('react/package.json')),'react-dom':dirname(webRequire.resolve('react-dom/package.json')),
+    alias:{...await officialUiEntries(),react:dirname(webRequire.resolve('react/package.json')),'react-dom':dirname(webRequire.resolve('react-dom/package.json')),
       '@deepseek-ai/dsh-client-ui-primitives':join(root,'deepseek-harness/packages/client/ui-primitives/src/index.ts'),
       '@deepseek-ai/dsh-util-workspace-path':join(root,'deepseek-harness/packages/util/workspace-path/src/index.ts')},
     loader:{'.css':'text','.module.css':'local-css','.svg':'text','.woff2':'dataurl','.woff':'dataurl','.ttf':'dataurl'},

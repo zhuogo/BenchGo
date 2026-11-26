@@ -4,8 +4,6 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { notificationPublication } from './notification-publication.mjs';
-import { installTaskCleanupStore } from './task-cleanup-store.mjs';
-import { installTaskCleanupContinuationStore } from './task-cleanup-continuation-store.mjs';
 import { reactionEmojis } from './message-reaction.mjs';
 
 const encode = value => JSON.stringify(value);
@@ -215,7 +213,5 @@ export function createAssistantRuntimeStore({ directory, filename, afterCommit }
     const write = api[name];
     api[name] = (...args) => { const result = write(...args); committed(); return result; };
   }
-  api.taskCleanup = installTaskCleanupStore({ db, transaction });
-  api.taskCleanupContinuations = installTaskCleanupContinuationStore({ db, transaction });
   return api;
 }

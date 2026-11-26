@@ -134,7 +134,7 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
             return send(res, 200, { proof });
           }
           return send(res, 200, { name: 'DSH Link', hostName: hostName(), version: '0.1.0',
-            ...(device ? { hostId: 'sha256:' + identity.pin, authorizationId: device.id, executionSourceProof: 1, groupAssetLease: true, ...(routes ? { routes: routes() } : {}) } : {}) });
+            ...(device ? { hostId: 'sha256:' + identity.pin, authorizationId: device.id, executionSourceProof: 1, ...(routes ? { routes: routes() } : {}) } : {}) });
         }
         const file = { '/link': 'index.html', '/link/': 'index.html', '/link/index.html': 'index.html', '/link/app.js': 'app.js', '/link/app.css': 'app.css' }[url.pathname];
         if (!file) throw fail('未找到', 404);
@@ -186,7 +186,13 @@ export async function listen({ identity, config, webRoot, store, dispatch, workb
       if (url.pathname === '/link/api/workbench') {
         if (!workbench) throw fail('网页工作台尚未就绪', 503);
         const input = await body(req);
-        return send(res, 200, await workbench.begin(device, res, { groupAssetLease: input.groupAssetLease === true }));
+        const hostId = 'sha256:' + identity.pin;
+        if (input.expectedHostId != null && input.expectedHostId !== hostId ||
+            input.expectedAuthorizationId != null && input.expectedAuthorizationId !== device.id) {
+          throw Object.assign(fail('目标设备身份或配对授权已变化', 409), { code: 'IDENTITY_CHANGED' });
+        }
+        const session = await workbench.begin(device, res, { groupAssetLease: input.groupAssetLease === true });
+        return send(res, 200, { ...session, hostId, authorizationId: device.id, hostName: hostName(), ...(routes ? { routes: routes() } : {}) });
       }
       const input = await body(req, RPC_BODY_BYTES);
       if (device.groupSyncOnly) {

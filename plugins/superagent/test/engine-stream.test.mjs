@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createAssistantEngine } from '../src/engine.mjs';
 import { projectReplyStream } from '../client/reply-stream.mjs';
+import { chatNotificationIdentities } from '../src/chat-publication.mjs';
 import { createAssistantOrchestrationStore } from '../src/orchestration-store.mjs';
 import { installRoleHost } from './role-host-fixture.mjs';
 
@@ -83,7 +84,16 @@ for (const cancelled of [false, true]) test(`ordinary Router text uses live offi
   await agent.whenIdle();
   const final = await engine.history();
   assert.equal(render(), null);
-  assert.equal(final.messages.filter(row => row.role === 'assistant').length, cancelled ? 0 : 1);
-  if (!cancelled) assert.equal(final.messages.at(-1).text, '第一段，第二段');
+  const replies = final.messages.filter(row => row.role === 'assistant');
+  assert.equal(replies.length, 1);
+  const [reply] = replies;
+  assert.equal(reply.text, '第一段，第二段');
+  assert.equal(`message:${reply.id}`, initial.key);
+  assert.equal(Boolean(reply.interrupted), cancelled);
+  const events = agent.session.snapshotEvents();
+  const end = events.findLast(event => event.type === 'turn/end');
+  assert.equal(end.data.reason.kind, cancelled ? 'aborted' : 'completed');
+  if (cancelled) assert.equal(end.data.reason.reason.kind, 'user');
+  assert.deepEqual(chatNotificationIdentities(events, end), cancelled ? [] : [{ requestId: reply.requestId }]);
   assert.doesNotMatch(JSON.stringify(final.messages), /PRIVATE_REASONING/);
 });
