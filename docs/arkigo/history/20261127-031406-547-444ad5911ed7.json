@@ -1,0 +1,56 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-27T03:14:06.547Z",
+  "by": "用户",
+  "reason": "按用户决定将证据不足设为关单终态",
+  "base": "be0a516b7d90",
+  "result": "444ad5911ed7",
+  "changes": [
+    {
+      "op": "update",
+      "id": "workbench.base.faults.triage",
+      "fields": [
+        "body.constraint",
+        "implementation.evidence",
+        "implementation.note",
+        "sources"
+      ],
+      "before": {
+        "id": "workbench.base.faults.triage",
+        "type": "rule",
+        "title": "显示每次研判结论",
+        "summary": "研判结果直接回填原工单。已确认缺陷且三段结果齐备后进入待审核。",
+        "parent": "workbench.base.faults",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "问题不成立、配置问题、证据不足无法复现均直接关闭并保留理由和核实依据。新的实质证据可重开原单。确认缺陷且候选修复已准备好才进入待审核。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+              "path": "benchgo-web/services/feedback/main.go",
+              "symbol": "applyExecutionResult"
+            },
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "2d8325e76c65e3facbb531a4fcd34ed9c2b5bbf59ba4ad1d82ce0efe814ba710",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "triage"
+            }
+          ],
+          "note": "测试工单在线验证重复领单和证据不足关单。襄阳现有 SuperAgent 已完成简短请求的回执探针。真实工单到 Worker 的目录绑定、实质证据重开和失败重试仍待验证或实现。",
+          "status": "partial"
+        }
+      }
+    }
+  ]
+}

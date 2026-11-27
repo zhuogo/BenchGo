@@ -1,0 +1,95 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T14:17:51.396Z",
+  "by": "codex",
+  "reason": "记录服务器登记完成后的自动刷新和工作台切换核验",
+  "base": "41e1e51ea492",
+  "result": "e80930c83dbb",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.manage",
+      "fields": [
+        "body.responsibilities",
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "link.manage",
+        "type": "module",
+        "title": "共享资源与服务器管理",
+        "summary": "聚合导航与助手共用资源查询，设备中心承担首次信任和部署。",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "配对工作台保留官方资源接口。本机文件、任意终端与 SSH 以本机 owner 边界为准。"
+          ],
+          "responsibilities": [
+            "按设备分页查询项目、会话、模型和能力。离线是可报告结果。",
+            "已配对设备按开放能力使用会话菜单操作、连接与中继管理。",
+            "人工 SSH 终端与本机 AI 运维复用登记目标。添加服务器时自动读取并绑定首次 SSH 主机指纹，原连接重连继续核验已保存的指纹。",
+            "移除服务器时清除本机 SSH 登记与凭据。用户重新添加已移出的服务器时清理遗留登记，并建立独立的 SSH 连接。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/SSH服务器运维.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T14:00:33.044Z",
+              "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
+              "path": "plugins/link/src/devices/resources.mjs",
+              "symbol": "createDeviceResources"
+            },
+            {
+              "checkedAt": "2026-11-26T14:00:33.044Z",
+              "hash": "a59eb417216ccc57738317845421dbce902d2e15abc0d95e610e7866ac7669bd",
+              "path": "plugins/link/src/index.mjs"
+            },
+            {
+              "checkedAt": "2026-11-26T14:00:33.044Z",
+              "hash": "235327a47cba58ab27f414b9c81a9683dfbe360d946a8278b48bb9dea5793e75",
+              "path": "plugins/link/src/server/manager.mjs",
+              "symbol": "createServerManager"
+            },
+            {
+              "checkedAt": "2026-11-26T14:00:33.044Z",
+              "hash": "01780f264261aa0c5c464172ccf4f2121c5213a238e5a28b722c6b77056f3c84",
+              "path": "plugins/link/src/devices/center.mjs",
+              "symbol": "createDeviceCenter"
+            },
+            {
+              "checkedAt": "2026-11-26T14:00:33.044Z",
+              "hash": "aa6d6cf6e4a3b37ade52c7797774eec0bc442a275c44d30331ddd452a3b61d2d",
+              "path": "plugins/link/src/devices/registry.mjs",
+              "symbol": "openDeviceRegistry"
+            },
+            {
+              "checkedAt": "2026-11-26T14:00:33.044Z",
+              "hash": "d9159b363679256b55bee88d92c72f1e14e5696d0736d10a6a46b556e48d2383",
+              "path": "plugins/link/client/device-center.jsx",
+              "symbol": "AddServer"
+            },
+            {
+              "checkedAt": "2026-11-26T14:00:33.044Z",
+              "hash": "19f72f84075f63f1c2a61138199db75fda75cbce9411451dd0800979b147f39b",
+              "path": "plugins/base/workbench/src/ssh-trust.mjs"
+            }
+          ],
+          "note": "添加服务器一次提交，首次登记自动读取并绑定 SSH 指纹。移除清理本机凭据并覆盖已移出设备的旧登记。SSH、设备中心和桌面与移动尺寸的浏览器回归通过。",
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

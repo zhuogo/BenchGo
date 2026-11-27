@@ -1,0 +1,158 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-26T16:46:13.923Z",
+  "by": "codex",
+  "reason": "记录故障工单联调、浏览器交互和襄阳隔离测试的实际结果",
+  "base": "e80930c83dbb",
+  "result": "be0a516b7d90",
+  "changes": [
+    {
+      "op": "update",
+      "id": "workbench.base.faults",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "workbench.base.faults",
+        "type": "module",
+        "title": "系统故障反馈",
+        "summary": "BenchGo 上报产品故障，BenchGo-Web 统一受理并在审批后推进试点。",
+        "parent": "workbench.base",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "boundaries": [
+            "反馈不包含会话内容、凭据、用户路径或原始日志。",
+            "Web 持有原工单。合入由维护者在 GitHub 操作，正式发版沿现有流程。"
+          ],
+          "responsibilities": [
+            "自动反馈启用后，只上报受支持的产品内部异常。现场配置问题由工作台提示。断网重试，重复报告归并。",
+            "Web 复用现有工单，登记受信任执行实例并提供领单、核实回执和审核入口。",
+            "襄阳使用其 BenchGo SuperAgent 的模型和执行配置进行研判、候选修复和后续执行。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T13:19:09.145Z",
+              "hash": "804b2bdae73bad88c6925d8e241a6dabc13c7551090a5c0a5fb456941576b2e9",
+              "path": "plugins/base/src/fault-feedback.mjs",
+              "symbol": "createFaultFeedback"
+            },
+            {
+              "checkedAt": "2026-11-26T13:19:09.145Z",
+              "hash": "6a2f4ccebbca33163bd2ef00678f0ea3a2491a20a3aaa0395b63d637cd6e4376",
+              "path": "plugins/base/src/plugin.mjs",
+              "symbol": "apply"
+            },
+            {
+              "checkedAt": "2026-11-26T13:19:09.145Z",
+              "hash": "60cffdd127552d63794bc172df23ef3bfaf2be0702b7816524ce0cac3316f5d9",
+              "path": "plugins/base/src/web.mjs",
+              "symbol": "initializeWeb"
+            }
+          ],
+          "note": "已接入基础层的显式配置、侧栏状态内部错误白名单、脱敏数据队列和离线重试。Web 工单接口、审核页、襄阳领单执行、PR 和试点尚未联调。",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.base.faults.review",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note",
+        "implementation.status"
+      ],
+      "before": {
+        "id": "workbench.base.faults.review",
+        "type": "rule",
+        "title": "审核内容和提交绑定",
+        "summary": "审核展示问题、修复方案和修复后的情景演练。",
+        "parent": "workbench.base.faults",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "问题一句话加括号里的实际用户操作与结果，多条按序号列出。修复方案采用最小可行改动，情景演练写原操作和预期结果，两块沿用问题序号。在原单回填实际试点结果。审批绑定候选提交与试点范围，变更后重审。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "status": "planned"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.base.faults.triage",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note",
+        "implementation.status"
+      ],
+      "before": {
+        "id": "workbench.base.faults.triage",
+        "type": "rule",
+        "title": "显示每次研判结论",
+        "summary": "研判结果直接回填原工单。已确认缺陷且三段结果齐备后进入待审核。",
+        "parent": "workbench.base.faults",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "问题不成立、配置问题、证据不足无法复现均直接关闭并保留理由和核实依据。新的实质证据可重开原单。确认缺陷且候选修复已准备好才进入待审核。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "status": "planned"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.base.faults.worktree",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note",
+        "implementation.status"
+      ],
+      "before": {
+        "id": "workbench.base.faults.worktree",
+        "type": "rule",
+        "title": "每张工单独立 worktree",
+        "summary": "同一工单在襄阳复用自己的修复分支和工作区。",
+        "parent": "workbench.base.faults",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "从登记的仓库拉取并记录基准提交。同一工单使用独立 worktree 和修复分支，串行写入。推送候选修复并创建 PR，再将链接与提交 SHA 回填工单。Web 批准试点后按已审批提交构建验证，GitHub 由维护者合并，正式发布沿现有流程。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "status": "planned"
+        }
+      }
+    }
+  ]
+}

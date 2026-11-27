@@ -47,6 +47,7 @@ export function DeviceLauncher({ compact = false, label = '' }) {
       if (event.source !== frame.current?.contentWindow || event.origin !== new URL(url).origin) return;
       if (event.data?.type === 'dsh-devices:theme-ready') syncTheme();
       if (event.data?.type === 'dsh-devices:actions-ready') setActionsReady(true);
+      if (event.data?.type === 'dsh-devices:directory-changed') document.dispatchEvent(new Event('benchgo:devices-changed'));
       if (event.data?.type === 'dsh-devices:return-local') setOpen(false);
       if (!paired && event.data?.type === 'dsh-devices:select' && typeof event.data.deviceId === 'string' && event.data.deviceId) {
         setOpen(false);

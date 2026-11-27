@@ -1,0 +1,53 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-27T03:33:44.298Z",
+  "by": "codex",
+  "reason": "核对重置后恢复的工单审核面板与线上第 6 版一致",
+  "base": "14c0957a510d",
+  "result": "0a8f2c5706c0",
+  "changes": [
+    {
+      "op": "update",
+      "id": "workbench.base.faults.review",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "workbench.base.faults.review",
+        "type": "rule",
+        "title": "审核内容和提交绑定",
+        "summary": "审核展示问题、修复方案和修复后的情景演练。",
+        "parent": "workbench.base.faults",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "问题一句话加括号里的实际用户操作与结果，多条按序号列出。修复方案采用最小可行改动，情景演练写原操作和预期结果，两块沿用问题序号。在原单回填实际试点结果。审批绑定候选提交与试点范围，变更后重审。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+              "path": "benchgo-web/services/feedback/main.go",
+              "symbol": "approveWorkflow"
+            },
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "ea87c64bd3ac5bc9e305d8c0e888ead22ef86aacfab878e103e186354b92e86a",
+              "path": "benchgo-web/.draftgo/worktree/pages/page_24.html",
+              "symbol": "refreshFaultReview"
+            }
+          ],
+          "note": "在线测试工单验证管理员权限、审批幂等、候选 SHA 不符拒绝、失败回填。浏览器使用模拟数据验证三块内容、取消审批、提交与试点绑定、证据不足时隐藏审批。真实候选的成功试点及 PR 回填还未验收。",
+          "status": "partial"
+        }
+      }
+    }
+  ]
+}

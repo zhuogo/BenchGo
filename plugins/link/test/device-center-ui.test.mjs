@@ -90,7 +90,8 @@ test('Android redelivery keeps the original pairing request through approval', a
 });
 
 test('adding a server submits password authentication without a fingerprint step', async () => {
-  const view = fixture('AddServer', { onAdded() {}, agentAvailable: true }); await view.settle();
+  let registered = 0, opened = 0;
+  const view = fixture('AddServer', { onAdded() { opened++; }, onRegistered() { registered++; }, agentAvailable: true }); await view.settle();
   const fields = view.nodes().filter(node => node.type === 'input');
   fields[1].props.onChange({ target: { value: 'server.example.com' } }); fields[3].props.onChange({ target: { value: 'ubuntu' } }); await view.settle();
   assert.match(textOf(view.tree), /添加服务器/);
@@ -104,6 +105,31 @@ test('adding a server submits password authentication without a fingerprint step
   assert.equal(view.calls[0].args.password, 'test-password');
   assert.equal(Object.hasOwn(view.calls[0].args, 'fingerprint'), false);
   await view.tick(); assert(textOf(view.tree).includes('打开工作台'));
+  assert.equal(registered, 1);
+  assert.equal(opened, 0);
+  await view.click('打开工作台');
+  assert.equal(registered, 1);
+  assert.equal(opened, 1);
+});
+
+test('server registration refreshes the directory and notifies the desktop before opening', async () => {
+  const view = fixture('DeviceCenter', { embedded: true, reuseWorkbench: true });
+  await view.settle();
+  await view.click('添加设备');
+  const add = view.nodes().find(node => node.type?.name === 'AddDevice');
+  const listCount = () => view.calls.filter(call => call.action === 'list').length;
+  const before = listCount();
+  add.props.onServerRegistered();
+  await view.settle();
+  assert.equal(listCount(), before + 1);
+  assert(view.parent.messages.some(({ data }) => data.type === 'dsh-devices:directory-changed'));
+  assert(!view.parent.messages.some(({ data }) => data.type === 'dsh-devices:select'));
+  await add.props.onAdded({ id: 'server' });
+  await view.settle();
+  assert(view.parent.messages.some(({ data }) => data.type === 'dsh-devices:select' && data.deviceId === 'server'));
+  await add.props.onAdded({ id: 'hidden-server' });
+  await view.settle();
+  assert(!view.parent.messages.some(({ data }) => data.type === 'dsh-devices:select' && data.deviceId === 'hidden-server'));
 });
 
 test('server resource prefetch preserves the form and returns to installation without opening a device', async () => {

@@ -1,0 +1,124 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-27T03:19:57.134Z",
+  "by": "codex",
+  "reason": "记录襄阳现有 API、Worker 与独立 worktree 的只读验收",
+  "base": "444ad5911ed7",
+  "result": "94e557b3895c",
+  "changes": [
+    {
+      "op": "update",
+      "id": "workbench.base.faults",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "workbench.base.faults",
+        "type": "module",
+        "title": "系统故障反馈",
+        "summary": "BenchGo 上报产品故障，BenchGo-Web 统一受理并在审批后推进试点。",
+        "parent": "workbench.base",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "boundaries": [
+            "反馈不包含会话内容、凭据、用户路径或原始日志。",
+            "Web 持有原工单。合入由维护者在 GitHub 操作，正式发版沿现有流程。"
+          ],
+          "responsibilities": [
+            "自动反馈启用后，只上报受支持的产品内部异常。现场配置问题由工作台提示。断网重试，重复报告归并。",
+            "Web 复用现有工单，登记受信任执行实例并提供领单、核实回执和审核入口。",
+            "襄阳使用其 BenchGo SuperAgent 的模型和执行配置进行研判、候选修复和后续执行。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "804b2bdae73bad88c6925d8e241a6dabc13c7551090a5c0a5fb456941576b2e9",
+              "path": "plugins/base/src/fault-feedback.mjs",
+              "symbol": "createFaultFeedback"
+            },
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "6a2f4ccebbca33163bd2ef00678f0ea3a2491a20a3aaa0395b63d637cd6e4376",
+              "path": "plugins/base/src/plugin.mjs",
+              "symbol": "apply"
+            },
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "60cffdd127552d63794bc172df23ef3bfaf2be0702b7816524ce0cac3316f5d9",
+              "path": "plugins/base/src/web.mjs",
+              "symbol": "initializeWeb"
+            },
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+              "path": "benchgo-web/services/feedback/main.go",
+              "symbol": "submitFault"
+            },
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "2d8325e76c65e3facbb531a4fcd34ed9c2b5bbf59ba4ad1d82ce0efe814ba710",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "tick"
+            }
+          ],
+          "note": "正式版客户端向 BenchGo-Web 写单已验证。DraftGo 反馈服务 v9 和工单审核面板已保存上线，襄阳 SuperAgent 外部 API 已完成请求和回执验证。执行器尚未启用，真实领单、缺陷候选、试点与 PR 回填还未端到端验收。",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.base.faults.worktree",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "workbench.base.faults.worktree",
+        "type": "rule",
+        "title": "每张工单独立 worktree",
+        "summary": "同一工单在襄阳复用自己的修复分支和工作区。",
+        "parent": "workbench.base.faults",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "从登记的仓库拉取并记录基准提交。同一工单使用独立 worktree 和修复分支，串行写入。推送候选修复并创建 PR，再将链接与提交 SHA 回填工单。Web 批准试点后按已审批提交构建验证，GitHub 由维护者合并，正式发布沿现有流程。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "2d8325e76c65e3facbb531a4fcd34ed9c2b5bbf59ba4ad1d82ce0efe814ba710",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "worktree"
+            },
+            {
+              "checkedAt": "2026-11-26T16:46:13.923Z",
+              "hash": "2d8325e76c65e3facbb531a4fcd34ed9c2b5bbf59ba4ad1d82ce0efe814ba710",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "pilotResult"
+            }
+          ],
+          "note": "执行器已有每单独立 Git worktree、试点提交校验、PR 创建及回填代码。Windows 的侧栏测试 24 项和襄阳隔离环境基线测试通过。现有外部消息 API 不接受强制工作目录参数，未启用自动领单。真实候选、PR 和回填待验收。",
+          "status": "partial"
+        }
+      }
+    }
+  ]
+}

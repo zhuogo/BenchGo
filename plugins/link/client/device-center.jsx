@@ -128,20 +128,20 @@ function useJob(runtime, job, setJob, setError, attempt = 0) {
     timer = setTimeout(poll, 400); return () => { closed = true; clearTimeout(timer); };
   }, [runtime, job?.id, job?.state, setJob, setError, attempt]);
 }
-function AddDevice({ runtime, onAdded, sshAvailable, agentAvailable }) {
+function AddDevice({ runtime, onAdded, onServerRegistered, sshAvailable, agentAvailable }) {
   const [path, setPath] = useState('existing');
-  return <><SegmentedControl label="添加方式" value={path} onChange={setPath} tabIdPrefix="dc-add" options={[{ value: 'existing', label: '连接已有设备', panelId: 'dc-add-existing-panel' }, { value: 'server', label: '添加服务器', panelId: 'dc-add-server-panel' }]} /><div id="dc-add-existing-panel" role="tabpanel" aria-labelledby="dc-add-existing" hidden={path !== 'existing'}><AddComputer runtime={runtime} onAdded={onAdded} /></div><div id="dc-add-server-panel" role="tabpanel" aria-labelledby="dc-add-server" hidden={path !== 'server'}><ServerInstall runtime={runtime} onAdded={onAdded} sshAvailable={sshAvailable} agentAvailable={agentAvailable} /></div></>;
+  return <><SegmentedControl label="添加方式" value={path} onChange={setPath} tabIdPrefix="dc-add" options={[{ value: 'existing', label: '连接已有设备', panelId: 'dc-add-existing-panel' }, { value: 'server', label: '添加服务器', panelId: 'dc-add-server-panel' }]} /><div id="dc-add-existing-panel" role="tabpanel" aria-labelledby="dc-add-existing" hidden={path !== 'existing'}><AddComputer runtime={runtime} onAdded={onAdded} /></div><div id="dc-add-server-panel" role="tabpanel" aria-labelledby="dc-add-server" hidden={path !== 'server'}><ServerInstall runtime={runtime} onAdded={onAdded} onRegistered={onServerRegistered} sshAvailable={sshAvailable} agentAvailable={agentAvailable} /></div></>;
 }
 const serverInstallDownload = 'https://benchgo.cn/api/x/install/linux.sh';
 const serverInstallCommand = `installer=$(curl -fsSL '${serverInstallDownload}') && bash -c "$installer"`;
-function ServerInstall({ runtime, onAdded, sshAvailable, agentAvailable }) {
+function ServerInstall({ runtime, onAdded, onRegistered, sshAvailable, agentAvailable }) {
   const [copied, setCopied] = useState(false), [error, setError] = useState('');
   const copy = async () => {
     try { await navigator.clipboard.writeText(serverInstallCommand); setCopied(true); setError(''); }
     catch { setError('复制失败，请选中命令复制'); }
   };
   return <>
-    {sshAvailable && <AddServer runtime={runtime} onAdded={onAdded} agentAvailable={agentAvailable} />}
+    {sshAvailable && <AddServer runtime={runtime} onAdded={onAdded} onRegistered={onRegistered} agentAvailable={agentAvailable} />}
     <Disclosure title="手动安装" className="dc-management" defaultOpen={!sshAvailable}>
       <p className="dc-note">在 Linux x64 服务器上以普通用户运行。</p>
       <pre className="dc-install-command"><code>{serverInstallCommand}</code></pre>
@@ -153,12 +153,16 @@ function ServerInstall({ runtime, onAdded, sshAvailable, agentAvailable }) {
     </Disclosure>
   </>;
 }
-function AddServer({ runtime, onAdded, device, agentAvailable }) {
+function AddServer({ runtime, onAdded, onRegistered, device, agentAvailable }) {
   const [form, setForm] = useState(() => ({ ...emptyServer(), ...(device ? { name: device.name } : {}) })), [job, setJob] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const gate = useRef(false), mounted = useRef(true);
   const [pollAttempt, setPollAttempt] = useState(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useJob(runtime, job, setJob, setError, pollAttempt);
+  const registered = jobFinished(job) && !jobFailed(job) ? job.device : undefined;
+  useEffect(() => {
+    if (registered) onRegistered?.();
+  }, [registered, onRegistered]);
   const submit = async () => {
     if (gate.current) return; gate.current = true; setBusy(true); setError('');
     try {
@@ -782,6 +786,11 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     }
     return next;
   }, [runtime]);
+  const serverRegistered = useCallback(() => {
+    void refresh().catch(reason => setError(reason.message));
+    const origin = globalThis.__DSH_DEVICE_PARENT_ORIGIN__ || new URLSearchParams(location.search).get('parentOrigin');
+    if (origin && parent !== window) parent.postMessage({ type: 'dsh-devices:directory-changed' }, origin);
+  }, [refresh]);
   useEffect(() => {
     let stopped = false, timer;
     const poll = async () => {
@@ -925,7 +934,12 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
   }, [frames, data.devices, activeId, busy, error, select, switchReady]);
   const added = useCallback(async device => {
     if (device?.id && !device.pairingNotice) {
-      if (!await select(device)) await refresh();
+      try {
+        const next = await refresh();
+        const saved = next.devices.find(item => item.id === device.id);
+        if (!saved) throw new Error('设备中心找不到这台服务器，无法打开工作台');
+        await select(saved);
+      } catch (reason) { setError(reason.message); }
     } else {
       setModal(null);
       setShowDevices(true);
@@ -988,13 +1002,13 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     const titles = { add: '添加设备', relay: '添加中继', bind: '补绑 SSH', reconnect: '重新认证 SSH', pairing: '生成连接码', terminal: `${device?.name} · SSH 终端` };
     let content;
     if (type === 'relay') content = <RelayWizard canDeploy={data.capabilities?.relayDeploy === true} agentAvailable={agentAvailable} runtime={runtime} onClose={closeModal} job={relayJob} setJob={setRelayJob} onPoolChanged={relayChanged} onChanged={() => { relayChanged(); setDirectoryTab('relay'); setModal(null); setShowDevices(true); }} />;
-    if (type === 'add') content = <AddDevice runtime={runtime} onAdded={added} sshAvailable={data.capabilities?.ssh !== false} agentAvailable={agentAvailable} />;
-    if (type === 'bind') content = <AddServer runtime={runtime} device={device} agentAvailable={agentAvailable} onAdded={async () => { await refresh(); move('manage'); }} />;
+    if (type === 'add') content = <AddDevice runtime={runtime} onAdded={added} onServerRegistered={serverRegistered} sshAvailable={data.capabilities?.ssh !== false} agentAvailable={agentAvailable} />;
+    if (type === 'bind') content = <AddServer runtime={runtime} device={device} agentAvailable={agentAvailable} onRegistered={serverRegistered} onAdded={() => move('manage')} />;
     if (type === 'reconnect') content = <ReconnectServer runtime={runtime} device={device} agentAvailable={agentAvailable} onConnected={async () => { await refresh(); if (returnTo === 'workbench') await select(device); else move(returnTo); }} />;
     if (type === 'terminal') content = <ServerTerminal key={device.id} runtime={runtime} device={device} allowResize={device.sharedTerminal || data.capabilities?.serverTerminalResize === true} onReconnect={device.sharedTerminal ? undefined : reconnect} />;
     if (type === 'pairing') content = <ServerPairing runtime={runtime} device={device} onClose={() => move('manage')} onReconnect={reconnect} />;
     if (type === 'manage') content = <ManageDevice device={device} runtime={runtime} onChanged={refresh} serverManagement={serverManagement} agentAvailable={agentAvailable} onServerAction={move} onOpenWorkbench={select} membership={memberFor(device)} canRemoveMember={group?.manageable} onCloseWorkbench={canCloseWorkbench ? () => closeWorkbench(device) : undefined} onRemoved={id => { setFrames(items => items.filter(frame => frame.id !== id)); if (activeId === id) { setActiveId(null); setShowDevices(true); } setModal(null); void refresh().catch(reason => setError(reason.message)); }} />;
-    return <Sheet key={type} title={titles[type] || device?.name} onClose={closeModal} busy={!!busy} terminal={type === 'terminal'}>{content}</Sheet>;
+    return <Sheet key={type} title={titles[type] || device?.name} onClose={closeModal} busy={!!busy} terminal={type === 'terminal'}>{content}{type === 'add' && <ErrorLine error={error} />}</Sheet>;
   };
   return <main className="dc-root" data-native={mobile || undefined}>
     <header className={'dc-topbar' + (integratedNavigation ? ' dc-topbar-integrated' : '') + (switchNavigation ? ' dc-topbar-switch' : '')}>
@@ -1007,7 +1021,7 @@ export function DeviceCenter({ runtime = deviceRuntime }) {
     </header>
     <div className="dc-surface" hidden={!showDevices}>
       <section className="dc-content">
-        <ErrorLine error={error} />
+        {modal?.type !== 'add' && <ErrorLine error={error} />}
         {!loaded && <DeviceLoading label="正在读取设备…" />}
         {loaded && data.capabilities?.hostAdmin && <section id="dc-panel-connection" className="dc-connection-panel" aria-label="连接">
           <div className="dc-section-heading"><h1>连接</h1></div><LinkSettings embedded management={runtime.hostCall} refreshToken={relayRevision} detailsTarget={detailsTarget} />
