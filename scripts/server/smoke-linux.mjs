@@ -169,19 +169,28 @@ export async function smokeLinuxServer({ directory = join(root, 'artifacts/linux
       ownerScript({ ...input, expectedHostId: `sha256:${connection.pin}` })]));
     const beforeRestart = await owner({ action: 'health', requireAssistant: true });
     if (!beforeRestart.ready || !beforeRestart.assistant || !beforeRestart.instanceId) throw new Error('Managed server restart is unavailable');
+    console.log(`Managed restart initial health: ready=${beforeRestart.ready} assistant=${beforeRestart.assistant} busy=${beforeRestart.busy}`);
     // systemd may stop the responder before the accepted request reaches SSH.
-    await owner({ action: 'updates', operation: 'restart-host' }).catch(() => null);
+    const restart = await owner({ action: 'updates', operation: 'restart-host' }).catch(() => null);
+    console.log(`Managed restart request: received=${!!restart} phase=${['idle', 'waiting', 'ready', 'error'].includes(restart?.phase) ? restart.phase : 'other'}`);
     let restarted = false;
+    let lastHealth;
     const restartDeadline = Date.now() + 180_000;
     while (Date.now() < restartDeadline) {
       await pause(1000);
       const health = await owner({ action: 'health', requireAssistant: true }).catch(() => null);
+      lastHealth = health;
       if (health?.ready && health.assistant && health.instanceId && health.instanceId !== beforeRestart.instanceId && health.version === receipt.pluginVersion) {
         restarted = true;
         break;
       }
     }
-    if (!restarted) throw new Error('Managed server restart did not restore the target workbench and assistant');
+    if (!restarted) {
+      console.error(`Managed restart final health: reachable=${!!lastHealth} ready=${lastHealth?.ready === true} assistant=${lastHealth?.assistant === true} busy=${lastHealth?.busy === true} instanceChanged=${!!lastHealth?.instanceId && lastHealth.instanceId !== beforeRestart.instanceId} versionMatches=${lastHealth?.version === receipt.pluginVersion}`);
+      const saved = await userJson(join(installation.dataDir, 'update-restart.json'), ['requested', 'instanceId']).catch(() => null);
+      console.error(`Managed restart receipt: exists=${!!saved} requested=${saved?.requested === true} previousInstance=${saved?.instanceId === beforeRestart.instanceId}`);
+      throw new Error('Managed server restart did not restore the target workbench and assistant');
+    }
     await assertAuthenticatedState(connection, cert);
     await assertAssistantWorkbench(connection, cert);
     const assistantDir = join(installation.dataDir, 'assistant');
