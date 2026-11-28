@@ -660,14 +660,15 @@ async function mountLinkHost(ctx, config) {
   const pairedResourceNavigation = async (input, device, { signal, origin }) => {
     const authorize = () => {
       authorizePairedDevice(device);
-      if (!device.groupMember || !group.enabled() || !group.member(device.id))
+      if (device.groupMember && (!group.enabled() || !group.member(device.id)))
         throw Object.assign(new Error('当前工作台未获设备组资源授权'), { status: 403, code: 'GROUP_REQUIRED' });
       signal.throwIfAborted();
     };
     authorize();
     const center = await getCenter();
-    if (input.action !== 'select') return center.groupResourceApi({ ...input, signal }, authorize);
-    await center.groupResourceApi({ action: 'devices' }, authorize).then(value => {
+    const scope = { includeGroup: device.groupMember === true };
+    if (input.action !== 'select') return center.groupResourceApi({ ...input, signal }, authorize, scope);
+    await center.groupResourceApi({ action: 'devices' }, authorize, scope).then(value => {
       if (!value.devices.some(row => row.id === input.deviceId && row.kind !== 'local')) throw Object.assign(new Error('此设备不在工作台所属设备组中'), { status: 403 });
     });
     if (!cloudGateway) throw Object.assign(new Error('请使用桌面工作台打开其他组成员的资源，或配置云端设备网关'), { status: 409, code: 'CLOUD_DEVICE_GATEWAY_REQUIRED' });
@@ -783,7 +784,7 @@ async function mountLinkHost(ctx, config) {
     record: (id, direction) => store.recordReturn(id, direction),
     revoke: id => store.revoke(id),
   };
-  const centerOptions = { webRoot, credentials: ctx.credentials, managerFactory: config.deviceManagerFactory, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name, pairing,
+  const centerOptions = { webRoot, fontRoot: config.fontRoot, credentials: ctx.credentials, managerFactory: config.deviceManagerFactory, localDispatch: input => dispatch(input, { id: 'local' }), localName: () => store.state.name, pairing,
     groupAssets, signSource: (target, command) => signExecutionSource(identity, target, command) };
   const getCenter = () => deviceCenter ??= createDeviceCenter({ ...centerOptions, directory: join(directory, 'outgoing'), hostAdmin: input => admin(input),
     group: { ...group, routes: groupRoutes, enroll: enrollGroup, syncSoon: syncGroupSoon } }).catch(error => { deviceCenter = undefined; throw error; });

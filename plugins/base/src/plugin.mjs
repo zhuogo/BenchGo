@@ -5,6 +5,7 @@ import { mountModelRetryDefaults } from './model-retry-defaults.mjs';
 import { mountTooling } from './tooling.mjs';
 import { mountUsage } from './usage.mjs';
 import { mountUpdates } from './updates.mjs';
+import { createRestartAdmission } from './server-restart.mjs';
 import { mountFeedbackRoute } from './feedback.mjs';
 import { mountFaultFeedback } from './fault-feedback.mjs';
 import { mountWeb } from './web.mjs';
@@ -40,7 +41,7 @@ export async function apply(ctx, config = {}) {
   hostScope(ctx);
   const directory = config.dataDir ?? await prepareDefaultDataDirectory();
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  ctx.provide('benchgo', { config, directory });
+  ctx.provide('benchgo', { config, directory, restartAdmission: createRestartAdmission() });
   ctx.inject(['agents', 'llm'], mountLiveReasoning);
   ctx.inject(['settings'], mountModelRetryDefaults);
   const management = createSettingsManagement({ directory });

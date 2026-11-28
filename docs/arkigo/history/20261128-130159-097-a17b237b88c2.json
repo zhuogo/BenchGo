@@ -1,0 +1,1967 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T13:01:59.097Z",
+  "by": "codex",
+  "reason": "核对当前实现，同步总图、远端会话与产物、发布范围和已复查的源码依据",
+  "base": "d69d1d5fd3ca",
+  "result": "a17b237b88c2",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant",
+        "type": "module",
+        "title": "SuperAgent 总助手",
+        "summary": "Router 持续对话和持有工单，Worker 在项目设备执行，结果从原对话交付。",
+        "parent": "benchgo",
+        "group": "产品板块",
+        "order": 6,
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "依赖 Harness 聚合的 commander。远端项目设备仅需可用的独立执行服务。"
+          ],
+          "responsibilities": [
+            "统一受理主聊、旁聊、渠道及定时事件",
+            "以唯一工单组织委派、真实执行事实、等待与继续",
+            "按会话角色装配身份、记忆与技能并通过 Router 展示结果"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "2daa17970a0bea8109689ee265eb10a60fa02f0f7c5a3acddfa6b8b6ebace5b7",
+              "path": "plugins/superagent/src/plugin.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "aa8087cf929c00babb46bf6e5d1bee9551690eab2b0b6b7140f9cbca6a84ccd8",
+              "path": "plugins/superagent/src/engine.mjs",
+              "symbol": "createAssistantEngine"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "201e5444b84a2bc20375fa42c81bc619b4686585c8056640fed64649d735bad1",
+              "path": "plugins/superagent/src/assignment-executor.mjs",
+              "symbol": "createAssignmentExecutor"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.delivery",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.delivery",
+        "type": "rule",
+        "title": "执行完成和消息送达独立",
+        "summary": "Worker 成果以实际终态及结果记录为准，告知或渠道发送重试不得重派执行。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "constraint": "按执行终态及结果记录交付。普通中止保留原会话尚未提交的结果通知，历史取消项按原事件身份核验后恢复。",
+          "when": "持久结果已生成，原 Router 或渠道正在告知时。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "任务、跟进与目标"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/结果与交付.md",
+            "symbol": "Worker 结果"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md",
+            "symbol": "公共接口与数据契约"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T16:55:04.055Z",
+              "hash": "9c23299b92874916df09eb1d7528a15fabab7254b0a85e2d81256f96115ad7f9",
+              "path": "plugins/superagent/src/result-commit.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:55:04.055Z",
+              "hash": "d784285b711667730d9cdc3e87aede115eac913cfd711b66d4466e96f3f2b281",
+              "path": "plugins/superagent/src/message-inbox.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:55:04.055Z",
+              "hash": "58c30872d51bcf140f8274e804d4983808e10c12f9fba1a24a24427a99d95caa",
+              "path": "plugins/superagent/src/engine.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:55:04.055Z",
+              "hash": "e0e24ee182743eeb54c42032c077dbebdb36e005aa5a6c7b7d179ef90077b36a",
+              "path": "plugins/superagent/src/router-task-expression.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.dispatch",
+      "fields": [
+        "body.steps",
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.dispatch",
+        "type": "flow",
+        "title": "原对话受理、执行与交付",
+        "summary": "Router 快速受理，Worker 返回执行结果，原 Router 自然交付。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "answer",
+            "deliver"
+          ],
+          "start": "receive",
+          "steps": [
+            {
+              "action": "[[assistant.ingress]] 持久保存真人消息及来源，按请求标识去重。",
+              "failure": "同标识不同内容拒绝，状态不明时核对实际回执。",
+              "id": "receive",
+              "title": "写入原线程收件箱"
+            },
+            {
+              "action": "问答当场答，产品内管理使用专属工具，环境工作交给 Worker。",
+              "id": "route",
+              "title": "Router 判断当场答复、管理或委派"
+            },
+            {
+              "action": "Router 按原会话权限执行产品内操作，回复普通正文。",
+              "failure": "操作依据或回执不足时如实说明。",
+              "id": "answer",
+              "title": "直接回答或管理"
+            },
+            {
+              "action": "保存 [[assistant.task]] 的来源、授权和任务要求。原聊天收到受理回复，可继续对话。",
+              "id": "own",
+              "title": "在 A 持久创建工单"
+            },
+            {
+              "action": "本机用官方 Agent 或已选原生 Agent。跨设备走 [[assistant.remote]]。",
+              "failure": "执行不确定、等用户输入或停止时记录真实事实，由原工单跟进。",
+              "id": "worker",
+              "title": "执行项目任务"
+            },
+            {
+              "action": "以执行终态与最后一段有效正文为依据，保存结果原稿及产物引用，持久通知原 Router。",
+              "failure": "提交未完成时保留原稿供恢复，避免再派同一 Worker。",
+              "id": "commit",
+              "title": "保存 Worker 结果"
+            },
+            {
+              "action": "同一持久 inbox 消费结果版本并生成普通公开正文，沿官方历史保存。外部渠道复用常规发送。",
+              "failure": "失败后区分告知、事实补记与渠道发送重试，已完成执行仍保留。",
+              "id": "deliver",
+              "title": "原 Router 交付"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "receive",
+              "to": "route"
+            },
+            {
+              "from": "route",
+              "to": "answer",
+              "when": "即时问答或授权内的产品操作"
+            },
+            {
+              "from": "route",
+              "to": "own",
+              "when": "需要环境执行"
+            },
+            {
+              "from": "own",
+              "to": "worker"
+            },
+            {
+              "from": "worker",
+              "to": "commit"
+            },
+            {
+              "from": "commit",
+              "to": "deliver"
+            }
+          ],
+          "trigger": "用户在主聊、旁聊或已准入渠道提出请求。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "任务、跟进与目标"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/结果与交付.md",
+            "symbol": "Worker 结果"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md",
+            "symbol": "公共接口与数据契约"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "aa8087cf929c00babb46bf6e5d1bee9551690eab2b0b6b7140f9cbca6a84ccd8",
+              "path": "plugins/superagent/src/engine.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "201e5444b84a2bc20375fa42c81bc619b4686585c8056640fed64649d735bad1",
+              "path": "plugins/superagent/src/assignment-executor.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "9c23299b92874916df09eb1d7528a15fabab7254b0a85e2d81256f96115ad7f9",
+              "path": "plugins/superagent/src/result-commit.mjs",
+              "symbol": "commitWorkerResult"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "0e87a84954389c2ddf279cd0fb592b091582bda3a5d5c61dd48358df59291e09",
+              "path": "plugins/superagent/src/message-inbox.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "0830f75301d96129c4e24d7c29045c0252a38b2b91f4f6c2e83db5b368dbafc6",
+              "path": "plugins/superagent/src/result-delivery.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.ingress",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.ingress",
+        "type": "module",
+        "title": "入口、准入与研判",
+        "summary": "主聊旁聊直达 Router，渠道及机器消息先核对来源和政策。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "渠道接入和 session 投影按真实能力提供。Watchdog 单独观察，决策与执行仍由宿主处理。"
+          ],
+          "responsibilities": [
+            "适配器只处理外部协议、来源事实与发送。真实消息经统一入口登记、去重。",
+            "桌面有明确对话意图时进入 Router。对高噪音渠道，准入后可经研判，定时和 Watchdog 使用宿主事件入口。",
+            "逻辑 thread 与底层官方 session 分开；持久 inbox 串行处理，优先用户消息。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/入口与研判.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/链接与渠道.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "4d7b133eed954e5ca9f818eb0bf2e174ab62eb4e1a21c29b78e3dd69c0212351",
+              "path": "plugins/superagent/src/channel-ingress.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "aa8087cf929c00babb46bf6e5d1bee9551690eab2b0b6b7140f9cbca6a84ccd8",
+              "path": "plugins/superagent/src/engine.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "0e87a84954389c2ddf279cd0fb592b091582bda3a5d5c61dd48358df59291e09",
+              "path": "plugins/superagent/src/message-inbox.mjs",
+              "symbol": "createMessageInbox"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.ingress.router-steering",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.ingress.router-steering",
+        "type": "rule",
+        "title": "Router 固定插队发送",
+        "summary": "主聊与手动旁聊固定插队，运行中切换模型在下一轮对话生效。",
+        "parent": "assistant.ingress",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "发送按钮和快捷键使用插队模式。已经开始的回合继续使用原模型，下一轮读取新保存的模型配置。",
+          "when": "用户向主聊或手动旁聊发送消息。"
+        },
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T04:30:05.872Z",
+              "hash": "a01dd81e1f1864ee6c111ba4666c166f05ff025e3274bd310d452decf1cbb7ba",
+              "path": "plugins/superagent/client/conversation.jsx",
+              "symbol": "mountAssistantConversation"
+            },
+            {
+              "checkedAt": "2026-11-28T04:30:05.872Z",
+              "hash": "b50837f2797fecfb3fce03d94aa26a709f4fb21bb1413194a367c0f6e87c3c93",
+              "path": "plugins/superagent/src/engine.mjs",
+              "symbol": "nativePrompt"
+            },
+            {
+              "checkedAt": "2026-11-28T04:30:05.872Z",
+              "hash": "e46bb7c4522cf6f7788dfc7363891520d252ccaadaca9f10a7bd02dc2268e666",
+              "path": "plugins/superagent/src/router-session-setup.mjs",
+              "symbol": "createRouterSessionSetup"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.management",
+        "type": "module",
+        "title": "任务跟进、权限与清理",
+        "summary": "原工单承接进度、补充、审批、暂停及归档操作，并按事实反馈。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "无法确认的请求保留待核实状态。对任务结果的事后改动由关联任务处理。"
+          ],
+          "responsibilities": [
+            "Router 在原任务写入经确认的修改并记录原话。超出 Mandate 的变更需要用户确认。",
+            "暂停或停止请求与执行端确认分开。动作范围和回执按实际身份、来源、参数与许可验证。",
+            "展示整理使用官方归档，归档写入先于停止确认。恢复仅恢复展示。目标清单不产生执行任务。",
+            "普通工单查询省略空白续读字段，同一回合对无效查询和未变化快照结束重复读取。批量整理逐项保留回执，重试只处理未完成项。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/任务列表交互.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T06:30:35.299Z",
+              "hash": "9d03e60a18c382466da3c3b6238364d943e531b49c1adf5d15aeafb99164e6ed",
+              "path": "plugins/superagent/src/desktop-task-access.mjs"
+            },
+            {
+              "checkedAt": "2026-11-26T06:30:35.299Z",
+              "hash": "2ba9c9a7acd11dd508574b410e1782e4035caa586e81eb9d37953d9783d7e6e3",
+              "path": "plugins/superagent/src/router-tools.mjs"
+            },
+            {
+              "checkedAt": "2026-11-26T06:30:35.299Z",
+              "hash": "15b943ecf6dbc2e22db74b08ed5bfcd0a2ebd5eff066673996b5f1800f11fedc",
+              "path": "plugins/superagent/src/task-cleanup-store.mjs"
+            },
+            {
+              "checkedAt": "2026-11-26T06:30:35.299Z",
+              "hash": "ec6508965224f72a86a2f448e7c12d314f7b3014615afc6522ada661362f9946",
+              "path": "plugins/superagent/src/task-management.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.archive-navigation",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.management.archive-navigation",
+        "type": "rule",
+        "title": "Router 归档保留当前页面",
+        "summary": "Router 归档工单时，已打开的独立面板保留原位。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "工单和 Worker 的归档状态随宿主更新。旧 Worker 从原生会话选择中清除时，保留用户当前打开的独立面板。",
+          "when": "Router 在后台归档工单"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-25 用户要求 Router 归档工单时保持当前页面"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T15:14:41.601Z",
+              "hash": "fe5e0763d78d024e035217abe50ebf6cebb13540613b181252967b9593c74861",
+              "path": "plugins/base/client/workspace-navigation.mjs",
+              "symbol": "preservePanelOnSessionArchive"
+            },
+            {
+              "checkedAt": "2026-11-25T15:14:41.601Z",
+              "hash": "430051dd312677e276e5032d2821a25d9d80ddd26e144a8c7c80d5a35ffc9e8a",
+              "path": "plugins/base/client/index.jsx",
+              "symbol": "mountBaseUi"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.session-archive",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.management.session-archive",
+        "type": "interface",
+        "title": "总助手批量归档工作台会话",
+        "summary": "本机主人在聊天里按 Harness、标题、项目、时间或保留数量归档普通会话。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "auth": "绑定当前本机主人真实指令",
+          "kind": "function",
+          "request": [
+            {
+              "description": "明确要求归档全部 DeepSeek Harness 工作台会话时使用。工具没有筛选参数，宿主在同一真人指令内锁定官方会话范围，冻结清单并复核后归档。",
+              "name": "archive_official",
+              "type": "object"
+            },
+            {
+              "description": "按 Harness、项目、标题、时间、保留数量或精确 ID 冻结清单。未归组项目字段为 null。",
+              "name": "preview",
+              "type": "object"
+            },
+            {
+              "description": "按同一真人指令冻结的清单提交，显式选择整批或精确子集。",
+              "name": "apply",
+              "type": "object"
+            }
+          ],
+          "response": [
+            {
+              "description": "报告实际归档项数和逐项未完成原因。",
+              "name": "结果",
+              "type": "object"
+            }
+          ],
+          "signature": "assistant_session_archive_official() / assistant_session_archive_preview(filters) / assistant_session_archive_apply(previewId, all | ids)"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求 AI 快捷归档过多的会话，历史会话归档需要保留当前对话。"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 用户要求只归档全部 DeepSeek Harness 会话，并修复 Router 的重复调用。"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T07:52:00.765Z",
+              "hash": "783a48fa939df133cfc9fb56a2461c5d29a50033480fe71e7c62dd6d2b432535",
+              "path": "plugins/superagent/src/session-archive.mjs",
+              "symbol": "registerSessionArchive"
+            },
+            {
+              "checkedAt": "2026-11-26T07:52:00.765Z",
+              "hash": "cacdd792885551b6b2a8be8dedbb4d3e55f92a801a1200ee55de5f1e5f37794f",
+              "path": "plugins/superagent/src/router-permissions.mjs",
+              "symbol": "installRouterFailureConvergence"
+            },
+            {
+              "checkedAt": "2026-11-26T07:52:00.765Z",
+              "hash": "056d0a68e37b7c6e8e8f892191cf3d0ee9dff68f35f2051febddd238cd75974e",
+              "path": "plugins/superagent/src/router-tools.mjs",
+              "symbol": "createRouterTools"
+            },
+            {
+              "checkedAt": "2026-11-26T07:52:00.765Z",
+              "hash": "ead9533e10079dfc39541891db47e3d65ab149208515fd94ec37d4f805a3479c",
+              "path": "plugins/superagent/src/router-session-setup.mjs",
+              "symbol": "createRouterSessionSetup"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.ownership",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.ownership",
+        "type": "rule",
+        "title": "业务工单归最初受理主机",
+        "summary": "A 持有完整业务 taskId，B 只运行执行实例。远端状态变化以可核验回执为准。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "constraint": "A 持有完整业务 taskId，B 只运行执行实例。远端状态变化以可核验回执为准。",
+          "when": "任务派到已配对的项目设备，或从异地界面查看、续接、控制时。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "跨设备任务"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/模型与上下文.md",
+            "symbol": "跨设备模型归属"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md",
+            "symbol": "定向命令、执行事实与恢复"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "4148b597526cda7df4f0e5b2e7f67f20254bba2767f59bdf1a9c7815a12cec9c",
+              "path": "plugins/superagent/src/orchestration-store.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "56078abebb11cc19e4bec1a999051f17e40c2f05e4947916c88d8c9d578c3efe",
+              "path": "plugins/superagent/src/remote-assignment-executor.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "d82e63b0975cda578da33ade01c9182bc856fc70edf137e31306b8417b9e2615",
+              "path": "plugins/harness/src/remote-execution.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.remote",
+      "fields": [
+        "body.steps",
+        "implementation.evidence",
+        "notes"
+      ],
+      "before": {
+        "id": "assistant.remote",
+        "type": "flow",
+        "title": "A 持有工单，B 执行并回传",
+        "summary": "A 冻结执行身份和路线，B 的 benchgoExecution 运行 Worker，A 按事件水位接续。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "close"
+          ],
+          "start": "choose",
+          "steps": [
+            {
+              "action": "A 按 `deviceId` 与 `projectId` 通过 [[link.resources]] 查询执行目录，根据 B 公布的项目、Harness、供应商和模型确定组合。",
+              "failure": "能力、模型或目标身份缺失时报告阻断原因。",
+              "id": "choose",
+              "title": "探测 B 的实际能力"
+            },
+            {
+              "action": "持久保存原任务、要求、目标身份、Assignment / Run / fence、模型路线和 submit 请求。",
+              "id": "save",
+              "title": "写入 A 唯一工单与固定提交"
+            },
+            {
+              "action": "Link v2 核对授权。B 的 `benchgoExecution` 核验目标、项目、原生能力和本机凭据，记录执行实例及回执。",
+              "failure": "回执未知时按原执行身份查询，只有认证目标确认缺失才重投原冻结请求。",
+              "id": "submit",
+              "title": "B 核验提交与本机资源"
+            },
+            {
+              "action": "B 使用官方 Agent 或 Commander 运行支持的原生 Agent。原始会话、凭据与产物留在 B。",
+              "failure": "B 保留未确认事件；A 断线后原授权内的已接受运行可继续。",
+              "id": "execute",
+              "title": "B 建立或续接执行会话"
+            },
+            {
+              "action": "A 校验身份和事件序号，持久应用事实及水位再确认。归档变化核验当前执行和要求版本，先持久化事实后推进游标。控制、补充及问题回复须 B 确认。",
+              "failure": "事件断档、离线或控制未知时保留待核实状态，禁止推测远端已停止。",
+              "id": "reconcile",
+              "title": "A 逐页核对执行事实"
+            },
+            {
+              "action": "A 收取匹配结果与原执行引用，再由原 Router 交付。B 的展示会话只读，用户回 A 的工单输入。",
+              "id": "close",
+              "title": "让 A 更新任务并交付"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "choose",
+              "to": "save"
+            },
+            {
+              "from": "save",
+              "to": "submit"
+            },
+            {
+              "from": "submit",
+              "to": "execute"
+            },
+            {
+              "from": "execute",
+              "to": "reconcile"
+            },
+            {
+              "from": "reconcile",
+              "to": "close"
+            }
+          ],
+          "trigger": "A 接受项目任务，项目属于另一个已配对且可执行的设备 B。"
+        },
+        "notes": [
+          {
+            "text": "Link v2 当前每次接受一个冻结的执行组合。远端执行会话直接输入、二级子代理委派与跨设备产物传输尚未接入。物理双机及实际供应商请求按专项验收。",
+            "tone": "warn",
+            "type": "callout"
+          }
+        ],
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "跨设备任务"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/模型与上下文.md",
+            "symbol": "跨设备模型归属"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md",
+            "symbol": "定向命令、执行事实与恢复"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "788f629d5f0214b4ec0f6b015c049433f229dd2ec40c4fe42c0eb360d8b09b64",
+              "path": "plugins/superagent/src/remote-assignment-executor.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "b8af8e4bfbd559c99035e21447505adc02ff6f7fcbe70d65f5b1ebebe63a7d0a",
+              "path": "plugins/superagent/src/worker-archive.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "4ccb73f395a3f37e6599c0cf4f28cd0c40fef69169f740e733ef4c7875657f13",
+              "path": "plugins/harness/src/remote-execution.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T16:46:16.529Z",
+              "hash": "f7898dd9470990168c555c21f19e348cc83972f5115df2ce5c2a34a486a08230",
+              "path": "plugins/link/src/devices/routes.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.task",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.task",
+        "type": "entity",
+        "title": "A 的业务工单与输入账",
+        "summary": "唯一 taskId 关联原来源、要求、授权、执行引用、结果版本及交付事实。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "fields": [
+            {
+              "description": "最初受理宿主与该业务任务",
+              "name": "ownerHostId / taskId",
+              "type": "稳定定位"
+            },
+            {
+              "description": "可执行目标与用户明确提出的结果条件",
+              "name": "target / acceptance",
+              "type": "任务要求"
+            },
+            {
+              "description": "真实来源、范围、发起人和策略版本",
+              "name": "Mandate",
+              "type": "授权快照"
+            },
+            {
+              "description": "保护执行事实、事件水位与迟到消息",
+              "name": "Assignment / Run / fence",
+              "type": "执行绑定"
+            },
+            {
+              "description": "原始成果与送达事实分别保存",
+              "name": "Result / delivery",
+              "type": "独立记录"
+            }
+          ],
+          "ownership": "A 的 SuperAgent 编排账本。官方 Session 保存对话、工具活动、审批和执行原文。",
+          "retention": "整理归档通过官方归档集改变展示位置，保留原业务状态、成果与执行记录。",
+          "stateTransitions": [
+            {
+              "from": "进行中",
+              "to": "等待",
+              "when": "出现确证的人工输入、暂停或待核实执行事实"
+            },
+            {
+              "from": "等待",
+              "to": "进行中",
+              "when": "实际接受补充、答复或确认恢复"
+            },
+            {
+              "from": "进行中",
+              "to": "完成",
+              "when": "完成事实和结果提交"
+            },
+            {
+              "from": "等待",
+              "to": "完成",
+              "when": "待核实执行已结束且结果完成提交"
+            }
+          ],
+          "states": [
+            {
+              "name": "进行中"
+            },
+            {
+              "description": "真实提问、暂停、输入或执行不确定等须区分具体原因",
+              "name": "等待"
+            },
+            {
+              "description": "以保存的执行终态和结果为准",
+              "name": "完成"
+            }
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "任务、跟进与目标"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/结果与交付.md",
+            "symbol": "Worker 结果"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md",
+            "symbol": "公共接口与数据契约"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "4148b597526cda7df4f0e5b2e7f67f20254bba2767f59bdf1a9c7815a12cec9c",
+              "path": "plugins/superagent/src/orchestration-store.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "fe2cf67d9515ab7edb1310f503d64ec82a5a2a626c27dd3fe53cdada06c05645",
+              "path": "plugins/superagent/src/task-lifecycle.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:53:53.723Z",
+              "hash": "2c1c8f40cb75765dade7dc92d08d1983afb412a1239ad2b8d861fd6b83001f12",
+              "path": "plugins/superagent/src/task-archive.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "link",
+        "type": "module",
+        "title": "设备与远程连接",
+        "summary": "建立设备信任，选择直连或中继，并暴露目标设备真实可用的资源和操作。",
+        "parent": "benchgo",
+        "group": "产品板块",
+        "order": 1,
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "中继承担传输。目标主机保留工作台数据与执行环境。",
+            "首次配对、部署和秘密由设备中心办理。"
+          ],
+          "responsibilities": [
+            "设备中心管理配对、路线、中继池和已登记服务器",
+            "共享资源服务为导航和助手提供设备查询、管理和远端执行接口"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "b1a1976fccb7b81d9044cb6443e674affef167f7aa74f76ae60d6c7f1548c9a3",
+              "path": "plugins/link/src/index.mjs",
+              "symbol": "mountLink"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "3789bee7c7060c60c373ab33a624a71430f9fb00041b92b0fdeb62a7dfb3e3b6",
+              "path": "plugins/base/src/link-plugin.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.workbench-startup",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "link.connect.workbench-startup",
+        "type": "rule",
+        "title": "远端工作台优先加载项目与总助手",
+        "summary": "先读取项目和总助手状态，推迟非首屏资源。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "远端先发出项目与总助手状态请求。推迟非首屏功能与字体，首屏可先用系统字体。"
+        },
+        "notes": [
+          {
+            "text": "桌面代理复用安装包内通过内容哈希核验的 FangYuan 分片，缺失或损坏时回退目标字体。字体仍经本机工作台会话认证，内容哈希字体采用私有不可变缓存，普通 API 禁止缓存。字体命中保持远端健康状态的真实性。",
+            "type": "text"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "49f7d002c4c2e2c1dae3a67b43be7d49906590f530bfe57d4c8ec2f905782e9c",
+              "path": "plugins/base/client/index.jsx",
+              "symbol": "apply"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "8cccf6b52845907705c15bd5d7f644560a30445dcf92a55043c043298c61fa57",
+              "path": "plugins/base/scripts/build-client.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "418e3155c7d2e4bb1309498ba65198de25c46c0e20af330c455b64060ac27a01",
+              "path": "plugins/base/workbench/client/index.jsx",
+              "symbol": "mountWorkbenchClient"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "ff90caa6ef1396c258a6ede5f5cd45695da699b5f6334f7a0ba78badc29ff441",
+              "path": "plugins/base/src/link-plugin.mjs",
+              "symbol": "apply"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "39fa8668b136d30516e6f6da136b68e9a0e786cb5d2b04ffcca34d123e840a86",
+              "path": "plugins/link/src/devices/proxy.mjs",
+              "symbol": "createDeviceProxy"
+            }
+          ],
+          "note": "首屏优先读取与惰性装配继续由原入口负责。桌面代理补充本机字体复用，避免远端字体占满同源连接。安装产物已同步并请求官方 HMR，当前用户窗口是否载入最新脚本待验。",
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.manage",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "link.manage",
+        "type": "module",
+        "title": "共享资源与服务器管理",
+        "summary": "聚合导航与助手共用资源查询，设备中心承担首次信任和部署。",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "配对工作台保留官方资源接口。本机文件、任意终端与 SSH 以本机 owner 边界为准。"
+          ],
+          "responsibilities": [
+            "按设备分页查询项目、会话、模型和能力。离线是可报告结果。",
+            "已配对设备按开放能力使用会话菜单操作、连接与中继管理。",
+            "人工 SSH 终端与本机 AI 运维复用登记目标。添加服务器时自动读取并绑定首次 SSH 主机指纹，原连接重连继续核验已保存的指纹。",
+            "移除服务器时清除本机 SSH 登记与凭据。用户重新添加已移出的服务器时清理遗留登记，并建立独立的 SSH 连接。",
+            "服务器登记成功后立即更新设备中心和桌面设备列表。打开工作台前通过设备目录核对已登记的设备，无法找到时在添加页显示原因。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/SSH服务器运维.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T14:17:51.396Z",
+              "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
+              "path": "plugins/link/src/devices/resources.mjs",
+              "symbol": "createDeviceResources"
+            },
+            {
+              "checkedAt": "2026-11-26T14:17:51.396Z",
+              "hash": "a59eb417216ccc57738317845421dbce902d2e15abc0d95e610e7866ac7669bd",
+              "path": "plugins/link/src/index.mjs"
+            },
+            {
+              "checkedAt": "2026-11-26T14:17:51.396Z",
+              "hash": "235327a47cba58ab27f414b9c81a9683dfbe360d946a8278b48bb9dea5793e75",
+              "path": "plugins/link/src/server/manager.mjs",
+              "symbol": "createServerManager"
+            },
+            {
+              "checkedAt": "2026-11-26T14:17:51.396Z",
+              "hash": "01780f264261aa0c5c464172ccf4f2121c5213a238e5a28b722c6b77056f3c84",
+              "path": "plugins/link/src/devices/center.mjs",
+              "symbol": "createDeviceCenter"
+            },
+            {
+              "checkedAt": "2026-11-26T14:17:51.396Z",
+              "hash": "aa6d6cf6e4a3b37ade52c7797774eec0bc442a275c44d30331ddd452a3b61d2d",
+              "path": "plugins/link/src/devices/registry.mjs",
+              "symbol": "openDeviceRegistry"
+            },
+            {
+              "checkedAt": "2026-11-26T14:17:51.396Z",
+              "hash": "7933b7045dbabdb85b7c7d292c582ebdccf03ac2c00c2150c6b424dd293cc706",
+              "path": "plugins/link/client/device-center.jsx",
+              "symbol": "DeviceCenter"
+            },
+            {
+              "checkedAt": "2026-11-26T14:17:51.396Z",
+              "hash": "d62ee79a8c43bf93c0c974bec9b2b0748b8f542b7d433ecf85fbef9bdb73f7e5",
+              "path": "plugins/link/client/device-launcher.jsx",
+              "symbol": "DeviceLauncher"
+            },
+            {
+              "checkedAt": "2026-11-26T14:17:51.396Z",
+              "hash": "19f72f84075f63f1c2a61138199db75fda75cbce9411451dd0800979b147f39b",
+              "path": "plugins/base/workbench/src/ssh-trust.mjs"
+            }
+          ],
+          "note": "覆盖服务器登记后的自动更新、桌面通知和打开工作台前的设备核验。",
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.resources",
+      "fields": [
+        "body.request",
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "link.resources",
+        "type": "interface",
+        "title": "共享设备资源与执行接口",
+        "summary": "由已配对设备调用实际开放的资源、会话、管理或执行能力。",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "auth": "目标设备验证配对授权与请求主体。执行使用与目标身份绑定的能力及回执。",
+          "errors": [
+            {
+              "code": "UNSUPPORTED_EXECUTION_PROTOCOL",
+              "when": "协议版本或操作不支持"
+            },
+            {
+              "code": "UNSUPPORTED",
+              "when": "目标未开放执行服务"
+            },
+            {
+              "code": "IDENTITY_CHANGED",
+              "when": "执行回执身份与授权不匹配"
+            }
+          ],
+          "kind": "http",
+          "request": [
+            {
+              "description": "执行包括 catalog、submit、get、input、control、ack、archive、archives",
+              "name": "operation",
+              "type": "string"
+            }
+          ],
+          "response": [
+            {
+              "description": "执行回执携带目标身份与配对授权，出站调用方核对冻结值",
+              "name": "hostId / authorizationId",
+              "type": "string"
+            }
+          ],
+          "signature": "POST /link/api/rpc，按 action 和目标能力目录调用。执行操作使用 action=execution、version=2。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/跨设备协作.md"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/src/index.mjs"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "b1a1976fccb7b81d9044cb6443e674affef167f7aa74f76ae60d6c7f1548c9a3",
+              "path": "plugins/link/src/index.mjs",
+              "symbol": "mountLink"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.410Z",
+              "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
+              "path": "plugins/link/src/devices/resources.mjs",
+              "symbol": "createDeviceResources"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "models.identity",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "models.identity",
+        "type": "rule",
+        "title": "模型 ID 保持原值",
+        "summary": "显式选择优先，供应商与模型 ID 原样校验、保存、重载并用于请求。",
+        "parent": "models",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "constraint": "显式选择优先，供应商与模型 ID 原样校验、保存、重载并用于请求。",
+          "when": "修改单项配置、选择模型或恢复原生会话。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "AGENTS.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/模型与供应商.md",
+            "symbol": "共享 API 配置"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/原生工具与会话.md",
+            "symbol": "调度边界"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "9ea14525a99b3bcb59a053b038d0d503855106f20f5ef9f009d2dde6996105df",
+              "path": "plugins/harness/src/selection.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "86f9b5fb699f8f84facfb58a21cbbf9783cc436c1c2a24c45c45cf43ef52a6f0",
+              "path": "plugins/harness/src/runtime.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "8aa9525b55c34ba8d2505e8427e1fe179e230e28af6adbaff3d0852e570bf505",
+              "path": "plugins/base/src/model-providers.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "models.route",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "models.route",
+        "type": "entity",
+        "title": "会话模型绑定",
+        "summary": "按真实会话保存 Harness、供应商与原始模型 ID，重新连接时继续核对。",
+        "parent": "models",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "fields": [
+            {
+              "description": "按原值存取与请求",
+              "name": "Harness / providerId / model",
+              "type": "不透明标识"
+            },
+            {
+              "description": "用于恢复已存在的原生会话",
+              "name": "native handle",
+              "type": "原生会话引用"
+            }
+          ],
+          "ownership": "用户通过统一选择器确认。基础层提供模型目录和凭据路由，Commander 保存会话绑定。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/模型与供应商.md",
+            "symbol": "共享 API 配置"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/原生工具与会话.md",
+            "symbol": "调度边界"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "86f9b5fb699f8f84facfb58a21cbbf9783cc436c1c2a24c45c45cf43ef52a6f0",
+              "path": "plugins/harness/src/runtime.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "d3ca38d616b157cfe36948356de4e3d1fbc7f282611c67febd6e3d43308209ce",
+              "path": "plugins/harness/src/store.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "9ea14525a99b3bcb59a053b038d0d503855106f20f5ef9f009d2dde6996105df",
+              "path": "plugins/harness/src/selection.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "models.select",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "models.select",
+        "type": "flow",
+        "title": "选择模型并启动原生会话",
+        "summary": "选中的 Harness、供应商和模型经过校验后写入会话并用于实际请求。",
+        "parent": "models",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "restore"
+          ],
+          "start": "catalog",
+          "steps": [
+            {
+              "action": "从基础层获取供应商、配置模型和工具可用性，按协议能力筛选。",
+              "failure": "显示缺少配置或不支持原因。",
+              "id": "catalog",
+              "title": "读取共享目录"
+            },
+            {
+              "action": "按 [[models.identity]] 校验完整组合，保存选项。",
+              "id": "select",
+              "title": "提交显式选择"
+            },
+            {
+              "action": "[[models.commander]] 准备配置并校验绑定后连接，转发正文和事件。",
+              "failure": "原绑定不可用时报告原因，保留会话与原始配置。",
+              "id": "launch",
+              "title": "启动或连接真实 Agent"
+            },
+            {
+              "action": "用户可以重新连接已保存原生句柄，或归档并释放进程。",
+              "failure": "缺少原句柄时给出诊断，由用户决定如何继续。",
+              "id": "restore",
+              "title": "恢复还是归档"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "catalog",
+              "to": "select"
+            },
+            {
+              "from": "select",
+              "to": "launch"
+            },
+            {
+              "from": "launch",
+              "to": "restore"
+            }
+          ],
+          "trigger": "用户在工作台的项目或会话中选择模型并发送消息。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/模型与供应商.md",
+            "symbol": "共享 API 配置"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/原生工具与会话.md",
+            "symbol": "调度边界"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "8aa9525b55c34ba8d2505e8427e1fe179e230e28af6adbaff3d0852e570bf505",
+              "path": "plugins/base/src/model-providers.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "9ea14525a99b3bcb59a053b038d0d503855106f20f5ef9f009d2dde6996105df",
+              "path": "plugins/harness/src/selection.mjs",
+              "symbol": "harnessSelection"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "86f9b5fb699f8f84facfb58a21cbbf9783cc436c1c2a24c45c45cf43ef52a6f0",
+              "path": "plugins/harness/src/runtime.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "b3419a52ec87ee08d96b6e616654550827ab64ca05c7fba952776ef430accb29",
+              "path": "plugins/harness/src/plugin.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "models.skills",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "models.skills",
+        "type": "module",
+        "title": "技能发现与执行增强",
+        "summary": "统一列出官方最终生效技能，由基础层装配官方会话执行与压缩增强。",
+        "parent": "models",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "技能正文按需获取。内部模块随统一插件交付。"
+          ],
+          "responsibilities": [
+            "按项目范围查询最终生效技能。",
+            "自建技能源在预览、校验后安装所选依赖闭包。",
+            "Efficiency 使用已有原生执行与压缩接缝。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/04-模型与工具/统一技能管理.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/源码架构.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "869b4384ad17cc086a425cc83952cf7c5b49959251829f0c800cea09eb8c525e",
+              "path": "plugins/base/src/skills.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "38c165fb1e5f1ba20052713887ad2734e5b47928ce22c15513b0f0982480c8a7",
+              "path": "plugins/base/src/skill-deck.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:23.725Z",
+              "hash": "68a73a4d8c9527c4413a52a9dbbb9261183ed19608ee33ac102c12ffe651240c",
+              "path": "plugins/base/src/plugin.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "release",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "release",
+        "type": "module",
+        "title": "更新与发布",
+        "summary": "统一发行版本，对变化的组件构建、验签和分发，运行时按安装方式激活。",
+        "parent": "benchgo",
+        "group": "产品板块",
+        "order": 5,
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "每个平台保留自己的安装入口和兼容条件。真机和公开发行由各自实物验收。"
+          ],
+          "responsibilities": [
+            "维护引擎 pin 和组件版本",
+            "生成可验证安装包与离线插件种子",
+            "协调 Desktop、CLI 和服务器安装、复用及更新"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "upstream.json"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T05:51:29.689Z",
+              "hash": "22d62c5bc083dfc33b7644621d3930af1cd02851fc9dc1198e5596e6b5a3b791",
+              "path": "scripts/release/plan.mjs",
+              "symbol": "createReleasePlan"
+            },
+            {
+              "checkedAt": "2026-11-26T05:51:29.689Z",
+              "hash": "3214016c08e4b6b0aa1de5e4649fa20f6443a02051395377db4adff05cb18285",
+              "path": "plugins/base/src/updates.mjs",
+              "symbol": "createUpdates"
+            },
+            {
+              "checkedAt": "2026-11-26T05:51:29.689Z",
+              "hash": "40d988e9b16621f7e38d30616cd3d01311e3d0ea4c3ba7325079b3bae34402b8",
+              "path": "packages/benchgo-cli/src/installer.mjs",
+              "symbol": "installWorkbench"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "release.activate",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "release.activate",
+        "type": "flow",
+        "title": "主机验签并激活更新",
+        "summary": "验签并激活兼容功能包，受管 Linux 自动重启，客户端确认目标版本就绪后恢复连接。",
+        "parent": "release",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "restart"
+          ],
+          "start": "check",
+          "steps": [
+            {
+              "action": "按选择的分发源取带签名的清单，核对引擎、应用及功能包版本。",
+              "failure": "检查失败时保留此前已确认版本并报告；缺少应用版本信息时不推断。",
+              "id": "check",
+              "title": "验签并核对主机兼容"
+            },
+            {
+              "action": "校验下载包并准备不可变版本目录。受管 Linux 可在任务运行时准备，任务结束后再激活。Windows 在安装前检查任务。",
+              "failure": "不兼容或校验失败时保留当前版本。任务未结束时保留准备结果并等待。",
+              "id": "prepare",
+              "title": "准备已验证插件"
+            },
+            {
+              "action": "经官方 profile 约束切换，并记录重启所需状态。",
+              "failure": "锁冲突或校验失败应保留当前可用版本。",
+              "id": "activate",
+              "title": "锁内切换激活指针"
+            },
+            {
+              "action": "受管 Linux 在任务空闲时自动重启。校验实际加载的版本、Link、工作台及原先可用的总助手，连接恢复后返回原页面。桌面壳和 Android 沿用平台入口。",
+              "failure": "保留准备结果并展示服务启动或模块就绪失败。只有主机确认正在重启或实例已变化时才进入更新恢复；状态探测临时失败时保留当前工作台。",
+              "id": "restart",
+              "title": "按重启后版本确认"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "check",
+              "to": "prepare"
+            },
+            {
+              "from": "prepare",
+              "to": "activate"
+            },
+            {
+              "from": "activate",
+              "to": "restart"
+            }
+          ],
+          "trigger": "用户在工作台执行检查或更新。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "插件安装与激活"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "更新入口与状态"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-28 用户确认落实更新后自动重启、就绪核验与重连。"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T09:03:28.705Z",
+              "hash": "370a48ba5a329032654e5e8849dc47abe5c76b6b5efe632cd2abf2175b15d6dd",
+              "path": "plugins/base/src/updates.mjs",
+              "symbol": "createUpdates"
+            },
+            {
+              "checkedAt": "2026-11-28T09:03:28.705Z",
+              "hash": "7e61754a1e7a2f9b25eb7a7addb02f3d91aab7253ebc53178c6738b0ef32e61b",
+              "path": "plugins/base/src/server-restart.mjs",
+              "symbol": "managedServerRestart"
+            },
+            {
+              "checkedAt": "2026-11-28T09:03:28.705Z",
+              "hash": "8665f30461abb2c2fee5d34ebc93573285defc44893cd2091c015973a9e55e9e",
+              "path": "plugins/link/src/server/manager.mjs",
+              "symbol": "waitForServer"
+            },
+            {
+              "checkedAt": "2026-11-28T09:03:28.705Z",
+              "hash": "23e5d2fad4c84715be943734ab627e3a7986505aca6ed6839e402e1e3c7f24f7",
+              "path": "plugins/link/src/transport/workbench.mjs",
+              "symbol": "createWorkbench"
+            },
+            {
+              "checkedAt": "2026-11-28T09:03:28.705Z",
+              "hash": "17548606ca19a429325a4f7fee9fcf31cff3c1c8c6d6be18cf2d929c4090d637",
+              "path": "plugins/link/client/workbench-recovery.mjs",
+              "symbol": "watchWorkbench"
+            },
+            {
+              "checkedAt": "2026-11-28T09:03:28.705Z",
+              "hash": "3839747586ae92e5f3a4d91b5263142c6c32a584f576da29c66a3cd9cbd835d7",
+              "path": "scripts/server/bootstrap.mjs"
+            }
+          ],
+          "note": "已实现受管 Linux 更新准备、任务等待、业务准入排空、持久重启收据、失败复用和按新实例及组件就绪恢复。定向与浏览器回归通过。真实 Linux systemd 和跨版本自动更新仍待发行实机验收。",
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "release.publish",
+      "fields": [
+        "body.steps",
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "release.publish",
+        "type": "flow",
+        "title": "按变更构建并签名发布",
+        "summary": "比较最近签名发行，构建受影响组件，复用兼容安装包后发布。",
+        "parent": "release",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "publish"
+          ],
+          "start": "plan",
+          "steps": [
+            {
+              "action": "检查本次变更和版本，并给出构建范围；无可信基线时采用完整计划。",
+              "failure": "版本冲突、基线或选中改动不满足条件时由预演报告。",
+              "id": "plan",
+              "title": "比较签名基线"
+            },
+            {
+              "action": "统一 Actions 构建受影响的桌面、Android、插件和服务端归档。插件变化时同步原生种子。",
+              "failure": "组件任务失败时按实际 Actions 日志排查。",
+              "id": "build",
+              "title": "更新需要变化的组件"
+            },
+            {
+              "action": "验证引擎兼容、生产依赖和动态资源，签名清单包含版本、摘要与配置要求。",
+              "failure": "签名、校验或产物不满足时阻止推进正式通道。",
+              "id": "verify",
+              "title": "验证闭包并签名"
+            },
+            {
+              "action": "登记统一发行版本及已验证组件，推进正式下载清单。",
+              "failure": "所有验证产物已具备，仅最后发布失败时，可复用发行恢复工作流。",
+              "id": "publish",
+              "title": "发布不可变版本"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "plan",
+              "to": "build"
+            },
+            {
+              "from": "build",
+              "to": "verify"
+            },
+            {
+              "from": "verify",
+              "to": "publish"
+            }
+          ],
+          "trigger": "在已同步 main 上以 `npm run release:update -- --version X.Y.Z` 预演，明确发布时提交发布说明。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "发布操作与门槛"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "签名与分发渠道"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:52:25.046Z",
+              "hash": "22d62c5bc083dfc33b7644621d3930af1cd02851fc9dc1198e5596e6b5a3b791",
+              "path": "scripts/release/plan.mjs",
+              "symbol": "createReleasePlan"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:25.046Z",
+              "hash": "974971d17dde84686104f3ba24dacf4a5f50e9115bc4f3e572c32901d27566bc",
+              "path": "scripts/release/update.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:25.046Z",
+              "hash": "a7559c7b31e36f61599e0ae0ff449480d7dda7ac316c7400aef1cd3d1a11712e",
+              "path": ".github/workflows/unified-release.yml"
+            },
+            {
+              "checkedAt": "2026-11-25T13:52:25.046Z",
+              "hash": "54bedf02202203a8679448e80620524a59047c9a2009f0792420578355891deb",
+              "path": "scripts/release/publish.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "workbench",
+        "type": "module",
+        "title": "工作台与 Agent",
+        "summary": "在一套工作台里导航项目和会话、操作本机资源并查看产物。",
+        "parent": "benchgo",
+        "group": "产品板块",
+        "order": 2,
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "原生会话调度由模型与工具板块的 Commander 负责。业务工单由 SuperAgent 持有。"
+          ],
+          "responsibilities": [
+            "基础层装配公共配置与统一客户端",
+            "项目入口连接官方会话或原生会话，提供审批、归档和恢复",
+            "按宿主权限挂载文件、Git、终端与预览"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/源码架构.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "68a73a4d8c9527c4413a52a9dbbb9261183ed19608ee33ac102c12ffe651240c",
+              "path": "plugins/base/src/plugin.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:11.895Z",
+              "hash": "6094f5618fbe89d796654ce1e03731cb6446f41ebcd1cdd8f0acf2f49d8b2a2c",
+              "path": "plugins/base/workbench/src/project-files.mjs",
+              "symbol": "mountProjectFiles"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.base",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "workbench.base",
+        "type": "module",
+        "title": "基础层与客户端装配",
+        "summary": "一个 benchgo-plugin 安装包对宿主暴露五个 Cordis 入口和统一客户端。",
+        "parent": "workbench",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "boundaries": [
+            "三个内部源码包随基础层装配。官方 `clientModules` 识别完整包根入口。"
+          ],
+          "responsibilities": [
+            "根入口建立 benchgo、benchgoSettings、工具/模型、项目、数据根和统计服务。",
+            "业务入口分别装配 Harness、SuperAgent、Voice、Link；统一客户端 id 为 `benchgo-plugin`。",
+            "Interactive 将白名单交互回复回传官方会话，Efficiency 复用原生执行与压缩，Workbench 承载本机工程操作。",
+            "五个入口为 `benchgo-plugin` 以及同包的 `/harness-plugin`、`/superagent-plugin`、`/voice-plugin`、`/link-plugin`。注册顺序与依赖以 profile patch 为准。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/源码架构.md"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/base/package.json"
+          },
+          {
+            "kind": "file",
+            "ref": "AGENTS.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:12.949Z",
+              "hash": "38da94237847f576ac71076c2911f9764d8b3071b3c559e0d2f4cb6bbccf4a3a",
+              "path": "plugins/base/package.json"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.949Z",
+              "hash": "68a73a4d8c9527c4413a52a9dbbb9261183ed19608ee33ac102c12ffe651240c",
+              "path": "plugins/base/src/plugin.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.949Z",
+              "hash": "271bb8acfcafd07981d0344be71559c05dfca276baf14c40636e02a66a15abcf",
+              "path": "plugins/base/cordis.patch.yml"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.session",
+      "fields": [
+        "body.steps",
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "workbench.session",
+        "type": "flow",
+        "title": "打开项目、会话和产物",
+        "summary": "从项目导航进入所属设备，用真实会话处理任务和查看产物。",
+        "parent": "workbench",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "preview"
+          ],
+          "start": "find",
+          "steps": [
+            {
+              "action": "使用当前设备、全部设备或指定设备显示范围。跨设备列表通过 [[link.resources]] 查询。",
+              "failure": "加载失败或目标离线时保留来源并报告失败。项目登记成功后立即刷新所属设备的项目目录，打开新会话无需先等待完整侧栏状态。",
+              "id": "find",
+              "title": "定位项目与会话"
+            },
+            {
+              "action": "按资源所属设备进入会话。远端任务执行会话允许查看，并提供返回 A 工单的入口。",
+              "failure": "目标能力不足时保留解释，任务输入与控制从原工单办理。",
+              "id": "open",
+              "title": "打开真实会话"
+            },
+            {
+              "action": "官方会话由 [[workbench.official]] 处理。已选择的原生路由经 Commander 连接实际 Agent。",
+              "failure": "工具未安装、会话失联或协议不支持时明确报告。",
+              "id": "agent",
+              "title": "发送、审批或继续"
+            },
+            {
+              "action": "按会话最新工作目录校验文件授权，再按类型加载预览。本机文件操作和终端按 owner 权限挂载。",
+              "failure": "路径越界、内容超限或格式不支持时说明，保留合规的下载或其他入口。",
+              "id": "preview",
+              "title": "查看项目文件与产物"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "find",
+              "to": "open"
+            },
+            {
+              "from": "open",
+              "to": "agent"
+            },
+            {
+              "from": "agent",
+              "to": "preview"
+            }
+          ],
+          "trigger": "用户从工作台的项目、最近或归档列表进入。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/跨设备资源导航.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/产物快览.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/项目文件操作.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
+              "path": "plugins/link/src/devices/resources.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "b3419a52ec87ee08d96b6e616654550827ab64ca05c7fba952776ef430accb29",
+              "path": "plugins/harness/src/plugin.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "6094f5618fbe89d796654ce1e03731cb6446f41ebcd1cdd8f0acf2f49d8b2a2c",
+              "path": "plugins/base/workbench/src/project-files.mjs",
+              "symbol": "mountProjectFiles"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "0ebf22cdc8fabd263bad36202ca5260481c622f9b0429ef62abbc1ee8aededda",
+              "path": "plugins/base/workbench/src/media.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "5c6eee30dbceb406d277b3e5a630720590c7ede57d7b569f788fd2718f90fd6a",
+              "path": "plugins/link/client/resource-navigation.jsx",
+              "symbol": "useResourceNavigation"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "49f7d002c4c2e2c1dae3a67b43be7d49906590f530bfe57d4c8ec2f905782e9c",
+              "path": "plugins/base/client/index.jsx",
+              "symbol": "Projects / refresh"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "39fa8668b136d30516e6f6da136b68e9a0e786cb5d2b04ffcca34d123e840a86",
+              "path": "plugins/link/src/devices/proxy.mjs",
+              "symbol": "createDeviceProxy"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "77e96081e20d331800d27e5a483e04d91a67fa6167c4e9f320184640df7bbda7",
+              "path": "plugins/link/client/project-bridge.mjs",
+              "symbol": "createProjectBridge"
+            }
+          ],
+          "note": "项目登记确认后立即关闭添加等待，并行准备新会话与刷新所属设备项目。项目刷新独立于慢最近列表与设备读取，同类在途完成后补读；旧状态失败或取消不会覆盖新快照。襄阳轻量目录入口 468–660 毫秒，完整入口对照 5095 毫秒。字体同源排队对照中的状态请求由 8173–8461 毫秒降至 519–738 毫秒。新一轮完整页面采样中默认工作区初始化 878 毫秒、ensureRecent 1497 毫秒，更新状态仍有 3524 毫秒长尾。真实模型发送与目标端部署仍待验。",
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

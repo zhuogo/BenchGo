@@ -9,7 +9,7 @@ import css from './updates.css';
 import { brandIcon } from '../../link/client/brand.jsx';
 import { Loading } from '../../shared/client/ui/loading.jsx';
 
-const activePhases = new Set(['checking', 'downloading']);
+const activePhases = new Set(['checking', 'downloading', 'waiting']);
 const updatePath = 'api/commander/updates';
 const downloadPlatforms = [
   { name: 'Windows', icon: 'computer', packages: [['windows-x64', '.exe', 'x64 · EXE']] },
@@ -297,9 +297,10 @@ export function UpdateLauncher({ host, wide = true }) {
   }, [desktopUpdates, canOpenAppUpdates, refreshNativeState]);
   useEffect(() => {
     const awaitingInstall = open && data?.release?.plugin?.compatible && data.release.plugin.available === true && data?.managed && !data?.canInstall && !data?.restartRequired;
-    if ((!activePhases.has(data?.phase) && !awaitingInstall && !(canAutoUpdate && data?.restartRequired && data?.busy) && !intent.current) || error) return;
+    const serverRestart = data?.hostHealth?.restart;
+    if ((!activePhases.has(data?.phase) && !awaitingInstall && !(canAutoUpdate && data?.restartRequired && data?.busy) && !['waiting', 'pending', 'restarting'].includes(serverRestart) && !intent.current) || error) return;
     const timer = setInterval(() => void run('status'), 2000); return () => clearInterval(timer);
-  }, [data?.phase, data?.canInstall, data?.managed, data?.release?.plugin?.version, data?.release?.plugin?.available, data?.release?.plugin?.compatible, data?.current?.plugin, data?.restartRequired, data?.busy, canAutoUpdate, open, error, run]);
+  }, [data?.phase, data?.canInstall, data?.managed, data?.release?.plugin?.version, data?.release?.plugin?.available, data?.release?.plugin?.compatible, data?.current?.plugin, data?.restartRequired, data?.busy, data?.hostHealth?.restart, canAutoUpdate, open, error, run]);
   const working = updatingAll || restarting || !!pending || activePhases.has(data?.phase) || nativeActivePhases.has(nativeState?.phase), restart = !!data?.restartRequired || data?.phase === 'ready';
   const unpublished = data?.phase === 'unpublished', serverDeployment = data?.installation === 'server', serverManaged = serverDeployment && data?.managed === false;
   // The host owns semantic version comparisons; a different/unknown version is
@@ -321,8 +322,10 @@ export function UpdateLauncher({ host, wide = true }) {
   const sameRelease = !!targetVersion && targetVersion === data?.current?.release;
   const nativeStopFailed = !serverDeployment && !nativeError && nativeState?.phase === 'error' && nativeState.failure === 'stop-failed';
   const appUpdateFailed = nativeStopFailed && (action === 'app' || !updateAvailable);
-  const status = restarting ? '正在重启' : updatingAll ? '更新中' : restart ? canAutoUpdate && data?.busy ? '等待任务结束' : '待重启' : working ? (preparing ? '准备中' : data?.phase === 'downloading' || pending === 'install' || nativeState?.phase === 'downloading' ? '下载中' : pending === 'app' ? '更新中' : '检查中') : updateAvailable ? '有更新' : '';
-  const pluginStatus = restarting ? '正在重启主机应用…' : updatingAll ? '正在完成更新…' : restart ? canAutoUpdate && data?.busy ? '等待任务结束后自动重启' : '待重启' : working ? (preparing ? '正在准备更新…' : data?.phase === 'downloading' || pending === 'install' || nativeState?.phase === 'downloading' ? '正在下载…' : pending === 'app' ? '更新中…' : '正在检查…')
+  const serverRestart = data?.hostHealth?.restart;
+  const waitingForTasks = serverRestart === 'waiting' || data?.phase === 'waiting' || restart && canAutoUpdate && data?.busy;
+  const status = waitingForTasks ? '等待任务结束' : restarting || serverRestart === 'restarting' ? '正在重启' : updatingAll ? '更新中' : restart ? '待重启' : working ? (preparing ? '准备中' : data?.phase === 'downloading' || pending === 'install' || nativeState?.phase === 'downloading' ? '下载中' : pending === 'app' ? '更新中' : '检查中') : updateAvailable ? '有更新' : '';
+  const pluginStatus = waitingForTasks ? '等待任务结束后自动重启' : serverRestart === 'restarting' ? '远端服务正在重启…' : restarting ? '正在重启主机应用…' : updatingAll ? '正在完成更新…' : restart ? '待重启' : working ? (preparing ? '正在准备更新…' : data?.phase === 'downloading' || pending === 'install' || nativeState?.phase === 'downloading' ? '正在下载…' : pending === 'app' ? '更新中…' : '正在检查…')
     : error ? (['install', 'app'].includes(retryAction.current.action) ? '更新未完成' : '暂时无法检查更新')
       : appUpdateFailed ? '应用更新未完成'
       : !data ? '尚未读取更新信息' : unpublished ? data.notice || '更新通道尚未就绪'
@@ -452,7 +455,7 @@ export function UpdateLauncher({ host, wide = true }) {
               {nativeFailureInDetails && nativeFailure && <><p className="cmd-update-warning">应用更新尚未完成</p>{nativeFailure}{restart && !canAutoUpdate && <p className="cmd-update-warning">请先重启主机应用，使功能包生效，再重试应用更新。</p>}</>}
             </Dialog.Content>
           </Dialog.Root>
-          {!data && !error ? <Loading label="正在读取更新信息" compact /> : restart ? <div className="cmd-update-notice" role="status"><UIIcon name="check" size={16} /><span>{canAutoUpdate ? restarting ? '正在重启主机应用，更新后自动返回工作台' : updatingAll ? '功能包已就绪，正在完成主机应用更新' : data?.busy ? '功能包已就绪，任务结束后自动完成更新并重启' : error ? '功能包已就绪，更新尚未完成，请重试' : '功能包已就绪，即将自动完成更新并重启' : <>功能包已就绪，重启主机{serverDeployment ? '服务' : '应用'}后生效{data?.busy && '，请先结束运行中的任务'}</>}</span></div> : <>
+          {!data && !error ? <Loading label="正在读取更新信息" compact /> : restart ? <div className="cmd-update-notice" role="status"><UIIcon name="check" size={16} /><span>{serverRestart ? serverRestart === 'failed' ? '功能包已准备好，请重试重启服务' : waitingForTasks ? '任务结束后会自动重启远端服务' : '远端正在重启，连接恢复后会自动返回' : canAutoUpdate ? restarting ? '正在重启主机应用，更新后自动返回工作台' : updatingAll ? '功能包已就绪，正在完成主机应用更新' : data?.busy ? '功能包已就绪，任务结束后自动完成更新并重启' : error ? '功能包已就绪，更新尚未完成，请重试' : '功能包已就绪，即将自动完成更新并重启' : <>功能包已就绪，重启主机{serverDeployment ? '服务' : '应用'}后生效{data?.busy && '，请先结束运行中的任务'}</>}</span>{serverRestart === 'failed' && <button type="button" className="cmd-update-text-button" disabled={!!pending || !decision.enabled} onClick={() => void run('restart')}>重试重启</button>}</div> : <>
             {(installBlockReason && (updateAvailable || action === 'blocked' || action === 'deployment')) && <p className="cmd-update-warning" role="status">{installBlockReason}</p>}
             {data?.managed === false && !updateAvailable && <p className="cmd-update-warning">{serverManaged ? '此主机由服务器部署管理' : '当前安装方式需要新版应用才能启用功能包更新。'}</p>}
             <div className="cmd-update-actions"><BubbleTooltip label={actionable && (!enabled || appOnHost) ? installBlockReason || '当前暂不能更新' : undefined} portal><span className="cmd-update-action" tabIndex={actionable && (!enabled || appOnHost) ? 0 : undefined}>{actionable ? <HoldToUpdate key={holdKey} label={appUpdateFailed && enabled && !appOnHost ? '长按 2 秒重试' : undefined} disabled={!open || working || !enabled || appOnHost} onComplete={primary} /> : <button type="button" className="cmd-update-button cmd-update-check" disabled={working} onClick={() => void primary()}>{preparing ? '准备中…' : pending === 'install' || data?.phase === 'downloading' || nativeState?.phase === 'downloading' ? '下载中…' : pending === 'app' ? '更新中…' : working ? '检查中…' : '检查更新'}</button>}</span></BubbleTooltip>{updateAvailable && <button type="button" className="cmd-update-icon-button" aria-label="重新检查" disabled={working} onClick={() => void check()}><UIIcon name="refresh" size={16} /></button>}</div>
@@ -462,7 +465,7 @@ export function UpdateLauncher({ host, wide = true }) {
           : !serverDeployment && ['downloading', 'verifying', 'installing', 'ready'].includes(nativeState?.phase)
             ? <UpdateProgress native phase={nativeState.phase} progress={nativeState} observedAt={nativeState.observedAt} /> : null)}
         {!nativeFailureInDetails && nativeFailure}
-        {(error || (!unpublished && data?.error)) && <div className="cmd-update-error" role="alert"><span>{error || data.error}</span>{retryInstall ? <HoldToUpdate key={`retry:${holdKey}`} label="长按 2 秒重试" disabled={!open || working || !!data?.busy} onComplete={retry} /> : <button type="button" className="cmd-update-text-button" disabled={!!pending || (working && retryAction.current.action !== 'status')} onClick={() => void retry()}>重试</button>}</div>}
+        {(error || (!unpublished && data?.error)) && <div className="cmd-update-error" role="alert"><span>{error || data.error}</span>{serverRestart !== 'failed' && (retryInstall ? <HoldToUpdate key={`retry:${holdKey}`} label="长按 2 秒重试" disabled={!open || working || !!data?.busy && !data?.hostHealth} onComplete={retry} /> : <button type="button" className="cmd-update-text-button" disabled={!!pending || (working && retryAction.current.action !== 'status')} onClick={() => void retry()}>重试</button>)}</div>}
         <section className="cmd-update-source" aria-labelledby={`${id}-source`}>
           <div className="cmd-update-source-row"><label htmlFor={`${id}-source-select`} id={`${id}-source`}><LinkIconMedium kind="url" href="https://github.com" size={16} />更新来源</label><Select id={`${id}-source-select`} value={source} disabled={working || restart} onChange={event => { const value = event.target.value; setSource(value); setError(''); if (value !== 'custom') void configure(value); }}>{Object.entries(sourceNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></div>
           {source === 'custom' && <form className="cmd-update-custom" onSubmit={event => { event.preventDefault(); void configure('custom', event.currentTarget.elements.namedItem('mirrorUrl').value); }}><input name="mirrorUrl" type="url" required aria-label="自定义 HTTPS 镜像地址" placeholder="https://mirror.example.com/" value={mirrorUrl} disabled={working || restart} onChange={event => setMirrorUrl(event.target.value)} /><button type="submit" className="cmd-update-button" disabled={working || restart}>保存</button></form>}

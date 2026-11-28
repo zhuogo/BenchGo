@@ -18,6 +18,7 @@ test('cross-device sidebar persists scope and renders device states while retain
   const bundle = await build({ stdin: { resolveDir: root, loader: 'jsx', contents: `
     import React, {useState} from 'react';import {createRoot} from 'react-dom/client';
     import {Projects,setFixtureState} from './plugins/base/client/index.jsx';
+    import * as projectReceiver from './plugins/link/client/project-receiver.mjs';
     import {SessionDevicePicker} from './plugins/base/client/session-device-picker.jsx';
     import {ConversationContent} from './deepseek-harness/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx';
     import conversationCss from './deepseek-harness/packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css';
@@ -27,6 +28,7 @@ test('cross-device sidebar persists scope and renders device states while retain
     import themeBase from './deepseek-harness/packages/client/ui-theme/src/styles/base.css';
     import surfaces from './deepseek-harness/packages/client/ui-theme/src/styles/gradient-shadow-text.css';
     import {installIconSprite} from './deepseek-harness/packages/client/ui-theme/src/client/icon-sprite.ts';
+    window.fixtureProjectReceiver=projectReceiver;
     installIconSprite({effect:effect=>effect(),on(){}},undefined);
     moduleSource.update({base:true,harness:true,superagent:false,link:true});
     window.enableAssistant=()=>moduleSource.update({base:true,harness:true,superagent:true,link:true});
@@ -165,6 +167,7 @@ test('cross-device sidebar persists scope and renders device states while retain
         window.calls=[];const deviceId=new URLSearchParams(location.search).get('device');
         let items=[{workspaceId:'default-id',path:'/target/default',isDefault:true,sessionIds:['session-0']},{workspaceId:'same-id',path:'/target/project',sessionIds:['target-session']}];
         const remove=async id=>{const response=await fetch('/target-project-delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({deviceId,id})});const result=await response.json();if(!response.ok)throw Error(result.error);items=items.filter(item=>item.workspaceId!==id);};
+        const {createProjectReceiver,projectInput,projectPickerActions}=window.fixtureProjectReceiver;
         function installResourceReceiver${receiver};
         installResourceReceiver({sessions:{list:{getSnapshot:()=>({phase:'ready',ids:['session-0','target-session']})}},workspaces:{list:{getSnapshot:()=>({phase:'ready',items})},${deleteMode==='legacy'?'':'delete:remove,'}},uiWorkspace:{openSession:id=>window.calls.push({kind:'official',id})}}, {
           open:async id=>window.calls.push({kind:'native',id}),newSession:async id=>{window.calls.push({kind:'new',id});window.openFixtureConversation();},addProject:()=>window.calls.push({kind:'project'}),projectApi:async()=>({}),

@@ -76,8 +76,42 @@ test('opening artifacts and resolving reply files preserve shared state reads wh
 
 test('assistant conversation retains the official composer without a replacement slot', () => {
   const source = readFileSync(new URL('../client/conversation.jsx', import.meta.url), 'utf8');
-  assert.doesNotMatch(source, /InboxComposer|mountComposerInboxAdapter|<textarea|conversation\.composer/);
+  assert.doesNotMatch(source, /InboxComposer|mountComposerInboxAdapter|<textarea/);
   assert.match(source, /renderFactorySlot\('conversation\.content'/);
+});
+
+test('Router composer uses steering for every send gesture and preserves the official composer', () => {
+  let home = { channel: false };
+  const conversation = load('../client/conversation.jsx', { react: {
+    createContext: () => ({}), createElement: (component, props) => ({ component, props }),
+    useContext: () => home, useMemo: read => read(),
+  } });
+  const OfficialComposer = () => {};
+  const entry = { component: OfficialComposer, children: { 'conversation.input.attachments': {} } };
+  const effects = [], entries = [];
+  let changed;
+  conversation.mountAssistantConversation({
+    effect: effect => effects.push(effect),
+    slots: { entries: () => entries, subscribe: (_name, callback) => { changed = callback; return () => {}; } },
+  });
+  const dispose = effects[0]();
+  entries.push(entry);
+  changed();
+  const calls = [];
+  const keyboard = { submit: (...args) => calls.push(args) };
+  const props = { keyboard, useBusyEnter: select => select('queue') };
+  const router = entry.component(props);
+  assert.equal(router.component, OfficialComposer);
+  assert.equal(router.props.useBusyEnter(value => value), 'steer');
+  router.props.keyboard.submit('queue', 'enter');
+  router.props.keyboard.submit('steer', 'click');
+  assert.deepEqual(calls, [['steer', 'enter'], ['steer', 'click']]);
+  home = { channel: true };
+  assert.equal(entry.component(props).props.keyboard, keyboard);
+  home = null;
+  assert.equal(entry.component(props).props.useBusyEnter(value => value), 'queue');
+  dispose();
+  assert.equal(entry.component, OfficialComposer);
 });
 
 test('identity notification refreshes the sidebar snapshot even with a stale state read in flight', async () => {

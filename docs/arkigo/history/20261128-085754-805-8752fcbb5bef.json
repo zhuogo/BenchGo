@@ -1,0 +1,131 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T08:57:54.805Z",
+  "by": "codex",
+  "reason": "记录襄阳轻量项目入口的实机对照",
+  "base": "2cb3a851a7d1",
+  "result": "8752fcbb5bef",
+  "changes": [
+    {
+      "op": "update",
+      "id": "workbench.session",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "workbench.session",
+        "type": "flow",
+        "title": "打开项目、会话和产物",
+        "summary": "从项目导航进入所属设备，用真实会话处理任务和查看产物。",
+        "parent": "workbench",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "preview"
+          ],
+          "start": "find",
+          "steps": [
+            {
+              "action": "使用当前设备、全部设备或指定设备显示范围。跨设备列表通过 [[link.resources]] 查询。",
+              "failure": "加载失败或目标离线时保留来源并报告失败。项目登记成功后立即刷新所属设备的项目目录，打开新会话无需先等待完整侧栏状态。",
+              "id": "find",
+              "title": "定位项目与会话"
+            },
+            {
+              "action": "按资源所属设备进入会话。远端任务执行会话允许查看，并提供返回 A 工单的入口。",
+              "failure": "目标能力不足时保留解释，任务输入与控制从原工单办理。",
+              "id": "open",
+              "title": "打开真实会话"
+            },
+            {
+              "action": "官方会话由 [[workbench.official]] 处理。已选择的原生路由经 Commander 连接实际 Agent。",
+              "failure": "工具未安装、会话失联或协议不支持时明确报告。",
+              "id": "agent",
+              "title": "发送、审批或继续"
+            },
+            {
+              "action": "按会话最新工作目录校验文件授权，再按类型加载预览。本机文件操作和终端按 owner 权限挂载。",
+              "failure": "路径越界、内容超限或格式不支持时说明，保留合规的下载或其他入口。",
+              "id": "preview",
+              "title": "查看项目文件与产物"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "find",
+              "to": "open"
+            },
+            {
+              "from": "open",
+              "to": "agent"
+            },
+            {
+              "from": "agent",
+              "to": "preview"
+            }
+          ],
+          "trigger": "用户从工作台的项目、最近或归档列表进入。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/跨设备资源导航.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/产物快览.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/项目文件操作.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T08:47:44.676Z",
+              "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
+              "path": "plugins/link/src/devices/resources.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T08:47:44.676Z",
+              "hash": "b3419a52ec87ee08d96b6e616654550827ab64ca05c7fba952776ef430accb29",
+              "path": "plugins/harness/src/plugin.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T08:47:44.676Z",
+              "hash": "6094f5618fbe89d796654ce1e03731cb6446f41ebcd1cdd8f0acf2f49d8b2a2c",
+              "path": "plugins/base/workbench/src/project-files.mjs",
+              "symbol": "mountProjectFiles"
+            },
+            {
+              "checkedAt": "2026-11-28T08:47:44.676Z",
+              "hash": "0ebf22cdc8fabd263bad36202ca5260481c622f9b0429ef62abbc1ee8aededda",
+              "path": "plugins/base/workbench/src/media.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T08:47:44.676Z",
+              "hash": "8353a70ed9e86dc102d3de1788ed78ca1b3a3ba3e593de6751504340fe95dfb5",
+              "path": "plugins/link/client/resource-navigation.jsx",
+              "symbol": "useResourceNavigation"
+            },
+            {
+              "checkedAt": "2026-11-28T08:47:44.676Z",
+              "hash": "5ee91f9994f7ecb4fe77aa418d11a1c806594fc0b3f2dd5988a0fa615e4d8449",
+              "path": "plugins/base/client/index.jsx",
+              "symbol": "Projects"
+            }
+          ],
+          "note": "新增项目后立即刷新所属设备项目列表，并行打开新会话。资源刷新及项目弹窗浏览器回归通过。",
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

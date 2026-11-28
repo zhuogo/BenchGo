@@ -1,0 +1,224 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-27T05:40:36.586Z",
+  "by": "codex",
+  "reason": "记录主动派单上线和真实工单验收",
+  "base": "fd73f6bf1224",
+  "result": "4e749f643701",
+  "changes": [
+    {
+      "op": "update",
+      "id": "workbench.base.faults",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "workbench.base.faults",
+        "type": "module",
+        "title": "系统故障反馈",
+        "summary": "BenchGo 上报产品故障，BenchGo-Web 统一受理并在审批后推进试点。",
+        "parent": "workbench.base",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "boundaries": [
+            "反馈不包含会话内容、凭据、用户路径或原始日志。",
+            "Web 持有原工单。正式发版沿现有流程。",
+            "回执凭据保存在受保护的运行配置。普通功能故障使用固定任务模板。"
+          ],
+          "responsibilities": [
+            "自动反馈启用后，只上报受支持的产品内部异常。现场配置问题由工作台提示。断网重试，重复报告归并。",
+            "BenchGo-Web 自定义服务主动把普通功能故障工单提交给襄阳现有 BenchGo API，由 Router 分配 Worker 核实。Worker 回执写回原工单。",
+            "襄阳复用 SuperAgent 配置。Web 审核通过后按候选提交执行试点，维护者在 GitHub 合并。"
+          ]
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "804b2bdae73bad88c6925d8e241a6dabc13c7551090a5c0a5fb456941576b2e9",
+              "path": "plugins/base/src/fault-feedback.mjs",
+              "symbol": "createFaultFeedback"
+            },
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+              "path": "benchgo-web/services/feedback/main.go",
+              "symbol": "submitFault"
+            },
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "localAssistant"
+            },
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "tick"
+            }
+          ],
+          "note": "测试工单 #12 完成上报、领单、襄阳现有 SuperAgent API 与 Codex Worker 只读核实、证据不足关单、重复回执和队列空闲回读。本轮用验收脚本转交实际回执。已在本地外部执行器补上从已完成任务读取关单结果，实测可读取 #12 的结论。常驻执行器未启用，确认缺陷后的审批、试点、PR 尚未端到端验收。",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.base.faults.review",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "workbench.base.faults.review",
+        "type": "rule",
+        "title": "审核内容和提交绑定",
+        "summary": "审核展示问题、修复方案和修复后的情景演练。",
+        "parent": "workbench.base.faults",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "问题一句话加括号里的实际用户操作与结果，多条按序号列出。修复方案采用最小可行改动，情景演练写原操作和预期结果，两块沿用问题序号。在原单回填实际试点结果。审批绑定候选提交与试点范围，变更后重审。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-27T03:33:44.298Z",
+              "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+              "path": "benchgo-web/services/feedback/main.go",
+              "symbol": "approveWorkflow"
+            },
+            {
+              "checkedAt": "2026-11-27T03:33:44.298Z",
+              "hash": "efd6d6a27e4af644c6e8b7f903abeeed786ca5629062627d0275a1509a76b8ed",
+              "path": "benchgo-web/.draftgo/worktree/pages/page_24.html",
+              "symbol": "refreshFaultReview"
+            }
+          ],
+          "note": "在线测试工单验证管理员权限、审批幂等、候选 SHA 不符拒绝、失败回填。浏览器使用模拟数据验证三块内容、取消审批、提交与试点绑定、证据不足时隐藏审批。真实候选的成功试点及 PR 回填还未验收。",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.base.faults.triage",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "workbench.base.faults.triage",
+        "type": "rule",
+        "title": "显示每次研判结论",
+        "summary": "研判结果直接回填原工单。已确认缺陷且三段结果齐备后进入待审核。",
+        "parent": "workbench.base.faults",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "问题不成立、配置问题、证据不足无法复现均直接关闭并保留理由和核实依据。证据不足以「已关闭 · 证据不足」结束该工单流程，无需重开、重试或审核。确认缺陷且候选修复已准备好才进入待审核。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          },
+          {
+            "kind": "conversation",
+            "ref": "用户确认：证据不足直接关单，无需后续操作"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+              "path": "benchgo-web/services/feedback/main.go",
+              "symbol": "applyExecutionResult"
+            },
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+              "path": "benchgo-web/services/feedback/main.go",
+              "symbol": "syncTicket"
+            },
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "readTaskClosure"
+            }
+          ],
+          "note": "在襄阳现有 API 上对测试工单 #12 执行 24 项定向测试，全部通过且未复现。原单回读为已关闭，保留证据不足原因。重复结果幂等，关单后不再领出。外部执行器新增读取已完成任务的关单结果，验证了来源请求校验。常驻执行器和确认缺陷分支仍待联调。",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.base.faults.worktree",
+      "fields": [
+        "body.constraint",
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "workbench.base.faults.worktree",
+        "type": "rule",
+        "title": "每张工单独立 worktree",
+        "summary": "同一工单在襄阳复用自己的修复分支和工作区。",
+        "parent": "workbench.base.faults",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "从登记的仓库拉取并记录基准提交。Worker 为每张工单准备独立 worktree 和修复分支。同一工单在后续试点继续使用该 worktree。Web 批准试点后按已审批提交验证。通过后推送候选、创建 PR 并回填链接。GitHub 由维护者合并，正式发布沿现有流程。"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-26 对话确认的 BenchGo 自动故障反馈与维护流程"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "worktree"
+            },
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "triage"
+            },
+            {
+              "checkedAt": "2026-11-27T03:27:47.942Z",
+              "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
+              "path": "benchgo-web/services/feedback/executor.mjs",
+              "symbol": "pilotResult"
+            }
+          ],
+          "note": "只读探针从指定 worktree 返回随机标记与基准提交，测试工单 #12 在单独分支的 worktree 执行 24 项侧栏测试。现有 SuperAgent 任务没有系统级绑定工作区，实际执行用提示词指定路径。验收分支、worktree 和模拟工单已清理。修改候选、审批后试点和 PR 回填待验收。",
+          "status": "partial"
+        }
+      }
+    }
+  ]
+}

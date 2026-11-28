@@ -647,6 +647,13 @@
                 "type": "object",
                 "additionalProperties": true
               },
+              "resetThread": {
+                "type": "object",
+                "properties": {
+                  "threadId": { "type": "string" }
+                },
+                "required": ["threadId"]
+              },
               "review": {
                 "type": "object",
                 "additionalProperties": true
@@ -2321,6 +2328,7 @@
               "renameThread",
               "requestState",
               "resetMain",
+              "resetThread",
               "review",
               "reviewClaim",
               "reviewComplete",

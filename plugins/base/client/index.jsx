@@ -74,9 +74,11 @@ async function workerArchiveRequest(action, args) {
 let stateSignature, stateRequest = 0, readOwnershipIds;
 async function refresh(signal) {
   const request = ++stateRequest, ownershipVerifiedIds = readOwnershipIds?.();
-  const next = await api('state', {}, AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(STATE_TIMEOUT_MS)]));
-  signal?.throwIfAborted();
+  let next;
+  try { next = await api('state', {}, AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(STATE_TIMEOUT_MS)])); }
+  catch (error) { if (request !== stateRequest) return; throw error; }
   if (request !== stateRequest) return;
+  signal?.throwIfAborted();
   if (ownershipVerifiedIds) next.ownershipVerifiedIds = ownershipVerifiedIds;
   const signature = JSON.stringify(next);
   if (signature === stateSignature && data.loaded && !data.error) return;
@@ -515,7 +517,7 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
         const result = await projectDeleteAccess.bridge.api('deleteProject', { id, path: project.path });
         if (result?.deleted !== true || result.id !== id) throw Error('所属设备未确认项目删除，请刷新后核验');
         if (remoteTarget?.device.id === project.deviceId && (remoteTarget.resource.kind === 'projects' && remoteTarget.resource.resourceId === id || remoteTarget.resource.projectId === id)) setRemoteTarget(null);
-        navigation.retry();
+        navigation.refreshProjects(project.device);
       } else { await host.workspaces.delete(project.id); if (data.projectId === project.id) newSession(); await refresh(); }
       setConfirmProjectDelete(null); setProjectDeleteAccess(null);
     }
@@ -577,10 +579,15 @@ function Projects({ host, open, newSession, ensureRecent, expandSidebar, renderS
     </div>}
     <SessionDevicePicker directory={parentSessionDevices || (remoteTarget ? null : sessionDevices)} onSelect={selectSessionDevice} />
     <ResourceStage target={remoteTarget} onClose={() => setRemoteTarget(null)} sessionDevices={sessionDevices} onSessionDevice={selectSessionDevice} />
-    {addingProject && <ResourceCreationDialog navigation={modules.link ? navigation : { ...navigation, enabled: false }} api={api} onClose={() => setAddingProject(false)} onSelected={async (project, device) => {
-      if (device.id === navigation.activeId) { await refresh(); await newLocalSession(project.id, true); }
-      else openRemote(device, { kind: 'projects', resourceId: project.id, intent: 'newSession' });
+    {addingProject && <ResourceCreationDialog navigation={modules.link ? navigation : { ...navigation, enabled: false }} api={api} onClose={() => setAddingProject(false)} onSelected={(project, device) => {
       setAddingProject(false);
+      if (device.id === navigation.activeId) {
+        void newLocalSession(project.id, true).catch(cause => setError(cause.message));
+        void refresh().catch(cause => setError(current => current || connectionMessage(cause)));
+      } else {
+        openRemote(device, { kind: 'projects', resourceId: project.id, intent: 'newSession' });
+        navigation.refreshProjects(device);
+      }
     }} />}
     <Menu open={wide && !showArchived && !!actionSession} onClose={() => { if(!busy)setActionSession(null); }} anchor={null} anchorRef={actionAnchor} side="right" align="end" portal autoFocus compact listClassName="cmd-actions-popover">
       {currentActionSession && <>

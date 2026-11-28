@@ -1,0 +1,42 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T04:30:05.872Z",
+  "by": "codex",
+  "reason": "记录 Router 固定插队与下一轮切换模型的实现和验收",
+  "base": "c74861896ff7",
+  "result": "9ba53897075d",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.ingress.router-steering",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "assistant.ingress.router-steering",
+        "type": "rule",
+        "title": "Router 固定插队发送",
+        "summary": "主聊与手动旁聊固定插队，运行中切换模型在下一轮对话生效。",
+        "parent": "assistant.ingress",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "发送按钮和快捷键使用插队模式。已经开始的回合继续使用原模型，下一轮读取新保存的模型配置。",
+          "when": "用户向主聊或手动旁聊发送消息。"
+        }
+      }
+    },
+    {
+      "op": "add",
+      "id": "assistant.ingress.router-steering-check"
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "assistant.ingress.router-steering-check",
+        "to": "assistant.ingress.router-steering",
+        "type": "verifies"
+      }
+    }
+  ]
+}

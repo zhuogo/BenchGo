@@ -1,0 +1,100 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T10:55:00.637Z",
+  "by": "ai",
+  "reason": "补充襄阳真实远端代理与隔离项目登记验收",
+  "base": "cfcf6eef157f",
+  "result": "2aeff99aedc0",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.context.tool-refresh-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "assistant.context.tool-refresh-check",
+        "type": "acceptance",
+        "title": "真实工具发布与 Router 关闭正常收敛",
+        "summary": "真实 Cordis 和工具服务下，无关工具登记及作用域销毁可结束。",
+        "parent": "assistant.context",
+        "status": "accepted",
+        "origin": "code",
+        "body": {
+          "given": [
+            "真实 Cordis、官方工具服务及 dsh-ops 工具发布"
+          ],
+          "then": [
+            "不反复发布相同工具限制",
+            "保留定义身份核对与多个 Router 隔离"
+          ],
+          "when": "登记无关工具并关闭 Router 作用域"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "plugins/superagent/test/router-permissions.test.mjs"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-28T10:42:50.721Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/router-permissions.test.mjs"
+            }
+          ],
+          "note": "2026-11-28 定向测试中 Router 权限、Link 选路、项目桥、会话续签与跨设备集成共 85 项通过。襄阳替换旧进程后，服务器本机连续 30 次请求全部返回 200，耗时 7–129 毫秒。",
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.tls-deadline-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "link.connect.tls-deadline-check",
+        "type": "acceptance",
+        "title": "挂起的 TLS 握手按期退出",
+        "summary": "TCP 已连接而 TLS 挂起时，请求超时与取消仍能结算。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "code",
+        "body": {
+          "given": [
+            "测试服务接受 TCP 并挂起 TLS 握手"
+          ],
+          "then": [
+            "请求按期失败并回收连接",
+            "指纹核对失败时不发送 HTTP 凭据"
+          ],
+          "when": "请求期限到达、主动取消或关闭共享连接池"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/routes.test.mjs"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-28T10:42:50.721Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/routes.test.mjs"
+            }
+          ],
+          "note": "2026-11-28 routes.test.mjs 的挂起握手、取消与连接池关闭回归通过，包含在 85 项定向测试内。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

@@ -68,9 +68,11 @@ async function install() {
         }
         const release = await helper.prepareRelease({ directory: incoming, root: join(profile, '.benchgo/releases'), version: manifest.pluginVersion, runtime });
         const dataDir = installed?.dataDir ?? join(base, 'data');
+        let previousVersion;
         const webPort = installed?.webPort ?? await freePort(), port = installed?.port ?? await initializeServerLink(join(dataDir, 'link'));
         if (!installed) await atomic(join(profile, 'cordis.patch.yml'), ['- id: commander', '  config:', '    dataDir: ' + JSON.stringify(dataDir), '- id: commander-link', '  config:', '    directory: ' + JSON.stringify(join(dataDir, 'link')), '- id: session-telemetry-otel', '  disabled: true', ''].join('\n'));
         if (installed) {
+          previousVersion = (await helper.getInstallState(profile)).version ?? installed.pluginVersion;
           const active = await authorize(installed, false);
           const state = await linkJson(installed, '/link/api/rpc', { action: 'state' }, active.token);
           await ownerAdmin(installed, { action: 'revoke', id: active.deviceId });
@@ -80,6 +82,9 @@ async function install() {
           requireAssistant = modules?.modules?.superagent?.available === true || guard?.isFile() && guard.size === 0;
         }
         await helper.activateRelease({ profile, runtime, release, enabled: true, appVersion: null, migrateLegacy: true });
+        if (previousVersion) await atomic(join(dataDir, 'update-restart.json'), JSON.stringify({
+          previous: previousVersion, target: manifest.pluginVersion, assistant: requireAssistant, requested: true,
+        }));
         installed = { schemaVersion: 1, harnessVersion: manifest.harnessVersion, pluginVersion: manifest.pluginVersion, runtime, profile, dataDir, webPort, port };
         await atomic(stateFile, JSON.stringify(installed));
         const launcher = '(' + launchServer.toString() + ')(' + [process.execPath, runtime, ownerFile, base, webPort, dataDir].map(value => JSON.stringify(value)).join(',') + ', ' + recoverAssistantGuard.toString() + ');';
@@ -96,6 +101,8 @@ async function install() {
     if (operation === 'update') await waitForUpdatedService(installed.port, () => ownerAdmin(installed, { action: 'status' }), wait, async () => {
       const state = await ownerRequest(installed, '/api/commander', { action: 'state' });
       if (!Array.isArray(state.projects) || !Array.isArray(state.sessions)) throw new Error('服务器工作台状态异常');
+      const update = await ownerRequest(installed, '/api/commander/updates', { action: 'status' });
+      if (update.current?.plugin !== installed.pluginVersion || update.restartRequired) throw new Error('服务器尚未加载目标功能包');
       if (requireAssistant) {
         const modules = await ownerRequest(installed, '/api/benchgo/modules');
         if (modules?.modules?.superagent?.available !== true) throw new Error('服务器总助手尚未就绪');

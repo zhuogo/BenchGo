@@ -1,0 +1,211 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T12:13:43.398Z",
+  "by": "ai",
+  "reason": "记录七十三项回归与襄阳真实长连接并发验证结果",
+  "base": "c8f88603158e",
+  "result": "d69d1d5fd3ca",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.connect.tls-deadline",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "link.connect.tls-deadline",
+        "type": "rule",
+        "title": "TLS 握手受请求期限约束",
+        "summary": "握手挂起时按期结束请求，取消和连接池关闭同步回收连接。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "code",
+        "body": {
+          "constraint": "请求期限覆盖 TLS 握手。桌面代理的 HTTP 和多路复用流将取消信号传至握手连接。取消、超时或连接池关闭时结束未交付 socket 的等待，完成指纹校验后才发送 HTTP 凭据。HTTP 与流的连接阶段均包含连接池排队，到期立即结算下游并取消上游。",
+          "when": "通过固定证书指纹访问远端 HTTPS"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/设计.md",
+            "symbol": "连接与信任模型"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T12:10:26.852Z",
+              "hash": "d47c893ddf155db4ce70ab03761357c24e9d94b19c920f0739958872d0c83e47",
+              "path": "plugins/link/src/devices/remote.mjs",
+              "symbol": "remoteAgent / remoteJson"
+            },
+            {
+              "checkedAt": "2026-11-28T12:10:26.852Z",
+              "hash": "427a6658c5f9a46f77563c27a9eb152e49eb9046610a0ef30d4c9dd6dfa20d7c",
+              "path": "plugins/link/src/devices/proxy.mjs",
+              "symbol": "createDeviceProxy / forward"
+            }
+          ],
+          "note": "代理 HTTP、流取消会回收尚未交付的 TLS socket。HTTP 排队也受九十秒连接期限约束，主动结束下游以覆盖 Node 延迟分配 socket 的情况。",
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.tls-deadline-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "link.connect.tls-deadline-check",
+        "type": "acceptance",
+        "title": "挂起的 TLS 握手按期退出",
+        "summary": "TCP 已连接而 TLS 挂起时，请求超时与取消仍能结算。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "code",
+        "body": {
+          "given": [
+            "测试服务接受 TCP 并挂起 TLS 握手",
+            "共享连接池已被六十四条长流占满"
+          ],
+          "then": [
+            "请求按期失败并回收连接",
+            "代理 HTTP 与流的主动取消在五百毫秒内释放握手连接",
+            "排队中的 HTTP 到期返回 502 且不抵达上游",
+            "指纹核对失败时不发送 HTTP 凭据"
+          ],
+          "when": "请求期限到达、主动取消或关闭共享连接池"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/routes.test.mjs"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-28T12:10:26.852Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-transport.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/routes.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/base/test/sidebar-refresh.test.mjs"
+            }
+          ],
+          "note": "2026-11-28 本轮定向测试七十二项全部通过，覆盖真实挂起 TLS 的 HTTP 和流取消、六十四条长流占满连接池后的 HTTP 排队到期、旧 WebSocket 关闭及迟到消息隔离。整理代码后重新运行四项新增回归全部通过。构建、npm run check 和 git diff --check 通过。真实模型首条回复和长期稳定性尚未验收。",
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.workbench-recovery",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "link.connect.workbench-recovery",
+        "type": "rule",
+        "title": "工作台会话失效后恢复",
+        "summary": "配对有效时自动恢复当前工作台会话。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "桌面代理沿已核验路线重新签发失效会话，并合并并发续签。只读首屏请求可重试一次，写操作由用户决定是否重试。已撤销配对仍须重新配对。浏览器按 WebSocket 归属处理消息和关闭事件，旧连接的迟到事件仅影响原连接上的流。"
+        },
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T12:10:26.852Z",
+              "hash": "427a6658c5f9a46f77563c27a9eb152e49eb9046610a0ef30d4c9dd6dfa20d7c",
+              "path": "plugins/link/src/devices/proxy.mjs",
+              "symbol": "createDeviceProxy / recover"
+            },
+            {
+              "checkedAt": "2026-11-28T12:10:26.852Z",
+              "hash": "de8678ea5bb038b45f54b2c8040f11afd026a2dc2ce96ff45b41695cea07f579",
+              "path": "plugins/link/src/transport/workbench.mjs",
+              "symbol": "createWorkbench"
+            },
+            {
+              "checkedAt": "2026-11-28T12:10:26.852Z",
+              "hash": "8913509b894f63f74d59deb3a0f72673a8d23567a7f347ca4017bbac01b97e97",
+              "path": "plugins/link/client/workbench-bridge.mjs",
+              "symbol": "localConnection / localLines"
+            }
+          ],
+          "note": "HTTP 与多路复用流共享会话恢复。仅在开流前明确会话过期时恢复并重开一次，取消后停止执行，应用 401 原样保留。续签网络失败保留状态并冷却五秒。代理连接阶段有含排队在内的九十秒上限。浏览器流记录所属 WebSocket 并隔离旧连接消息与关闭事件。",
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.workbench-recovery-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "link.connect.workbench-recovery-check",
+        "type": "acceptance",
+        "title": "验证工作台续签",
+        "summary": "确认有效配对可以恢复，撤销仍然生效。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "已配对桌面代理持有失效工作台会话"
+          ],
+          "then": [
+            "只发起一次续签，读取恢复",
+            "写入不自动重新发送，撤销配对后返回授权失败"
+          ],
+          "when": "同时读项目、总助手和工作台入口"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/跨设备资源导航.md"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-28T12:10:26.852Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-sessions.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-transport.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/device-switch-browser.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-recovery-browser.test.mjs"
+            }
+          ],
+          "note": "2026-11-28 本轮七十二项定向测试全部通过。包含十一项会话续签测试、浏览器真实设备切换与恢复测试、侧栏刷新与性能、Router 权限回归和四项新增传输回归。旧 WebSocket 关闭及迟到帧不再中断新流。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

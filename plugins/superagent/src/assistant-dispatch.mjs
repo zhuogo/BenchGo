@@ -204,6 +204,7 @@ export function createAssistantDispatch(runtime) {
         if (threadId !== 'main') throw new Error('仅支持清理主聊天');
         return engine.resetMain();
       }
+      case 'resetThread': return engine.resetThread(threadId);
       case 'createThread': return engine.createThread({ title: input.title });
       case 'renameThread': return engine.updateThread(threadId, { title: input.title });
       case 'archiveThread': return engine.updateThread(threadId, { archived: input.archived ?? true }, { stopActivity: input.stopActivity === true });

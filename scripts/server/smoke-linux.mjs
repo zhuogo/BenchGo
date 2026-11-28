@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { ownerScript } from '../../plugins/link/src/server/owner-command.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tar = createRequire(join(root, 'plugins/base/package.json'))('tar');
@@ -164,6 +165,25 @@ export async function smokeLinuxServer({ directory = join(root, 'artifacts/linux
       catch (error) { initialAssistantError = error; await pause(500); }
     }
     if (initialAssistantError) throw initialAssistantError;
+    const owner = async input => parseSmokePrivateJson(await asUser('Call installed host management', [process.execPath, '--input-type=module', '-e',
+      ownerScript({ ...input, expectedHostId: `sha256:${connection.pin}` })]));
+    const beforeRestart = await owner({ action: 'health', requireAssistant: true });
+    if (!beforeRestart.ready || !beforeRestart.assistant || !beforeRestart.instanceId) throw new Error('Managed server restart is unavailable');
+    // systemd may stop the responder before the accepted request reaches SSH.
+    await owner({ action: 'updates', operation: 'restart-host' }).catch(() => null);
+    let restarted = false;
+    const restartDeadline = Date.now() + 180_000;
+    while (Date.now() < restartDeadline) {
+      await pause(1000);
+      const health = await owner({ action: 'health', requireAssistant: true }).catch(() => null);
+      if (health?.ready && health.assistant && health.instanceId && health.instanceId !== beforeRestart.instanceId && health.version === receipt.pluginVersion) {
+        restarted = true;
+        break;
+      }
+    }
+    if (!restarted) throw new Error('Managed server restart did not restore the target workbench and assistant');
+    await assertAuthenticatedState(connection, cert);
+    await assertAssistantWorkbench(connection, cert);
     const assistantDir = join(installation.dataDir, 'assistant');
     await asUser('Simulate an interrupted writer lock', [process.execPath, '--input-type=module', '-e',
       'import { writeFile, utimes } from "node:fs/promises"; const path = process.argv[1]; await writeFile(path, "", { flag: "wx", mode: 0o600 }); const old = new Date(Date.now() - 10000); await utimes(path, old, old);', join(assistantDir, 'owner-guard.lock')]);
@@ -200,7 +220,7 @@ export async function smokeLinuxServer({ directory = join(root, 'artifacts/linux
   if (failure) throw failure;
   receipt.verified.push(installVerification);
   receipt.installSmoke = { kind: 'fresh-user-systemd', registry: 'https://registry.npmjs.org', engine: upstream.version,
-    checks: ['shipped-installer', 'fresh-npm-runtime', 'systemd-active', 'link-tls-pin', 'unauthenticated-rejected', 'authenticated-state', 'systemd-restart', 'shipped-updater', 'empty-guard-recovery', 'paired-superagent', 'isolated-user-cleanup'] };
+    checks: ['shipped-installer', 'fresh-npm-runtime', 'systemd-active', 'link-tls-pin', 'unauthenticated-rejected', 'authenticated-state', 'managed-restart-host', 'new-service-instance', 'systemd-restart', 'shipped-updater', 'empty-guard-recovery', 'paired-superagent', 'isolated-user-cleanup'] };
   await writeReceipt(directory, receipt);
   return { verified: installVerification, sourceSha, platform: 'linux', arch: 'x64', version: receipt.version };
 }

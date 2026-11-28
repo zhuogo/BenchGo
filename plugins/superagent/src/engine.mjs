@@ -43,7 +43,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   const appendRecord = appendChatRecord ?? appendPluginRecord;
   const nativeSubmissions = new Map();
   const archivingThreads = new Set();
-  const activeRoutes = new WeakMap();
+  const resettingThreads = new Map();
   const lifecycle = new AbortController();
   const agentCompaction = new Map();
   const routeCompaction = createAuxiliaryCompactionHook({ getConfig: () => store.getConfig(), dispatch: options => ctx.llm.stream(options),
@@ -56,7 +56,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     if (options.purpose !== 'compaction' || ![...handles.values()].some(handle => handle.agent.id === options.sessionId)) return next();
     return routeCompaction(options, next);
   });
-  let stopped = false, stateQueue = Promise.resolve(), threadCreationQueue = Promise.resolve(), disposal, resettingMain, recoveringMain;
+  let stopped = false, stateQueue = Promise.resolve(), threadCreationQueue = Promise.resolve(), disposal, recoveringMain;
   const assertOpen = () => { if (stopped) throw new Error('总助手已关闭'); };
   const emit = event => { for (const listener of listeners) { try { listener(copy(event)); } catch { /* Observers cannot interrupt the engine. */ } } };
   const historyCache = new Map();
@@ -195,7 +195,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   function replaySessionIds(state, threadId, sourceSessionId) {
     const record = threadFromState(state, threadId);
     if (!record || record.archived || record.sourceKey || record.sessionId !== sourceSessionId
-      || (threadId === 'main' && resettingMain) || archivingThreads.has(threadId)) return null;
+      || resettingThreads.has(threadId) || archivingThreads.has(threadId)) return null;
     return ownerSessionIds(state, record);
   }
   function canRecoverResultClaim(state, row, sessionId) {
@@ -243,7 +243,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     get inbox() { return inbox; } });
   const sessionRuntime = { ctx, store, now, cooldownMs, builtinLayer, Compaction, appendRecord, appendChatRecord, setupTools, scheduleBridge, onSourceMessage, emit, mark,
     timings, thread, taskOwnerScope, mayReplyToTask, isStopped: () => stopped, cooldowns, errors, failures, models,
-    activeRoutes, agentCompaction,
+    agentCompaction,
     get inbox() { return inbox; } };
   async function prepareRouterMessage(agent, message, { recovery = false } = {}) {
     const config = await store.getConfig();
@@ -269,6 +269,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
   const inbox = createMessageInbox({
     getState: () => store.getState(), updateState, ensureSession,
     getAgent: threadId => {
+      if (threadId !== 'main' && resettingThreads.has(threadId)) return undefined;
       const handle = handles.get(threadId);
       return handle && ctx.agents.get(handle.agent.id) === handle.agent && (!handle.current || handle.current()) ? handle.agent : undefined;
     },
@@ -298,31 +299,48 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     const item = await sideThreadFor(sessionId);
     if (item) await inbox.cancel(item.id);
   }, { global: true });
-  async function resetMainSession({ allowCurrentSend = false } = {}) {
+  async function resetThreadSession(threadId, { allowCurrentSend = false } = {}) {
     assertOpen();
-    if (recoveringMain) await recoveringMain;
-    if (resettingMain) return resettingMain;
-    if (handles.get('main')?.agent.status === 'running' || (sending.has('main') && !allowCurrentSend)) throw new Error('请先停止正在运行的主聊天');
+    const main = threadId === 'main';
+    if (main && recoveringMain) await recoveringMain;
+    if (resettingThreads.has(threadId)) return resettingThreads.get(threadId);
+    if (archivingThreads.has(threadId)) throw new Error('旁聊正在归档');
+    const activeError = () => new Error(main ? '请先停止正在运行的主聊天' : '请先停止正在运行或排队的旁聊');
+    if (handles.get(threadId)?.agent.status === 'running' || (sending.has(threadId) && !allowCurrentSend)) throw activeError();
     const operation = (async () => {
       // Finish any accepted setup before releasing its writer. New ensures
       // wait for this reset instead of reusing an agent being disposed.
-      await pending.get('main');
-      const handle = handles.get('main');
-      if (handle?.agent.status === 'running') throw new Error('请先停止正在运行的主聊天');
-      handles.delete('main');
-      errors.delete('main'); failures.delete('main'); models.delete('main'); agentCompaction.delete('main');
+      await pending.get(threadId);
+      if (!main) {
+        const record = await thread(threadId);
+        if (record.sourceKey) throw new Error('渠道聊天由原渠道管理');
+        if (record.archived) throw new Error('请先恢复已归档的旁聊');
+        if (await inbox.hasPending(threadId)) throw activeError();
+        const agent = record.sessionId && ctx.agents.get(record.sessionId);
+        if (nativeSubmissions.has(record.sessionId) || agent?.status === 'running'
+          || agent?.inbox.nextTurn.length || agent?.inbox.nextStep.length) throw activeError();
+      }
+      const handle = handles.get(threadId);
+      if (handle?.agent.status === 'running') throw activeError();
+      handles.delete(threadId);
+      errors.delete(threadId); failures.delete(threadId); models.delete(threadId); agentCompaction.delete(threadId);
       await handle?.dispose();
-      await inbox.cancel('main');
-      await onClearMain?.();
+      if (main) {
+        await inbox.cancel(threadId);
+        await onClearMain?.();
+      }
       // Keep IDs as durable cancellation and deduplication receipts after clear.
-      await updateState(state => ({ mainSessionId: null, sessionLineage: {
-        ...(state.sessionLineage || {}),
-        main: [...new Set([...(state.sessionLineage?.main || []), state.mainSessionId].filter(Boolean))],
-      } }));
+      await updateState(state => ({
+        ...(main ? { mainSessionId: null }
+          : { threads: state.threads.map(item => item.id === threadId ? { ...item, sessionId: null } : item) }),
+        sessionLineage: { ...(state.sessionLineage || {}),
+          [threadId]: ownerSessionIds(state, threadFromState(state, threadId)),
+        },
+      }));
       return { cleared: true };
     })();
-    resettingMain = operation;
-    try { return await operation; } finally { resettingMain = undefined; }
+    resettingThreads.set(threadId, operation);
+    try { return await operation; } finally { resettingThreads.delete(threadId); }
   }
   async function restoreActiveRouter(record) {
     const registry = typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : ctx.workspaceRegistry;
@@ -336,7 +354,10 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     if (stopped) throw new Error('总助手已关闭');
     if (archivingThreads.has(threadId)) throw new Error('旁聊正在归档');
     if (threadId === 'main' && recoveringMain && !recovery) { await recoveringMain; return ensureSession({ threadId }); }
-    if (threadId === 'main' && resettingMain) { await resettingMain; return ensureSession({ threadId }); }
+    if (resettingThreads.has(threadId)) {
+      await resettingThreads.get(threadId).catch(() => {});
+      return ensureSession({ threadId, recovery, recoveredEvidence });
+    }
     if (handles.has(threadId)) {
       const handle = handles.get(threadId);
       if (ctx.agents.get(handle.agent.id) !== handle.agent || handle.current && !handle.current()) {
@@ -346,28 +367,32 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       }
       const record = await thread(threadId);
       if (record.archived) throw new Error('请先恢复已归档的旁聊');
-      if (handles.get(threadId) !== handle || (threadId === 'main' && resettingMain)) return ensureSession({ threadId });
+      if (handles.get(threadId) !== handle || resettingThreads.has(threadId)) return ensureSession({ threadId });
       await restoreActiveRouter(record);
       if (handle.agent.status !== 'running') await liveSessionRole(handle.agent)?.reconcile();
+      if (handles.get(threadId) !== handle || resettingThreads.has(threadId)) return ensureSession({ threadId });
       return handle.agent;
     }
     if (pending.has(threadId)) return pending.get(threadId);
     const operation = (async () => {
       let record = await thread(threadId);
       if (record.archived) throw new Error('请先恢复已归档的旁聊');
-      // Persist identity before creating a writer, so concurrent callers share one main session.
+      let freshSessionId;
+      // Persist identity before creating a writer, so concurrent callers share one session.
       if (!record.sessionId) {
+        if (!recovery) freshSessionId = randomUUID();
         await updateState(state => threadId === 'main'
-          ? { mainSessionId: state.mainSessionId || randomUUID() }
-          : { threads: state.threads.map(item => item.id === threadId ? { ...item, sessionId: item.sessionId || randomUUID() } : item) });
+          ? { mainSessionId: state.mainSessionId || freshSessionId || randomUUID() }
+          : { threads: state.threads.map(item => item.id === threadId ? { ...item, sessionId: item.sessionId || freshSessionId || randomUUID() } : item) });
         record = await thread(threadId);
       }
       await updateState(state => ({ sessionLineage: { ...(state.sessionLineage || {}),
         [threadId]: [...new Set([...(state.sessionLineage?.[threadId] || []), record.sessionId])],
       } }));
       await restoreActiveRouter(record);
-      const sessions = await ctx.sessionQuery.listSessions();
-      const savedSession = sessions.find(item => item.header.id === record.sessionId);
+      // Only a UUID allocated by this setup can skip looking for a saved session.
+      const savedSession = record.sessionId === freshSessionId ? undefined
+        : (await ctx.sessionQuery.listSessions()).find(item => item.header.id === record.sessionId);
       if (recovery && !savedSession) throw new Error('Router 持久会话缺失，不能以空白会话替代恢复');
       const presets = ctx.get?.('agentPresets');
       const role = await createSessionRoleAssembly({ ctx, database: store.orchestration,
@@ -457,7 +482,10 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       }
       signal?.throwIfAborted();
       const threadId = state.mainSessionId === request.sessionId ? 'main' : state.threads.find(item => item.sessionId === request.sessionId).id;
+      const clearing = () => new RemoteError('session/agent-busy', '旁聊正在清理，请在新会话中重试', {});
+      if (threadId !== 'main' && resettingThreads.has(threadId)) throw clearing();
       const agent = await ensureSession({ threadId });
+      if (threadId !== 'main' && agent.id !== request.sessionId) throw clearing();
       if ((await thread(threadId)).sourceKey) {
         if (!onSourceMessage) throw new RemoteError('session/agent-busy', 'Source conversation input routing is unavailable', { reason: 'SOURCE_INPUT_ROUTE_UNAVAILABLE' });
         return dispatch();
@@ -476,20 +504,11 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       if (prior) route = await reconcileRoutedReasoning(ctx.llm, route, signal);
       signal?.throwIfAborted();
       const previous = agent.model.current();
-      const activeRoute = activeRoutes.get(agent);
-      if (agent.status === 'running' && request.mode === 'steer' && (previous?.provider !== route[0].providerId || previous?.model !== route[0].modelId
-        || previous?.reasoningEffort !== route[0].options?.reasoningEffort || activeRoute && JSON.stringify(route) !== JSON.stringify(activeRoute.models.slice(activeRoute.index)))) {
-        throw new RemoteError('session/agent-busy', '当前回合的模型队列已冻结；切换模型后请使用排队发送，或等待当前回合结束', { reason: 'NATIVE_STEER_MODEL_CHANGED' });
-      }
-      const hasImage = Array.isArray(request.content) && request.content.some(part => part?.type === 'image'
-        || part?.type === 'file' && ctx.get?.('fileUploads')?.resolve(agent, part.receiptId)?.type === 'image');
-      if (agent.status === 'running' && hasImage && (previous?.provider !== route[0].providerId || previous?.model !== route[0].modelId
-        || previous?.reasoningEffort !== route[0].options?.reasoningEffort)) {
-        throw new RemoteError('session/agent-busy', '当前对话正在运行；请等待完成后按新选择的模型提交图片', { reason: 'NATIVE_ATTACHMENT_REQUIRES_IDLE' });
-      }
       if (agent.status === 'idle') agent.model.select({ provider: route[0].providerId, model: route[0].modelId,
         ...(route[0].options?.reasoningEffort === undefined ? {} : { reasoningEffort: route[0].options.reasoningEffort }) });
-      try { return await dispatch(); }
+      const steering = Array.isArray(request.content) && request.content.length > 0
+        && (request.mode === 'steer' || request.mode === 'queue');
+      try { return await dispatch(steering ? 'steer' : undefined); }
       catch (error) {
         if (previous && agent.status === 'idle') agent.model.select(previous);
         throw error;
@@ -501,7 +520,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     recoverMain() {
       assertOpen();
       if (recoveringMain) return recoveringMain;
-      if (sending.has('main') || pending.has('main') || resettingMain) return Promise.resolve({ status: 'busy' });
+      if (sending.has('main') || pending.has('main') || resettingThreads.has('main')) return Promise.resolve({ status: 'busy' });
       const operation = (async () => {
         const record = await thread('main');
         if (!record.sessionId) return { status: 'uninitialized' };
@@ -582,7 +601,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
         // Reopen an unused draft instead of accumulating empty side chats.
         // Inspect durable events too: desktop sends do not all pass through send().
         for (const item of (await store.getState()).threads.toReversed()) {
-          if (item.sourceKey || item.archived || item.pinned || item.title !== name || sending.has(item.id)) continue;
+          if (item.sourceKey || item.archived || item.pinned || item.title !== name || sending.has(item.id) || resettingThreads.has(item.id)) continue;
           await pending.get(item.id);
           const agent = handles.get(item.id)?.agent ?? ctx.agents.get(item.sessionId);
           if (agent?.status === 'running') continue;
@@ -590,7 +609,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
           try { events = item.sessionId ? (await ctx.sessionQuery.readSession(item.sessionId)).events : []; }
           catch { continue; } // Unknown history must never be treated as empty.
           if (events.some(event => ['user/message', 'assistant/message', 'assistant/attempt', 'tool/result'].includes(event.type))) continue;
-          if (sending.has(item.id) || agent?.status === 'running') continue;
+          if (sending.has(item.id) || resettingThreads.has(item.id) || agent?.status === 'running') continue;
           await ensureSession({ threadId: item.id });
           return thread(item.id);
         }
@@ -604,7 +623,6 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
     },
     async updateThread(threadId, patch, { stopActivity = false, beforeSave } = {}) {
       if (threadId === 'main') throw new Error('主聊天不能归档或改为旁聊');
-      const record = await thread(threadId);
       if ('models' in patch) throw new Error('旁聊统一使用 SuperAgent 模型设置');
       if (patch.title !== undefined && (typeof patch.title !== 'string' || !patch.title.trim() || patch.title.length > 200)) throw new Error('无效旁聊名称');
       if (patch.archived !== undefined && typeof patch.archived !== 'boolean') throw new Error('无效归档状态');
@@ -618,9 +636,11 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       });
       if (allowed.archived === undefined) return (await save()).threads.find(item => item.id === threadId);
       const activeError = () => Object.assign(new Error('旁聊仍有活动'), { code: 'workspace/session-active', status: 409 });
+      if (resettingThreads.has(threadId)) throw Object.assign(new Error('旁聊正在清理'), { status: 409 });
       if (archivingThreads.has(threadId)) throw Object.assign(new Error('旁聊归档正在提交'), { status: 409 });
-      if (stopActivity && allowed.archived) archivingThreads.add(threadId);
+      archivingThreads.add(threadId);
       try {
+        const record = await thread(threadId);
         const registry = workspaceRegistry();
         const agent = handles.get(threadId)?.agent;
         if (allowed.archived) {
@@ -641,7 +661,11 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       return thread(threadId);
     },
     async resetMain() {
-      return resetMainSession();
+      return resetThreadSession('main');
+    },
+    async resetThread(threadId) {
+      if (!threadId || threadId === 'main') throw new Error('请选择要清理的旁聊');
+      return resetThreadSession(threadId);
     },
     async deleteThread(threadId) {
       if (threadId === 'main') throw new Error('主聊天不能删除');
@@ -675,10 +699,13 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       assertOpen();
       if (typeof text !== 'string' || !text.trim() || text.length > 200_000) throw new Error('请输入有效内容');
       if (typeof requestId !== 'string' || !requestId || requestId.length > 200) throw new Error('无效请求标识');
+      const clear = text.trim() === '/clear';
+      if (clear && threadId !== 'main' && !(await thread(threadId)).sourceKey) return resetThreadSession(threadId);
       receive(requestId);
       const operation = (sending.get(threadId) || Promise.resolve()).catch(() => {}).then(async () => {
         assertOpen();
-        if (threadId === 'main' && text.trim() === '/clear') return resetMainSession({ allowCurrentSend: true });
+        if (clear && threadId === 'main') return resetThreadSession(threadId, { allowCurrentSend: true });
+        if (threadId !== 'main') await resettingThreads.get(threadId)?.catch(() => {});
         if (archivingThreads.has(threadId) || (await thread(threadId)).archived) throw new Error('请先恢复已归档的旁聊');
         return inbox.enqueue({ threadId, text, requestId, replyContext });
       });
@@ -734,7 +761,7 @@ export async function createAssistantEngine({ ctx, store, setupTools, scheduleBr
       stopped = true;
       lifecycle.abort(new Error('总助手已关闭'));
       disposal = (async () => {
-        await Promise.allSettled([threadCreationQueue, ...nativeSubmissions.values(), ...sending.values(), ...pending.values(), ...(resettingMain ? [resettingMain] : []), ...(recoveringMain ? [recoveringMain] : [])]);
+        await Promise.allSettled([threadCreationQueue, ...nativeSubmissions.values(), ...sending.values(), ...pending.values(), ...resettingThreads.values(), ...(recoveringMain ? [recoveringMain] : [])]);
         await inbox.dispose();
         await disposeTaskReplies();
         await stateQueue.catch(() => {});

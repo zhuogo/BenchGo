@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-const STARTUP_STAGES = new Set(['started', 'splash-visible', 'enrollment-ready', 'shell-loading', 'shell-loaded', 'host-starting', 'host-ready', 'host-connected', 'welcome-state-ready', 'workspace-visible', 'workspace-ready', 'failed']);
+const STARTUP_STAGES = new Set(['started', 'enrollment-starting', 'splash-visible', 'enrollment-ready', 'shell-loading', 'shell-loaded', 'host-starting', 'host-ready', 'host-connected', 'host-analytics-ready', 'welcome-state-ready', 'workspace-visible', 'workspace-ready', 'failed']);
 const STARTUP_LABELS = {
   'enrollment-ready': '正在载入工作台…',
   'host-starting': '正在启动服务…',
@@ -37,9 +37,14 @@ export function createWelcomeWindow({ BrowserWindow, nativeTheme, platform, opti
 /** Keep one bounded, local startup record; diagnostic I/O must never gate startup. */
 export function createStartupTiming(directory, { now = () => performance.now(), startedAt = new Date().toISOString() } = {}) {
   const start = now(), stages = [], seen = new Set();
+  const processStartedAt = new Date(performance.timeOrigin).toISOString();
   let finished = false, writes = Promise.resolve();
   const persist = () => {
-    const value = JSON.stringify({ startedAt, pid: process.pid, status: finished ? stages.at(-1).stage : 'starting', elapsedMs: stages.at(-1).elapsedMs, stages }, null, 2);
+    const { stage, elapsedMs } = stages.at(-1);
+    const value = JSON.stringify({
+      processStartedAt, processElapsedMs: Math.round(start) + elapsedMs,
+      startedAt, pid: process.pid, status: finished ? stage : 'starting', elapsedMs, stages,
+    }, null, 2);
     writes = writes.then(async () => { await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'benchgo-startup.json'), value, { mode: 0o600 }); }).catch(() => {});
   };
   const mark = stage => {

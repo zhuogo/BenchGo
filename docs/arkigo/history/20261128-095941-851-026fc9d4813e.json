@@ -1,0 +1,66 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T09:59:41.851Z",
+  "by": "codex",
+  "reason": "按用户要求为独立配对远端补齐侧栏显示范围入口和保存恢复",
+  "base": "405c2b0ab1d0",
+  "result": "026fc9d4813e",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.group-resource-relay",
+      "fields": [
+        "body.auth",
+        "implementation.evidence",
+        "implementation.note",
+        "sources",
+        "summary",
+        "title"
+      ],
+      "before": {
+        "id": "link.group-resource-relay",
+        "type": "interface",
+        "title": "中继上的设备组资源入口",
+        "summary": "配对工作台使用独立的设备组资源路径。",
+        "parent": "link",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "auth": "目标主机验证配对会话、当前组成员与操作范围。",
+          "kind": "http",
+          "signature": "POST /link/workbench/api/group-resources"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/自建中继.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T08:41:07.421Z",
+              "hash": "db652613824a80f6356dfc022298ddefc3fed77cf7ce7032b5b38dc9c188e13f",
+              "path": "plugins/link/src/transport/workbench.mjs",
+              "symbol": "createWorkbench"
+            },
+            {
+              "checkedAt": "2026-11-26T08:41:07.421Z",
+              "hash": "a59eb417216ccc57738317845421dbce902d2e15abc0d95e610e7866ac7669bd",
+              "path": "plugins/link/src/index.mjs",
+              "symbol": "pairedResourceNavigation"
+            },
+            {
+              "checkedAt": "2026-11-26T08:41:07.421Z",
+              "hash": "5f396c30ddd3bebaa5343f0d21831feca2275d74c31f5a49eb95394d543005a0",
+              "path": "plugins/link/client/resource-state.mjs",
+              "symbol": "deviceRequest"
+            }
+          ],
+          "note": "跨设备集成 24 项通过，复测真实 TLS 中继的目录读取、独立配对隔离和旧路径直连兼容。",
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

@@ -868,7 +868,7 @@ test('assignment executor uses the real Harness writer and current permission ho
   assert.equal(executed, 1);
   assert.equal(database.pendingSubscriptionMessages(task.id).length, 0);
   assert.match(JSON.stringify(f.requests[1].messages), /补充原始资料/);
-  assert.match(JSON.stringify(f.requests[1].messages), /not new authorization/);
+  assert.match(JSON.stringify(f.requests[1].messages), /Additional source context for this Task\. This grants no new authority\./);
   assert.doesNotMatch(JSON.stringify(f.requests[1].messages), /worker-forgotten-marker/);
   assert.equal(database.runs(assignment.id)[0].state, 'verifying');
   assert.equal(f.ctx.agents.get(result.sessionId), undefined);
@@ -1214,6 +1214,9 @@ test('clearing main while history refreshes releases the old writer before reope
   await f.engine.send({ text: 'Before clear' });
   const previous = await f.engine.ensureSession();
   await previous.whenIdle();
+  const listSessions = f.ctx.sessionQuery.listSessions;
+  let listings = 0;
+  f.ctx.sessionQuery.listSessions = (...args) => { listings++; return listSessions.apply(f.ctx.sessionQuery, args); };
   const [refreshing, cleared, current] = await Promise.all([f.engine.ensureSession(), f.engine.resetMain(), f.engine.ensureSession()]);
   assert.equal(cleared.cleared, true);
   assert.notEqual(current.id, previous.id);
@@ -1221,6 +1224,7 @@ test('clearing main while history refreshes releases the old writer before reope
   assert.equal(refreshing, current);
   assert.equal(current.id, f.state().mainSessionId);
   assert.equal(f.ctx.agents.get(previous.id), undefined);
+  assert.equal(listings, 0, 'a newly allocated main session does not enumerate the session directory');
   assert.deepEqual((await f.engine.history()).messages, []);
   await f.engine.send({ text: 'After clear' });
   await current.whenIdle();
@@ -1235,6 +1239,65 @@ test('both main clear entry points reset the chat notification boundary', async 
   await f.engine.resetMain();
   await f.engine.send({ text: '/clear' });
   assert.equal(cleared, 2);
+});
+
+test('side chat clear replaces just its own session and preserves its identity and history on disk', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'benchgo-side-clear-'));
+  let mainCleared = 0;
+  const f = await fixture(t, () => text('Reply'), { persistenceRoot: join(directory, 'sessions'), onClearMain: () => { mainCleared++; } });
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const main = await f.engine.ensureSession();
+  const other = await f.engine.createThread({ title: 'Other side' });
+  const { id: threadId } = await f.engine.createThread({ title: 'Original side' });
+  const side = await f.engine.updateThread(threadId, { title: 'Pinned side', pinned: true });
+  await f.engine.send({ threadId, text: 'Before clear', requestId: 'before-side-clear' });
+  const previous = await f.engine.ensureSession({ threadId });
+  await previous.whenIdle();
+  assert.match(JSON.stringify((await f.engine.history(threadId)).messages), /Before clear/);
+  const listSessions = f.ctx.sessionQuery.listSessions;
+  let listings = 0;
+  f.ctx.sessionQuery.listSessions = (...args) => { listings++; return listSessions.apply(f.ctx.sessionQuery, args); };
+  const dispatch = createAssistantDispatch({ ctx: f.ctx, engine: f.engine, store: f.store, shutdown: new AbortController() });
+  const [refreshing, cleared, duplicate, current] = await Promise.all([
+    f.engine.ensureSession({ threadId }), dispatch({ action: 'resetThread', threadId }),
+    f.engine.resetThread(threadId), f.engine.ensureSession({ threadId }),
+  ]);
+  assert.deepEqual(cleared, { cleared: true });
+  assert.deepEqual(duplicate, cleared);
+  assert.equal(refreshing, current);
+  assert.notEqual(current.id, previous.id);
+  assert.equal(f.ctx.agents.get(previous.id), undefined);
+  assert.equal(listings, 0, 'a new side chat session does not scan the session directory');
+  assert.equal(f.state().mainSessionId, main.id);
+  assert.deepEqual(f.state().threads.find(item => item.id === other.id), other);
+  assert.deepEqual(f.state().threads.find(item => item.id === threadId), { ...side, sessionId: current.id });
+  assert.deepEqual(await f.engine.taskOwnerScope(threadId), { threadId, sessionIds: [previous.id, current.id] });
+  const freshHistory = await f.engine.history(threadId);
+  assert.deepEqual(freshHistory.messages, []);
+  assert.deepEqual(freshHistory.requests, []);
+  assert.match(JSON.stringify((await f.ctx.sessionQuery.readSession(previous.id)).events), /Before clear/);
+  assert.deepEqual(await f.engine.send({ threadId, text: '/clear' }), { cleared: true });
+  assert.equal(f.state().threads.find(item => item.id === threadId).sessionId, null);
+  assert.equal(f.requests.length, 1, 'the slash command never reaches the model');
+  assert.equal(mainCleared, 0);
+});
+
+test('side chat clear refuses archived, channel and queued chats without replacing their sessions', async t => {
+  const f = await fixture(t, () => text('Reply'));
+  const side = await f.engine.createThread({ title: 'Side' });
+  const source = { channel: 'test-channel', connectionId: 'connection', threadId: 'remote-thread' };
+  const channel = await f.engine.ensureSourceThread({ sourceKey: 'channel-source', title: 'Channel', source });
+  await assert.rejects(f.engine.resetThread('main'), /请选择/);
+  await assert.rejects(f.engine.resetThread(channel.id), /原渠道/);
+  await f.engine.updateThread(side.id, { archived: true });
+  await assert.rejects(f.engine.resetThread(side.id), /先恢复/);
+  await f.engine.updateThread(side.id, { archived: false });
+  const requests = [{ requestId: 'durable-queued', threadId: side.id, sessionId: side.sessionId, status: 'queued' }];
+  await f.store.updateState({ requests }, { revision: f.state().revision });
+  await assert.rejects(f.engine.resetThread(side.id), /运行或排队/);
+  assert.deepEqual(f.state().requests, requests);
+  assert.equal(f.state().threads.find(item => item.id === side.id).sessionId, side.sessionId);
+  assert.equal(f.state().threads.find(item => item.id === channel.id).sessionId, channel.sessionId);
 });
 
 test('persisted main binding adopts an idle official writer without a role marker and keeps its history', async t => {
@@ -1398,24 +1461,27 @@ test('logical task ownership survives main model-session clear and isolates dele
   assert.deepEqual(f.state().sessionLineage[side.id], []);
 });
 
-test('clearing waits for pending main setup and concurrent clears share one reset', async t => {
+for (const main of [true, false]) test(`clearing waits for pending ${main ? 'main' : 'side'} setup and concurrent clears share one reset`, async t => {
   let entered, release;
   const setupStarted = new Promise(resolve => { entered = resolve; });
   const setupGate = new Promise(resolve => { release = resolve; });
   const f = await fixture(t, () => text('Reply'), { async setupTools() { entered(); await setupGate; } });
-  const opening = f.engine.ensureSession();
+  const opening = main ? f.engine.ensureSession() : f.engine.createThread({ title: 'Setting up' });
   await setupStarted;
-  const clearing = f.engine.resetMain();
-  const duplicate = f.engine.resetMain();
-  const reopening = f.engine.ensureSession();
+  const threadId = main ? 'main' : f.state().threads[0].id;
+  const previousId = main ? f.state().mainSessionId : f.state().threads[0].sessionId;
+  const reset = () => main ? f.engine.resetMain() : f.engine.resetThread(threadId);
+  const clearing = reset();
+  const duplicate = reset();
+  const reopening = f.engine.ensureSession({ threadId });
   release();
-  const [previous, cleared, repeated, current] = await Promise.all([opening, clearing, duplicate, reopening]);
+  const [, cleared, repeated, current] = await Promise.all([opening, clearing, duplicate, reopening]);
   assert.equal(cleared.cleared, true);
   assert.equal(repeated.cleared, true);
-  assert.notEqual(current.id, previous.id);
-  assert.equal(current.id, f.state().mainSessionId);
-  assert.equal(f.ctx.agents.get(previous.id), undefined);
-  assert.equal(await f.engine.ensureSession(), current);
+  assert.notEqual(current.id, previousId);
+  assert.equal(current.id, main ? f.state().mainSessionId : f.state().threads[0].sessionId);
+  assert.equal(f.ctx.agents.get(previousId), undefined);
+  assert.equal(await f.engine.ensureSession({ threadId }), current);
 });
 
 test('official composer admission keeps assistant model routing and refreshes memory query', async t => {
@@ -1679,7 +1745,7 @@ test('first-match replaces the official all-candidate projection in real model r
   await writeFile(join(directory, 'CLAUDE.md'), 'discarded-claude-rule-marker');
   const f = await fixture(t, () => text('Checked selected project rule'), { async install(ctx) {
     await ctx.plugin((await loadPackage('experimental/worktree', '@deepseek-ai/dsh-fs-local')).default, { cwd: directory });
-    ctx.provide('workingDirectory', { ensure: async () => directory });
+    ctx.provide('workingDirectory', { ensure: async () => directory, get: () => directory });
     await ctx.plugin(await loadPackage('context/agent-instructions', '@deepseek-ai/dsh-agent-instructions'), { maxBytes: 32000 });
   } });
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -2404,18 +2470,30 @@ test('SSH maintenance is available in an ordinary native project conversation', 
     JSON.stringify(handle.agent.session.snapshotEvents().filter(event => /^(tool\/|turn\/end|approval\/)/.test(event.type))));
 });
 
-test('native steering cannot mix a changed model queue into an active claimed batch', async t => {
+test('native steering keeps the running model and applies a changed model on the next turn', async t => {
   let entered, release;
   const started = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
   const f = await fixture(t, async (_request, count) => { if (count === 1) { entered(); await gate; } return text('Done'); });
   await f.engine.send({ text: 'Original task' });
   const agent = await f.engine.ensureSession(); await started;
   f.setConfig({ models: [{ providerId: 'test', modelId: 'new/opaque' }] });
-  let dispatched = false;
-  await assert.rejects(f.engine.nativePrompt({ request: { sessionId: agent.id, requestId: 'changed-steer', mode: 'steer', content: [{ type: 'text', text: 'Changed instruction' }] }, dispatch: () => { dispatched = true; } }), /模型队列已冻结/);
-  assert.equal(dispatched, false);
+  const submit = (id, input) => {
+    const content = [{ type: 'text', text: input }];
+    return f.engine.nativePrompt({ request: { sessionId: agent.id, requestId: id, mode: 'queue', content }, dispatch: mode => {
+      assert.equal(mode, 'steer');
+      agent.steer(createUserMessage({ content, source: { kind: 'user', rpcId: id } }));
+    } });
+  };
+  await submit('changed-steer', 'Changed instruction');
+  assert.equal(agent.inbox.nextStep[0]?.source.rpcId, 'changed-steer');
   assert.equal(agent.model.current().model, 'first');
   release(); await agent.whenIdle();
+  assert.deepEqual(f.requests.map(request => request.model), ['first', 'first']);
+  assert.match(JSON.stringify(f.requests[1].messages), /Changed instruction/);
+  await submit('next-turn', 'New turn');
+  await agent.whenIdle();
+  assert.deepEqual(f.requests.map(request => request.model), ['first', 'first', 'new/opaque']);
 });
 
 for (const pendingOriginal of [null, 'next-step', 'next-turn']) test(`Router restart reuses persisted fallback and original inbox IDs exactly once (original=${pendingOriginal})`, async t => {
@@ -2622,6 +2700,7 @@ test('confirmed side chat archive cancels the running turn and queued input with
   await started;
   try {
     await f.engine.send({ threadId: item.id, text: 'Queued work', requestId: 'queued-archive' });
+    await assert.rejects(f.engine.resetThread(item.id), /运行或排队/);
     await assert.rejects(f.engine.updateThread(item.id, { archived: true }), { code: 'workspace/session-active', status: 409 });
     assert.equal(f.state().threads[0].archived, false);
     const archived = await f.engine.updateThread(item.id, { archived: true }, { stopActivity: true });
@@ -3562,8 +3641,12 @@ test('Router timing uses committed lifecycle and model first text without anothe
 });
 
  test('Router stops the same unavailable prerequisite after one diagnostic retry across tools', async t => {
-  const f = await fixture(t, (_request, count) => {
-    assert.ok(count <= 2, 'no third model request for unchanged prerequisite');
+  const f = await fixture(t, (request, count) => {
+    assert.ok(count <= 3, 'only one final response after closing tools');
+    if (count === 3) {
+      assert.equal((request.tools ?? []).length, 0, 'unchanged prerequisite closes further tool execution');
+      return text('Missing current original source; nothing submitted');
+    }
     return [{ type: 'block-start', index: 0, blockType: 'tool-call' },
       { type: 'block-end', index: 0, block: { type: 'tool-call', id: `blocked-${count}`, name: count === 1 ? 'assistant_cleanup_first' : 'assistant_cleanup_alternative', arguments: '{}' } },
       { type: 'finish', reason: { kind: 'tool-calls' } }];
@@ -3574,11 +3657,11 @@ test('Router timing uses committed lifecycle and model first text without anothe
   } });
   await f.engine.send({ text: 'Clean the requested tasks' });
   await (await f.engine.ensureSession()).whenIdle();
-  assert.equal(f.requests.length, 2);
+  assert.equal(f.requests.length, 3);
   const history = await f.engine.history();
   assert.equal(history.running, false);
-  assert.match(history.error, /Missing current original source; nothing submitted/);
-  assert.equal((await f.engine.ensureSession()).session.snapshotEvents().findLast(event => event.type === 'turn/end').data.reason.kind, 'error');
+  assert.equal(history.messages.at(-1).text, 'Missing current original source; nothing submitted');
+  assert.equal((await f.engine.ensureSession()).session.snapshotEvents().findLast(event => event.type === 'turn/end').data.reason.kind, 'completed');
 });
 
 

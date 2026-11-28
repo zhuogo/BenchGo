@@ -1,0 +1,112 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T08:19:22.442Z",
+  "by": "codex",
+  "reason": "落实用户确认的远端更新自动重启及重连",
+  "base": "bf94c4af39ec",
+  "result": "c57410372d9b",
+  "changes": [
+    {
+      "op": "update",
+      "id": "release.activate",
+      "fields": [
+        "body.steps",
+        "implementation.evidence",
+        "implementation.note",
+        "implementation.status",
+        "sources",
+        "summary"
+      ],
+      "before": {
+        "id": "release.activate",
+        "type": "flow",
+        "title": "主机验签并激活更新",
+        "summary": "通过下载清单确认兼容性，锁内切换插件版本重启后由宿主解析。",
+        "parent": "release",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "restart"
+          ],
+          "start": "check",
+          "steps": [
+            {
+              "action": "按选择的分发源取带签名的清单，核对引擎、应用及功能包版本。",
+              "failure": "检查失败时保留此前已确认版本并报告；缺少应用版本信息时不推断。",
+              "id": "check",
+              "title": "验签并核对主机兼容"
+            },
+            {
+              "action": "校验下载包并准备不可变版本目录，协调活跃任务和更新互斥。",
+              "failure": "安装前发现任务或不兼容状态时留在当前版本。",
+              "id": "prepare",
+              "title": "准备已验证插件"
+            },
+            {
+              "action": "经官方 profile 约束切换，并记录重启所需状态。",
+              "failure": "锁冲突或校验失败应保留当前可用版本。",
+              "id": "activate",
+              "title": "锁内切换激活指针"
+            },
+            {
+              "action": "官方解析器实际加载新版本后才确认新的统一发行版。桌面壳及 Android 走平台入口。",
+              "id": "restart",
+              "title": "按重启后版本确认"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "check",
+              "to": "prepare"
+            },
+            {
+              "from": "prepare",
+              "to": "activate"
+            },
+            {
+              "from": "activate",
+              "to": "restart"
+            }
+          ],
+          "trigger": "用户在工作台执行检查或更新。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "插件安装与激活"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "更新入口与状态"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T05:50:51.370Z",
+              "hash": "3214016c08e4b6b0aa1de5e4649fa20f6443a02051395377db4adff05cb18285",
+              "path": "plugins/base/src/updates.mjs",
+              "symbol": "createUpdates"
+            },
+            {
+              "checkedAt": "2026-11-26T05:50:51.370Z",
+              "hash": "623f44352c39ef26201a7478a46d40846b9a43343be74b3b9ef8f691cf491b8e",
+              "path": "plugins/base/client/updates.jsx",
+              "symbol": "UpdateLauncher"
+            },
+            {
+              "checkedAt": "2026-11-26T05:50:51.370Z",
+              "hash": "abab79b18720bcd2cee3a011b7454bb78de0953545434894b4f3d9585df31d3e",
+              "path": "scripts/desktop/package-plugin-update.mjs"
+            }
+          ],
+          "note": "95 项更新服务、面板和原生桥接测试通过，覆盖安装器检查失败时功能包更新仍能安全重启。",
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

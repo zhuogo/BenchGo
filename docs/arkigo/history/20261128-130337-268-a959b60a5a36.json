@@ -1,0 +1,158 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T13:03:37.268Z",
+  "by": "codex",
+  "reason": "Correct the Router prompt ingress evidence symbol",
+  "base": "a17b237b88c2",
+  "result": "a959b60a5a36",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.dispatch",
+      "fields": [
+        "implementation.evidence"
+      ],
+      "before": {
+        "id": "assistant.dispatch",
+        "type": "flow",
+        "title": "原对话受理、执行与交付",
+        "summary": "Router 快速受理，Worker 返回执行结果，原 Router 自然交付。",
+        "parent": "assistant",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "answer",
+            "deliver"
+          ],
+          "start": "receive",
+          "steps": [
+            {
+              "action": "主聊和手动旁聊由官方会话入口接收、保存和去重。渠道等来源按 [[assistant.ingress]] 在授权范围内进入持久收件箱。确定的任务通知沿宿主收件箱交付。",
+              "failure": "同标识不同内容拒绝，状态不明时核对实际回执。",
+              "id": "receive",
+              "title": "在原会话受理消息"
+            },
+            {
+              "action": "问答当场答，产品内管理使用专属工具，环境工作交给 Worker。",
+              "id": "route",
+              "title": "Router 判断当场答复、管理或委派"
+            },
+            {
+              "action": "Router 按原会话权限执行产品内操作，回复普通正文。",
+              "failure": "操作依据或回执不足时如实说明。",
+              "id": "answer",
+              "title": "直接回答或管理"
+            },
+            {
+              "action": "保存 [[assistant.task]] 的来源、授权和任务要求。原聊天收到受理回复，可继续对话。",
+              "id": "own",
+              "title": "在 A 持久创建工单"
+            },
+            {
+              "action": "本机用官方 Agent 或已选原生 Agent。跨设备走 [[assistant.remote]]。",
+              "failure": "执行不确定、等用户输入或停止时记录真实事实，由原工单跟进。",
+              "id": "worker",
+              "title": "执行项目任务"
+            },
+            {
+              "action": "以执行终态与最后一段有效正文为依据，保存结果原稿及产物引用，持久通知原 Router。",
+              "failure": "提交未完成时保留原稿供恢复，避免再派同一 Worker。",
+              "id": "commit",
+              "title": "保存 Worker 结果"
+            },
+            {
+              "action": "同一持久 inbox 消费结果版本并生成普通公开正文，沿官方历史保存。外部渠道复用常规发送。",
+              "failure": "失败后区分告知、事实补记与渠道发送重试，已完成执行仍保留。",
+              "id": "deliver",
+              "title": "原 Router 交付"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "receive",
+              "to": "route"
+            },
+            {
+              "from": "route",
+              "to": "answer",
+              "when": "即时问答或授权内的产品操作"
+            },
+            {
+              "from": "route",
+              "to": "own",
+              "when": "需要环境执行"
+            },
+            {
+              "from": "own",
+              "to": "worker"
+            },
+            {
+              "from": "worker",
+              "to": "commit"
+            },
+            {
+              "from": "commit",
+              "to": "deliver"
+            }
+          ],
+          "trigger": "用户在主聊、旁聊或已准入渠道提出请求。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/任务与执行.md",
+            "symbol": "任务、跟进与目标"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/结果与交付.md",
+            "symbol": "Worker 结果"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/06-superagent/服务契约.md",
+            "symbol": "公共接口与数据契约"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T13:01:59.097Z",
+              "hash": "5dbe8f540eef493567f600f4f01e14838888487f38bc9724be8b2533004e5f3d",
+              "path": "plugins/superagent/src/engine.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T13:01:59.097Z",
+              "hash": "201e5444b84a2bc20375fa42c81bc619b4686585c8056640fed64649d735bad1",
+              "path": "plugins/superagent/src/assignment-executor.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T13:01:59.097Z",
+              "hash": "9c23299b92874916df09eb1d7528a15fabab7254b0a85e2d81256f96115ad7f9",
+              "path": "plugins/superagent/src/result-commit.mjs",
+              "symbol": "commitWorkerResult"
+            },
+            {
+              "checkedAt": "2026-11-28T13:01:59.097Z",
+              "hash": "d784285b711667730d9cdc3e87aede115eac913cfd711b66d4466e96f3f2b281",
+              "path": "plugins/superagent/src/message-inbox.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T13:01:59.097Z",
+              "hash": "0830f75301d96129c4e24d7c29045c0252a38b2b91f4f6c2e83db5b368dbafc6",
+              "path": "plugins/superagent/src/result-delivery.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T13:01:59.097Z",
+              "hash": "c1e2cf5d53cc465a8d175dc32ff73984629f43f4079b22e99974e5bbebf4ebb0",
+              "path": "plugins/superagent/src/native-prompt-ingress.mjs",
+              "symbol": "mountNativePromptIngress"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

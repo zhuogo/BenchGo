@@ -1,0 +1,42 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T10:42:50.721Z",
+  "by": "codex",
+  "reason": "记录远端阻塞根因修复及真实工具发布和 TLS 期限回归",
+  "base": "0b4b9ea39caa",
+  "result": "d5ab07be4648",
+  "changes": [
+    {
+      "op": "add",
+      "id": "assistant.context.tool-refresh"
+    },
+    {
+      "op": "add",
+      "id": "assistant.context.tool-refresh-check"
+    },
+    {
+      "op": "add",
+      "id": "link.connect.tls-deadline"
+    },
+    {
+      "op": "add",
+      "id": "link.connect.tls-deadline-check"
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "assistant.context.tool-refresh-check",
+        "to": "assistant.context.tool-refresh",
+        "type": "verifies"
+      }
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "link.connect.tls-deadline-check",
+        "to": "link.connect.tls-deadline",
+        "type": "verifies"
+      }
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T06:16:08.700Z",
+  "by": "codex",
+  "reason": "记录冷启动隔离对照、配置审计优化与实际交互验收",
+  "base": "81e4fc6151e2",
+  "result": "bf94c4af39ec",
+  "changes": [
+    {
+      "op": "update",
+      "id": "workbench.official.cold-start",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "workbench.official.cold-start",
+        "type": "acceptance",
+        "title": "已初始化桌面工作台冷启动在 10 秒内",
+        "summary": "从启动桌面进程到工作台可交互不超过 10 秒，现有功能完整可用。",
+        "parent": "workbench.official",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "given": [
+            "已安装并初始化的桌面工作台",
+            "桌面主进程与 Host 均已退出"
+          ],
+          "then": [
+            "从创建桌面进程到正常操作工作台不超过 10 秒",
+            "插件、会话、配置保护和后台任务能力完整",
+            "首次安装和升级单独计时"
+          ],
+          "when": "启动 BenchGo 并实测到工作台可交互"
+        },
+        "sources": [
+          {
+            "kind": "conversation",
+            "ref": "2026-11-28 用户确认冷启动以 10 秒内为目标，且不得影响功能。"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-28T04:46:49.377Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "artifacts/benchgo-startup-20261128.json"
+            }
+          ],
+          "note": "Windows 已安装版本 0.1.11 从进程启动到工作台显示 39.45 秒，Host 启动占 35.38 秒。显示即已超过 10 秒。隔离宿主核验五个插件与工作台接口，样本中的慢启动达到 35.24 秒。工作台实际交互时间仍须桌面实测。",
+          "status": "failed"
+        }
+      }
+    }
+  ]
+}

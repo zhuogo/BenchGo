@@ -1,0 +1,317 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T09:38:04.956Z",
+  "by": "codex",
+  "reason": "修复远端字体排队、流会话续签与项目独立刷新并回写实测边界",
+  "base": "7c2c69d587d0",
+  "result": "405c2b0ab1d0",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.connect.workbench-recovery",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "link.connect.workbench-recovery",
+        "type": "rule",
+        "title": "工作台会话失效后恢复",
+        "summary": "配对有效时自动恢复当前工作台会话。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "桌面代理沿已核验路线重新签发失效会话，并合并并发续签。只读首屏请求可重试一次，写操作由用户决定是否重试。已撤销配对仍须重新配对。"
+        },
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T10:02:26.232Z",
+              "hash": "2c3a5f0301dcb55195d3ab2795f2d32564c2a023619a68a23cd27d0df8e5f41c",
+              "path": "plugins/link/src/devices/proxy.mjs",
+              "symbol": "createDeviceProxy"
+            },
+            {
+              "checkedAt": "2026-11-26T10:02:26.232Z",
+              "hash": "46f6d6627d0963049bc6495b3ffb98d31c0f2a95ddad62eb54efaa4af099e165",
+              "path": "plugins/link/src/transport/workbench.mjs",
+              "symbol": "createWorkbench"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.workbench-recovery-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "link.connect.workbench-recovery-check",
+        "type": "acceptance",
+        "title": "验证工作台续签",
+        "summary": "确认有效配对可以恢复，撤销仍然生效。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "已配对桌面代理持有失效工作台会话"
+          ],
+          "then": [
+            "只发起一次续签，读取恢复",
+            "写入不自动重新发送，撤销配对后返回授权失败"
+          ],
+          "when": "同时读项目、总助手和工作台入口"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/跨设备资源导航.md"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-26T10:02:26.232Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-sessions.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/relay.test.mjs"
+            }
+          ],
+          "note": "本地 TLS 回归覆盖 8 个新会话淘汰旧会话、旧版 401、并发合并、写操作和撤销。隔离中继回归通过。",
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.workbench-startup",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note",
+        "notes"
+      ],
+      "before": {
+        "id": "link.connect.workbench-startup",
+        "type": "rule",
+        "title": "远端工作台优先加载项目与总助手",
+        "summary": "先读取项目和总助手状态，推迟非首屏资源。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "远端先发出项目与总助手状态请求。推迟非首屏功能与字体，首屏可先用系统字体。"
+        },
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-26T10:02:26.232Z",
+              "hash": "102953a1839020a4cf171fa5c35870fb99dcb0d63b478ea027754185e6b569de",
+              "path": "plugins/base/client/index.jsx",
+              "symbol": "apply"
+            },
+            {
+              "checkedAt": "2026-11-26T10:02:26.232Z",
+              "hash": "8cccf6b52845907705c15bd5d7f644560a30445dcf92a55043c043298c61fa57",
+              "path": "plugins/base/scripts/build-client.mjs"
+            },
+            {
+              "checkedAt": "2026-11-26T10:02:26.232Z",
+              "hash": "418e3155c7d2e4bb1309498ba65198de25c46c0e20af330c455b64060ac27a01",
+              "path": "plugins/base/workbench/client/index.jsx",
+              "symbol": "mountWorkbenchClient"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.workbench-startup-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "link.connect.workbench-startup-check",
+        "type": "acceptance",
+        "title": "验证远端首屏资源顺序",
+        "summary": "查看项目和总助手状态读取及字体请求顺序。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "目标主机启用 BenchGo 与总助手"
+          ],
+          "then": [
+            "项目、模块与总助手状态先于字体",
+            "远端不请求本机文件、Git、终端和预览适配脚本"
+          ],
+          "when": "打开远端工作台"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/跨设备资源导航.md"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-26T10:02:26.232Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/base/test/client-discovery.test.mjs"
+            }
+          ],
+          "note": "襄阳目标的无头 Chromium 同会话对照，浏览器侧替换候选插件脚本。连接握手前字体请求由 23 降至 0，项目和总助手状态均先于字体完成。官方客户端注册和分包测试通过。",
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.session",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "workbench.session",
+        "type": "flow",
+        "title": "打开项目、会话和产物",
+        "summary": "从项目导航进入所属设备，用真实会话处理任务和查看产物。",
+        "parent": "workbench",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "preview"
+          ],
+          "start": "find",
+          "steps": [
+            {
+              "action": "使用当前设备、全部设备或指定设备显示范围。跨设备列表通过 [[link.resources]] 查询。",
+              "failure": "加载失败或目标离线时保留来源并报告失败。项目登记成功后立即刷新所属设备的项目目录，打开新会话无需先等待完整侧栏状态。",
+              "id": "find",
+              "title": "定位项目与会话"
+            },
+            {
+              "action": "按资源所属设备进入会话。远端任务执行会话允许查看，并提供返回 A 工单的入口。",
+              "failure": "目标能力不足时保留解释，任务输入与控制从原工单办理。",
+              "id": "open",
+              "title": "打开真实会话"
+            },
+            {
+              "action": "官方会话由 [[workbench.official]] 处理。已选择的原生路由经 Commander 连接实际 Agent。",
+              "failure": "工具未安装、会话失联或协议不支持时明确报告。",
+              "id": "agent",
+              "title": "发送、审批或继续"
+            },
+            {
+              "action": "按会话最新工作目录校验文件授权，再按类型加载预览。本机文件操作和终端按 owner 权限挂载。",
+              "failure": "路径越界、内容超限或格式不支持时说明，保留合规的下载或其他入口。",
+              "id": "preview",
+              "title": "查看项目文件与产物"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "find",
+              "to": "open"
+            },
+            {
+              "from": "open",
+              "to": "agent"
+            },
+            {
+              "from": "agent",
+              "to": "preview"
+            }
+          ],
+          "trigger": "用户从工作台的项目、最近或归档列表进入。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/跨设备资源导航.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/产物快览.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/项目文件操作.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T08:57:54.805Z",
+              "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
+              "path": "plugins/link/src/devices/resources.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T08:57:54.805Z",
+              "hash": "b3419a52ec87ee08d96b6e616654550827ab64ca05c7fba952776ef430accb29",
+              "path": "plugins/harness/src/plugin.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T08:57:54.805Z",
+              "hash": "6094f5618fbe89d796654ce1e03731cb6446f41ebcd1cdd8f0acf2f49d8b2a2c",
+              "path": "plugins/base/workbench/src/project-files.mjs",
+              "symbol": "mountProjectFiles"
+            },
+            {
+              "checkedAt": "2026-11-28T08:57:54.805Z",
+              "hash": "0ebf22cdc8fabd263bad36202ca5260481c622f9b0429ef62abbc1ee8aededda",
+              "path": "plugins/base/workbench/src/media.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T08:57:54.805Z",
+              "hash": "fb99a4c2487e35f4027cb7ba26fb86c872d052ca1d1a5289abc6a6c30fdb0c29",
+              "path": "plugins/link/client/resource-navigation.jsx",
+              "symbol": "useResourceNavigation"
+            },
+            {
+              "checkedAt": "2026-11-28T08:57:54.805Z",
+              "hash": "5ee91f9994f7ecb4fe77aa418d11a1c806594fc0b3f2dd5988a0fa615e4d8449",
+              "path": "plugins/base/client/index.jsx",
+              "symbol": "Projects"
+            },
+            {
+              "checkedAt": "2026-11-28T08:57:54.805Z",
+              "hash": "f52b66d604fbb29d9a9f7b38724fda6999a2f63efb4a7aa9e312ff3e6f85630a",
+              "path": "plugins/link/src/devices/proxy.mjs",
+              "symbol": "createDeviceProxy"
+            },
+            {
+              "checkedAt": "2026-11-28T08:57:54.805Z",
+              "hash": "77e96081e20d331800d27e5a483e04d91a67fa6167c4e9f320184640df7bbda7",
+              "path": "plugins/link/client/project-bridge.mjs",
+              "symbol": "createProjectBridge"
+            }
+          ],
+          "note": "已验证新增项目后立即刷新所属设备项目列表。襄阳中继同代理对照，完整工作台目录 5095 毫秒、43 个浏览器请求，轻量入口目录 468–660 毫秒、5 个请求；首次握手 640 毫秒。实机仅浏览，登记和侧栏衔接以浏览器回归验收。",
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

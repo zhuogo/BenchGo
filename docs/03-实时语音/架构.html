@@ -95,9 +95,11 @@
       "sources": [
         "plugins/media/src/calls.mjs",
         "plugins/media/src/conversations.mjs",
-        "plugins/media/client/controller.mjs"
+        "plugins/media/client/controller.mjs",
+        "plugins/media/src/web.mjs",
+        "docs/03-实时语音/说话对象判断.md"
       ],
-      "note": "当前通话恢复直接交流，无对话／静默切换，不调用说话对象决策。设置中的决策连接、称呼配置和固定样例测试保留；判断临界点与上下文设计待研讨后再接入。普通通话30分钟，需有效心跳。",
+      "note": "说话对象判断保留设置和独立测试入口，仍待接入通话主流程。普通通话使用 30 分钟租约，需有效心跳。",
       "state": "implemented",
       "x": 1200,
       "y": 160
@@ -110,7 +112,7 @@
       "sub": "Router 原层 / 普通会话增强，未配置降级直通",
       "symbol": "createConversationBridge().describe()",
       "plain": "总助手继续用原来的 Router；普通会话可选择额外的轻量接话模型。",
-      "role": "通过 assistant.sessionRole 核实 Router；普通会话验证 sessions、agents、sessionController 接缝。native 复用 Router，ordinary 配置完整时 enhanced，未配置时降级为 direct；新能力只保证 native 与 enhanced。",
+      "role": "通过 assistant.sessionRole 核实 Router，使用 native 路径复用原对话。普通官方会话核对 sessions、agents 和 sessionController，配置交互模型时走 enhanced，经轻量交互模型交接原 Agent，未配置时走 direct 沿原会话直发。",
       "input": "真实 Session 归属、交互模型配置",
       "output": "native / enhanced / direct 模式",
       "sources": [
@@ -461,5 +463,5 @@
       "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
-  "version": "2026-11-11-1"
+  "version": "2026-11-28"
 }</script><script src="../_assets/architecture.js"></script></body></html>

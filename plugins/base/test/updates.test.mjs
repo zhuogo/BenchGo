@@ -5,8 +5,10 @@ import { createRequire, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import * as tar from 'tar';
 import { createUpdates, mountUpdates, desktopApplicationVersion } from '../src/updates.mjs';
+import { createRestartAdmission, managedServerRestart } from '../src/server-restart.mjs';
 import { prepareRelease, activateRelease, getInstallState, releaseBundleName } from '../shared/plugin-install.mjs';
 
 async function fixture(t, options = {}) {
@@ -78,10 +80,143 @@ async function fixture(t, options = {}) {
     }
     return options.downloadResponse ? options.downloadResponse(artifact) : new Response(options.corrupt ? 'wrong bytes' : artifact);
   };
-  const service = await createUpdates({ directory, profile: directory, runtime: directory, version: options.currentVersion || '0.1.2', releaseVersion: options.currentReleaseVersion, engineVersion: Object.hasOwn(options, 'engineVersion') ? options.engineVersion : '1.2.3', appVersion: options.appVersion, publicKey: publicKey.export({ type: 'spki', format: 'pem' }), fetcher, install, installation: options.installation || 'desktop', platform: options.platform ?? 'win32', arch: options.arch ?? 'x64', isBusy: () => busy });
+  const startService = next => createUpdates({ directory, profile: directory, runtime: directory, version: options.currentVersion || '0.1.2', releaseVersion: options.currentReleaseVersion, engineVersion: Object.hasOwn(options, 'engineVersion') ? options.engineVersion : '1.2.3', appVersion: options.appVersion, publicKey: publicKey.export({ type: 'spki', format: 'pem' }), fetcher, install, installation: options.installation || 'desktop', platform: options.platform ?? 'win32', arch: options.arch ?? 'x64', isBusy: () => busy, ...options.host, ...next });
+  const service = await startService();
   t.after(() => service.close());
-  return { service, directory, state, setBusy: value => { busy = value; }, setHttpStatus: value => { httpStatus = value; }, activated: () => activated, downloads: () => downloads, prepared: () => prepared };
+  return { service, directory, state, startService, setBusy: value => { busy = value; }, setHttpStatus: value => { httpStatus = value; }, activated: () => activated, downloads: () => downloads, prepared: () => prepared };
 }
+
+test('managed Linux waits for idle without a client and confirms the target and prior assistant after restart', { timeout: 10_000 }, async t => {
+  let restarts = 0, assistant = true;
+  const f = await fixture(t, { installation: 'server', platform: 'linux', serverCatalog() {},
+    host: { restartServer: async () => { restarts++; }, idlePollMs: 10, serverReadiness: () => ({ workbench: true, assistant }) },
+  });
+  await f.service.dispatch({ action: 'check' });
+  await f.service.settled();
+  f.setBusy(true);
+  assert.equal((await f.service.status()).canInstall, true);
+  await f.service.dispatch({ action: 'install' });
+  while ((await f.service.status()).phase !== 'waiting') await delay(10);
+  assert.equal(f.activated(), 0);
+  assert.equal(restarts, 0);
+  f.setBusy(false);
+  while (!restarts) await delay(10);
+  await f.service.settled();
+  const staged = await f.service.status();
+  assert.equal(staged.hostHealth.restart, 'restarting');
+  assert.equal(staged.hostHealth.target, '0.1.3');
+  await assert.rejects(f.service.dispatch({ action: 'restart' }), /正在重启/);
+  await f.service.close();
+  assistant = false;
+  const next = await f.startService({ version: '0.1.3' });
+  t.after(() => next.close());
+  const warming = await next.status();
+  assert.notEqual(warming.hostHealth.instanceId, staged.hostHealth.instanceId);
+  assert.equal(warming.restartRequired, false);
+  assert.equal(warming.hostHealth.ready, false);
+  assistant = true;
+  assert.equal((await next.status()).hostHealth.ready, true);
+  assert.equal(restarts, 1);
+});
+
+test('managed Linux retries a rejected service restart without downloading or activating again', async t => {
+  let attempts = 0;
+  const f = await fixture(t, { installation: 'server', platform: 'linux', serverCatalog() {},
+    host: { restartServer: async () => { if (++attempts === 1) throw new Error('systemd rejected restart'); } },
+  });
+  await f.service.dispatch({ action: 'check' }); await f.service.settled();
+  await f.service.dispatch({ action: 'install' }); await f.service.settled();
+  const failed = await f.service.status();
+  assert.equal(failed.hostHealth.restart, 'failed');
+  assert.equal(failed.decision.enabled, true);
+  await f.service.dispatch({ action: 'restart' }); await f.service.settled();
+  assert.equal((await f.service.status()).hostHealth.restart, 'restarting');
+  assert.equal(f.downloads(), 1);
+  assert.equal(f.activated(), 1);
+});
+
+test('restart admission drains accepted requests and refuses work until unlocked', async () => {
+  const admission = createRestartAdmission();
+  const pending = Promise.withResolvers();
+  const request = admission.run(() => pending.promise);
+  let drained = false;
+  const lock = admission.lock(new AbortController().signal).then(() => { drained = true; });
+  await assert.rejects(admission.run(() => assert.fail('work admitted while locked')), { status: 503 });
+  await delay(5);
+  assert.equal(drained, false);
+  pending.resolve();
+  await Promise.all([lock, request]);
+  assert.equal(drained, true);
+  admission.unlock();
+  assert.equal(await admission.run(() => 'accepted'), 'accepted');
+});
+
+test('Linux restart matches the owning user unit and installation profile', async () => {
+  for (const group of ['/user.slice/user-0.slice/user@0.service/app.slice/benchgo.service', '/user.slice/user-0.slice/user@0.service/benchgo.service']) {
+    let called;
+    const restart = await managedServerRestart('/profile', 'linux', {
+      home: '/home', env: {}, uid: () => 0,
+      read: async path => path === '/proc/self/cgroup' ? '0::' + group : JSON.stringify({ schemaVersion: 1, profile: '/profile', dataDir: '/data' }),
+      execute: async (...args) => { called = args; },
+    });
+    assert.ok(restart);
+    assert.equal(restart.receiptPath, join('/data', 'update-restart.json'));
+    await restart.request();
+    assert.deepEqual(called.slice(0, 2), ['systemctl', ['--user', '--no-block', 'restart', 'benchgo.service']]);
+    assert.equal(called[2].env.DBUS_SESSION_BUS_ADDRESS, 'unix:path=/run/user/0/bus');
+  }
+  for (const [profile, group] of [['/other', '/user@0.service/app.slice/benchgo.service'], ['/profile', '/system.slice/other.service']]) {
+    assert.equal(await managedServerRestart(profile, 'linux', {
+      read: async path => path === '/proc/self/cgroup' ? '0::' + group : JSON.stringify({ schemaVersion: 1, profile: '/profile', dataDir: '/data' }),
+    }), undefined);
+  }
+});
+
+test('manual managed restart shares task waiting and admission, and releases admission on failure', { timeout: 10_000 }, async t => {
+  const admission = createRestartAdmission();
+  let attempts = 0;
+  const f = await fixture(t, { installation: 'server', platform: 'linux',
+    host: { restartAdmission: admission, idlePollMs: 10, restartServer: async () => {
+      admission.check();
+    } },
+  });
+  f.setBusy(true);
+  await f.service.dispatch({ action: 'restart-host' });
+  assert.equal((await f.service.status()).lastAction, 'restart');
+  assert.doesNotThrow(() => admission.check());
+  f.setBusy(false);
+  await f.service.settled();
+  assert.match((await f.service.status()).error, /正在重启/);
+  assert.doesNotThrow(() => admission.check());
+  const next = await f.startService({ restartServer: async () => { attempts++; }, restartAdmission: admission });
+  t.after(() => next.close());
+  await next.dispatch({ action: 'restart-host' }); await next.settled();
+  assert.equal(attempts, 1);
+  assert.equal((await next.status()).hostHealth.restart, 'restarting');
+  assert.throws(() => admission.check(), { status: 503 });
+  await next.close();
+  assert.doesNotThrow(() => admission.check());
+});
+
+test('a prepared managed update resumes after plugin disposal without a second download', { timeout: 10_000 }, async t => {
+  let restarts = 0;
+  const f = await fixture(t, { installation: 'server', platform: 'linux', serverCatalog() {},
+    host: { idlePollMs: 10, restartServer: async () => { restarts++; } },
+    beforeActivate: () => { f.setBusy(true); },
+  });
+  await f.service.dispatch({ action: 'check' }); await f.service.settled();
+  await f.service.dispatch({ action: 'install' });
+  while (f.activated() !== 1) await delay(10);
+  await f.service.close();
+  assert.equal(restarts, 0);
+  f.setBusy(false);
+  const next = await f.startService();
+  t.after(() => next.close());
+  await next.settled();
+  assert.equal(restarts, 1);
+  assert.equal(f.downloads(), 1);
+  assert.equal(f.activated(), 1);
+});
 
 test('signed check, verified install, persistence and restart state form one complete update path', async t => {
   const f = await fixture(t, { appVersionInFeed: '0.1.2' });

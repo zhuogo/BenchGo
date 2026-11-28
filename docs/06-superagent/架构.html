@@ -14,7 +14,7 @@
   "title": "SuperAgent 总助手",
   "eyebrow": "SUPERAGENT / ORCHESTRATION",
   "subtitle": "A 的 Router 受理并持有唯一业务 Task；本地或 B 的 Harness 执行同一委托，事实回 A 落库和原来源交付。",
-  "boundary": "任务仅进行中、等待、完成三态。Worker 正常结束后保存它的最后一段话作为结果，任务记完成并通知 Router；没做成由 Router 读结果后直说，结果不满意由用户找 Router 派关联调整任务。真实审批、输入、暂停、中断和错误保持等待并写明原因。节点标记表示存在对应源码，安装版主路径仍须实际验收。 2026-11-15 已接通 A 唯一业务 Task → Link v2 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v2 每次冻结一个 Harness 与模型组合、无二级子代理委派，执行会话只读，跨设备产物传输不支持。 本机与跨设备外部 Worker 已接线。Router 与辅助角色固定使用官方 Harness。",
+  "boundary": "业务工单保留进行中、等待、完成三态。结果保存、通知送达、归档与执行退出各有独立事实。远端 Worker 复用 B 的官方或外部 Harness。真机、安装版和供应商验收范围见各模块正文。",
   "nodes": [
     {
       "id": "ingress",
@@ -69,7 +69,7 @@
       "sub": "持续对话 · 专属工具 · 快速委派",
       "symbol": "createAssistantEngine()",
       "plain": "用户与同一个总助手对话；Router 处理专属产品管理与协调，环境操作交给 Worker。",
-      "role": "Router 仅保留专属产品管理、任务协调与已装配的上下文工具；文件、命令、网页、技能、插件、MCP 和官方 subagents 等环境执行能力交给 Worker，不提供一两步直做的例外，分工见任务与执行.md。依持久主聊/旁聊归属复用官方 Agent 单写入生命周期，按安全边界装配当前有效档案版本和原会话历史，处理真实用户消息及持久内部信号。内存装配标记仅为缓存，缺失时在安全边界恢复装配，不要求用户手动结束原会话，不重放已执行动作；恢复契约及验证边界见模型与上下文.md。 跨设备仍由受理宿主 A 协调同一 Task；B 只承接执行，不调用 B 的 Router、研判或任务调度。",
+      "role": "Router 仅保留专属产品管理、任务协调与已装配的上下文工具；文件、命令、网页、技能、插件、MCP 和官方 subagents 等环境执行能力交给 Worker，不提供一两步直做的例外，分工见任务与执行.md。依持久主聊/旁聊归属复用官方 Agent 单写入生命周期，按安全边界装配当前有效档案版本和原会话历史，处理真实用户消息及持久内部信号。内存装配标记仅为缓存，缺失时在安全边界恢复装配，不要求用户手动结束原会话，不重放已执行动作；恢复契约及验证边界见模型与上下文.md。 跨设备仍由受理宿主 A 协调同一 Task；B 只承接执行，不调用 B 的 Router、研判或任务调度。 主聊和手动旁聊固定插队。当前回合沿用已选模型，新的 Router 模型设置在下一轮生效。清理主聊或手动旁聊时切换到新会话，工单继续沿原逻辑会话跟进。",
       "input": "用户原话、身份文档、历史与可信内部信号",
       "output": "直接回答与产品管理、任务查询/重命名/整理、委派/修订、原来源交付",
       "sources": [
@@ -78,7 +78,10 @@
         "plugins/superagent/src/router-tools.mjs",
         "plugins/superagent/src/conversation-management.mjs",
         "plugins/superagent/src/router-permissions.mjs",
-        "plugins/superagent/src/router-language-policy.mjs"
+        "plugins/superagent/src/router-language-policy.mjs",
+        "plugins/superagent/src/native-prompt-ingress.mjs",
+        "plugins/superagent/client/conversation.jsx",
+        "docs/06-superagent/对话交互.md"
       ],
       "note": "Router 也是官方 Agent Session，没有另一套推理循环；角色工具门只保留专属产品管理、协调与上下文能力，不验收 Worker 内容。assistant_projects 默认汇总本机和全部出站设备，显式 scope=local 只查本机，设备参数查询已授权目标，失败保留覆盖缺口；assistant_devices 是出站目录，assistant_device_status 是本机入站授权，均不冒充实时在线。有限设备管理已有接线；A 工单、B 独立执行及统一管理已有源码和定向 fixture，首次配对、秘密及目标确认仍走原设备中心。 Router 固定官方 Harness，主模型设置只选择供应商和模型。",
       "state": "implemented",
@@ -93,7 +96,7 @@
       "sub": "A 唯一业务账 · 统一查询与控制",
       "symbol": "assistant_tasks / assistant_task_manage / assistant_task_cleanup",
       "plain": "在哪台设备受理，业务工单就完整留在哪台宿主。",
-      "role": "受理宿主 A 在本机任务账保存唯一业务 Task、ownerHostId、可信逻辑来源、完整要求和 Mandate、任务输入账、Assignment/Run、控制意图、Result 与交付关联。本地和远端执行共用 TaskId 及任务查询、修订、控制和整理服务，B 的 executionId 只是执行定位。Router session 重建、项目导航及设备切换不改变归属；不合并成全局中心账。原有有界检索、展示版本、冻结子集归档和停止后归档沿同一领域规则执行。",
+      "role": "受理宿主 A 在本机任务账保存唯一业务 Task、ownerHostId、可信逻辑来源、完整要求和 Mandate、任务输入账、Assignment/Run、控制意图、Result 与交付关联。本地和远端执行共用 TaskId 及任务查询、修订、控制和整理服务，B 的 executionId 只是执行定位。Router session 重建、项目导航及设备切换不改变归属；不合并成全局中心账。有界检索、展示版本和冻结子集归档沿同一领域规则执行。官方归档立即生效，对运行中的会话同次请求停止。",
       "input": "A 的真实来源与要求 / 本地或远端执行事实",
       "output": "A 的唯一业务 Task、输入应用回执、结果与整理记录",
       "sources": [
@@ -105,13 +108,12 @@
         "plugins/superagent/src/conversation-management.mjs",
         "plugins/superagent/src/task-cleanup-store.mjs",
         "docs/06-superagent/任务与执行.md",
-        "plugins/superagent/src/task-cleanup-continuation.mjs",
-        "plugins/superagent/src/task-cleanup-continuation-store.mjs",
         "plugins/superagent/src/remote-assignment-executor.mjs",
         "plugins/superagent/src/remote-execution-store.mjs",
-        "plugins/superagent/test/owned-remote-execution-integration.test.mjs"
+        "plugins/superagent/test/owned-remote-execution-integration.test.mjs",
+        "plugins/superagent/src/worker-archive.mjs"
       ],
-      "note": "跨设备正式 Task、稳定归属、统一任务工具和执行投影已接线；A 保存要求意图，B 回传实际应用及退出事实，不存在两端业务状态机。五项 A coordinator→B 独立执行服务官方 Agent fixture 覆盖新链；真实数据根和物理双机待验。",
+      "note": "在冻结清单中选择精确子集，逐项保存回执。恢复只恢复列表展示。执行是否停止以执行端事实为准。",
       "state": "implemented",
       "x": 1200,
       "y": 160
@@ -124,14 +126,13 @@
       "sub": "创建分派、领取续租与动作许可",
       "symbol": "createOrchestrationRuntime() / createAssistantAssignmentWorker()",
       "plain": "后台服务把任务交给 Worker，执行边界核对领取身份、租约和工单状态。",
-      "role": "orchestration-runtime 每秒巡检并为新任务创建 Assignment，assignment-worker 领取所有可执行任务并续租，Worker 的普通工具由 Harness 原生执行。BenchGo 自有外部动作遵循对应动作服务的许可。叫停立即通知执行会话取消。 已明确授权的停止后归档在同一巡检派工前维护：核对原来源、精确任务、版本与执行身份，复用停止输入，真正退出后归档；重启可续办，不新增timer，通知只表达事实。 跨设备已接线：A 的同一编排按 Task 的执行位置选择本地或远端适配，不在 A 启动第二个 Worker；远端派发前持久保存稳定请求和执行身份。B 只核验委托和本机容量、接收执行，不运行 B 的业务编排。",
+      "role": "orchestration-runtime 为新任务创建 Assignment，assignment-worker 领取可执行任务并续租。普通工具由 Harness 执行，BenchGo 外部动作由对应服务核验许可。A 持久保存远端请求和执行身份后派发，B 核验委托与本机容量后执行。停止命令的受理和退出证明分别记录。",
       "input": "当前任务、要求/授权版本、待执行分派",
       "output": "有效 Assignment/Run 或等待原因",
       "sources": [
         "plugins/superagent/src/orchestration-runtime.mjs",
         "plugins/superagent/src/assignment-worker.mjs",
         "plugins/superagent/src/external-actions.mjs",
-        "plugins/superagent/src/task-cleanup-continuation.mjs",
         "plugins/superagent/src/remote-assignment-executor.mjs"
       ],
       "note": "单数据根只有一个编排所有者；领取与续租使用 owner、lease 和 fence，防止旧执行覆盖新结果。使用者权限由对应渠道适配器处理，核心不设主人/其他用户角色。 本地执行链和独立远端执行适配已有源码及定向 fixture；控制发出不等于远端已停止，租约过期或断线不能证明可重新派发。",
@@ -216,15 +217,17 @@
       "sub": "执行完成与可信送达独立记录",
       "symbol": "createOrchestrationRuntime()",
       "plain": "原聊天直接显示普通 Router 回复；外部渠道沿既有普通回复链路发送。",
-      "role": "桌面沿正常官方 Session 流式显示与历史保存，无任务结果专用投递中转。外部渠道复用普通回复的来源校验、发送、回执和失败处理；送达与任务完成分别记录，发送效果未知不盲重发，不回退已完成任务。",
+      "role": "桌面沿正常官方 Session 流式显示与历史保存，无任务结果专用投递中转。外部渠道复用普通回复的来源校验、发送、回执和失败处理；送达与任务完成分别记录，发送效果未知不盲重发，不回退已完成任务。 官方远端 Worker 的产物可从原回复或任务详情，经原 Link 会话预览与下载。",
       "input": "普通 Router 公开回复与原来源",
       "output": "投递回执、待交付原因和任务状态",
       "sources": [
         "plugins/superagent/src/orchestration-runtime.mjs",
         "plugins/superagent/src/direct-reply-delivery.mjs",
-        "plugins/superagent/src/channels/delivery-outcome.mjs"
+        "plugins/superagent/src/channels/delivery-outcome.mjs",
+        "plugins/superagent/client/execution-session-navigation.mjs",
+        "plugins/superagent/client/reply-file-navigation.mjs"
       ],
-      "note": "源码接线和定向验证通过；外部普通回复发送能力继续复用，安装版真实端到端仍待用户验收。排入队列、HTTP 接收、可信送达、已读和已播放是不同事实；失败不重跑 Worker。真实渠道端到端仍须用对应账号验收。",
+      "note": "源码接线和定向验证通过；外部普通回复发送能力继续复用，安装版真实端到端仍待用户验收。排入队列、HTTP 接收、可信送达、已读和已播放是不同事实；失败不重跑 Worker。真实渠道端到端仍须用对应账号验收。 外部 Worker 的远端产物预览与下载待接入。",
       "state": "implemented",
       "x": 60,
       "y": 740
@@ -309,7 +312,7 @@
       "sub": "assistant.db · ledger.db · 官方 Session · Markdown",
       "symbol": "createAssistantStore()",
       "plain": "任务、业务原文、对话原文和档案各有自己的权威存放处。",
-      "role": "三个自我迭代数据面：Markdown 保存权威事实与档案（按日详细事实、短总纲、对象视图、Dreams）；assistant.db 保存版本/journal、bank 分类与索引、统一维护队列/增量水位、技能及想法候选；官方 Session/ledger.db 保留各自原文证据。任务与投递仍由原控制面保存，不复制对话全文。 任务展示版本、有效期冻结预览、持久待归档项及正式回执位于同一 assistant.db；提交核对权威任务与执行版本，回收仅作用于过期未消费预览。 跨设备存储：A 完整保存这张业务 Task 的领域账与交付账，B 仅保存独立执行实例、官方会话/日志/产物、输入应用版本、回执和事件水位。两端保存不同职责的事实，不在 B 建第二份 Task，也不用可淘汰的引用元数据充当 A 的工单历史。",
+      "role": "三个自我迭代数据面：Markdown 保存权威事实与档案（按日详细事实、短总纲、对象视图、Dreams）；assistant.db 保存版本/journal、bank 分类与索引、统一维护队列/增量水位、技能及想法候选；官方 Session/ledger.db 保留各自原文证据。任务与投递仍由原控制面保存，不复制对话全文。 任务展示版本、有有效期的冻结预览与正式回执位于同一 assistant.db；提交核对权威任务与执行版本，回收仅作用于过期未消费预览。 跨设备存储：A 完整保存这张业务 Task 的领域账与交付账，B 仅保存独立执行实例、官方会话/日志/产物、输入应用版本、回执和事件水位。两端保存不同职责的事实，不在 B 建第二份 Task，也不用可淘汰的引用元数据充当 A 的工单历史。",
       "input": "任务与运行变化、业务原文、档案修改",
       "output": "可恢复的任务、结果、投递与档案记录",
       "sources": [
@@ -318,7 +321,6 @@
         "plugins/superagent/src/runtime-store.mjs",
         "plugins/superagent/src/ledger.mjs",
         "plugins/superagent/src/store.mjs",
-        "plugins/superagent/src/task-cleanup-continuation-store.mjs",
         "plugins/harness/src/remote-execution-store.mjs",
         "plugins/superagent/src/legacy-ownership-transfer.mjs",
         "scripts/migrate-remote-task-ownership.mjs",
@@ -969,7 +971,7 @@
         "plugins/harness/src/remote-execution-store.mjs",
         "plugins/harness/test/remote-execution.test.mjs"
       ],
-      "note": "A 正式工单→B 独立执行服务新链已接线；五项官方 Agent fixture 覆盖完成回流、问题/context、原 session 暂停恢复、连续 revision 和取消 cleanup。旧 B Task 接收链、assistant_remote_task、引用旁账及旧运行回退已删除。B v2 每次冻结一个 Harness 与模型组合，无二级子代理委派；B 会话只读，无跨设备产物传输。真物理双机、安装版与实际供应商请求待验。 A 可根据 B 的目录冻结 Codex 或 Claude Code 的执行组合，由 B 使用本机 API 凭据执行。",
+      "note": "A 正式工单→B 独立执行服务新链已接线；五项官方 Agent fixture 覆盖完成回流、问题/context、原 session 暂停恢复、连续 revision 和取消 cleanup。旧 B Task 接收链、assistant_remote_task、引用旁账及旧运行回退已删除。B v2 每次冻结一个 Harness 与模型组合。原执行会话可查看与归档，官方 Worker 产物通过原 Link 会话读取。外部 Worker 产物与二级子代理委派待接入。真物理双机、安装版与实际供应商请求待验。 A 可根据 B 的目录冻结 Codex 或 Claude Code 的执行组合，由 B 使用本机 API 凭据执行。",
       "state": "implemented",
       "x": 440,
       "y": 1580,
@@ -1369,6 +1371,11 @@
       "edge": 1
     },
     {
+      "node": "router",
+      "title": "插队发送与下一轮选模",
+      "text": "主聊和手动旁聊在原官方会话插队发送，当前回合沿用原模型。下一轮使用新保存的 Router 模型。"
+    },
+    {
       "node": "delivery",
       "title": "问答与产品管理沿原会话回复",
       "text": "普通问答以及状态、设置、记忆、提醒和任务协调由 Router 使用专属工具办理，沿原来源正常回复；不因此开展文件、网页或命令调查。内部结果通知仍只表达既有事实，不获得新执行授权。",
@@ -1387,10 +1394,9 @@
       "edge": 20
     },
     {
-      "node": "dispatch",
-      "title": "明确停止后归档，跨回合自动收尾",
-      "text": "只有用户明确要求停掉并归档时，宿主才冻结原真人来源、任务版本与执行身份。既有巡检先核对后续任务输入，再停止并等待真正退出、重新冻结归档；自然退出可继续，新执行或绑定该任务的新输入使待办失效。重启可续办，取消不逆转停止；原旁聊删除后抑制通知，不重建会话。模型不轮询，也不新增执行授权。",
-      "edge": 3
+      "node": "task",
+      "title": "在官方归档中同时请求停止",
+      "text": "Router 冻结本次真人指令对应的范围并提交已确认子集。官方立即归档，运行中的会话同时收到停止请求。退出按执行事实核验，归档回执可以恢复展示。"
     },
     {
       "node": "task",
@@ -1544,7 +1550,7 @@
       "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
-  "version": "2026-11-18-external-harness-api-2",
+  "version": "2026-11-28",
   "context": {
     "intro": "上下文按固定层、会话层与按需层装配。Router 使用四份稳定档案、短 MEMORY 总纲、小量对象 INDEX 和每次启动的简短协作对齐，详细事实、对象页与复盘按需；Worker 按需读取技能正文。当前回合后续可在安全边界刷新纠正，源码已接线，真实付费模型效果未验，边界见记忆与技能；全量 token 预算仍待实施。",
     "groups": [

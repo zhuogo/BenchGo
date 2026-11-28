@@ -312,7 +312,7 @@ test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persi
   assert.equal(authenticated, 1, 'opening the proxy uses one admission request');
   const response = await fetch(proxy.origin + path); assert.equal(response.headers.get('set-cookie'), null); assert.match(await response.text(), /href="\/s\/[A-Za-z0-9_-]+\/link\/workbench\//); assert.equal(successfulProxyRequests, 1, 'successful proxy responses notify the device center');
   assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'self' http:\/\/127.0.0.1:4444 dsh-app:/);
-  const publicProxy = await createDeviceProxy(target, { parentOrigin: 'https://owner.test', publicOrigin: 'https://work.test', publicPrefix: '/p/cloud-route' });
+  const publicProxy = await createDeviceProxy(target, { parentOrigin: 'https://owner.test', publicOrigin: 'https://work.test', publicPrefix: '/p/cloud-route', webRoot: new URL('../dist/web/', import.meta.url) });
   t.after(() => publicProxy.close());
   const publicEntry = new URL(await publicProxy.enter());
   assert.equal(publicEntry.origin, 'https://work.test'); assert.equal(publicEntry.pathname, '/p/cloud-route/enter');
@@ -320,6 +320,16 @@ test('pinned TLS proxy isolates credentials, rewrites base and multiplexes persi
   const publicLocation = publicLogin.headers.get('location'); assert.match(publicLocation, /^\/p\/cloud-route\/s\//);
   const publicPage = await fetch(publicProxy.origin + publicLocation.slice('/p/cloud-route'.length));
   assert.match(await publicPage.text(), /href="\/p\/cloud-route\/s\//);
+  const pickerTicket = new URL(publicProxy.enter());
+  pickerTicket.searchParams.set('projectPicker', '1');
+  const pickerLogin = await fetch(publicProxy.origin + '/enter' + pickerTicket.search, { redirect: 'manual' });
+  const pickerPath = pickerLogin.headers.get('location').slice('/p/cloud-route'.length);
+  assert.match(pickerPath, /\/link\/workbench\/project-picker$/);
+  const pickerPage = await fetch(publicProxy.origin + pickerPath);
+  assert.match(await pickerPage.text(), /<script src="\.\/workbench\.js" data-project-picker><\/script>/);
+  assert.match(pickerPage.headers.get('content-security-policy'), /frame-ancestors 'self' https:\/\/owner\.test/);
+  assert.equal((await fetch(publicProxy.origin + '/enter' + pickerTicket.search, { redirect: 'manual' })).status, 401);
+  assert.equal((await fetch(publicProxy.origin + pickerPath.replace(/\/s\/[^/]+/, '/s/' + 'x'.repeat(43)))).status, 403);
   const centerDirectory = join(directory, 'sidebar-owner'), registry = await openDeviceRegistry(centerDirectory);
   const saved = await registry.upsert({ ...target, name: '远端电脑', hostId: 'sha256:' + identity.pin, authorizationId: 'paired-sidebar' });
   const center = await createDeviceCenter({ directory: centerDirectory, webRoot: new URL('../dist/web/', import.meta.url), managerFactory: () => null });

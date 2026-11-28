@@ -14,7 +14,7 @@
   "title": "工作台与 Agent",
   "eyebrow": "WORKSPACE / AGENT",
   "subtitle": "统一客户端组织项目与真实会话；业务任务归发起宿主，执行可在远端，导航切换不转移任务所有权。",
-  "boundary": "图示来自当前工作区源码。外部 Agent 能力各异；本机工作台、SSH、真实原生会话和安装版界面需分别验收，不能由构建成功推定。 2026-11-15 已接通 A 唯一业务 Task → Link v2 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v2 每次冻结一个 Harness 与模型组合、无二级子代理委派，执行会话只读，跨设备产物传输不支持。",
+  "boundary": "工作台复用官方会话与已授权的 Link 资源，A 保留业务工单，B 提供执行会话与受限的资源管理。官方会话、外部 Agent、SSH 和安装版各有独立验收范围，见各模块设计。",
   "nodes": [
     {
       "id": "base",
@@ -72,7 +72,7 @@
         "plugins/base/client/sidebar-state.mjs",
         "plugins/base/src/web.mjs"
       ],
-      "note": "任务业务属于 SuperAgent，导航不另建执行队列。 项目/最近可选择本机、全部或指定设备，目标导航已接线，最近聚合保留原会话归属。 A 工单与 B 执行位置的统一展示、原任务管理及只读会话入口已接线；真实安装版待验。",
+      "note": "业务工单由 SuperAgent 管理。项目和最近按已保存的显示范围投影，保留资源与原会话的所属设备。",
       "state": "implemented",
       "x": 820,
       "y": 160
@@ -275,16 +275,18 @@
       "sub": "当前设备 · 全部 · 指定设备",
       "symbol": "共享显示设置",
       "plain": "一个设置同时控制项目和最近列表。",
-      "role": "默认当前工作台所属设备；全部包括已授权但暂时离线的设备。选择持久化并保持草稿和列表位置，仅影响项目/最近资源投影，不改变助手能力、任务 ownerHostId 或执行位置；切到 B 不将 A 的工单带入 B 的业务账。",
+      "role": "本机和配对工作台共用当前设备、所有已连接设备和指定设备三种显示范围，保存在当前工作台所属主机。组成员可见主机和组内设备，独立配对仅见其主机。显示范围只影响项目与最近列表。",
       "input": "用户选择的设备集合",
       "output": "侧栏查询范围",
       "sources": [
         "docs/02-工作台与Agent/跨设备资源导航.md",
         "plugins/link/client/resource-navigation.jsx",
         "plugins/link/client/resource-state.mjs",
-        "plugins/base/client/index.jsx"
+        "plugins/base/client/index.jsx",
+        "plugins/link/src/devices/center.mjs",
+        "plugins/link/src/transport/workbench.mjs"
       ],
-      "note": "已接当前/全部/指定范围，服务端保存与重载、保存失败重试。浏览器 fixture 已验，真实双机待验。",
+      "note": "保存时保留当前授权目录之外的已有选择。刷新展示当前授权内的选择，切换范围保留页面和草稿。",
       "state": "implemented",
       "x": 60,
       "y": 1040,
@@ -298,13 +300,15 @@
       "sub": "按设备查询 · 分页 · 部分失败",
       "symbol": "Link 资源服务",
       "plain": "某台设备离线，不影响其他设备的项目出现。",
-      "role": "复用统一跨设备服务按需查询摘要，限制并发、取消过期请求；缓存带来源和观测时间。保留各设备原有最近候选，不将项目全部会话重复收进最近。",
+      "role": "复用统一跨设备服务按需查询摘要，限制并发、取消过期请求；缓存带来源和观测时间。保留各设备原有最近候选，不将项目全部会话重复收进最近。 项目登记后独立刷新所属设备的项目摘要，并行准备新会话。同类读取仍在途时合并补读。",
       "input": "范围与逐设备分页条件",
       "output": "可辨识的项目 / 最近摘要",
       "sources": [
         "docs/01-设备与远程连接/跨设备协作.md",
         "plugins/link/src/devices/resources.mjs",
-        "plugins/link/src/session/adapter.mjs"
+        "plugins/link/src/session/adapter.mjs",
+        "plugins/link/client/resource-navigation.jsx",
+        "plugins/link/client/project-receiver.mjs"
       ],
       "note": "已接共享 Link 资源服务，旧目标无法核验最近候选时返回不支持。可见时每30秒刷新摘要，不同步完整历史。",
       "state": "implemented",
@@ -320,7 +324,7 @@
       "sub": "资源设备 · 工单宿主 · 原生执行",
       "symbol": "deviceId + project/session ID",
       "plain": "在当前工作台打开远端内容，清楚知道正在操作哪台设备。",
-      "role": "项目与最近保留所属设备及原始 ID，打开 B 资源保留 A 的对话、草稿和原 taskId；A 任务详情统一查询、修订与控制，显示 B 执行位置和观测时间。执行会话按 hostId / authorizationId 核验后通过 Link 在 B 原生查看，当前仅只读；普通 send/respond/cancel 与菜单写入不能绕过工单所有者。补充、修订和答复回 A 原任务入口办理；尚无 B 会话直接输入回传桥，A 不可达时不能在 B 另建工单或擅自应用输入。",
+      "role": "项目与最近保留所属设备及原始 ID，打开 B 的资源保留 A 的对话和草稿。核验目标与授权后可查看 B 的执行记录并返回 A 的原工单。经授权可归档与恢复会话。归档运行中的会话须经确认并同时请求停止。业务补充、修订和答复沿 A 的原任务入口。",
       "input": "资源 deviceId/sessionId 或 A 的 ownerHostId/taskId",
       "output": "原生资源/执行会话与 A 的统一任务入口",
       "sources": [
@@ -329,9 +333,13 @@
         "plugins/link/client/resource-state.mjs",
         "plugins/base/client/index.jsx",
         "docs/02-工作台与Agent/任务列表交互.md",
-        "docs/06-superagent/任务与执行.md"
+        "docs/06-superagent/任务与执行.md",
+        "plugins/link/src/session/adapter.mjs",
+        "plugins/link/src/session/actions.mjs",
+        "plugins/link/src/session/native.mjs",
+        "plugins/superagent/client/execution-session-navigation.mjs"
       ],
-      "note": "统一 A 任务投影、目标身份校验、B 只读执行会话与返回原工单入口已有接线。UI 39 项与四态、明暗、390px 组件验证通过；真实安装版待验。B 会话直接输入回传和跨设备产物预览/下载尚不支持，不把可查看会话当作可写。",
+      "note": "归档、请求停止和实际退出分别确认。官方 Worker 产物可经原 Link 会话预览或下载；外部 Worker 产物与直接输入回传待接入。",
       "state": "implemented",
       "x": 820,
       "y": 1040,
@@ -526,13 +534,13 @@
     },
     {
       "node": "cross-scope",
-      "title": "已接线：项目和最近显示多设备资源",
-      "text": "在侧栏设置中选择当前设备、所有已连接设备或指定设备。项目按设备分组；最近保留原有候选语义，再按活动时间聚合。"
+      "title": "按授权显示项目和最近",
+      "text": "本机与配对工作台共用显示菜单。组成员可选主机和组内设备，独立配对仅能选择所属主机。保存后在相应工作台恢复。"
     },
     {
       "node": "cross-navigation",
-      "title": "已接线：资源导航与原工单管理",
-      "text": "打开 B 资源保持 A 上下文，A 的任务详情仍使用原 taskId；B 执行会话通过身份核验后只读查看。业务补充、修订与答复只在 A 原任务入口，不支持 B 会话直接输入或跨设备产物传输。"
+      "title": "查看执行会话与返回原工单",
+      "text": "从 A 查看 B 的执行记录，保留原 taskId。经确认可归档运行中的会话并请求停止。补充、修订和答复从 A 原工单办理。"
     },
     {
       "node": "cross-availability",
@@ -584,7 +592,7 @@
       "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
-  "version": "2026-11-18-external-harness-api-2",
+  "version": "2026-11-28",
   "canvas": {
     "width": 1580,
     "height": 1280

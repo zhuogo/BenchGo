@@ -14,7 +14,7 @@
   "title": "更新与发布",
   "eyebrow": "BUILD / RELEASE",
   "subtitle": "统一安装先发现与复用，生产闭包保留实际依赖，部署资源校验缓存后交付；三平台原生、GUI 交接与公开发行分别验收。",
-  "boundary": "图中机制已有实现，但构建、签名、安装、激活与公网分发必须对当前产物分别验收。插件、桌面应用、Android 与服务器是不同更新边界；源码测试或 artifact 存在不代表已正式发布。  install、instance-reuse、payload-policy、sidebar-closure、deployment-resources 已有对应源码；状态仅表示所述实现范围，不表示三平台原生安装、GUI 交接、真实模型推理或公开发行通过。默认 full 保留完整离线 seed，显式 online 走固定签名资源与缓存；Office/Python/Node/dsh-ops 保留。",
+  "boundary": "签名基线决定本次构建及复用范围。功能包、桌面安装包、服务器种子和 Android 分别验收。受管 Linux 的重启协议与客户端恢复已有定向覆盖，跨版本自动更新仍按发布设计在实机或发行产物中验收。",
   "nodes": [
     {
       "id": "version",
@@ -111,7 +111,7 @@
       "sub": "一个公开版本，复用没有变化的组件",
       "symbol": "v<releaseVersion> · plugin-updates · app-updates",
       "plain": "普通 push 保存源码，显式统一发版才通知客户端。",
-      "role": "统一工作流先比较签名发行基线，按需调用功能包、Windows、Android 构建；全部验证后发布不可变资产，再推进原生及签名更新通道。默认只生成计划。",
+      "role": "统一工作流比较最近签名基线，按需构建插件、Windows、macOS、Linux 和 Android。插件版本变化时同步 macOS 与 Linux 原生种子。全部验证后发布不可变资产并推进更新通道。默认只生成计划。",
       "input": "已签名清单、完整包、显式发布选项",
       "output": "可匿名下载的发行包与更新通道",
       "sources": [
@@ -152,12 +152,14 @@
       "sub": "检查、下载、安装统一 admission",
       "symbol": "createUpdates() · mountUpdates()",
       "plain": "更新当前连接的主机，同时避开正在执行的任务。",
-      "role": "通过 /api/commander/updates 比较组件与兼容条件，返回统一 decision；用户只操作检查更新或长按更新。安装前检查 managed/兼容/忙碌，下载后再次检查任务，阻止并发变更。",
+      "role": "通过 /api/commander/updates 比较版本与兼容条件，统一返回进度与决策。受管 Linux 可先准备功能包再等待空闲，Windows 在安装前后检查任务。检查、下载和激活互斥。受管服务器的设备中心更新也复用此服务。",
       "input": "更新动作、当前版本、profile、运行任务状态",
       "output": "真实更新状态或冲突原因",
       "sources": [
         "plugins/base/src/updates.mjs",
-        "plugins/base/client/updates.jsx"
+        "plugins/base/client/updates.jsx",
+        "plugins/link/src/server/manager.mjs",
+        "plugins/link/src/server/owner-command.mjs"
       ],
       "note": "未知版本不显示已最新；远程手机看到的是主机插件状态，不是 APK 状态。",
       "state": "implemented",
@@ -205,21 +207,24 @@
     },
     {
       "id": "restart",
-      "title": "重启后解析与加载",
+      "title": "主机重启与工作台恢复",
       "kicker": "RESTART / RESOLVE",
       "kind": "finish",
-      "sub": "待重启 → 官方解析器 → 实际新版本",
-      "symbol": "getInstallState() · restartRequired",
-      "plain": "重启后真正加载新包，才能确认更新生效。",
-      "role": "更新服务比较已加载版本与激活版本，返回 restartRequired；安装器用随应用的运行时初始化 profile，客户端再显示实际版本。",
-      "input": "已激活 profile 与下一次主机启动",
-      "output": "实际加载的插件、五入口和客户端",
+      "sub": "确认运行版本、实例与模块就绪",
+      "symbol": "restartActivated() / managedServerRestart() / watchWorkbench()",
+      "plain": "受管 Linux 等任务结束再自动重启，客户端等目标工作台就绪后回到原地址。",
+      "role": "受管 Linux x64 排空已接收请求，再核对任务和实际激活指针，记录重启进度并请求所属 systemd 用户服务重启。Link 核对运行版本、工作台和原先可用的总助手。Windows 使用桌面原生安全重启入口。",
+      "input": "已激活版本、宿主任务与健康状态",
+      "output": "恢复目标版本和工作台，或保留准备结果和重试入口",
       "sources": [
         "plugins/base/src/updates.mjs",
         "plugins/base/shared/plugin-install.mjs",
-        "scripts/desktop/plugin-bundle.mjs"
+        "scripts/desktop/plugin-bundle.mjs",
+        "plugins/base/src/server-restart.mjs",
+        "plugins/link/client/workbench-recovery.mjs",
+        "plugins/link/src/transport/workbench.mjs"
       ],
-      "note": "必须检查物理包、官方解析入口与客户端，不只检查 manifest 版本。",
+      "note": "自动重启以受管宿主归属校验通过为前提。旧服务器保留设备中心部署入口，跨版本实机验收见发布设计。",
       "state": "implemented",
       "x": 440,
       "y": 740
@@ -435,7 +440,7 @@
     {
       "a": "activate",
       "b": "restart",
-      "label": "等待下次启动",
+      "label": "重启与就绪检查",
       "from": "r",
       "to": "l"
     },
@@ -522,8 +527,8 @@
     },
     {
       "node": "updates",
-      "title": "安装前后都核对忙碌状态",
-      "text": "检查当前安装与兼容性后下载包；下载期间若有新任务开始，安装被阻止，不切换运行中的业务代码。",
+      "title": "按宿主类型处理运行任务",
+      "text": "受管 Linux 可在任务运行时准备包，等待空闲再激活。Windows 安装前后检查任务，受阻时保留已验证的准备结果。",
       "edge": 5
     },
     {
@@ -534,8 +539,8 @@
     },
     {
       "node": "restart",
-      "title": "重启并核对实际加载",
-      "text": "启动后核对真实包、官方解析路径、五入口及客户端；仅看到下载完成或 manifest 新版本不能判定成功。",
+      "title": "确认新实例与工作台就绪",
+      "text": "受管 Linux 排空请求后自动重启。Link 在目标版本与所需组件就绪后沿原地址重新载入。Windows 走桌面安全重启。",
       "edge": 8
     },
     {
@@ -582,7 +587,7 @@
       "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
-  "version": "2026-11-16-installation-implementation-1",
+  "version": "2026-11-28",
   "canvas": {
     "width": 1580,
     "height": 1240

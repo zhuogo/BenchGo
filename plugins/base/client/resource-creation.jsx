@@ -7,15 +7,15 @@ import { deviceIcon, deviceStatus } from '../../link/client/device-state.mjs';
 import { ProjectDialog, ProjectPicker } from './project-picker.jsx';
 import { UIIcon } from './iconsax.jsx';
 
-function useProjectBridge(device) {
+function useProjectBridge(device, projectPicker = false) {
   const frame = useRef(null), [url, setUrl] = useState('');
   const identity = JSON.stringify([device.id, device.hostId, device.authorizationId]);
-  const bridge = useMemo(() => createProjectBridge({ deviceId: device.id, expectedDevice: device, onEntry: setUrl, getFrame: () => frame.current }), [identity]);
+  const bridge = useMemo(() => createProjectBridge({ deviceId: device.id, expectedDevice: device, projectPicker, onEntry: setUrl, getFrame: () => frame.current }), [identity, projectPicker]);
   useEffect(() => () => bridge.dispose(), [bridge]);
   return { frame, url, bridge };
 }
 function RemoteProjectPicker({ device, ...props }) {
-  const { frame, url, bridge } = useProjectBridge(device);
+  const { frame, url, bridge } = useProjectBridge(device, true);
   const api = async (action, args) => {
     const result = await bridge.api(action, args);
     if (action === 'browse' && result.folderManagement && !await bridge.supports('folder')) return { ...result, folderManagement: false };

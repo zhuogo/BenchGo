@@ -14,7 +14,7 @@
   "title": "设备与远程连接",
   "eyebrow": "REMOTE / LINK",
   "subtitle": "A 宿主持有业务任务，B 只提供执行；Link 复用认证、可信路线与有限协议，不依赖 B 的 SuperAgent。",
-  "boundary": "节点状态区分已有源码与待实施设计；连线表示职责关系，不代表链路已完成或通过真机验收。家庭 NAT、蜂窝网络、Android、ACME 与首次 SSH 部署仍需实测；公共中继控制面、区域调度为后续目标。当前源码仍装配 cloud-access，设计要求的默认入口收敛尚不能标为完成。 2026-11-15 已接通 A 唯一业务 Task → Link v2 execution → B 独立 benchgoExecution → A 事实/结果回流。A coordinator 与无 SuperAgent 的 B 独立服务及官方 Agent fixture 五项通过，Link execution catalog 真实 TLS/身份测试通过；UI 39 项及四态、明暗、390px 组件验证通过。这些不等于真物理双机、安装版或实际供应商验收。旧数据离线迁移 CLI 六项测试通过，未操作真实权威库；B v2 每次冻结一个 Harness 与模型组合、无二级子代理委派，执行会话只读，跨设备产物传输不支持。  统一本机 CLI 和已登记 Desktop/Web 发现已接线：交互默认浏览器，SSH/无头保留后台；同一 canonical profile 只有一个写入宿主，检测原 SSH/systemd 服务时不另建。未知旧 Harness profile 保守拒绝，三平台原生与 GUI 交接仍待实物验收；唯一契约见更新与发布板块。",
+  "boundary": "受托执行通过 Link v2 回传 A，B 独立提供执行服务。物理双机、蜂窝网络、Android、ACME 和首次 SSH 部署按各自路径验收。公网 owner 默认入口收敛仍待实施，当前源码含 cloud-access 和按部署配置启用的设备网关。",
   "nodes": [
     {
       "id": "entry",
@@ -131,7 +131,7 @@
         "plugins/link/src/devices/routes.mjs",
         "plugins/link/src/devices/remote.mjs"
       ],
-      "note": "证书、身份和 401/403 错误立即停止；选路发生在发送业务请求之前。",
+      "note": "证书、身份和 401/403 错误立即停止；选路发生在发送业务请求之前。 TLS 握手纳入请求期限，校验保存的 SPKI 后才发送凭据。",
       "state": "implemented",
       "x": 820,
       "y": 450
@@ -141,17 +141,19 @@
       "title": "客户端工作台代理",
       "kicker": "CLIENT PROXY",
       "kind": "execution",
-      "sub": "兑换工作台会话并代理页面与流量",
+      "sub": "工作台票据、请求转发与会话续签",
       "symbol": "createDeviceProxy()",
       "plain": "连接建立后，把远端工作台放进当前客户端。",
-      "role": "为选中的可信目标创建代理；使用设备凭据取得远程工作台会话，管理入口票据、资源转发、流和断开清理。",
+      "role": "桌面代理管理短时票据、HTTP 与多路复用流。目标明确报告配对会话过期时合并续签，仅在目标尚未受理流操作时重开。取消或到达期限时终止在途请求。",
       "input": "选中路线、设备 token、父页面来源",
       "output": "客户端可打开的工作台地址",
       "sources": [
         "plugins/link/src/devices/proxy.mjs",
-        "plugins/link/client/workbench-bridge.mjs"
+        "plugins/link/client/workbench-bridge.mjs",
+        "plugins/link/src/devices/remote.mjs",
+        "docs/01-设备与远程连接/设计.md#重启后的工作台连接"
       ],
-      "note": "切换路线会重建不匹配的代理实例；不能任意指定上游 URL。",
+      "note": "认证后的内容哈希字体优先从本机校验并加载，缺失时从目标读取。",
       "state": "implemented",
       "x": 440,
       "y": 450
@@ -164,13 +166,15 @@
       "sub": "Cookie 保护官方页面、API 与 Gateway",
       "symbol": "createWorkbench()",
       "plain": "看到的是目标主机原有工作台，数据仍在主机。",
-      "role": "通过设备授权创建 HttpOnly / Secure / SameSite=Strict 会话；复用已安装官方前端与连接 peer，承载资源、API、事件流及实时语音。",
+      "role": "通过设备授权创建 HttpOnly / Secure / SameSite=Strict 会话；复用已安装官方前端与连接 peer，承载资源、API、事件流及实时语音。 配对工作台提供按当前授权裁剪的项目与最近显示范围。",
       "input": "已批准设备凭据或有效工作台 Cookie",
       "output": "同一工作台页面、API、Gateway 与语音流",
       "sources": [
-        "plugins/link/src/transport/workbench.mjs"
+        "plugins/link/src/transport/workbench.mjs",
+        "plugins/link/src/index.mjs",
+        "plugins/link/client/workbench-recovery.mjs"
       ],
-      "note": "撤销设备会使会话失效并关闭对应 peer、事件流与语音连接。",
+      "note": "配对撤销关闭对应 peer、事件流与语音连接。观察到主机重启或实例变化后保留页面与草稿，等目标版本与必要组件就绪，再在原地址载入。",
       "state": "implemented",
       "x": 60,
       "y": 450
@@ -318,7 +322,7 @@
       "sub": "目标设备执行与回执",
       "symbol": "benchgoExecution / executionId",
       "plain": "B 运行 Worker、保存过程；这张业务工单只属于 A。",
-      "role": "B 根据 A 冻结的组合及 B 本机工具和凭据运行官方或外部 Worker。事件、提问、停止证明和结果回到 A 的原工单。",
+      "role": "B 根据 A 冻结的组合及 B 本机工具和凭据运行官方或外部 Worker。事件、提问、停止证明和结果回到 A 的原工单。 官方 Worker 的产物由目标原工作台按会话授权提供。",
       "input": "A 的稳定任务/执行身份、冻结要求与执行配置",
       "output": "B 的 executionId、原生会话、应用回执与执行事实",
       "sources": [
@@ -326,7 +330,8 @@
         "docs/06-superagent/服务契约.md",
         "plugins/harness/src/remote-execution.mjs",
         "plugins/harness/src/remote-execution-store.mjs",
-        "plugins/harness/test/remote-execution.test.mjs"
+        "plugins/harness/test/remote-execution.test.mjs",
+        "plugins/superagent/client/execution-session-navigation.mjs"
       ],
       "note": "协议和双宿主 TLS 已定向验证。物理双机与真实 API 待验。",
       "state": "partial",
@@ -374,7 +379,9 @@
       "y": 1325,
       "state": "implemented",
       "sources": [
-        "docs/01-设备与远程连接/SSH服务器运维.md"
+        "docs/01-设备与远程连接/SSH服务器运维.md",
+        "plugins/link/src/server/manager.mjs",
+        "plugins/link/src/server/owner-command.mjs"
       ]
     },
     {
@@ -654,10 +661,9 @@
       "edge": 6
     },
     {
-      "node": "sessions",
-      "title": "断线与撤销有明确归属",
-      "text": "断线释放流资源；主机撤销设备会清除凭据对应会话并关闭 peer。重新连接不得凭地址绕过身份验证。",
-      "edge": 7
+      "node": "workbench",
+      "title": "按原授权恢复连接",
+      "text": "会话过期时按原配对续签，授权撤销则进入连接恢复。主机重启时保留页面草稿，等目标版本、工作台及原先可用的总助手就绪后恢复。"
     },
     {
       "node": "cross-entry",
@@ -734,7 +740,7 @@
       "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
-  "version": "2026-11-18-external-harness-api-2",
+  "version": "2026-11-28",
   "canvas": {
     "width": 1580,
     "height": 1570

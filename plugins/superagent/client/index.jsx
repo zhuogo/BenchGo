@@ -449,7 +449,7 @@ export function readState(signal) {
   }
   return abortable(read.promise, signal);
 }
-async function api(action, args = {}, signal) {
+async function api(action, args = {}, signal, { announce = true } = {}) {
   if (action === 'state' && !Object.keys(args).length) return readState(signal);
   const order = assistantConfigSync.begin();
   let response;
@@ -460,11 +460,12 @@ async function api(action, args = {}, signal) {
   // Every poll and background retain ensures its thread. Only a first or replaced
   // session changes what the sidebar, ownership and review lists must reread.
   const threadId = args.threadId ?? 'main';
-  if (action === 'resetMain') ensuredSessions.delete('main');
-  if (action === 'resetMain' || (action === 'ensure' && ensuredSessions.get(threadId) !== response.sessionId)) {
+  const reset = action === 'resetMain' || action === 'resetThread';
+  if (reset) ensuredSessions.delete(threadId);
+  if (reset || (action === 'ensure' && ensuredSessions.get(threadId) !== response.sessionId)) {
     if (action === 'ensure') ensuredSessions.set(threadId, response.sessionId);
     invalidateAssistantState();
-    document.dispatchEvent(new Event('benchgo:assistant-changed'));
+    if (announce) document.dispatchEvent(new Event('benchgo:assistant-changed'));
   }
   return response;
 }
@@ -698,6 +699,12 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   const [snapshot, setSnapshot] = useState(null), [error, setError] = useState(''), [tab, setTab] = useState(selectedAssistantTab);
   const [threadId, setThreadId] = useState(selectedAssistantThread), [history, replaceHistory] = useState({ messages: [], running: false });
   const [requestedTask, setRequestedTask] = useState(selectedAssistantTask);
+  const [clearingId, setClearingId] = useState(null);
+  const clearingThread = useRef(null), clearCommand = useRef(null);
+  const threads = snapshot?.state?.threads || [];
+  const selected = threads.find(thread => thread.id === threadId);
+  const main = threadId === 'main', chatName = main ? '主聊天' : '旁聊';
+  const canClear = main || !!selected && !selected.sourceKey && !selected.archived;
   useEffect(() => {
     const openThread = event => select(event.detail);
     document.addEventListener('benchgo:assistant-thread', openThread);
@@ -719,14 +726,17 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   // One read per thread at a time. Callers arriving meanwhile share a single
   // trailing read, which starts after their change and therefore observes it.
   const refreshHistory = (id, signal) => {
+    if (clearingThread.current === id) return Promise.resolve();
     const reads = historyReads.current, active = reads.get(id);
+    const requestEpoch = epoch.current;
     const start = () => {
-      const entry = { queued: null };
+      if (epoch.current !== requestEpoch || clearingThread.current === id) return Promise.resolve();
+      const entry = { epoch: requestEpoch, queued: null };
       entry.running = readHistory(id).finally(() => { if (reads.get(id) === entry) reads.delete(id); });
       reads.set(id, entry);
       return entry.running;
     };
-    if (!active) return abortable(start(), signal);
+    if (!active || active.epoch !== requestEpoch) return abortable(start(), signal);
     active.queued ||= active.running.then(start, start);
     return abortable(active.queued, signal);
   };
@@ -735,7 +745,7 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   // The conversation context is memoized on these callbacks; they outlive history commits.
   const loadEarlier = useCallback(async () => {
     const { hasMore, nextBefore } = latestHistory.current;
-    if (!hasMore || nextBefore == null) return;
+    if (!hasMore || nextBefore == null || clearingThread.current === current.current) return;
     const id = current.current, requestEpoch = epoch.current;
     const page = await api('history', { threadId: id, before: nextBefore });
     if (current.current === id && epoch.current === requestEpoch) replaceHistory(previous => structuralShare(previous, mergeHistory(previous, page, true)));
@@ -763,7 +773,6 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
   const onRefresh = useCallback(() => refreshCurrent.current(), []);
   const stateRequest = useRef(0);
   const refresh = async (signal) => { const request = ++stateRequest.current; const value = await api('state', {}, signal); if (request === stateRequest.current) setSnapshot(previous => structuralShare(previous, { ...value, config: assistantConfigSync.getSnapshot() || value.config })); return value; };
-  const execute = async (operation) => { try { setError(''); await operation(); return true; } catch (cause) { setError(cause.message || String(cause)); return false; } };
   const loadErrors = useRef(new Map()), loadAttempts = useRef(new Map());
   const readResource = async (source, operation, signal) => {
     const attempt = (loadAttempts.current.get(source) || 0) + 1, requestEpoch = epoch.current;
@@ -786,34 +795,59 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
       ...(tab === 'chat' ? [readResource('chat', async () => { await api('ensure', { threadId }); await refreshHistory(threadId); })] : []),
     ]);
   };
-  const clearingMain = useRef(false), clearCommand = useRef(null);
-  const clearMain = async () => {
-    if (clearingMain.current || current.current !== 'main') return;
-    clearingMain.current = true;
+  const clearChat = async () => {
+    if (!canClear || clearingThread.current || current.current !== threadId) return;
+    clearingThread.current = threadId;
+    setClearingId(threadId);
+    setError('');
+    let cleared = false, sessionId;
+    const quiet = { announce: false };
+    const setChatSession = next => setSnapshot(value => value ? { ...value, state: { ...value.state,
+      ...(main ? { mainSessionId: next }
+        : { threads: value.state.threads.map(thread => thread.id === threadId ? { ...thread, sessionId: next } : thread) }),
+    } } : value);
     try {
-      await execute(async () => {
-        await api('resetMain');
-        epoch.current++;
+      await api(main ? 'resetMain' : 'resetThread', main ? {} : { threadId }, undefined, quiet);
+      cleared = true;
+      stateRequest.current++;
+      historyReads.current.delete(threadId);
+      setChatSession(null);
+      if (current.current === threadId) {
+        loadErrors.current.delete('chat');
         clearCommand.current.sessionId = null;
-        setSnapshot(value => value ? { ...value, state: { ...value.state, mainSessionId: null } } : value);
-        if (current.current === 'main') replaceHistory({ messages: [], running: false });
-        document.dispatchEvent(new Event('benchgo:assistant-changed'));
-        try {
-          await refresh();
-          if (current.current === 'main') { await api('ensure', { threadId: 'main' }); await refreshHistory('main'); }
-        } catch (cause) { setError('主聊天已清理，重新加载失败：' + (cause.message || String(cause))); }
-      });
-    } finally { clearingMain.current = false; }
+        epoch.current++;
+        replaceHistory({ messages: [], running: false });
+      }
+      ({ sessionId } = await api('ensure', { threadId }, undefined, quiet));
+      if (!sessionId) throw new Error('新会话未就绪');
+      if (current.current === threadId) replaceHistory({ sessionId, messages: [], running: false });
+      setChatSession(sessionId);
+    } catch (cause) {
+      const message = cause.message || String(cause);
+      if (current.current === threadId) setError(cleared ? `${chatName}已清理，重新加载失败：${message}` : message);
+    } finally {
+      clearingThread.current = null;
+      setClearingId(null);
+      if (cleared) {
+        stateRequest.current++;
+        // Publish once the old transcript has been replaced, outside the reset/open sequence.
+        setTimeout(() => {
+          document.dispatchEvent(new CustomEvent('benchgo:assistant-changed', { detail: clearCommand }));
+          if (sessionId && current.current === threadId) void readResource('chat', () => refreshHistory(threadId)).catch(() => {});
+          void refresh().catch(() => {}); // The page poll reports shared state read errors.
+        }, 0);
+      }
+    }
   };
-  clearCommand.current = { sessionId: threadId === 'main' ? history.sessionId : null, run: clearMain };
+  clearCommand.current = { sessionId: canClear && tab === 'chat' && !execution ? history.sessionId : null, run: clearChat };
   useEffect(() => {
     const registration = ctx.inject(['commandUi'], scope => {
       scope.effect(() => scope.commandUi.register({
         name: 'clear',
-        label: () => '清理主聊天',
-        description: () => '清空主聊天记录并开始新的对话',
+        label: () => '清理当前聊天',
+        description: () => '清空当前聊天记录并开始新的对话',
         icon: props => <UIIcon name="trash" {...props} />,
-        available: session => !!clearCommand.current?.sessionId && clearCommand.current.sessionId === session.sessionId,
+        available: session => !clearingThread.current && !!clearCommand.current?.sessionId && clearCommand.current.sessionId === session.sessionId,
         ui: { kind: 'action', run: session => { if (clearCommand.current?.sessionId === session.sessionId) void clearCommand.current.run(); } },
       }));
     });
@@ -829,7 +863,7 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
       try {
         await Promise.allSettled([
           readResource('state', () => refresh(controller.signal), controller.signal),
-          ...(tab === 'chat' ? [readResource('chat', async () => {
+          ...(tab === 'chat' && clearingThread.current !== threadId ? [readResource('chat', async () => {
             if (!opened) { await api('ensure', { threadId }, controller.signal); opened = true; }
             if (!disposed) await refreshHistory(threadId, controller.signal);
           }, controller.signal)] : []),
@@ -840,7 +874,11 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
         if (!disposed && visible()) timer = setTimeout(tick, controller.signal.aborted ? 0 : 30000);
       }
     };
-    const wake = () => { clearTimeout(timer); if (visible()) void tick(); else inFlight?.abort(); };
+    const wake = event => {
+      if (event?.type === 'benchgo:assistant-changed' && event.detail === clearCommand) return;
+      clearTimeout(timer);
+      if (visible()) void tick(); else inFlight?.abort();
+    };
     const unsubscribe = ctx?.layout?.panelInfo?.subscribe(wake);
     document.addEventListener('visibilitychange', wake);
     document.addEventListener('benchgo:assistant-changed', wake);
@@ -849,9 +887,7 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
     return () => { disposed = true; inFlight?.abort(); clearTimeout(timer); unsubscribe?.(); document.removeEventListener('visibilitychange', wake); document.removeEventListener('benchgo:assistant-changed', wake); window.removeEventListener('online', wake); };
   }, [threadId, tab, ctx]);
   const select = (id) => { const next = id || 'main'; selectedAssistantThread = next; setTab('chat'); if (current.current === next) return; epoch.current++; current.current = next; setThreadId(next); replaceHistory({ messages: [], running: false }); loadErrors.current.clear(); setError(''); };
-  const threads = snapshot?.state?.threads || [];
-  const selected = threads.find(thread => thread.id === threadId);
-  const view = tab === 'chat' ? 'chat' : 'studio';
+  const view = tab === 'chat' ? 'chat' : 'studio', clearingChat = threadId === clearingId;
   const dismissLoadError = () => { loadErrors.current.clear(); setError(''); };
   return <ActivityProvider>
     <BackgroundSessions ctx={ctx} state={snapshot?.state} selectedSessionId={history.sessionId} />
@@ -874,14 +910,15 @@ export function AssistantPage({ ctx, SessionProvider, renderSlot }) {
                 loadError={view === 'studio' ? error : ''} onRetryLoad={retryLoad} onDismissLoadError={dismissLoadError} />
             </RetainedPane>
             {view === 'chat' && <>
+              {clearingChat && history.sessionId && <Loading label={`正在清理${chatName}…`} compact />}
               {history.sessionId ? <AssistantConversation key={threadId} active={!execution} ctx={ctx}
                 sessionId={history.sessionId} threadId={threadId} channel={!!selected?.sourceKey} history={history} onLoadEarlier={loadEarlier} onRefresh={onRefresh}
                 SessionProvider={SessionProvider} renderSlot={renderSlot} api={api} assistantName={snapshot.config.name}
                 assistantConfig={snapshot.config} petExpression={snapshot.petExpression} onOpenResources={openResources} onOpenExecution={openExecution}
                 loadError={error} onRetryLoad={retryLoad} onDismissLoadError={dismissLoadError}
-                onClear={clearMain} onConfigureModel={!snapshot.config.models?.length ? configureModel : undefined} />
+                onClear={canClear ? clearChat : undefined} clearPending={clearingChat} onConfigureModel={!snapshot.config.models?.length ? configureModel : undefined} />
                 : error ? <ChatNoticeFeed message={`聊天暂未连接：${error}`} onRetry={retryLoad} />
-                  : <div className="ba-resource-initial"><Loading label={`正在打开${threadId === 'main' ? '主聊天' : '旁聊'}`} /></div>}
+                  : <div className="ba-resource-initial"><Loading label={`正在打开${chatName}`} /></div>}
             </>}
           </>}
       </div>

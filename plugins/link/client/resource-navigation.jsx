@@ -9,12 +9,14 @@ import {UIIcon} from '../../base/client/iconsax.jsx';
 import {deviceStatus,workbenchUrl} from './device-state.mjs';
 import {observeHostTheme,sendWorkbenchTheme,themedWorkbenchUrl} from './device-theme.mjs';
 import {deviceLauncherMode} from './device-navigation.mjs';
+import {createProjectReceiver,projectInput,projectPickerActions} from './project-receiver.mjs';
 import {deviceRequest,normalizeScope,scopeDevices,resourceKey,readResourcePages,mergeResourcePage,sortResourceRecents,sessionActionAccess,canRetryResource,resourceRetryDelay,resourceQueryFailure,resourceRequestId} from './resource-state.mjs';
 
 export function useResourceNavigation(enabled,showArchived){
-  enabled=enabled&&(deviceLauncherMode()!=='remote'||globalThis.__DSH_LINK_GROUP_RESOURCES__===true);
+  enabled=enabled&&(deviceLauncherMode()!=='remote'||globalThis.__DSH_LINK_RESOURCES__===true||globalThis.__DSH_LINK_GROUP_RESOURCES__===true);
   const [scope,setScope]=useState(normalizeScope()),[devices,setDevices]=useState([]),[activeId,setActiveId]=useState('local'),[pages,setPages]=useState({}),[error,setError]=useState(''),[saveError,setSaveError]=useState(''),[saving,setSaving]=useState(false),[ready,setReady]=useState(false),[revision,setRevision]=useState(0);
   const generation=useRef(0),draft=useRef(null),identities=useRef(new Map()),touched=useRef(false),pageRef=useRef({}),requests=useRef(new Map()),deviceVersion=useRef(0),archiveView=useRef(showArchived);
+  const projectRefresh=useRef(null);
   const [connecting,setConnecting]=useState(false);
   const updatePages=update=>{const value=update(pageRef.current);pageRef.current=value;setPages(value);};
   const updateDevices=value=>{
@@ -35,10 +37,9 @@ export function useResourceNavigation(enabled,showArchived){
       running=true;deferred=false;const request=new AbortController();activeRequest=request;
       const deviceRead=++deviceVersion.current,signal=AbortSignal.any([controller.signal,request.signal,AbortSignal.timeout(15000)]);
       try{
-        const result=await deviceRequest('devices',{},signal);
+        const [result,config]=await Promise.all([deviceRequest('devices',{},signal),deviceRequest('resourceScope',{},signal)]);
         if(!valid)return;
         if(deviceRead===deviceVersion.current)updateDevices(result);
-        const config=await deviceRequest('resourceScope',{},signal);
         if(valid){if(!touched.current)setScope(normalizeScope(config.scope));setReady(true);setError('');setConnecting(false);attempt=0;discovered=true;}
       }catch(e){if(valid&&!controller.signal.aborted&&!request.signal.aborted){const retry=canRetryResource(resourceQueryFailure(e));setError(e.message);setConnecting(retry);setReady(true);if(retry)timer=setTimeout(read,resourceRetryDelay(++attempt));}}
       finally{running=false;if(valid&&rerun){rerun=false;void read();}}
@@ -53,6 +54,7 @@ export function useResourceNavigation(enabled,showArchived){
     const id=++generation.current;
     let disposed=false,running=false,rerun=false,timer,controller;
     const schedule=new Map();
+    const changedProjects=new Set();
     const changed=new Set(remote.filter(device=>identities.current.has(device.id)&&identities.current.get(device.id)!==JSON.stringify([device.hostId,device.authorizationId])).map(device=>device.id));
     const archiveChanged=archiveView.current!==showArchived;archiveView.current=showArchived;
     identities.current=new Map(remote.map(device=>[device.id,JSON.stringify([device.hostId,device.authorizationId])]));
@@ -60,6 +62,7 @@ export function useResourceNavigation(enabled,showArchived){
     const load=async(device,kind,signal)=>{
       const key=device.id+'\0'+kind;
       if(requests.current.has(key)||signal.aborted)return;
+      if(kind==='projects')changedProjects.delete(device.id);
       const request=new AbortController(),bounded=AbortSignal.any([signal,request.signal,AbortSignal.timeout(15000)]);
       requests.current.set(key,request);
       const previous=pageRef.current[key];
@@ -81,16 +84,24 @@ export function useResourceNavigation(enabled,showArchived){
         if(requests.current.get(key)===request){
           requests.current.delete(key);
           if(id===generation.current)updatePages(old=>({...old,[key]:{...old[key],loading:false,refreshing:false}}));
+          refreshChanged();
         }
       }
     };
+    const pendingProject=deviceId=>changedProjects.has(deviceId)&&!requests.current.has(deviceId+'\0projects');
     const refresh=async(force=true)=>{
+      if(disposed||document.hidden||!remote.length||running)return;
       clearTimeout(timer);
-      if(disposed||document.hidden||!remote.length)return;
-      if(running)return;
       running=true;controller=new AbortController();const signal=controller.signal;
       try{
-        let cursor=0;const jobs=remote.flatMap(device=>['projects','recent','capabilities'].filter(kind=>{const next=schedule.get(device.id+'\0'+kind)?.next;return next!==Infinity&&(force||!next||next<=Date.now());}).map(kind=>[device,kind]));
+        let cursor=0;
+        const changed=remote.filter(device=>pendingProject(device.id));
+        const jobs=changed.map(device=>[device,'projects']);
+        jobs.push(...remote.flatMap(device=>['projects','recent','capabilities'].filter(kind=>{
+          if(kind==='projects'&&changedProjects.has(device.id))return false;
+          const next=schedule.get(device.id+'\0'+kind)?.next;
+          return next!==Infinity&&(force||!next||next<=Date.now());
+        }).map(kind=>[device,kind])));
         await Promise.all(Array.from({length:Math.min(4,jobs.length)},async()=>{while(cursor<jobs.length&&!signal.aborted){const [device,kind]=jobs[cursor++];await load(device,kind,signal);}}));
         if(!signal.aborted&&id===generation.current){
           const version=++deviceVersion.current,result=await deviceRequest('devices',{},AbortSignal.any([signal,AbortSignal.timeout(15000)]));
@@ -100,31 +111,44 @@ export function useResourceNavigation(enabled,showArchived){
         // Per-device reads retain their own errors; a failed status read must not erase them.
       }finally{
         running=false;
-        if(!disposed&&!document.hidden){if(rerun){rerun=false;void refresh();}else timer=setTimeout(()=>refresh(false),Math.max(250,Math.min(30000,...[...schedule.values()].map(value=>value.next-Date.now()))));}
+        if(!disposed&&!document.hidden){
+          if(rerun){rerun=false;void refresh();}
+          else if([...changedProjects].some(pendingProject))void refresh(false);
+          else timer=setTimeout(()=>refresh(false),Math.max(250,Math.min(30000,...[...schedule.values()].map(value=>value.next-Date.now()))));
+        }
       }
     };
+    const refreshChanged=()=>{
+      if(disposed||document.hidden)return;
+      for(const device of remote.filter(device=>pendingProject(device.id)))void load(device,'projects',controller?.signal||new AbortController().signal);
+    };
+    projectRefresh.current={invalidate(device){
+      if(!remote.some(row=>row.id===device?.id&&row.hostId===device.hostId&&row.authorizationId===device.authorizationId))return;
+      changedProjects.add(device.id);
+      refreshChanged();
+    },flush:refreshChanged};
     const visibility=()=>{
       if(document.hidden){clearTimeout(timer);controller?.abort();requests.current.forEach(request=>request.abort());}
       else if(running){rerun=true;}
       else void refresh();
     };
     void refresh();document.addEventListener('visibilitychange',visibility);window.addEventListener('online',visibility);
-    return()=>{disposed=true;generation.current++;clearTimeout(timer);controller?.abort();requests.current.forEach(request=>request.abort());requests.current.clear();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('online',visibility);};
+    return()=>{disposed=true;generation.current++;projectRefresh.current=null;clearTimeout(timer);controller?.abort();requests.current.forEach(request=>request.abort());requests.current.clear();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('online',visibility);};
   },[enabled,ready,signature,showArchived,revision]);
-  const save=async value=>{touched.current=true;setReady(true);draft.current=normalizeScope(value);setScope(draft.current);setSaving(true);setSaveError('');try{const result=await deviceRequest('setResourceScope',{scope:draft.current});setScope(normalizeScope(result.scope||draft.current));draft.current=null;}catch(e){setSaveError('显示范围未保存：'+e.message);}finally{setSaving(false);}};
+  const save=async value=>{touched.current=true;setReady(true);draft.current=normalizeScope(value);setScope(draft.current);setSaving(true);setSaveError('');try{const result=await deviceRequest('setResourceScope',{scope:draft.current},AbortSignal.timeout(15000));setScope(normalizeScope(result.scope||draft.current));draft.current=null;}catch(e){setSaveError('显示范围未保存：'+e.message);}finally{setSaving(false);}};
   const more=async(device,kind)=>{
     const version=generation.current,key=device.id+'\0'+kind,previous=pageRef.current[key];
     if(document.hidden||requests.current.has(key)||!previous?.hasMore)return;
     const controller=new AbortController();requests.current.set(key,controller);
     updatePages(old=>({...old,[key]:{...old[key],loading:true,refreshing:true}}));
     try{
-      const value=await deviceRequest('resources',{deviceId:device.id,kind,offset:previous.items?.length||0,limit:30,archived:showArchived},controller.signal);
+      const value=await deviceRequest('resources',{deviceId:device.id,kind,offset:previous.items?.length||0,limit:30,archived:showArchived},AbortSignal.any([controller.signal,AbortSignal.timeout(15000)]));
       const page=value.devices?.[0];
       if(!page||!Array.isArray(page.items))throw Error('设备资源响应无效');
       if(!controller.signal.aborted&&version===generation.current)updatePages(old=>({...old,[key]:mergeResourcePage(old[key],page,true)}));
     }catch(e){if(!controller.signal.aborted&&version===generation.current)updatePages(old=>({...old,[key]:mergeResourcePage(old[key],resourceQueryFailure(e))}));}
     finally{
-      if(requests.current.get(key)===controller){requests.current.delete(key);if(version===generation.current)updatePages(old=>({...old,[key]:{...old[key],loading:false,refreshing:false}}));}
+      if(requests.current.get(key)===controller){requests.current.delete(key);if(version===generation.current){updatePages(old=>({...old,[key]:{...old[key],loading:false,refreshing:false}}));projectRefresh.current?.flush();}}
     }
   };
   // Current/All include the already mounted local workspace even while device
@@ -138,7 +162,7 @@ export function useResourceNavigation(enabled,showArchived){
     setRevision(v=>v+1);
     return result;
   };
-  return {enabled,scope:enabled?scope:normalizeScope(),devices,activeId,selected,remote,pages,error:enabled?(saveError||error):'',saveError:enabled?saveError:'',connecting,saving,ready,save,more,sessionAction,revision,retry:()=>setRevision(v=>v+1),showLocal:!enabled||scope.mode!=='selected'||scope.deviceIds.includes(activeId)};
+  return {enabled,scope:enabled?scope:normalizeScope(),devices,activeId,selected,remote,pages,error:enabled?(saveError||error):'',saveError:enabled?saveError:'',connecting,saving,ready,save,more,sessionAction,revision,refreshProjects:device=>projectRefresh.current?.invalidate(device),retry:()=>setRevision(v=>v+1),showLocal:!enabled||scope.mode!=='selected'||scope.deviceIds.includes(activeId)};
 }
 export function ResourceScope({navigation:n}){const [open,setOpen]=useState(false);return <div className="cmd-resource-scope"><Menu className="cmd-resource-scope-anchor" open={open} onClose={()=>setOpen(false)} portal autoFocus compact listClassName="cmd-resource-scope-menu" items={[{type:'label',id:'heading',text:'项目与最近 · 显示范围'},...['current','all','selected'].map((id,i)=>({id,disabled:n.saving,label:['当前设备（工作台主机）','所有已连接设备','指定设备'][i],icon:<span aria-hidden="true">{n.scope.mode===id?'✓':''}</span>}))]} onSelect={mode=>{void n.save({...n.scope,mode});if(mode!=='selected')setOpen(false);}} anchor={<Tooltip label={'显示范围：'+({current:'当前设备',all:'所有已连接设备',selected:'指定设备'})[n.scope.mode]}><button type="button" aria-label="显示范围" aria-haspopup="menu" aria-expanded={open} onClick={()=>setOpen(!open)}><UIIcon name="filter" size={16}/><span className="cmd-resource-scope-label">显示</span></button></Tooltip>}>
   {n.scope.mode==='selected'&&<div className="cmd-resource-devices">{n.devices.map(device=><label key={device.id}><input type="checkbox" checked={n.scope.deviceIds.includes(device.id)} disabled={n.saving} onChange={event=>void n.save({...n.scope,deviceIds:event.target.checked?[...n.scope.deviceIds,device.id]:n.scope.deviceIds.filter(id=>id!==device.id)})}/><span>{device.name}</span>{deviceStatus(device)&&<small>{deviceStatus(device)}</small>}</label>)}</div>}
@@ -371,9 +395,8 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
     blocks.set(id, policy);
     restoreInput = () => { if (blocks.storeFor(id).getSnapshot() === policy) blocks.set(id, previous); };
   };
-  const requests = new Map(), projectRequests = new Map(), cancellations = new Set();
-  const projectActions = typeof projectApi === 'function' ? ['browse', 'project', 'clone'] : [];
-  if (projectActions.length && projectFolderActions) projectActions.push('folder');
+  const requests = new Map(), cancellations = new Set();
+  const projectActions = typeof projectApi === 'function' ? projectPickerActions.filter(action => action !== 'folder' || projectFolderActions) : [];
   if (typeof host.workspaces?.delete === 'function' && typeof getDefaultProjectId === 'function') projectActions.push('deleteProject');
   const loadedValue = async (list, pick, label) => {
     const find = () => pick(list.getSnapshot());
@@ -441,6 +464,20 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
     window.parent.postMessage({ type: 'benchgo:resource:ready', projectActions,
       executionReadOnly: !!(host.conversation?.blocks?.storeFor && host.conversation?.blocks?.set), files: fileWorkspaceAvailable(), sessionDevices: typeof onSessionDevices === 'function' }, origin);
   };
+  const receiveProject = createProjectReceiver(projectActions, async (action, args) => {
+    if (disposed) throw Error('工作台已关闭');
+    if (action !== 'deleteProject') return projectApi(action, projectInput(action, args));
+    if (typeof args?.id !== 'string' || !args.id || typeof args.path !== 'string' || !args.path) throw Error('项目引用无效，请刷新后重试');
+    const defaultId = await getDefaultProjectId();
+    if (disposed) throw Error('工作台已关闭');
+    if (typeof defaultId !== 'string' || !defaultId) throw Error('默认项目身份尚未就绪，请刷新后重试');
+    const project = await loadedValue(host.workspaces.list, snapshot => snapshot.items.find(item => (item.workspaceId || item.id) === args.id), '项目列表');
+    if (disposed) throw Error('工作台已关闭');
+    if (!project || project.path !== args.path) throw Error('项目身份已变化，请刷新后重试');
+    if (project.isDefault || args.id === defaultId) throw Error('默认项目不可删除');
+    await host.workspaces.delete(args.id);
+    return { deleted: true, id: args.id };
+  }, result => { if (!disposed) window.parent.postMessage(result, origin); });
   const receive = (event, local = false) => {
     if (!local && (event.source !== window.parent || event.origin !== origin)) return;
     if (event.data?.type === 'benchgo:resource:probe') { ready(); return; }
@@ -454,40 +491,7 @@ export function installResourceReceiver(host, { open, newSession, addProject, pr
       return;
     }
     if (event.data?.type === 'benchgo:project:call') {
-      const { action, args, requestId } = event.data;
-      if (typeof requestId !== 'string' || requestId.length > 200) return;
-      if (!projectRequests.has(requestId)) {
-        if (projectRequests.size >= 128) {
-          const retired = [...projectRequests].find(([, entry]) => entry.done);
-          if (retired) projectRequests.delete(retired[0]);
-          else { window.parent.postMessage({ type: 'benchgo:project:result', requestId, error: '项目操作繁忙，请稍后重试' }, origin); return; }
-        }
-        const entry = { done: false };
-        entry.promise = Promise.resolve().then(async () => {
-          if (disposed) throw Error('工作台已关闭');
-          if (!projectActions.includes(action)) throw Error('目标不支持此项目操作，请更新 BenchGo');
-          if (action === 'deleteProject') {
-            if (typeof args?.id !== 'string' || !args.id || typeof args.path !== 'string' || !args.path) throw Error('项目引用无效，请刷新后重试');
-            const defaultId = await getDefaultProjectId();
-            if (disposed) throw Error('工作台已关闭');
-            if (typeof defaultId !== 'string' || !defaultId) throw Error('默认项目身份尚未就绪，请刷新后重试');
-            const project = await loadedValue(host.workspaces.list, snapshot => snapshot.items.find(item => (item.workspaceId || item.id) === args.id), '项目列表');
-            if (disposed) throw Error('工作台已关闭');
-            if (!project || project.path !== args.path) throw Error('项目身份已变化，请刷新后重试');
-            if (project.isDefault || args.id === defaultId) throw Error('默认项目不可删除');
-            await host.workspaces.delete(args.id);
-            return { type: 'benchgo:project:result', requestId, value: { deleted: true, id: args.id } };
-          }
-          let input;
-          if (action === 'folder') {
-            const { operation, directory, path, name, destination } = args ?? {};
-            input = { operation, directory, path, name, destination };
-          } else input = action === 'clone' ? { url: args?.url } : args?.path === undefined ? {} : { path: args.path };
-          return { type: 'benchgo:project:result', requestId, value: await projectApi(action, input) };
-        }).catch(reason => ({ type: 'benchgo:project:result', requestId, error: reason.message })).finally(() => { entry.done = true; });
-        projectRequests.set(requestId, entry);
-      }
-      void projectRequests.get(requestId).promise.then(result => { if (!disposed) window.parent.postMessage(result, origin); });
+      receiveProject(event.data);
       return;
     }
     if (event.data?.type !== 'benchgo:resource:open' || typeof event.data.requestId !== 'string') return;

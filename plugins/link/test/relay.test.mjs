@@ -288,7 +288,7 @@ test('real relay isolates anonymous traffic and each verified device quota, incl
   const relayPort = await freePort(), origin = `https://localhost:${relayPort}`;
   request.relayCert = identity.cert; request.relayOrigin = origin;
   await writeFile(join(directory, 'index.html'), '<html></html>');
-  const workbench = createWorkbench({ webServer: { renderIndex: html => html }, connection: {
+  const workbench = createWorkbench({ get: () => undefined, webServer: { renderIndex: html => html }, connection: {
     createPeer: () => ({ dispose: async () => {} }),
     createSharedFetchHandler: () => ({ fetch: async () => Response.json({ ok: true }) }),
   } }, store, { workbenchRoot: directory });

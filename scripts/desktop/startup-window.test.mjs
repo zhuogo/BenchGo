@@ -217,6 +217,8 @@ test('startup timing records bounded phases and total elapsed time without slowi
   const saved = JSON.parse(await readFile(join(directory, 'benchgo-startup.json'), 'utf8'));
   assert.equal(saved.status, 'workspace-ready');
   assert.equal(saved.elapsedMs, 100);
+  assert.equal(saved.processElapsedMs, 200);
+  assert.equal(saved.processStartedAt, new Date(performance.timeOrigin).toISOString());
   assert.deepEqual(saved.stages, [
     { stage: 'started', elapsedMs: 0, durationMs: 0 },
     { stage: 'host-starting', elapsedMs: 25, durationMs: 25 },

@@ -46,7 +46,7 @@ async function fixture() {
       const ordering=!idleMode&&['mixed','reordered'].includes(stage),second={...human,id:'second',source:{kind:'user',rpcId:'second-rpc'},content:[{type:'text',text:'这是第二条排队要求'}]};
       const inbox=ordering?{'next-turn':stage==='reordered'?[second,human]:[human,second]}:inputMode&&stage==='inbox'?{[queued?'next-turn':'next-step']:[human,{...human,id:'private',source:{kind:'benchgo-task-reply'},content:[{type:'text',text:'PRIVATE_NOTICE'}]}]}:{};
       let Official, ModelSetup, retains=0;
-      const ctx={effect:fn=>fn(),slots:{inject:(_name,fn)=>fn(),register:({name},Component)=>{
+      const ctx={effect:fn=>fn(),slots:{entries:()=>[],subscribe:()=>()=>{},inject:(_name,fn)=>fn(),register:({name},Component)=>{
         if(name==='benchgo.assistant.conversation')Official=Component;
         if(name==='conversation.input.dock')ModelSetup=Component;
         return()=>{};
@@ -106,7 +106,7 @@ async function fixture() {
       const session={sessionId,openState:'open',running:false,subagent:null,pendingSubmissions:[]};
       let history={sessionId,threadId,lastEndSeq:11,error:'服务器历史中的旧错误',messages:[{id:'human',role:'user',seq:7,text:'请检查服务是否正常'}]};
       let continuation=11, turnEnd={seq:11,data:{reason:{kind:'error',error:{message:'模型响应超时'}}}};
-      const ctx={effect:fn=>fn(),slots:{inject:(_name,fn)=>fn(),register:({name},Component)=>{if(name==='benchgo.assistant.conversation')Official=Component;return noop}},
+      const ctx={effect:fn=>fn(),slots:{entries:()=>[],subscribe:()=>noop,inject:(_name,fn)=>fn(),register:({name},Component)=>{if(name==='benchgo.assistant.conversation')Official=Component;return noop}},
         uiConversation:{binding:()=>({activate:noop})},
         sessions:{retain:()=>({binding,ready:Promise.resolve(),release:noop})}};
       let Official;

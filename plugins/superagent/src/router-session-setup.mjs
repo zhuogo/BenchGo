@@ -23,10 +23,10 @@ const replyToolEnabled = (_kind, name) => name === 'assistant_reply';
 /** Assembles one Router conversation on its official Agent: model routing and fallback, prompt sections, tools, gates and turn hooks. */
 export function createRouterSessionSetup(runtime, { threadId, record, role, recoveredEvidence, presets }) {
   const { ctx, store, now, cooldownMs, builtinLayer, Compaction, appendRecord, appendChatRecord, setupTools, scheduleBridge, onSourceMessage, emit, mark,
-    timings, thread, taskOwnerScope, mayReplyToTask, isStopped, cooldowns, errors, failures, models, activeRoutes,
+    timings, thread, taskOwnerScope, mayReplyToTask, isStopped, cooldowns, errors, failures, models,
     agentCompaction } = runtime;
   const routerContext = createRouterContext({ store, sessionId: record.sessionId });
-  let contextText = '', selection, replyTurn, failedPlan, claimedMessages = [], currentTurn, resumeFallback;
+  let contextText = '', selection, replyTurn, failedPlan, claimedMessages = [], currentTurn, startedTurn, resumeFallback;
   let replayCalls = new Set();
   const advanceModel = () => {
     if (!selection) return false;
@@ -69,7 +69,6 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
         const plan = readModelFallbacks(agent.session.snapshotEvents()).get(message.source.fallbackId);
         if (plan && !plan.cancelled && plan.message.id === message.id) {
           selection = { turnKey: plan.requestId, models: copy(plan.models), index: plan.index, failures: copy(plan.failures) };
-          activeRoutes.set(agent, selection);
           replyTurn = plan.requestId;
           const original = agent.session.snapshotEvents().find(event => event.type === 'user/message' && event.data?.id === plan.requestId)?.data
             || plan.uncommitted?.find(message => message.id === plan.requestId);
@@ -86,9 +85,11 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
       else if (request.source.kind === routerRecoverySource && request.source.sessionId === agent.id) replyTurn = request.source.requestId;
       const route = routes().findLast(event => event.data.messageId === request.id
         || (request.source.rpcId && event.data.requestId === request.source.rpcId))?.data;
-      if (route) {
+      if (route?.requestId && startedTurn === turn && selection) {
+        // Native steering changes the reply owner while keeping the running turn's model and fallback position.
+        selection.turnKey = replyTurn ?? turn;
+      } else if (route) {
         selection = { turnKey: replyTurn ?? turn, models: copy(route.models), index: 0, failures: [] };
-        activeRoutes.set(agent, selection);
         replayCalls = new Set();
         select(selection.models[0]);
       }
@@ -217,6 +218,7 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
     scope.systemPrompt.section({ name: 'benchgo-chat-publication', order: -86, interpolate: false, text: 'Ordinary text streams visibly to the user. A brief acknowledgement can precede tools in the same turn; assistant_reply publishes and ends the turn, so use ordinary text when continuing work. Normal final text is published on successful turn completion. Avoid repeating acknowledgements or narrating each tool step; the UI shows activity. Report saved Worker results naturally when notified. Publishing a reply is not action approval; keep secrets and private reasoning out of visible text.' });
     scope.systemPrompt.section({ name: 'benchgo-router-tools', order: -88, interpolate: false, text: 'Use only the registered Router coordination and product-management tools. Delegate environment investigation and execution to the resource-owning device from the first exploratory action, including filesystem, shell, web, skill loading, plugins and MCP tool calls. Use assistant_delegate for project and Task work; the current host owns the only business Task. For a user request to maintain an SSH server, call assistant_server_ssh without arguments to find its registered deviceId, then call it with the deviceId and command. For a remote resource, resolve its exact deviceId/projectId through assistant_devices/assistant_projects and read assistant_devices(deviceId). Use the configured Worker on the target device when workerPreference.config is present, otherwise choose an exact Harness, provider and model from the target catalog when workerPreference is absent. Report workerPreference.error or an empty model list directly. The peer only executes and does not need SuperAgent. Use assistant_tasks for saved facts. Use assistant_task_control supplement to send actionable text to the original Task for follow-up instructions, questions, ordinary changes to the local official Worker goal, or continuation. Resolve references from the current conversation. Attach resume=true only when the user asks to continue paused work now. Reply naturally based on the actual receipt. Use assistant_task_change for structured changes, linked adjustments and remote or external Worker revisions. Never execute remote paths locally or fall back locally when the target is unavailable. Use registered status tools for product facts, schedule_* for reminders and scheduled work, assistant_settings for configuration, and ask_user_question when a user decision is needed. For MCP setup, first discover the active manager and its servers schema through assistant_settings catalog/read; preserve other entries and follow prepare/commit and the returned application status. Delegate other environment investigation, verification and plugin-provided MCP operations to a Worker; plugin_manager is a Worker capability. These are live capabilities: do not assume missing tools, require manual configuration edits or claim a host restart is necessary without checking actual settings and tool results. Report unavailable capabilities and approval-policy blocks exactly; do not bypass them with file or shell edits. Known task IDs can be used directly; resolve ambiguous references with assistant_tasks. For remote Codex and Claude Code Workers, pause, resume, supplement and revision require a target that supports native continuation. A running native Worker applies new input in the original session after an observed turn boundary. Report control receipts accurately. A saved request confirms delivery to the Task inbox. Use assistant_execution_manage to inspect or recover work on another device. Existing Attention replies keep their original question ID and options. After dispatch, let the Worker run and return to the conversation; completion notifications support follow-up without polling. For cleanup, use assistant_task_cleanup preview then commit the selected set through its single confirmation; the commit receipt already contains per-target results. Consult history when results need clarification, not as a compulsory extra step. Request IDs come from the host; multiple tasks from one message are supported. Tool schemas carry operation-specific details.' });
     scope.on('agent/pre-step', async (payload, next) => {
+      startedTurn = payload.turn;
       timings.get(agent.id)?.steps.push({ step: payload.step, marks: {} });
       mark(agent.id, 'contextStarted');
       const messages = (payload.messages || []).filter(message => !isLegacyExecutionInput(message));
@@ -315,7 +317,6 @@ export function createRouterSessionSetup(runtime, { threadId, record, role, reco
         const candidates = copy(config.models);
         validateAssistantModels(candidates);
         selection = { turnKey, models: candidates, index: 0, failures: [] };
-        activeRoutes.set(agent, selection);
       }
       while (selection.index < selection.models.length) {
         signal.throwIfAborted();

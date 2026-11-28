@@ -7,7 +7,7 @@ const requiresIdentity = action => action === 'deleteProject' || action === 'fol
 let bridgeSequence = 0;
 
 /** Project forms remain in the owner; requests run inside the authorized device frame. */
-export function createProjectBridge({ deviceId, expectedDevice, onEntry, getFrame, window = globalThis.window, origin = globalThis.location.origin, request = deviceRequest, timeout = 15_000 }) {
+export function createProjectBridge({ deviceId, expectedDevice, projectPicker = false, onEntry, getFrame, window = globalThis.window, origin = globalThis.location.origin, request = deviceRequest, timeout = 15_000 }) {
   const prefix = `project-${++bridgeSequence}`;
   const identity = device => JSON.stringify([device?.id, device?.hostId ?? null, device?.authorizationId ?? null]);
   const expectedIdentity = expectedDevice ? identity(expectedDevice) : null;
@@ -40,6 +40,7 @@ export function createProjectBridge({ deviceId, expectedDevice, onEntry, getFram
       if (expectedIdentity && (!value.device || identity(value.device) !== expectedIdentity)) throw Error('目标设备身份或授权已变化，请关闭后重新选择');
       if (typeof value?.url !== 'string' || !value.url) throw Error('目标设备未返回工作台地址');
       const url = new URL(workbenchUrl(value.url, origin));
+      if (projectPicker && url.pathname.endsWith('/enter')) url.searchParams.set('projectPicker', '1');
       url.hash = new URLSearchParams({ resourceParentOrigin: origin }).toString();
       remoteOrigin = url.origin;
       onEntry(url.href);

@@ -1,0 +1,14 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T04:24:28.853Z",
+  "by": "user",
+  "reason": "固定 Router 插队发送，模型设置从下一轮对话生效",
+  "base": "2082078406cf",
+  "result": "c74861896ff7",
+  "changes": [
+    {
+      "op": "add",
+      "id": "assistant.ingress.router-steering"
+    }
+  ]
+}

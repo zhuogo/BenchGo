@@ -28,9 +28,10 @@ export function registerNativePromptIngress(ctx, engine) {
         const args = envelope.payload.args;
         // Exact Connection Fetch routes admit owner Peers only. Invoke the public
         // Gateway directly: it still validates arguments and owns attachment admission.
-        const dispatch = () => ctx.typertGateway.invoke({ namespace: 'session', method: 'prompt', args,
-          peer: ctx.connection.browserPeer, signal: request.signal });
         const prompt = args.request;
+        const dispatch = mode => ctx.typertGateway.invoke({ namespace: 'session', method: 'prompt',
+          args: mode === undefined || mode === prompt.mode ? args : { ...args, request: { ...prompt, mode } },
+          peer: ctx.connection.browserPeer, signal: request.signal });
         const routable = record(prompt) && typeof prompt.sessionId === 'string' && typeof prompt.requestId === 'string';
         const value = routable
           ? await engine.nativePrompt({ request: prompt, dispatch, signal: request.signal })

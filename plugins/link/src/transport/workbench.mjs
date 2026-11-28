@@ -184,7 +184,9 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
         await sendResponse(new Response(data, { headers: outgoing }), file !== 'index.html'); return;
       }
       if (path === 'remote/open' && req.method === 'POST') {
+        ctx.get('benchgo')?.restartAdmission?.check();
         const input = await json(req);
+        ctx.get('benchgo')?.restartAdmission?.check();
         if (typeof input.id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(input.id) || typeof input.endpoint !== 'string' || !/^[a-zA-Z0-9_$.-]+(?:\/[a-zA-Z0-9_$.-]+)*$/.test(input.endpoint)) throw fail('流请求无效');
         if (record.streams.has(input.id) || record.streams.size >= 64) throw fail('活跃流过多或重复', 429);
         const stream = { abort: new AbortController(), items: [], bytes: 0, ended: false, wake: undefined };
@@ -207,7 +209,9 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
         const heartbeat = setInterval(() => { if (!streamSignal.aborted && !res.destroyed && res.writableLength < 65536) res.write('{"type":"heartbeat"}\n'); }, 15000);
         heartbeat.unref?.();
         try {
-          const source = await ctx.typertGateway.wireStream.open(input.endpoint, input.payload, uplink, record.peer, streamSignal);
+          const admission = ctx.get('benchgo')?.restartAdmission;
+          const open = () => ctx.typertGateway.wireStream.open(input.endpoint, input.payload, uplink, record.peer, streamSignal);
+          const source = admission ? await admission.run(open) : await open();
           for await (const value of source) await writeChunk(res, JSON.stringify({ type: 'item', value }) + '\n', streamSignal);
           await writeChunk(res, '{"type":"end"}\n', streamSignal);
         } catch (error) {
@@ -216,7 +220,9 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
         return;
       }
       if (path === 'remote/uplink' && req.method === 'POST') {
+        ctx.get('benchgo')?.restartAdmission?.check();
         const input = await json(req), stream = record.streams.get(input.id);
+        ctx.get('benchgo')?.restartAdmission?.check();
         if (!stream) throw fail('流已结束', 410);
         if (input.type === 'cancel') stream.abort.abort();
         else if (input.type === 'end') stream.ended = true;
@@ -240,7 +246,7 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
       if (path.startsWith('api/')) {
         if (path === 'api/group-resources' || path === 'api/commander-devices' && req.method === 'POST' && resourceNavigation) {
           if (req.method !== 'POST') throw fail('不支持的方法', 405);
-          if (!resourceNavigation || !device.groupMember) throw fail('当前工作台未获设备组资源授权', 403);
+          if (!resourceNavigation) throw fail('当前工作台未开放资源导航', 403);
           const value = await resourceNavigation(await json(req), device, { signal, origin: url.origin });
           await sendResponse(Response.json(value)); return;
         }
@@ -257,7 +263,11 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
           else options.body = await readBody(req, MAX_BODY);
         }
         if ((store.principal?.(device.id) ?? store.state.devices.find(row => row.id === device.id))?.tokenHash !== device.tokenHash) throw fail('设备授权已失效', 401);
-        await sendResponse(await api.fetch(new Request(target, options), record.peer)); return;
+        const admission = ctx.get('benchgo')?.restartAdmission;
+        const dispatch = () => api.fetch(new Request(target, options), record.peer);
+        const response = admission && req.method === 'POST' && path !== 'api/commander/updates'
+          ? await admission.run(dispatch) : await dispatch();
+        await sendResponse(response); return;
       }
       if (!['GET', 'HEAD'].includes(req.method)) throw fail('不支持的方法', 405);
       if (path.startsWith('plugins/')) {
@@ -272,7 +282,7 @@ export function createWorkbench(ctx, store, { webRoot, workbenchRoot, deviceCent
       let data = await readFile(asset);
       let policy = headers['content-security-policy'];
       if (path === '' || path === 'index.html') {
-        const groupNavigation = resourceNavigation && device.groupMember ? '<script>globalThis.__DSH_LINK_GROUP_RESOURCES__=true</script>' : '';
+        const groupNavigation = resourceNavigation ? '<script>globalThis.__DSH_LINK_RESOURCES__=true;' + (device.groupMember ? 'globalThis.__DSH_LINK_GROUP_RESOURCES__=true;' : '') + '</script>' : '';
         const html = ctx.webServer.renderIndex(data.toString(), record.peer).replace(/<base\b[^>]*>/gi, '').replace(/(["'])\/(plugins|api)\//g, (_, quote, route) => quote + WORKBENCH_PATH + route + '/').replace(/<head(?:\s[^>]*)?>/i, open => open + '<base href="' + WORKBENCH_PATH + '">' + groupNavigation + '<script src="' + WORKBENCH_PATH + 'workbench.js"></script>').replace('width=device-width, initial-scale=1', 'width=device-width, initial-scale=1, viewport-fit=cover');
         const hashes = [...html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(match => "'sha256-" + createHash('sha256').update(match[1]).digest('base64') + "'");
         policy = "default-src 'self'; script-src 'self' 'unsafe-eval' " + hashes.join(' ') + "; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; frame-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";

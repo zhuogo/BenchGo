@@ -8,15 +8,40 @@ import { openRemoteWorkbench } from './routes.mjs';
 const secret = () => randomBytes(32).toString('base64url');
 const WORKBENCH = '/link/workbench/';
 const legacyAuthError = JSON.stringify({ error: '设备授权已失效，请重新配对' });
-const statePaths = new Set([WORKBENCH + 'api/commander', WORKBENCH + 'api/commander/assistant']);
-const isStateRequest = body => {
+const fontPath = WORKBENCH + 'api/commander-fonts/';
+const fontName = /^fangyuan-[a-z0-9]+-([a-f0-9]{12})\.woff2$/;
+const fontCache = 'private, max-age=31536000, immutable';
+const updatePath = WORKBENCH + 'api/commander/updates';
+const statePaths = new Set([WORKBENCH + 'api/commander', WORKBENCH + 'api/commander/assistant', updatePath]);
+const isStateRequest = (body, path) => {
   try {
     const value = JSON.parse(body);
-    return value?.action === 'state' && Object.keys(value).length === 1;
+    return value?.action === (path === updatePath ? 'status' : 'state') && Object.keys(value).length === 1;
   } catch { return false; }
 };
+async function readSessionRejection(response) {
+  if (response.statusCode !== 401) return { expired: false };
+  if (response.headers['x-benchgo-workbench-session'] === 'expired') return { expired: true };
+  if (!String(response.headers['content-type']).startsWith('application/json')) return { expired: false };
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of response.iterator({ destroyOnReturn: false })) {
+    chunks.push(chunk);
+    bytes += chunk.length;
+    if (bytes > 4096) break;
+  }
+  const body = Buffer.concat(chunks);
+  return { expired: response.readableEnded && body.toString() === legacyAuthError, body };
+}
 /** Each host has its own origin. Remote scripts cannot read the device centre. */
-export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuccess, webRoot, publicOrigin, publicPrefix = '', workbenchLease } = {}) {
+export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuccess, webRoot, fontRoot, publicOrigin, publicPrefix = '', workbenchLease } = {}) {
+  // Content-addressed fonts are identical across hosts. Serve installed subsets
+  // locally so first-use typography cannot queue ahead of remote session traffic.
+  let fonts = new Set();
+  if (fontRoot) {
+    try { fonts = new Set(JSON.parse(await readFile(new URL('manifest.json', fontRoot), 'utf8')).map(item => item.file).filter(file => fontName.test(file))); }
+    catch { /* An absent or incomplete optional font pack falls back to the host. */ }
+  }
   const agent = remoteAgent(target), tickets = new Map(), sessions = new Set(), sockets = new Set();
   const remoteOrigin = upstreamOrigin(target);
   let origin, remoteCookie, closed = false, leaseUntil = 0, renewing, admission;
@@ -24,6 +49,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
   const upstream = async () => {
     if (workbenchLease) {
       if (leaseUntil > Date.now()) return;
+      if (recoveryError && Date.now() < recoveryAfter) throw recoveryError;
       renewing ??= Promise.resolve(remoteCookie ? workbenchLease() : target).then(lease => {
         if (lease.url !== target.url || lease.pin !== target.pin || lease.relayTarget !== target.relayTarget || lease.hostId !== target.hostId)
           throw new Error('共享工作台路线已更新，请重新连接');
@@ -67,15 +93,37 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
         if (!expires || expires < Date.now()) throw Object.assign(new Error('工作台入口已过期，请重新选择设备'), { status: 401 });
         const token = sessions.values().next().value || secret(); sessions.add(token);
         if (sessions.size > 16) sessions.delete(sessions.values().next().value);
-        res.writeHead(303, { location: publicPrefix + '/s/' + token + '/link/workbench/', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end(); return;
+        const picker = webRoot && url.searchParams.get('projectPicker') === '1' ? 'project-picker' : '';
+        res.writeHead(303, { location: publicPrefix + '/s/' + token + WORKBENCH + picker, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end(); return;
       }
       const match = url.pathname.match(/^\/s\/([A-Za-z0-9_-]{43})(\/.*)$/);
       if (!match || !sessions.has(match[1]) || req.headers.origin && req.headers.origin !== origin) throw Object.assign(new Error('设备工作台未授权'), { status: 403 });
       const prefix = publicPrefix + '/s/' + match[1]; url.pathname = match[2];
+      if (webRoot && url.pathname === WORKBENCH + 'project-picker' && req.method === 'GET') {
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self'; frame-ancestors 'self' " + parentOrigin + " dsh-app:; base-uri 'none'",
+          'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
+        });
+        res.end('<!doctype html><meta charset="utf-8"><title>BenchGo</title><script src="./workbench.js" data-project-picker></script>');
+        return;
+      }
       if (url.pathname === '/local-proxy.js' && req.method === 'GET') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end('globalThis.__DSH_LINK_LOCAL_PROXY__=true;'); return; }
       if (webRoot && url.pathname === '/link/workbench/workbench.js' && req.method === 'GET') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end(await readFile(new URL('workbench.js', webRoot))); return; }
       if (!url.pathname.startsWith('/link/workbench/') || !['GET', 'HEAD', 'POST'].includes(req.method)) throw Object.assign(new Error('路径未授权'), { status: 403 });
       if (workbenchLease) await upstream();
+      const font = url.pathname.startsWith(fontPath) ? url.pathname.slice(fontPath.length) : '';
+      if (['GET', 'HEAD'].includes(req.method) && fonts.has(font)) {
+        let bytes;
+        try { bytes = await readFile(new URL('web/' + font, fontRoot)); }
+        catch { /* Remote fonts remain available if the local pack cannot be read. */ }
+        if (bytes && createHash('sha256').update(bytes).digest('hex').startsWith(font.match(fontName)[1])) {
+          res.writeHead(200, { 'content-type': 'font/woff2', 'content-length': bytes.length, 'cache-control': fontCache, 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+          res.end(req.method === 'HEAD' ? undefined : bytes);
+          return;
+        }
+      }
       const headers = {};
       for (const [key, value] of Object.entries(req.headers)) if (value !== undefined && !['cookie','authorization','host','origin','referer','connection','upgrade','sec-websocket-key','sec-websocket-version','x-benchgo-relay-target'].includes(key)) headers[key] = value;
       Object.assign(headers, relayTargetHeaders(target));
@@ -91,15 +139,35 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
         body = Buffer.concat(chunks);
       }
       const streamedBody = !body && (req.method === 'POST' || bodyLength > 0 || req.headers['transfer-encoding']);
-      const retryable = !streamedBody && (req.method !== 'POST' || isStateRequest(body));
+      const retryable = !streamedBody && (req.method !== 'POST' || isStateRequest(body, url.pathname));
       const forward = (cookie, retried = false) => {
         if (res.destroyed) return;
-        const remote = request(new URL(url.pathname + url.search, remoteOrigin), { agent, method: req.method, headers: { ...headers, cookie } }, response => {
+        const controller = new AbortController();
+        const remote = request(new URL(url.pathname + url.search, remoteOrigin), { agent, signal: controller.signal, linkConnectSignal: controller.signal, method: req.method, headers: { ...headers, cookie } }, response => {
+          clearTimeout(deadline);
           void sendResponse(response, cookie, retried).catch(error => res.destroy(error));
         });
-        remote.on('error', error => { onFailure?.(error); if (res.headersSent) res.destroy(); else { res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' }); res.end('主机暂时不可达，请返回设备列表重试'); } });
+        const failed = error => {
+          if (res.destroyed || res.writableEnded) return;
+          onFailure?.(error);
+          if (res.headersSent) res.destroy();
+          else {
+            res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
+            res.end('主机暂时不可达，请返回设备列表重试');
+          }
+        };
+        remote.on('error', failed);
+        // Socket inactivity timers start after assignment and omit agent queueing.
+        const deadline = setTimeout(() => {
+          const error = Object.assign(new Error('工作台响应超时'), { code: 'ETIMEDOUT' });
+          failed(error);
+          remote.destroy(error);
+          controller.abort(error);
+        }, 90000);
+        deadline.unref();
+        remote.once('close', () => clearTimeout(deadline));
         remote.setTimeout(90000, () => remote.destroy(Object.assign(new Error('工作台响应超时'), { code: 'ETIMEDOUT' })));
-        res.once('close', () => { if (!res.writableEnded) remote.destroy(); });
+        res.once('close', () => { if (!res.writableEnded) controller.abort(); });
         if (streamedBody) req.pipe(remote);
         else remote.end(body);
       };
@@ -112,17 +180,9 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
         // Older peers report an invalid workbench cookie in the JSON body. Keep
         // application-level 401s intact, including those returned by tool routes.
         if (!retried && status === 401) {
-          rejectedSession = response.headers['x-benchgo-workbench-session'] === 'expired';
-          if (!rejectedSession && String(response.headers['content-type']).startsWith('application/json')) {
-            const chunks = [];
-            let bytes = 0;
-            for await (const chunk of response.iterator({ destroyOnReturn: false })) {
-              chunks.push(chunk); bytes += chunk.length;
-              if (bytes > 4096) break;
-            }
-            rejectedBody = Buffer.concat(chunks);
-            rejectedSession = response.readableEnded && rejectedBody.toString() === legacyAuthError;
-          }
+          const rejection = await readSessionRejection(response);
+          rejectedSession = rejection.expired;
+          rejectedBody = rejection.body;
         }
         if (rejectedSession && !retried) {
           const recovered = await recover(cookie);
@@ -146,6 +206,7 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
         }
         if (status >= 200 && status < 400 && !rejectedSession) onSuccess?.();
         const outgoing = { ...response.headers, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
+        if (req.method === 'GET' && status === 200 && fontName.test(font) && String(response.headers['content-type']).startsWith('font/woff2')) outgoing['cache-control'] = fontCache;
         delete outgoing['set-cookie']; delete outgoing['x-frame-options']; delete outgoing['strict-transport-security'];
         if (outgoing['content-security-policy']) outgoing['content-security-policy'] = outgoing['content-security-policy'].replace(/frame-ancestors[^;]*/g, "frame-ancestors 'self' " + parentOrigin + ' dsh-app:');
         if (response.statusCode >= 300 && response.statusCode < 400) {
@@ -213,26 +274,84 @@ export async function createDeviceProxy(target, { parentOrigin, onFailure, onSuc
         let input;
         try {
           input = JSON.parse(raw.toString());
-          if (input.type === 'cancel') { requests.get(input.id)?.destroy(); requests.delete(input.id); return; }
+          if (input.type === 'cancel') { requests.get(input.id)?.abort(); requests.delete(input.id); return; }
           if (typeof input.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(input.id) || requests.has(input.id) || requests.size >= 64) throw new Error('流请求无效');
           const body = JSON.stringify(input.body);
           if (input.type !== 'open' || typeof input.body !== 'object' || body.length > 1024 * 1024) throw new Error('流请求无效');
-          const remote = request(new URL('/link/workbench/remote/open', remoteOrigin), { agent, method: 'POST', headers: { ...relayTargetHeaders(target), cookie: remoteCookie, origin: remoteOrigin, 'content-type': 'application/json' } }, response => {
-            send({ id: input.id, type: 'headers', status: response.statusCode });
-            let buffer = '';
-            response.setEncoding('utf8');
-            response.on('data', chunk => { buffer += chunk; if (buffer.length > 4 * 1024 * 1024) { remote.destroy(new Error('流响应过大')); return; } let index; while ((index = buffer.indexOf('\n')) >= 0) { const line = buffer.slice(0, index); buffer = buffer.slice(index + 1); if (line.trim()) { try { send({ id: input.id, type: 'data', value: JSON.parse(line) }); } catch { remote.destroy(new Error('流响应格式错误')); } } } });
-            response.on('end', () => { requests.delete(input.id); send({ id: input.id, type: 'end' }); });
-            response.on('error', error => remote.destroy(error));
-          });
-          requests.set(input.id, remote);
-          remote.setTimeout(90000, () => remote.destroy(new Error('流连接超时')));
-          remote.on('error', error => { requests.delete(input.id); send({ id: input.id, type: 'error', error: error.message }); });
-          remote.end(body);
+          const controller = new AbortController(), { signal } = controller;
+          requests.set(input.id, controller);
+          const finish = message => {
+            if (requests.get(input.id) !== controller) return;
+            requests.delete(input.id);
+            if (!signal.aborted) send({ id: input.id, ...message });
+          };
+          const forward = async (retried = false) => {
+            if (signal.aborted) return;
+            if (workbenchLease) {
+              try { await upstream(); }
+              catch (error) {
+                if (!signal.aborted) send({ id: input.id, type: 'headers', status: error.status || 502 });
+                finish({ type: 'end' });
+                return;
+              }
+            }
+            if (signal.aborted) return;
+            const cookie = remoteCookie;
+            const remote = request(new URL('/link/workbench/remote/open', remoteOrigin), { agent, signal, linkConnectSignal: signal, method: 'POST', headers: { ...relayTargetHeaders(target), cookie, origin: remoteOrigin, 'content-type': 'application/json' } }, response => {
+              clearTimeout(deadline);
+              response.on('error', error => remote.destroy(error));
+              void (async () => {
+                const rejection = await readSessionRejection(response);
+                if (!retried && rejection.expired) {
+                  const recovered = await recover(cookie);
+                  response.resume();
+                  if (signal.aborted) return;
+                  if (recovered) { await forward(true); return; }
+                  if (recoveryError && recoveryError.status !== 401) {
+                    send({ id: input.id, type: 'headers', status: recoveryError.status || 502 });
+                    finish({ type: 'end' });
+                    return;
+                  }
+                }
+                if (signal.aborted) { response.destroy(); return; }
+                send({ id: input.id, type: 'headers', status: response.statusCode });
+                let buffer = '';
+                const consume = chunk => {
+                  buffer += chunk;
+                  if (buffer.length > 4 * 1024 * 1024) { remote.destroy(new Error('流响应过大')); return; }
+                  let index;
+                  while ((index = buffer.indexOf('\n')) >= 0) {
+                    const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
+                    if (line.trim()) {
+                      try { send({ id: input.id, type: 'data', value: JSON.parse(line) }); }
+                      catch { remote.destroy(new Error('流响应格式错误')); return; }
+                    }
+                  }
+                };
+                response.setEncoding('utf8');
+                if (rejection.body) consume(rejection.body.toString());
+                response.on('data', consume);
+                if (response.readableEnded) finish({ type: 'end' });
+                else response.on('end', () => finish({ type: 'end' }));
+              })().catch(error => remote.destroy(error));
+            });
+            // Include DNS, connection setup and agent queueing in the opening deadline.
+            const deadline = setTimeout(() => {
+              const error = new Error('流连接超时');
+              finish({ type: 'error', error: error.message });
+              controller.abort(error);
+            }, 90000);
+            deadline.unref?.();
+            remote.once('close', () => clearTimeout(deadline));
+            remote.setTimeout(90000, () => remote.destroy(new Error('流连接超时')));
+            remote.on('error', error => finish({ type: 'error', error: error.message }));
+            remote.end(body);
+          };
+          void forward().catch(error => finish({ type: 'error', error: error.message }));
         } catch (error) { send({ id: input?.id, type: 'error', error: error.message }); }
       });
       ws.on('error', () => {});
-      ws.on('close', () => { activeSockets.delete(ws); for (const remote of requests.values()) remote.destroy(); requests.clear(); });
+      ws.on('close', () => { activeSockets.delete(ws); for (const controller of requests.values()) controller.abort(); requests.clear(); });
     });
   });
   server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });

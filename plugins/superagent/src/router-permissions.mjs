@@ -63,7 +63,7 @@ export function installRouterPermissionGate(scope, { agent, inherited, controlle
     };
   });
   const restrictionOwner = hostRootContext(scope);
-  let restriction, disposed = false;
+  let restriction, allowedNames, disposed = false;
   // Cordis clears uid before unloading effects; state 5 also covers restart
   // teardown. Sibling cleanup can emit tools/change before our listener leaves.
   const active = () => !disposed && scope.fiber?.uid !== null && scope.fiber?.state !== 5;
@@ -73,12 +73,18 @@ export function installRouterPermissionGate(scope, { agent, inherited, controlle
     if (!active() || refreshingRestrictions.has(restrictionOwner)) return;
     refreshingRestrictions.add(restrictionOwner);
     try {
-      const previous = restriction; restriction = undefined;
-      previous?.();
-      if (!active()) return;
-      const allow = [...new Set([...inherited.keys()].filter(name => coordination.has(name) && scope.tools.get(name, agent))
-        .concat(contextTools().filter(row => scope.tools.get(row.name, agent) === row.definition).map(row => row.name)))];
+      // Read global definitions without lifting our own mask. Context tools may
+      // have just appeared and are still hidden by the previous allow list.
+      const allow = [...new Set([...inherited.keys()].filter(name => coordination.has(name)
+        && (scope.tools.get(name) || scope.tools.get(name, agent)))
+        .concat(contextTools().filter(row => scope.tools.get(row.name) === row.definition).map(row => row.name)))];
+      if (allowedNames && allow.length === allowedNames.size && allow.every(name => allowedNames.has(name))) return;
+      const previous = restriction;
+      // Keep the old mask until its replacement is installed. Registry observers
+      // must never see a temporarily unrestricted Router during a real change.
       restriction = scope.tools.restrict?.({ allow });
+      allowedNames = new Set(allow);
+      previous?.();
     } finally { refreshingRestrictions.delete(restrictionOwner); }
   };
   restrict();

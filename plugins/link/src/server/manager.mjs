@@ -10,6 +10,7 @@ import { remoteAgent, remoteJson, upstreamOrigin } from '../devices/remote.mjs';
 import { deployRelay, relayManagementCommand, validateRelayDeployment } from './relay-deployment.mjs';
 import { ensureServerResources } from '../../../base/shared/server-resources.mjs';
 import { ownerCommand, ownerDiscoverCommand, ownerScript } from './owner-command.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { openDeviceRegistry } from '../devices/registry.mjs';
 const { Client, OpenSSHAgent } = ssh2;
 const operationError = (message, code, status = 409) => Object.assign(new Error(message), { code, status });
@@ -265,13 +266,95 @@ export function createServerManager({ directory, registry: sharedRegistry, crede
     const result = await execute(client, ownerCommand, { stdin: ownerScript(input), timeout: 25000 });
     let response;
     try { response = JSON.parse(result.stdout.trim()); } catch { throw new Error('服务器管理入口尚未就绪'); }
-    if (result.code !== 0) throw new Error(redactServerLog(response.error || '服务器管理请求失败'));
+    if (result.code !== 0 || response.error) throw Object.assign(new Error(redactServerLog(response.error || '服务器管理请求失败')), { status: response.status });
     return response;
   }
   async function verify(client, device) {
     const tunnel = await openSshTunnel(client, device.ssh.remotePort);
     try { await verifyServerWorkbench({ ...device, kind: 'ssh', url: tunnel.url }); }
     finally { await tunnel.close(); }
+  }
+  async function waitForServer(client, device, { version, requireAssistant, previousInstance, signal }) {
+    const deadline = Date.now() + 180_000;
+    let reason = '服务器 Link 尚未就绪';
+    const expectedHostId = device.hostId ?? 'sha256:' + device.pin;
+    while (Date.now() < deadline) {
+      signal.throwIfAborted();
+      try {
+        const health = await owner(client, { action: 'health', expectedHostId, requireAssistant });
+        if (!health.ready) throw new Error('工作台尚未就绪');
+        if (previousInstance && health.instanceId === previousInstance) throw new Error('服务器尚未完成重启');
+        if (version && health.version !== version) throw new Error('目标功能包尚未生效');
+        if (requireAssistant && !health.assistant) throw new Error('总助手尚未就绪');
+        await verify(client, device);
+        return;
+      } catch (error) {
+        if ([401, 403].includes(error.status) || /身份已变化|指纹|授权已失效/.test(error.message)) throw error;
+        reason = error.message;
+      }
+      await delay(1000, undefined, { signal });
+    }
+    throw new Error(reason + '，请在设备中心查看服务日志');
+  }
+  async function updateOnServer(client, device, step, signal) {
+    const expectedHostId = device.hostId ?? 'sha256:' + device.pin;
+    const call = operation => owner(client, { action: 'updates', operation, expectedHostId });
+    let state = await call('status').catch(error => {
+      if (error.status === 404) return null;
+      throw error;
+    });
+    if (!state?.hostHealth) return false;
+    const requireAssistant = state.hostHealth.requiresAssistant || state.hostHealth.assistant;
+    const previousInstance = state.hostHealth.instanceId;
+    const read = async () => {
+      await delay(1000, undefined, { signal });
+      return call('status');
+    };
+    if (!state.restartRequired && !['checking', 'downloading', 'waiting'].includes(state.phase)) {
+      step('检查服务器更新');
+      state = await call('check');
+      const checkDeadline = Date.now() + 120_000;
+      while (state.phase === 'checking') {
+        if (Date.now() >= checkDeadline) throw new Error('服务器检查更新超时');
+        state = await read();
+      }
+    }
+    if (state.phase === 'error' || state.phase === 'unpublished') throw new Error(state.error || '服务器更新通道尚未就绪');
+    if (state.decision?.action === 'current') return true;
+    if (state.decision?.action === 'deployment') return false;
+    let version = state.decision?.targetVersion ?? state.release?.plugin.version;
+    signal.throwIfAborted();
+    if (state.canInstall) {
+      step('下载并准备功能包');
+      state = await call('install');
+    } else if (state.hostHealth.restart === 'failed' && state.decision?.enabled) {
+      step('重试服务器重启');
+      state = await call('restart');
+    } else if (!state.restartRequired && !['downloading', 'waiting'].includes(state.phase)) {
+      throw new Error(state.decision?.reason || '服务器暂时无法更新');
+    }
+    let preparationTime = 0, lastPoll = Date.now(), previousPhase;
+    while (state) {
+      version ??= state.hostHealth?.target;
+      if (state.error) throw new Error(state.error);
+      if (state.hostHealth?.restart === 'failed') throw new Error('服务器未完成重启，请查看服务日志');
+      if (state.hostHealth?.restart === 'restarting' || version && !state.restartRequired && state.current?.plugin === version) break;
+      const phase = state.phase === 'waiting' || state.hostHealth?.restart === 'waiting' ? 'waiting' : 'preparing';
+      const now = Date.now();
+      if (previousPhase === 'preparing') preparationTime += now - lastPoll;
+      lastPoll = now;
+      if (phase !== previousPhase) step(phase === 'waiting' ? '等待运行中的任务结束' : '准备新版并重启服务器');
+      previousPhase = phase;
+      if (preparationTime > 20 * 60_000) throw new Error('服务器准备更新超时');
+      state = await read().catch(error => {
+        if (signal.aborted || error.status && error.status !== 503 || error.message.includes('身份已变化')) throw error;
+        return null;
+      });
+    }
+    if (!version) throw new Error('无法确认服务器目标功能包版本');
+    step('验证新版工作台');
+    await waitForServer(client, device, { version, requireAssistant, previousInstance, signal });
+    return true;
   }
   async function authorizeExisting(client, status, name) {
     const pin = status.hostId?.slice('sha256:'.length);
@@ -576,17 +659,51 @@ export function createServerManager({ directory, registry: sharedRegistry, crede
       ensure(); await ready; const device = records.get(input.id);
       const session = await connected(input.id);
       const operation = input.operation;
+      const prefix = 'export XDG_RUNTIME_DIR="/run/user/$(id -u)"; export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"; ';
       if (operation === 'update') return startJob(async (job, step, signal) => {
+        const completed = await updateOnServer(session.client, device, step, signal);
+        if (records.get(device.id) !== device || sessions.get(device.id) !== session) throw operationError('服务器登记或连接已变化', 'IDENTITY_CHANGED');
+        if (completed) return registry.get(device.id);
         const result = await install(session.client, { source: device.ssh.source }, 'update', job, step, signal);
         const pin = device.hostId ? device.hostId.slice('sha256:'.length) : device.pin;
         if (records.get(device.id) !== device || result.pin !== pin || sessions.get(device.id) !== session) throw operationError('服务器登记或主机身份已变化', 'IDENTITY_CHANGED');
         const saved = registry.get(device.id);
         const updated = { ...(saved.authorize ? device : { ...device, ...saved }), name: saved.name, pin, ssh: { ...device.ssh, remotePort: result.port } };
-        await verify(session.client, updated);
+        step('验证新版工作台');
+        await waitForServer(session.client, updated, { version: result.version, signal });
+        if (updated.ssh.remotePort === device.ssh.remotePort) return saved;
         return attach(session.client, updated, { register: true });
       });
-      const prefix = 'export XDG_RUNTIME_DIR="/run/user/$(id -u)"; export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"; ';
-      const commands = { status: 'systemctl --user is-active benchgo.service', start: 'systemctl --user start benchgo.service', stop: 'systemctl --user stop benchgo.service', restart: 'systemctl --user restart benchgo.service', logs: 'journalctl --user -u benchgo.service --no-pager -n 80 -o cat' };
+      if (operation === 'restart') return startJob(async (job, step, signal) => {
+        const expectedHostId = device.hostId ?? 'sha256:' + device.pin;
+        const previous = await owner(session.client, { action: 'health', expectedHostId }).catch(error => {
+          if ([401, 403].includes(error.status) || error.message.includes('身份已变化')) throw error;
+          return null;
+        });
+        step('重启服务器服务');
+        if (previous?.instanceId) {
+          const request = operation => owner(session.client, { action: 'updates', operation, expectedHostId }).catch(error => {
+            if (signal.aborted || error.status && error.status !== 503 || error.message.includes('身份已变化')) throw error;
+            return null;
+          });
+          let state = await request('restart-host');
+          while (state && state.hostHealth?.restart !== 'restarting') {
+            if (state.error) throw new Error(state.error);
+            step('等待运行中的任务结束');
+            await delay(1000, undefined, { signal });
+            state = await request('status');
+            if (state?.hostHealth?.instanceId !== previous.instanceId) break;
+          }
+        } else {
+          if (previous?.busy) throw new Error('服务器有任务运行中，请结束后再重启');
+          const result = await execute(session.client, prefix + 'systemctl --user restart benchgo.service', { signal, timeout: 120_000 });
+          if (result.code !== 0) throw new Error('服务器服务重启失败，请查看服务日志');
+        }
+        step('等待工作台与组件就绪');
+        await waitForServer(session.client, device, { version: previous?.pendingVersion ?? previous?.version, requireAssistant: previous?.assistant, previousInstance: previous?.instanceId, signal });
+        return registry.get(device.id);
+      });
+      const commands = { status: 'systemctl --user is-active benchgo.service', start: 'systemctl --user start benchgo.service', stop: 'systemctl --user stop benchgo.service', logs: 'journalctl --user -u benchgo.service --no-pager -n 80 -o cat' };
       if (!Object.hasOwn(commands, operation)) throw new Error('不支持的服务器操作');
       const result = await execute(session.client, prefix + commands[operation]); if (result.code !== 0 && operation !== 'status') throw new Error('服务器服务操作失败');
       return { operation, status: operation === 'status' ? result.stdout.trim() : operation === 'stop' ? 'stopped' : undefined, ...(operation === 'logs' ? { logs: redactServerLog(result.stdout) } : {}) };

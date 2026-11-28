@@ -306,17 +306,17 @@ test('real assistant engine admits native attachments and continues failed repli
   assert.equal((await send('busy-start', [{ type: 'text', text: 'Keep running' }])).result.ok, true);
   await entered.promise;
   model = 'text/opaque';
-  const blocked = await send('busy-image-switch', imageContent, 'queue');
-  assert.equal(blocked.result.error.details.reason, 'NATIVE_ATTACHMENT_REQUIRES_IDLE');
+  assert.equal((await send('busy-image-switch', imageContent, 'queue')).result.ok, true, 'image admission uses the active vision model');
   const fileContent = [{ type: 'file', receiptId: 'receipt/file' }, { type: 'text', text: '排队处理文件 /original' }];
-  assert.equal((await send('busy-file', fileContent, 'queue')).result.ok, true, 'ordinary files retain official queue support while running');
+  assert.equal((await send('busy-file', fileContent, 'queue')).result.ok, true);
   assert.equal((await send('busy-file', fileContent)).result.ok, true, 'official admission remains idempotent');
-  const queued = agent.inbox.nextTurn.find(message => message.source.rpcId === 'busy-file');
-  assert.deepEqual(queued.content, [{ type: 'file', attachment: file }, fileContent[1]]);
+  const steered = agent.inbox.nextStep.find(message => message.source.rpcId === 'busy-file');
+  assert.deepEqual(steered.content, [{ type: 'file', attachment: file }, fileContent[1]]);
+  assert.equal(agent.inbox.nextTurn.length, 0);
   release(); await agent.whenIdle();
-  assert.deepEqual(requests.map(row => row.model), ['vision/opaque', 'vision/opaque', 'text/opaque']);
+  assert.deepEqual(requests.map(row => row.model), ['vision/opaque', 'vision/opaque', 'vision/opaque']);
   assert.equal(bindings.filter(row => row.requestId === 'image-1').length, 1);
-  assert.equal(bindings.some(row => row.requestId === 'busy-image-switch'), false);
+  assert.equal(bindings.filter(row => row.requestId === 'busy-image-switch').length, 1);
 
   failNext = true;
   assert.equal((await send('needs-retry', [{ type: 'text', text: 'Original question' }])).result.ok, true);

@@ -11,18 +11,18 @@ const require=createRequire(new URL('../../../deepseek-harness/apps/web/package.
 const {chromium}=require('playwright');
 const executablePath=process.env.CHROMIUM_EXECUTABLE_PATH||[chromium.executablePath(),'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
 const sidebar=transformSync(readFileSync(new URL('../client/index.jsx',import.meta.url),'utf8')+'\nexport {Projects};export function setFixture(snapshot){defaultWorkspaceId="recent";update(snapshot);}',{loader:'jsx',format:'cjs'}).code;
-const helpers=transformSync(readFileSync(new URL('../client/sidebar-state.mjs',import.meta.url),'utf8'),{format:'cjs'}).code;
 
 test('real sidebar buttons create fresh views, preserve voice history and recover from failures', {skip:!executablePath},async()=>{
  const bundle=await build({stdin:{resolveDir:root,loader:'jsx',contents:`
  import React from 'react';import {createRoot} from 'react-dom/client';
+ import * as helpers from './plugins/base/client/sidebar-state.mjs';
+ import * as sessionStatus from './plugins/base/client/session-status.mjs';
  import css from './plugins/base/client/style.css';
- const helperModule={exports:{}};new Function('module','exports',${JSON.stringify(helpers)})(helperModule,helperModule.exports);
- const helpers=helperModule.exports,modules={base:true,harness:true,voice:true,superagent:false,link:false};
+ const modules={base:true,harness:true,voice:true,superagent:false,link:false};
  const Empty=()=>null,Icon=()=> <span aria-hidden>◇</span>,Wrap=({children})=>children;
  const stub=new Proxy({},{get:()=>Empty});
  const mod={exports:{}};
- new Function('require','module','exports',${JSON.stringify(sidebar)})(id=>id.endsWith('resource-navigation.jsx')?{useResourceNavigation:()=>({scope:{mode:'current'},showLocal:true,remote:[],selected:[],devices:[],activeId:'local'}),remoteRecentRows:()=>[],installResourceReceiver:()=>()=>{},RemoteProjects:Empty,ResourceStage:Empty}:id.endsWith('resource-state.mjs')?{sortResourceRecents:rows=>rows}:id==='react'?React:id.endsWith('sidebar-state.mjs')?helpers:id.endsWith('modules.mjs')?{moduleSource:{subscribe:()=>()=>{},getSnapshot:()=>modules}}:id==='@deepseek-ai/dsh-client-ui-primitives'?{Tooltip:Wrap,Menu:Empty,Modal:Empty,FishLogo:Icon,LinkIconMedium:Icon,IconPinFillRegular:Icon,IconPinOutlineRegular:Icon}:id.endsWith('shared/client/ui/tooltip.jsx')?{Tooltip:Wrap}:id.endsWith('iconsax.jsx')?{UIIcon:Icon}:stub,mod,mod.exports);
+ new Function('require','module','exports',${JSON.stringify(sidebar)})(id=>id.endsWith('resource-navigation.jsx')?{useResourceNavigation:()=>({scope:{mode:'current'},showLocal:true,remote:[],selected:[],devices:[],activeId:'local'}),remoteRecentRows:()=>[],installResourceReceiver:()=>()=>{},RemoteProjects:Empty,ResourceStage:Empty}:id.endsWith('resource-state.mjs')?{sortResourceRecents:rows=>rows}:id==='react'?React:id.endsWith('sidebar-state.mjs')?helpers:id.endsWith('session-status.mjs')?sessionStatus:id.endsWith('ui/confirmation.jsx')?{useConfirmation:()=>[()=>Promise.resolve(false),null]}:id.endsWith('modules.mjs')?{moduleSource:{subscribe:()=>()=>{},getSnapshot:()=>modules}}:id==='@deepseek-ai/dsh-client-ui-primitives'?{Tooltip:Wrap,Menu:Empty,Modal:Empty,FishLogo:Icon,LinkIconMedium:Icon,IconPinFillRegular:Icon,IconPinOutlineRegular:Icon}:id.endsWith('shared/client/ui/tooltip.jsx')?{Tooltip:Wrap}:id.endsWith('iconsax.jsx')?{UIIcon:Icon}:stub,mod,mod.exports);
  const store=value=>{const listeners=new Set();return{getSnapshot:()=>value,subscribe:listener=>{listeners.add(listener);return()=>listeners.delete(listener)},set:next=>{value=next;listeners.forEach(fn=>fn())}}};
  const old={id:'voice-old',title:'历史语音',blank:true,running:false,retainedBy:{mainView:1},updatedAt:20,projectionValues:{benchgoVoice:{used:true,startedAt:20,lastActivityAt:20}}};
  const projects=[{id:'recent',isDefault:true},{id:'project',title:'Project'}];
@@ -44,7 +44,7 @@ test('real sidebar buttons create fresh views, preserve voice history and recove
    await page.setViewportSize({width,height:900});
    for(const state of ['loading','empty','error','data']){
     await page.evaluate(state=>window.scenario(state),state);
-    await page.getByRole('button',{name:'创建新聊天',exact:true}).waitFor();
+    await page.getByRole('button',{name:'创建新聊天',exact:true}).waitFor().catch(error=>{throw Error(errors.join(' | ')||error.message)});
     await page.waitForFunction(state=>state==='data'?document.querySelectorAll('.cmd-session').length===1:document.querySelectorAll('.cmd-session').length===0,state);
     if(state==='data')await page.getByText('历史语音',{exact:true}).waitFor();
     assert(await page.getByRole('button',{name:'最近新聊天',exact:true}).isVisible());

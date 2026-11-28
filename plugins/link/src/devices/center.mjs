@@ -43,7 +43,7 @@ async function body(req) {
   const input = JSON.parse(Buffer.concat(chunks).toString());
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('请求必须是对象'); return input;
 }
-export async function createDeviceCenter({ directory, webRoot, managerFactory = createServerManager, hostAdmin, localName, localDispatch, publicOrigin, workbenchOrigin, registerProxy, pairing, signSource, group, groupAssets, credentials }) {
+export async function createDeviceCenter({ directory, webRoot, fontRoot, managerFactory = createServerManager, hostAdmin, localName, localDispatch, publicOrigin, workbenchOrigin, registerProxy, pairing, signSource, group, groupAssets, credentials }) {
   let renamedLocal;
   const registry = await openDeviceRegistry(directory, { localName: () => localName?.() || renamedLocal || '本机', group }), pending = new Map(), proxies = new Map(), tickets = new Map(), sessions = new Map(), parents = new Set(), sockets = new Set();
   let origin, closed = false;
@@ -193,19 +193,19 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
     return pair.result = { status: 'approved', device, direction: pair.remote.deviceGroup ? 'group' : direction };
   };
   const idOf = input => input.deviceId || input.targetId || input.id;
-  const groupResourceApi = async (input, authorize) => {
+  const groupResourceApi = async (input, authorize, { includeGroup = true } = {}) => {
     authorize();
     const directory = devices();
-    const members = directory.devices.filter(device => device.kind === 'local' || registry.isGroup(device.id));
+    const members = directory.devices.filter(device => device.kind === 'local' || includeGroup && registry.isGroup(device.id));
     const allowed = new Set(members.map(device => device.id));
     const requireDevice = id => {
-      if (!allowed.has(id)) throw fail('此设备不在工作台所属设备组中', 403);
+      if (!allowed.has(id)) throw fail('当前工作台未获此设备的资源授权', 403);
       return id;
     };
     const scopeView = scope => ({ ...scope, deviceIds: scope.deviceIds.filter(id => allowed.has(id)) });
     switch (input.action) {
       case 'devices':
-        return { devices: members, activeId: 'local', groupEnabled: true };
+        return { devices: members, activeId: 'local', groupEnabled: includeGroup };
       case 'resourceScope':
         return { scope: scopeView(registry.scope()) };
       case 'setResourceScope': {
@@ -246,7 +246,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
         await probeRemote(lease);
         const published = publicOrigin ? registerProxy() : null;
         try {
-          proxy = await createDeviceProxy(lease, { webRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}),
+          proxy = await createDeviceProxy(lease, { webRoot, fontRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}),
             parentOrigin: [origin, publicOrigin, ...parents].filter(Boolean).join(' '),
             workbenchLease: () => groupAssets.call(asset, 'workspace') });
         } catch (error) {
@@ -336,7 +336,7 @@ export async function createDeviceCenter({ directory, webRoot, managerFactory = 
               let proxy = previous?.routeKey === routeKey && previous.target === savedTarget ? previous : undefined;
               const published = !proxy && publicOrigin ? registerProxy() : null;
               try {
-                if (!proxy) proxy = await createDeviceProxy(target, { webRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}), parentOrigin: [origin, publicOrigin, ...parents].filter(Boolean).join(' '), onSuccess: () => markSuccess(id, savedTarget), onFailure: error => markFailure(id, savedTarget, error) });
+                if (!proxy) proxy = await createDeviceProxy(target, { webRoot, fontRoot, ...(published ? { publicOrigin: workbenchOrigin, publicPrefix: published.prefix } : {}), parentOrigin: [origin, publicOrigin, ...parents].filter(Boolean).join(' '), onSuccess: () => markSuccess(id, savedTarget), onFailure: error => markFailure(id, savedTarget, error) });
                 else await proxy.refresh();
                 if (closed || registry.get(id) !== savedTarget) throw fail('设备连接已更新，请重试', 409);
                 if (proxy !== previous) {

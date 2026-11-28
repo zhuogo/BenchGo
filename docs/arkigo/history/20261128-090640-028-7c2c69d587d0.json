@@ -1,0 +1,81 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T09:06:40.028Z",
+  "by": "codex",
+  "reason": "记录自动重启与恢复协议最终合并回归 179 项全部通过",
+  "base": "2f6193503dcf",
+  "result": "7c2c69d587d0",
+  "changes": [
+    {
+      "op": "update",
+      "id": "release.restart-protocol-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.note"
+      ],
+      "before": {
+        "id": "release.restart-protocol-check",
+        "type": "acceptance",
+        "title": "更新自动重启与连接恢复协议回归",
+        "summary": "验证任务等待、请求排空、重启失败复用及浏览器按目标就绪恢复。",
+        "parent": "release.activate",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "受管服务测试载体、SSH 与 HTTPS 连接测试载体及浏览器"
+          ],
+          "then": [
+            "任务运行时先准备，空闲后激活并发出服务重启请求",
+            "已接收请求及流初始化完成后复查任务，失败释放准入并保留准备结果",
+            "状态探测临时失败时保持工作台可操作",
+            "确认重启或实例变化后等待目标版本及必要组件就绪并原址恢复",
+            "超时提供重试，授权失效交由连接入口处理"
+          ],
+          "when": "运行更新、远端管理、请求准入与浏览器恢复定向回归"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-28 用户要求落实更新后自动重启与远端恢复，并同步设计。"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-28T09:03:28.705Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/base/test/updates.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/server-manager.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/owner-command.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-recovery-browser.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "scripts/server/smoke-linux.test.mjs"
+            }
+          ],
+          "note": "node --test 更新、SSH 管理、工作台及浏览器等定向综合回归 178 项通过。随后工作台和 smoke-linux 输入校验 13 项通过，包含新增流初始化排空回归。npm run reload:plus、npm run check 和语法检查通过。真实 Linux systemd 与跨版本更新须另行实机验收。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

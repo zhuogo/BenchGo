@@ -1,0 +1,22 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T10:03:09.206Z",
+  "by": "codex",
+  "reason": "记录远端显示范围的浏览器保存恢复和真实 TLS 授权隔离验收",
+  "base": "026fc9d4813e",
+  "result": "37c70ce61842",
+  "changes": [
+    {
+      "op": "add",
+      "id": "link.workbench-scope-check"
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "link.workbench-scope-check",
+        "to": "link.group-resource-relay",
+        "type": "verifies"
+      }
+    }
+  ]
+}

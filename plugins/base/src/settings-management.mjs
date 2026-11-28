@@ -243,7 +243,7 @@ export function createSettingsManagement({ directory, requestConfirmation, now =
       // for every namespace. Mutations still resolve fresh metadata at CAS time.
       const observeRows = async namespaces => {
         if (adapters.get(adapter.id) !== adapter) return;
-        const entries = await adapter.schema();
+        const entries = await (adapter.observationSchema?.(namespaces) ?? adapter.schema());
         const rows = entries.filter(row => (!namespaces || namespaces.has(row.namespace)) && row.applies !== 'blocked' && row.risk !== 'blocked');
         // Native reads may themselves project the entire official directory.
         // Share one fresh directory only within this observation sweep; CAS

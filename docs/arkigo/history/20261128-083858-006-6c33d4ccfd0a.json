@@ -1,0 +1,212 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T08:38:58.006Z",
+  "by": "codex",
+  "reason": "明确工作台重启凭据和项目登记后的即时刷新",
+  "base": "c57410372d9b",
+  "result": "6c33d4ccfd0a",
+  "changes": [
+    {
+      "op": "update",
+      "id": "release.activate",
+      "fields": [
+        "body.steps"
+      ],
+      "before": {
+        "id": "release.activate",
+        "type": "flow",
+        "title": "主机验签并激活更新",
+        "summary": "验签并激活兼容功能包，受管 Linux 自动重启，客户端确认目标版本就绪后恢复连接。",
+        "parent": "release",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "restart"
+          ],
+          "start": "check",
+          "steps": [
+            {
+              "action": "按选择的分发源取带签名的清单，核对引擎、应用及功能包版本。",
+              "failure": "检查失败时保留此前已确认版本并报告；缺少应用版本信息时不推断。",
+              "id": "check",
+              "title": "验签并核对主机兼容"
+            },
+            {
+              "action": "校验下载包并准备不可变版本目录，协调活跃任务和更新互斥。",
+              "failure": "安装前发现任务或不兼容状态时留在当前版本。",
+              "id": "prepare",
+              "title": "准备已验证插件"
+            },
+            {
+              "action": "经官方 profile 约束切换，并记录重启所需状态。",
+              "failure": "锁冲突或校验失败应保留当前可用版本。",
+              "id": "activate",
+              "title": "锁内切换激活指针"
+            },
+            {
+              "action": "受管 Linux 在任务空闲时自动重启。校验实际加载的版本、Link、工作台及原先可用的总助手，连接恢复后返回原页面。桌面壳和 Android 沿用平台入口。",
+              "failure": "保留准备结果，允许用户重试，展示服务启动或模块就绪失败。",
+              "id": "restart",
+              "title": "按重启后版本确认"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "check",
+              "to": "prepare"
+            },
+            {
+              "from": "prepare",
+              "to": "activate"
+            },
+            {
+              "from": "activate",
+              "to": "restart"
+            }
+          ],
+          "trigger": "用户在工作台执行检查或更新。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "插件安装与激活"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "更新入口与状态"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-28 用户确认落实更新后自动重启、就绪核验与重连。"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T08:19:22.442Z",
+              "hash": "3214016c08e4b6b0aa1de5e4649fa20f6443a02051395377db4adff05cb18285",
+              "path": "plugins/base/src/updates.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T08:19:22.442Z",
+              "hash": "d5243a0fa71dbceeaa717e4b1c890fe3bb49920fb5006315c0c754cf6f184505",
+              "path": "scripts/server/bootstrap.mjs"
+            }
+          ],
+          "note": "桌面更新与签名激活已实现，受管 Linux 自动重启、就绪核验及恢复连接待接入。",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "workbench.session",
+      "fields": [
+        "body.steps"
+      ],
+      "before": {
+        "id": "workbench.session",
+        "type": "flow",
+        "title": "打开项目、会话和产物",
+        "summary": "从项目导航进入所属设备，用真实会话处理任务和查看产物。",
+        "parent": "workbench",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "preview"
+          ],
+          "start": "find",
+          "steps": [
+            {
+              "action": "使用当前设备、全部设备或指定设备显示范围。跨设备列表通过 [[link.resources]] 查询。",
+              "failure": "加载失败或目标离线时保留来源并报告失败，避免把离线解释为空列表。",
+              "id": "find",
+              "title": "定位项目与会话"
+            },
+            {
+              "action": "按资源所属设备进入会话。远端任务执行会话允许查看，并提供返回 A 工单的入口。",
+              "failure": "目标能力不足时保留解释，任务输入与控制从原工单办理。",
+              "id": "open",
+              "title": "打开真实会话"
+            },
+            {
+              "action": "官方会话由 [[workbench.official]] 处理。已选择的原生路由经 Commander 连接实际 Agent。",
+              "failure": "工具未安装、会话失联或协议不支持时明确报告。",
+              "id": "agent",
+              "title": "发送、审批或继续"
+            },
+            {
+              "action": "按会话最新工作目录校验文件授权，再按类型加载预览。本机文件操作和终端按 owner 权限挂载。",
+              "failure": "路径越界、内容超限或格式不支持时说明，保留合规的下载或其他入口。",
+              "id": "preview",
+              "title": "查看项目文件与产物"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "find",
+              "to": "open"
+            },
+            {
+              "from": "open",
+              "to": "agent"
+            },
+            {
+              "from": "agent",
+              "to": "preview"
+            }
+          ],
+          "trigger": "用户从工作台的项目、最近或归档列表进入。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/设计.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/跨设备资源导航.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/产物快览.md"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/项目文件操作.md"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-25T13:51:12.949Z",
+              "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
+              "path": "plugins/link/src/devices/resources.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.949Z",
+              "hash": "b3419a52ec87ee08d96b6e616654550827ab64ca05c7fba952776ef430accb29",
+              "path": "plugins/harness/src/plugin.mjs"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.949Z",
+              "hash": "6094f5618fbe89d796654ce1e03731cb6446f41ebcd1cdd8f0acf2f49d8b2a2c",
+              "path": "plugins/base/workbench/src/project-files.mjs",
+              "symbol": "mountProjectFiles"
+            },
+            {
+              "checkedAt": "2026-11-25T13:51:12.949Z",
+              "hash": "0ebf22cdc8fabd263bad36202ca5260481c622f9b0429ef62abbc1ee8aededda",
+              "path": "plugins/base/workbench/src/media.mjs"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    }
+  ]
+}

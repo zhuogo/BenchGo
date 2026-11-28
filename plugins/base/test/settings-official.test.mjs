@@ -28,7 +28,7 @@ async function fixture(t) {
   ] }]));
   await writeFile(join(directory, 'cordis.yml'), '[]\n');
   const profile = { name: 'test', startedBundles: ['test-settings-bundle'], dir: directory,
-    patchPath: join(directory, 'cordis.patch.yml'), installAnchor: join(home, 'package.json'), cwd: home, home, overlays: [], telemetryDisabledEnv: undefined };
+    patchPath: join(directory, 'cordis.patch.yml'), installAnchor: join(home, 'package.json'), cwd: home, home, overlayPaths: [], telemetryDisabledEnv: undefined };
   let consumer, mounts = 0, ownedAdapter, projections = 0;
   const Probe = { Config: Schema.object({ ordinary: Schema.string().required(), count: Schema.number().min(1).max(20).default(2).volatile(),
     token: Schema.string().required().role('secret').volatile() }),
@@ -90,8 +90,8 @@ test('official native schemas retain blocked entries and discover newly declared
 test('official projections are reused across reads but refresh changed constraints and secret boundaries', async t => {
   const f = await fixture(t);
   await f.manager.flush();
-  const initial = f.projections();
   const catalog = await f.adapter.schema();
+  const initial = f.projections();
   catalog.find(row => row.namespace === 'probe').schema.type = 'null';
   await f.manager.read(ref);
   await change(f, [set('count', 4)]);
@@ -115,17 +115,19 @@ test('official projections are reused across reads but refresh changed constrain
   assert(!JSON.stringify(descriptor).includes('private-new-default'));
 });
 
-test('temporary projection failure is retried instead of caching a blocked configuration', async () => {
+test('temporary projection failure blocks editing and is retried without blocking native observation', async () => {
   let calls = 0;
   const config = Schema.object({ value: Schema.string() });
   const entry = { options: { id: 'probe', name: 'probe', config: {} }, fiber: { uid: 1, runtime: { Config: config }, effectiveConfig: {}, ctx: {} } };
   const ctx = { settings: { describe: () => [] }, configEditor: { configuration: () => [{ entry, inherited: {}, override: {} }] }, loader: { entries: () => [entry] } };
   const adapter = createOfficialSettingsAdapter(ctx, { projectSchema: () => { if (++calls === 1) throw Error('temporary'); return { type: 'object' }; } });
+  assert.equal((await adapter.observationSchema())[0].applies, 'reload');
+  assert.equal(calls, 0);
   assert.equal((await adapter.schema())[0].risk, 'blocked');
   assert.equal((await adapter.schema())[0].applies, 'reload');
   assert.equal(calls, 2);
   config.dict.value.meta.default = 1n;
-  assert.equal((await adapter.schema())[0].applies, 'reload', 'unhashable metadata uses the authoritative projector without caching');
+  assert.equal((await adapter.observationSchema())[0].applies, 'reload', 'unhashable metadata uses the authoritative projector without caching');
   assert.equal(calls, 3);
   config.dict.value.meta.default = 'valid';
   assert.equal((await adapter.schema())[0].applies, 'reload');
@@ -160,12 +162,17 @@ test('official observation batches use one fresh value directory rather than one
 });
 
 test('official page mutations use the same version and journal while sensitive writes remain blocked', async t => {
-  const f = await fixture(t), original = await f.manager.read(ref);
+  const f = await fixture(t);
+  await f.manager.flush();
+  assert.equal(f.projections(), 0, 'startup auditing does not compile the edit schema');
   await f.ctx.settings.mutate('probe', [set('count', 8)]);
   await f.manager.flush();
+  assert.equal(f.projections(), 0, 'an external edit is audited before the first managed read');
   const record = f.manager.history()[0];
   assert.equal(record.source, 'external'); assert.equal(record.reversible, true);
-  await assert.rejects(f.manager.prepare({ ...ref, expectedRevision: original.revision, ops: [set('count', 4)] }, owner), { code: 'SETTINGS_CONFLICT' });
+  assert(!JSON.stringify(record).includes('official-private-sentinel'));
+  await assert.rejects(f.manager.prepare({ ...ref, expectedRevision: record.previousRevision, ops: [set('count', 4)] }, owner), { code: 'SETTINGS_CONFLICT' });
+  assert.equal(f.projections(), 1, 'managed requests still compile and validate against the edit schema');
   const current = await f.manager.read(ref);
   await assert.rejects(f.manager.prepare({ ...ref, expectedRevision: current.revision, ops: [set('token', 'never-ordinary-json')] }, owner), { code: 'SETTINGS_SECRET_BLOCKED' });
   await f.manager.commit(await f.manager.rollback({ historyId: record.id, expectedRevision: current.revision }, owner), owner);

@@ -107,10 +107,13 @@ export function createOfficialSettingsAdapter(ctx, { resolveMetadata = () => ({}
     return { $schema: 'https://json-schema.org/draft/2020-12/schema', ...result.schema,
       $defs: { ...result.definitions, loaderExpression: false } };
   };
-  const projected = async row => {
+  const fingerprintSchema = schema => {
     let fingerprint = null;
-    try { fingerprint = projectionFingerprint(row.schema); }
+    try { fingerprint = projectionFingerprint(schema); }
     catch { /* Unresolved builders/non-JSON annotations retain official semantics. */ }
+    return fingerprint;
+  };
+  const projected = async (row, fingerprint) => {
     let cached = projections.get(row.namespace);
     if (!cached || cached.source !== row.schema || cached.fingerprint !== fingerprint || fingerprint === null) {
       cached = { source: row.schema, fingerprint, value: Promise.resolve().then(() => project(row.schema)).then(publicSchema) };
@@ -175,35 +178,40 @@ export function createOfficialSettingsAdapter(ctx, { resolveMetadata = () => ({}
     if (matching.length !== 1) throw fail('SETTINGS_BLOCKED', matching.length ? '配置命名空间不唯一' : '官方配置项已退出或未登记');
     return matching[0];
   };
+  async function describeNamespaces({ observing = false, namespaces } = {}) {
+    let rows;
+    try { rows = records(); }
+    catch { return [{ namespace: '*', title: '官方配置', applies: 'blocked', risk: 'blocked', unavailableReason: '官方配置服务无法读取目录' }]; }
+    const active = new Set(rows.map(row => row.namespace));
+    for (const key of projections.keys()) if (!active.has(key)) projections.delete(key);
+    for (const key of formSchemas.keys()) if (!active.has(key)) formSchemas.delete(key);
+    return Promise.all(rows.filter(row => !namespaces || namespaces.has(row.namespace)).map(async row => {
+      let schema, reason = row.reason;
+      if (!reason) {
+        const fingerprint = fingerprintSchema(row.schema);
+        // Journal snapshots use native settings and secret paths. Build the
+        // edit schema on demand, retaining the projector for unresolved graphs.
+        try { if (!observing || fingerprint === null) schema = await projected(row, fingerprint); }
+        catch { reason = '官方 schema 投影服务不可用，无法提供真实类型约束'; }
+      }
+      const metadata = await resolveMetadata({ entryId: row.namespace, pluginName: row.entry?.options.name, schema: row.schema });
+      return { namespace: row.namespace, title: metadata.title || row.entry?.options.name || row.namespace,
+        ...(schema ? { schema } : {}), ...metadata,
+        sensitivePaths: [...secretPaths(row.schema), ...(metadata.sensitivePaths || [])],
+        risk: reason ? 'blocked' : metadata.risk ?? 'confirm',
+        impact: metadata.impact || '官方插件配置变更；未声明具体影响，本次需要确认',
+        ...(row.entry && retained(row.entry.fiber) ? {
+          nonLiveBlockedReason: '重挂此插件会销毁当前管理服务或其依赖，无法在原接缝完成读回',
+          pathPolicies: [...(metadata.pathPolicies || []), ...nonvolatilePaths(row.schema).map(path => ({ path, risk: 'blocked' }))],
+        } : {}),
+        applies: reason ? 'blocked' : row.layer && !row.schema.meta?.volatile ? 'reload' : 'live',
+        ...(reason ? { unavailableReason: reason } : {}) };
+    }));
+  }
   return {
     id: 'official',
-    async schema() {
-      let rows;
-      try { rows = records(); }
-      catch { return [{ namespace: '*', title: '官方配置', applies: 'blocked', risk: 'blocked', unavailableReason: '官方配置服务无法读取目录' }]; }
-      const active = new Set(rows.map(row => row.namespace));
-      for (const key of projections.keys()) if (!active.has(key)) projections.delete(key);
-      for (const key of formSchemas.keys()) if (!active.has(key)) formSchemas.delete(key);
-      return Promise.all(rows.map(async row => {
-        let schema, reason = row.reason;
-        if (!reason) {
-          try { schema = await projected(row); }
-          catch { reason = '官方 schema 投影服务不可用，无法提供真实类型约束'; }
-        }
-        const metadata = await resolveMetadata({ entryId: row.namespace, pluginName: row.entry?.options.name, schema: row.schema });
-        return { namespace: row.namespace, title: metadata.title || row.entry?.options.name || row.namespace,
-          ...(schema ? { schema } : {}), ...metadata,
-          sensitivePaths: [...secretPaths(row.schema), ...(metadata.sensitivePaths || [])],
-          risk: reason ? 'blocked' : metadata.risk ?? 'confirm',
-          impact: metadata.impact || '官方插件配置变更；未声明具体影响，本次需要确认',
-          ...(row.entry && retained(row.entry.fiber) ? {
-            nonLiveBlockedReason: '重挂此插件会销毁当前管理服务或其依赖，无法在原接缝完成读回',
-            pathPolicies: [...(metadata.pathPolicies || []), ...nonvolatilePaths(row.schema).map(path => ({ path, risk: 'blocked' }))],
-          } : {}),
-          applies: reason ? 'blocked' : row.layer && !row.schema.meta?.volatile ? 'reload' : 'live',
-          ...(reason ? { unavailableReason: reason } : {}) };
-      }));
-    },
+    schema: () => describeNamespaces(),
+    observationSchema: namespaces => describeNamespaces({ observing: true, namespaces }),
     async read(namespace) { return snapshot(find(namespace)); },
     async readMany(namespaces) {
       if (!namespaces.length) return new Map();

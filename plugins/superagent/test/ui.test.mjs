@@ -12,6 +12,7 @@ import * as modelSettings from '../client/model-settings.mjs';
 import { petActionForSession, petExpressionForAction } from '../client/pet-state.mjs';
 import { createConfigSync, saveConfigPatch } from '../client/config-sync.mjs';
 import { structuralShare } from '../client/structural-share.mjs';
+import { sessionStatusSource } from '../../base/client/session-status.mjs';
 const { transformSync } = createRequire(new URL('../../base/package.json', import.meta.url))('esbuild');
 const code = transformSync(readFileSync(new URL('../client/index.jsx', import.meta.url), 'utf8') + '\nexport { mergeHistory, loadCatalog, messageText, retainSession, PendingCard, PendingInteractions, UIIcon, Identity, Studio, ResourceTabs, RetainedPane, api, BackgroundSessions };', { loader: 'jsx', format: 'cjs' }).code;
 const settingsCode = transformSync(readFileSync(new URL('../client/model-settings.jsx', import.meta.url), 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
@@ -28,7 +29,7 @@ function harness(options = {}) {
   const module = { exports: {} };
   const assistantConfigSync = createConfigSync();
   const assistantModelCatalog = createModelCatalogLoader(async () => { calls.push({ action: 'catalog' }); return typeof options.response === 'function' ? options.response(calls.at(-1)) : options.response || { providers: [], models: [] }; });
-  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, AbortSignal: options.AbortSignal || AbortSignal, localStorage: options.storage, queueMicrotask, setTimeout: options.setTimeout || (fn => fn()), clearTimeout: () => {}, setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { const call = JSON.parse(options.body); calls.push(call); return options.fetch ? options.fetch(url, options) : { benchgoCall: call }; }, require: id => id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('structural-share.mjs') ? { structuralShare } : id.endsWith('perf-trace.mjs') ? { perfTrace: { time: () => () => {} } } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async response => typeof options.response === 'function' ? options.response(response.benchgoCall) : options.response || ({ providers: [], models: [] }) } : id.endsWith('image-gallery-model.mjs') ? { groupReplyImages } : id.endsWith('image-gallery.jsx') ? { ImageGallery: 'ImageGallery' } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
+  runInNewContext(code, { module, exports: module.exports, URL, Event, CustomEvent, AbortController, AbortSignal: options.AbortSignal || AbortSignal, localStorage: options.storage, queueMicrotask, setTimeout: options.setTimeout || (fn => fn()), clearTimeout: () => {}, setInterval: fn => { intervals.push(fn); return fn; }, clearInterval: fn => { intervals.splice(intervals.indexOf(fn), 1); }, window: { confirm: options.confirm || (() => true), addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }, crypto: { randomUUID }, document: { baseURI: 'https://local/', hidden: false, addEventListener: (name, fn) => documentListeners.set(name, fn), removeEventListener: name => documentListeners.delete(name), dispatchEvent(event) { documentListeners.get(event.type)?.(event); return true; } }, fetch: async (url, options) => { const call = JSON.parse(options.body); calls.push(call); return options.fetch ? options.fetch(url, options) : { benchgoCall: call }; }, require: id => id.endsWith('session-status.mjs') ? { sessionStatusSource } : id.endsWith('model-catalog.mjs') ? { assistantModelCatalog } : id.endsWith('/ui/confirmation.jsx') ? { useConfirmation: () => [async () => (options.confirm || (() => true))(), null] } : id.endsWith('/ui/button.jsx') ? { Button: 'button' } : id.endsWith('/ui/collapsible.jsx') ? { Disclosure: 'Disclosure' } : id.endsWith('execution-session-navigation.mjs') ? { executionSessionNavigation } : id.endsWith('session-retain.mjs') ? { retainAssistantSession, assistantBackgroundSessions } : id === 'react' ? react : id.endsWith('sidebar-lists.mjs') ? sidebarLists : id.endsWith('pet-state.mjs') ? { petActionForSession, petExpressionForAction } : id.endsWith('model-settings.mjs') ? modelSettings : id.endsWith('model-settings.jsx') ? settingsModule.exports : id.endsWith('config-sync.mjs') ? { assistantConfigSync, saveConfigPatch } : id.endsWith('structural-share.mjs') ? { structuralShare } : id.endsWith('perf-trace.mjs') ? { perfTrace: { time: () => () => {} } } : id.endsWith('dirty-registry.mjs') ? registryModule.exports : id.endsWith('http-response.mjs') ? { readJsonResponse: async response => typeof options.response === 'function' ? options.response(response.benchgoCall) : options.response || ({ providers: [], models: [] }) } : id.endsWith('image-gallery-model.mjs') ? { groupReplyImages } : id.endsWith('image-gallery.jsx') ? { ImageGallery: 'ImageGallery' } : id.endsWith('dsh-client-ui-primitives') ? { Tooltip: ({ label, children }) => react.createElement('span', { 'data-tooltip': label }, children), Modal: () => null, Menu: () => null, IconPinOutlineMedium: "IconPinOutlineMedium", IconPinFillMedium: "IconPinFillMedium", IconArchiveOutlineMedium: "IconArchiveOutlineMedium", IconArchiveOffOutlineMedium: "IconArchiveOffOutlineMedium", IconEllipsisOutlineMedium: "IconEllipsisOutlineMedium" } : {} });
   return { listeners, documentListeners, intervals, exports: module.exports, render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return module.exports[name](props); }, calls, effects };
 }
 const walk = node => node && typeof node === 'object' ? [node, ...node.children.flatMap(walk)] : [];
@@ -595,11 +596,11 @@ test('chat opening reports failure while state is pending and retries chat witho
   const dispose = h.effects.find(item => item.deps?.length === 3 && item.deps[2] === ctx).effect();
   await new Promise(setImmediate);
   let nodes = walk(h.render('AssistantPage', { ctx }));
-  const failure = nodes.find(node => node.props.title === '聊天暂未连接');
+  const failure = nodes.find(node => node.props.message?.startsWith('聊天暂未连接：'));
   assert.ok(failure, 'ensure failure is visible before state settles');
-  assert.equal(failure.props.description, '设备连接中断');
+  assert.equal(failure.props.message, '聊天暂未连接：设备连接中断');
   broken = false;
-  const retry = failure.props.onAction();
+  const retry = failure.props.onRetry();
   await new Promise(setImmediate);
   nodes = walk(h.render('AssistantPage', { ctx }));
   assert(nodes.some(node => node.props.sessionId === 'main-session'), 'retry opens history independently of state');
@@ -621,13 +622,13 @@ test('history timeout releases the shared read so reconnect can restore chat whi
   await new Promise(setImmediate);
   assert.deepEqual(h.calls.map(call => call.action), ['state', 'ensure', 'history']);
   deadlines.pending[2].expire(); await new Promise(setImmediate);
-  const failure = walk(h.render('AssistantPage', { ctx })).find(node => node.props.title === '聊天暂未连接');
-  assert.match(failure?.props.description || '', /连接超时/);
+  const failure = walk(h.render('AssistantPage', { ctx })).find(node => node.props.message?.startsWith('聊天暂未连接：'));
+  assert.match(failure?.props.message || '', /连接超时/);
   stalled = false;
-  const retry = failure.props.onAction(); await new Promise(setImmediate);
+  const retry = failure.props.onRetry(); await new Promise(setImmediate);
   const nodes = walk(h.render('AssistantPage', { ctx }));
   assert(nodes.some(node => node.props.sessionId === 'main-session'));
-  assert(!nodes.some(node => node.props.role === 'alert'), 'successful chat recovery removes its timeout error');
+  assert(!nodes.some(node => node.props.loadError || node.props.message?.includes('????')), 'successful chat recovery removes its timeout error');
   assert.deepEqual(h.calls.map(call => call.action), ['state', 'ensure', 'history', 'state', 'ensure', 'history']);
   stateReads.forEach(resolve => resolve(snapshot)); await retry; dispose(); await new Promise(setImmediate);
 });
@@ -646,15 +647,15 @@ test('each loading branch reports immediately and recovery preserves the other b
   const dispose = h.effects.find(item => item.deps?.length === 3 && item.deps[2] === ctx).effect();
   await new Promise(setImmediate);
   let nodes = walk(h.render('AssistantPage', { ctx }));
-  assert.equal(nodes.find(node => node.props.title === '聊天暂未连接')?.props.description, '配置暂时不可用');
+  assert.equal(nodes.find(node => node.props.message?.startsWith('聊天暂未连接：'))?.props.message, '聊天暂未连接：配置暂时不可用');
   finishEnsure({ sessionId: 'main-session' }); await new Promise(setImmediate);
   nodes = walk(h.render('AssistantPage', { ctx }));
   assert(nodes.some(node => node.props.sessionId === 'main-session'));
-  assert(nodes.some(node => node.children.includes('配置暂时不可用')), 'chat success does not hide state failure');
+  assert(nodes.some(node => node.props.loadError === '配置暂时不可用'), 'chat success does not hide state failure');
   broken = false;
-  await nodes.find(node => node.type === 'button' && node.children.includes('重试加载')).props.onClick();
+  await nodes.find(node => node.props.loadError === '配置暂时不可用').props.onRetryLoad();
   nodes = walk(h.render('AssistantPage', { ctx }));
-  assert(!nodes.some(node => node.props.role === 'alert'), 'successful reload clears the recovered state error');
+  assert(!nodes.some(node => node.props.loadError), 'successful reload clears the recovered state error');
   dispose(); await new Promise(setImmediate);
 });
 test('a successful background retry clears the recovered chat error', async () => {
@@ -672,12 +673,12 @@ test('a successful background retry clears the recovered chat error', async () =
   h.render('AssistantPage', { ctx });
   const dispose = h.effects.find(item => item.deps?.length === 3 && item.deps[2] === ctx).effect();
   await new Promise(setImmediate);
-  assert(walk(h.render('AssistantPage', { ctx })).some(node => node.props.description === '设备连接中断'));
+  assert(walk(h.render('AssistantPage', { ctx })).some(node => node.props.message === '聊天暂未连接：设备连接中断'));
   broken = false;
   await timers.findLast(timer => timer.delay === 30000).run();
   const nodes = walk(h.render('AssistantPage', { ctx }));
   assert(nodes.some(node => node.props.sessionId === 'main-session'));
-  assert(!nodes.some(node => node.props.role === 'alert'), 'background recovery clears the stale opening error');
+  assert(!nodes.some(node => node.props.loadError), 'background recovery clears the stale opening error');
   dispose(); await new Promise(setImmediate);
 });
 test('state reads are shared until an invalidation and ensure announces only a new session', async () => {
@@ -765,16 +766,29 @@ test('background assistant thread approval is reserved for the unified review pa
   const nodes = walk(h.render('PendingInteractions', { ctx: { uiSession: { sessionStatus: { getSnapshot: () => new Map([['side-session', { pendingInteraction: pending }]]) } } }, threads: [{ id: 'side', title: 'Background work', sessionId: 'side-session' }] }));
   assert.equal(nodes.some(node => node.props.pending === pending), false);
 });
-test('clear is a main-chat slash action that resets once and opens the new session', async () => {
-  const snapshot = { config: { revision: 1, models: [{ providerId: 'provider', modelId: 'model' }] }, state: { mainSessionId: 'main-old', threads: [] } };
-  const history = { sessionId: 'main-old', messages: [{ id: 'old-message' }], images: [{ id: 'old-image', url: '/old.png' }], error: 'Old error' };
-  const h = harness({ state: [snapshot, '', 'chat', 'main', history], response: ({ action }) => {
-    if (action === 'resetMain') return { cleared: true };
-    if (action === 'state') return { ...snapshot, state: { ...snapshot.state, mainSessionId: 'main-new' } };
-    if (action === 'ensure') return { sessionId: 'main-new' };
-    if (action === 'history') return { threadId: 'main', sessionId: 'main-new', messages: [], images: [], running: false };
+for (const threadId of ['main', 'side']) test(`clear resets ${threadId} once and opens the new session before refreshing history`, async () => {
+  const main = threadId === 'main', resetAction = main ? 'resetMain' : 'resetThread';
+  const oldSession = `${threadId}-old`, newSession = `${threadId}-new`;
+  const loadingLabel = main ? '正在清理主聊天…' : '正在清理旁聊…';
+  const chatState = sessionId => ({ mainSessionId: main ? sessionId : 'other-main',
+    threads: main ? [] : [{ id: threadId, title: '旁聊标题', pinned: true, sessionId }] });
+  const snapshot = { config: { revision: 1, models: [{ providerId: 'provider', modelId: 'model' }] }, state: chatState(oldSession) };
+  const history = { sessionId: oldSession, messages: [{ id: 'old-message' }], images: [{ id: 'old-image', url: '/old.png' }], error: 'Old error' };
+  const reset = Promise.withResolvers(), open = Promise.withResolvers(), state = Promise.withResolvers();
+  const oldHistory = Promise.withResolvers(), newHistory = Promise.withResolvers(), background = [];
+  let historyReads = 0, announced = 0;
+  const h = harness({ state: [snapshot, '', 'chat', threadId, history], response: ({ action, threadId: target }) => {
+    if (action === resetAction) {
+      assert.equal(target, main ? undefined : threadId);
+      return reset.promise;
+    }
+    if (action === 'state') return state.promise;
+    assert.equal(target, threadId);
+    if (action === 'ensure') return open.promise;
+    if (action === 'history') return ++historyReads === 1 ? oldHistory.promise : newHistory.promise;
     throw new Error('Unexpected action: ' + action);
-  } });
+  }, setTimeout: fn => background.push(fn) });
+  h.documentListeners.set('benchgo:assistant-changed', () => { announced++; });
   let command;
   const ctx = { inject(deps, setup) {
     assert.deepEqual(Array.from(deps), ['commandUi']);
@@ -782,27 +796,56 @@ test('clear is a main-chat slash action that resets once and opens the new sessi
     setup({ effect: effect => disposers.push(effect()), commandUi: { register(value) { command = value; return () => { command = null; }; } } });
     return { dispose() { for (const dispose of disposers) dispose(); } };
   } };
-  h.render('AssistantPage', { ctx });
+  const render = () => walk(h.render('AssistantPage', { ctx }));
+  const initial = render();
   const dispose = h.effects.filter(item => item.deps?.length === 1 && item.deps[0] === ctx).map(item => item.effect());
   assert.equal(command.name, 'clear');
   assert.equal(command.ui.kind, 'action');
-  assert.equal(command.available({ sessionId: 'main-old' }), true);
+  assert.equal(command.available({ sessionId: oldSession }), true);
   assert.equal(command.available({ sessionId: 'side' }), false);
   assert.equal(command.available({ sessionId: 'coding' }), false);
   command.ui.run({ sessionId: 'side' });
   assert.equal(h.calls.length, 0);
-  command.ui.run({ sessionId: 'main-old' });
-  command.ui.run({ sessionId: 'main-old' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(h.calls.map(call => call.action), ['resetMain', 'state', 'ensure', 'history']);
-  const nodes = walk(h.render('AssistantPage', { ctx }));
-  assert.ok(nodes.some(node => node.props.sessionId === 'main-new'));
-  const nextHistory = nodes.find(node => node.props.history?.sessionId === 'main-new').props.history;
+  const refreshing = initial.find(node => node.props.onClear).props.onRefresh();
+  const queued = initial.find(node => node.props.onClear).props.onRefresh();
+  command.ui.run({ sessionId: oldSession });
+  command.ui.run({ sessionId: oldSession });
+  let nodes = render();
+  assert.ok(nodes.some(node => node.props.label === loadingLabel));
+  assert.equal(nodes.find(node => node.props.sessionId === oldSession).props.clearPending, true);
+  assert.equal(command.available({ sessionId: oldSession }), false);
+  assert.deepEqual(h.calls.map(call => call.action), ['history', resetAction]);
+
+  reset.resolve({ cleared: true });
+  await new Promise(setImmediate);
+  assert.deepEqual(h.calls.map(call => call.action), ['history', resetAction, 'ensure']);
+  assert.equal(announced, 0);
+  assert.ok(!render().some(node => node.props.history?.sessionId === oldSession));
+
+  open.resolve({ sessionId: newSession });
+  await new Promise(setImmediate);
+  nodes = render();
+  assert.equal(nodes.find(node => node.props.sessionId === newSession).props.clearPending, false);
+  assert.ok(!nodes.some(node => node.props.label === loadingLabel));
+  assert.deepEqual(JSON.parse(JSON.stringify(nodes.find(node => node.type === h.exports.BackgroundSessions).props.state)), chatState(newSession));
+  assert.equal(background.length, 1);
+  background.shift()();
+  assert.deepEqual(h.calls.map(call => call.action), ['history', resetAction, 'ensure', 'history', 'state']);
+  assert.equal(announced, 1);
+
+  oldHistory.resolve({ ...history, threadId });
+  await Promise.all([refreshing, queued]);
+  assert.equal(historyReads, 2, 'a queued read for the cleared session is dropped');
+  const nextHistory = render().find(node => node.props.history?.sessionId === newSession).props.history;
   assert.equal(nextHistory.messages.length, 0);
-  assert.equal(nextHistory.images.length, 0);
+  assert.equal(nextHistory.images, undefined);
   assert.equal(nextHistory.error, undefined);
-  assert.equal(command.available({ sessionId: 'main-old' }), false);
-  assert.equal(command.available({ sessionId: 'main-new' }), true);
+  assert.equal(command.available({ sessionId: oldSession }), false);
+  assert.equal(command.available({ sessionId: newSession }), true);
+  newHistory.resolve({ threadId, sessionId: newSession, messages: [], images: [], running: false });
+  state.resolve({ ...snapshot, state: chatState(newSession) });
+  await new Promise(setImmediate);
+  assert.equal(render().find(node => node.props.history?.sessionId === newSession).props.history.images.length, 0);
   for (const cleanup of dispose) await cleanup?.();
   assert.equal(command, null);
 });
@@ -817,8 +860,28 @@ test('clear failure preserves the main session and remains retryable', async () 
   nodes = walk(h.render('AssistantPage', props));
   assert.ok(nodes.some(node => node.props.loadError === '请先停止正在运行的主聊天'));
   assert.equal(nodes.find(node => node.props.onClear).props.history, history);
+  assert.equal(nodes.find(node => node.props.onClear).props.clearPending, false);
   await nodes.find(node => node.props.onClear).props.onClear();
   assert.deepEqual(h.calls.map(call => call.action), ['resetMain', 'resetMain']);
+});
+
+test('clear is unavailable in archived and channel side chats', async () => {
+  for (const eligibility of [{ archived: true }, { sourceKey: 'channel-source' }]) {
+    const history = { sessionId: 'side-session', messages: [] };
+    const snapshot = { config: { models: [] }, state: { threads: [{ id: 'side', sessionId: history.sessionId, ...eligibility }] } };
+    const h = harness({ state: [snapshot, '', 'chat', 'side', history] });
+    let command;
+    const ctx = { inject(_deps, setup) {
+      setup({ effect: effect => effect(), commandUi: { register(value) { command = value; } } });
+      return { dispose() {} };
+    } };
+    const nodes = walk(h.render('AssistantPage', { ctx }));
+    h.effects.find(item => item.deps?.length === 1 && item.deps[0] === ctx).effect();
+    assert.equal(command.available({ sessionId: history.sessionId }), false);
+    command.ui.run({ sessionId: history.sessionId });
+    assert.equal(nodes.find(node => node.props.history === history).props.onClear, undefined);
+    assert.equal(h.calls.length, 0);
+  }
 });
 
 test('a cleared main session observed by polling drops the old transcript and artifacts', () => {
@@ -836,18 +899,27 @@ test('a cleared main session observed by polling drops the old transcript and ar
 test('clear success remains committed when opening the new chat needs a retry', async () => {
   const snapshot = { config: { revision: 1, models: [] }, state: { mainSessionId: 'main-old', threads: [] } };
   const history = { sessionId: 'main-old', messages: [{ id: 'old-message' }], images: [{ id: 'old-image' }] };
+  let retry = false;
   const h = harness({ state: [snapshot, '', 'chat', 'main', history], response: ({ action }) => {
     if (action === 'resetMain') return { cleared: true };
+    if (action === 'state') return { ...snapshot, state: { ...snapshot.state, mainSessionId: retry ? 'main-new' : null } };
+    if (action === 'ensure' && retry) return { sessionId: 'main-new' };
+    if (action === 'history' && retry) return { threadId: 'main', sessionId: 'main-new', messages: [] };
     throw new Error('连接中断');
   } });
   const props = { ctx: {} };
   let nodes = walk(h.render('AssistantPage', props));
   await nodes.find(node => node.props.onClear).props.onClear();
+  await new Promise(setImmediate);
   nodes = walk(h.render('AssistantPage', props));
   assert.ok(nodes.some(node => node.props.message?.includes('主聊天已清理，重新加载失败：连接中断')));
   assert.ok(!nodes.some(node => node.props.history?.sessionId === 'main-old'));
   assert.equal(nodes.find(node => node.type === h.exports.PendingInteractions).props.threads.length, 0);
-  assert.deepEqual(h.calls.map(call => call.action), ['resetMain', 'state']);
+  assert.deepEqual(h.calls.map(call => call.action), ['resetMain', 'ensure', 'state']);
+  retry = true;
+  await nodes.find(node => node.props.message?.includes('主聊天已清理')).props.onRetry();
+  assert.ok(walk(h.render('AssistantPage', props)).some(node => node.props.history?.sessionId === 'main-new'));
+  assert.deepEqual(h.calls.map(call => call.action), ['resetMain', 'ensure', 'state', 'state', 'ensure', 'history']);
 });
 
 

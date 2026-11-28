@@ -48,7 +48,124 @@ async function fixture(t, options = {}) {
   t.after(async () => { await manager.close(); for (const client of clients) client.end(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
   return { directory, manager, input: { host: '127.0.0.1', port: server.address().port, username: 'tester' }, authentications: () => authentications, drop: () => { for (const client of clients) client.end(); } };
 }
-async function completed(manager, id) { for (let i = 0; i < 100; i++) { const value = await manager.job(id); if (value.state !== 'running') return value; await new Promise(resolve => setTimeout(resolve, 10)); } throw new Error('job did not settle'); }
+async function completed(manager, id, timeout = 1000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const value = await manager.job(id);
+    if (value.state !== 'running') return value;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error('job did not settle');
+}
+
+async function managedFixture(t, respond) {
+  const requests = [];
+  const f = await fixture(t, {
+    onExec(command, stream) {
+      assert.equal(command, ownerCommand, 'managed hosts must use their owner update service');
+      let script = '';
+      stream.on('data', chunk => { script += chunk; });
+      stream.on('end', () => {
+        const input = JSON.parse(script.match(/\}\)\((\{[^\n]*\})\)\.then\(value =>/)[1]);
+        requests.push(input);
+        const result = respond(input);
+        stream.write(JSON.stringify(result));
+        stream.exit(result.error ? 1 : 0);
+        stream.end();
+      });
+      return true;
+    },
+  });
+  const identity = await loadIdentity(f.directory);
+  const server = createHttpsServer({ key: identity.key, cert: identity.cert }, (request, response) => {
+    if (request.url === '/link/api/workbench') {
+      assert.equal(request.headers.authorization, 'Bearer managed-token');
+      response.writeHead(200, { 'set-cookie': 'dsh_link_workbench=managed' });
+      response.end('{"url":"/link/workbench/"}');
+    } else {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<html>ready</html>');
+    }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const { openDeviceRegistry } = await import('../src/devices/registry.mjs');
+  const registry = await openDeviceRegistry(f.directory);
+  const { fingerprint } = await f.manager.probe(f.input);
+  const hostId = 'sha256:' + identity.pin;
+  const id = 'managed-server';
+  await registry.upsert({ id, kind: 'ssh', name: 'Managed', hostId, pin: identity.pin, token: 'managed-token',
+    ssh: { ...f.input, fingerprint, remotePort: server.address().port } });
+  const manager = createServerManager({ directory: f.directory, registry,
+    resourceFetcher: async () => assert.fail('managed update downloaded deployment resources') });
+  t.after(() => manager.close());
+  const connection = await manager.reconnect({ id, password: 'secret' });
+  assert.equal((await completed(manager, connection.jobId)).state, 'done');
+  return { manager, id, requests, hostId };
+}
+
+test('managed update waits for tasks, a new instance, target version and assistant without replacing the tunnel', { timeout: 15_000 }, async t => {
+  let polls = 0, healthChecks = 0;
+  const before = { installation: 'server', phase: 'idle', current: { plugin: '1.0.0' },
+    hostHealth: { instanceId: 'before', assistant: true }, decision: { action: 'check' } };
+  const available = { ...before, canInstall: true, decision: { action: 'plugin', targetVersion: '1.1.0' } };
+  const f = await managedFixture(t, input => {
+    if (input.action === 'updates') {
+      if (input.operation === 'check') return available;
+      if (input.operation === 'install') return { ...available, phase: 'waiting' };
+      if (!polls++) return before;
+      return { ...available, restartRequired: true, hostHealth: { ...before.hostHealth, restart: 'restarting' } };
+    }
+    healthChecks++;
+    return { ready: true, assistant: healthChecks >= 4, instanceId: healthChecks === 1 ? 'before' : 'after',
+      version: healthChecks <= 2 ? '1.0.0' : '1.1.0' };
+  });
+  const tunnel = await f.manager.workbenchTarget(f.id);
+  const { jobId } = await f.manager.manage({ id: f.id, operation: 'update' });
+  const job = await completed(f.manager, jobId, 12_000);
+  assert.equal(job.state, 'done', job.error);
+  assert.equal(healthChecks, 4);
+  assert(job.steps.some(step => step.name === '等待运行中的任务结束'));
+  assert.equal((await f.manager.workbenchTarget(f.id)).url, tunnel.url);
+  assert.deepEqual(f.requests.filter(input => input.action === 'updates').map(input => input.operation), ['status', 'check', 'install', 'status']);
+  assert(f.requests.every(input => input.expectedHostId === f.hostId));
+  assert(f.requests.filter(input => input.action === 'health').every(input => input.requireAssistant));
+});
+
+test('managed manual restart waits through admission closure for a changed instance while retaining the workbench origin', { timeout: 12_000 }, async t => {
+  let healthChecks = 0;
+  const f = await managedFixture(t, input => {
+    if (input.action === 'health') {
+      healthChecks++;
+      return { ready: true, assistant: true, busy: healthChecks === 1, version: '1.0.0', instanceId: healthChecks < 3 ? 'before' : 'after' };
+    }
+    return input.operation === 'restart-host' ? { hostHealth: { instanceId: 'before', restart: 'waiting' } }
+      : { error: '服务器正在重启', status: 503 };
+  });
+  const tunnel = await f.manager.workbenchTarget(f.id);
+  const { jobId } = await f.manager.manage({ id: f.id, operation: 'restart' });
+  const job = await completed(f.manager, jobId, 10_000);
+  assert.equal(job.state, 'done', job.error);
+  assert.equal(healthChecks, 3);
+  assert(job.steps.some(step => step.name === '等待运行中的任务结束'));
+  assert.equal((await f.manager.workbenchTarget(f.id)).url, tunnel.url);
+  assert.deepEqual(f.requests.filter(input => input.action === 'updates').map(input => input.operation), ['restart-host', 'status']);
+});
+
+test('managed update reports authorization or identity rejection immediately', { timeout: 8000 }, async t => {
+  for (const rejection of [{ error: 'BenchGo 实例身份已变化' }, { error: 'owner denied', status: 403 }]) {
+    let polls = 0;
+    const f = await managedFixture(t, () => {
+      if (polls++) return rejection;
+      return { phase: 'downloading', hostHealth: { instanceId: 'before' }, decision: { targetVersion: '1.1.0' } };
+    });
+    const { jobId } = await f.manager.manage({ id: f.id, operation: 'update' });
+    const job = await completed(f.manager, jobId, 3000);
+    assert.equal(job.state, 'error');
+    assert.equal(job.error, rejection.error);
+    assert.equal(f.requests.length, 2);
+  }
+});
 test('input validation preserves host values and rejects shell and malformed addresses', () => {
   for (const host of ['127.0.0.1', '::1', 'node.example.com']) assert.equal(validateSshInput({ host, username: 'user' }).host, host);
   for (const host of ['a; touch /tmp/pwn', '-oProxyCommand=x', 'https://host', 'a\nlocalhost']) assert.throws(() => validateSshInput({ host, username: 'user' }));

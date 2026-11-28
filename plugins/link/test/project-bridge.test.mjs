@@ -42,6 +42,20 @@ test('project bridge is lazy, reuses concurrent connection and preserves opaque 
   } finally { view.bridge.dispose(); }
 });
 
+test('picker requests a lightweight page on proxy tickets, keeping the parent origin and ticket', async () => {
+  const view = fixture(undefined, { projectPicker: true });
+  try {
+    const connecting = view.bridge.supports('browse');
+    await settle();
+    const entry = new URL(view.entries[0]);
+    assert.equal(entry.searchParams.get('projectPicker'), '1');
+    assert.equal(entry.searchParams.get('ticket'), 'one');
+    assert.equal(new URLSearchParams(entry.hash.slice(1)).get('resourceParentOrigin'), 'http://127.0.0.1:8000');
+    view.ready();
+    assert.equal(await connecting, true);
+  } finally { view.bridge.dispose(); }
+});
+
 test('delete capability is additive, bound to the selected device and never retried after an uncertain timeout',async()=>{
  const device={id:'server/opaque-id',hostId:'host/exact',authorizationId:'pair/exact'};
  const request=async()=>({url:'http://127.0.0.1:9000/enter?ticket=one',device});

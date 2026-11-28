@@ -73,7 +73,7 @@
       "sources": [
         "plugins/base/src/picker-catalog.mjs",
         "plugins/base/client/model-picker.jsx",
-        "plugins/base/client/model-profile-match.mjs",
+        "plugins/base/shared/model-profile-match.mjs",
         "plugins/base/src/tooling.mjs"
       ],
       "note": "每条供应商配置声明一种协议。同一供应商提供多协议时可配置多个路由，模型标识保持原样。",
@@ -275,13 +275,15 @@
       "sub": "提交与回执、权限与状态、停止与续接",
       "symbol": "Commander / commander_delegate",
       "plain": "按项目和会话绑定调用协议驱动，将状态和结果返回发起方。",
-      "role": "工作台普通聊天经官方适配器进入 Commander。原生会话通过委派工具启动同项目子会话。本机和跨设备 Worker 共享原生执行能力，保留各自任务与会话归属。",
+      "role": "工作台普通聊天经官方适配器进入 Commander。原生会话通过委派工具启动同项目子会话。本机和跨设备 Worker 共享原生执行能力，保留各自任务与会话归属。 官方输入的普通文件按主机路径交给 Harness，图片在模型和驱动支持时经原生协议发送，续接核对已提交身份。",
       "input": "会话归属、项目、工具与模型绑定、消息和权限",
       "output": "原生会话句柄、提交回执、流式事件和执行结果",
       "sources": [
         "plugins/harness/src/adapter.mjs",
         "plugins/harness/src/runtime.mjs",
-        "plugins/harness/src/web.mjs"
+        "plugins/harness/src/web.mjs",
+        "docs/04-模型与工具/原生工具与会话.md#聊天附件",
+        "plugins/harness/test/adapter.test.mjs"
       ],
       "note": "窗口内普通会话、本机及远端 Worker 复用 Commander。原生委派持久去重，父轮停止传给仍在运行的子执行。 会话工具根据当前用户指令和宿主设备登记执行 SSH 命令。远端账号限定操作范围，本机返回必要输出和退出状态；断线后先核实执行事实。",
       "state": "partial",
@@ -297,13 +299,15 @@
       "sub": "Codex App Server、Claude Agent SDK、ACP",
       "symbol": "Codex / Claude / ACP",
       "plain": "按协议完成启动、发送、续接、事件和权限交互。",
-      "role": "Codex 通过 App Server 的 stdio JSON-RPC 建立或恢复线程。Claude Code 通过 Agent SDK 调用本机 CLI，按原生会话 ID 续接。兼容 ACP 的工具复用 ACP 驱动。各驱动将原生事件交回 Commander，并按实际能力处理打断、审批和问答。",
+      "role": "Codex 使用 App Server stdio JSON-RPC，Claude Code 通过 Agent SDK 调用本机 CLI，Pi 使用 RPC，OpenCode 使用本机 HTTP 与 SSE。兼容 ACP 的工具使用 ACP 驱动。各驱动按能力交回事件并处理续接、打断、审批和问答。",
       "input": "可执行入口、绑定配置、原生句柄和权限",
       "output": "可运行的驱动、能力与原生事件",
       "sources": [
         "plugins/harness/src/providers/codex.mjs",
         "plugins/harness/src/providers/claude.mjs",
-        "plugins/harness/src/providers/acp.mjs"
+        "plugins/harness/src/providers/acp.mjs",
+        "plugins/harness/src/providers/pi.mjs",
+        "plugins/harness/src/providers/opencode.mjs"
       ],
       "note": "Codex 与 Claude Code 为首批外部 Worker 验收对象。Codex 用 Responses，Claude Code 用 Messages。其他编码 CLI 按实际 API 和入口能力开放。",
       "state": "partial",
@@ -453,6 +457,11 @@
       "edge": 12
     },
     {
+      "node": "native-dispatch",
+      "title": "将聊天附件交给外部 Harness",
+      "text": "桌面文件沿用本机原路径，Web 和 Link 文件使用执行主机的上传副本。模型或驱动不支持图片时提示原因，恢复时跳过已提交的历史附件。"
+    },
+    {
       "node": "native-adapters",
       "title": "通过原生协议执行",
       "text": "Commander 调用对应的协议驱动。驱动回传文本、审批、工具活动和完成事件，工作台读取事件并呈现状态。",
@@ -503,7 +512,7 @@
       "path": "docs/01-设备与远程连接/SSH服务器运维.md"
     }
   ],
-  "version": "2026-11-18-external-harness-api-2",
+  "version": "2026-11-28",
   "canvas": {
     "width": 1580,
     "height": 1240

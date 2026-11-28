@@ -100,6 +100,51 @@ test('plugin install gives truthful staged restart feedback without claiming aut
   } finally { await view.dispose(); }
 });
 
+test('managed server update can prepare during tasks and keeps waiting visible after the panel closes', async () => {
+  let tick;
+  let state = { ...update(), installation: 'server', busy: true, hostHealth: { instanceId: 'server' },
+    decision: { action: 'plugin', available: true, enabled: true, targetVersion: '0.1.2' } };
+  const view = await mount(({ action }) => {
+    if (action === 'install') state = { ...state, phase: 'waiting', canInstall: false,
+      decision: { action: 'check', available: true, enabled: false } };
+    return state;
+  }, {}, { setInterval(callback) { tick = callback; return 1; }, clearInterval() {} });
+  try {
+    await view.click('下载，有更新');
+    assert.equal(view.button('长按 2 秒更新').disabled, false);
+    await view.hold();
+    assert(view.button('下载，等待任务结束'));
+    await view.click('关闭下载');
+    state = { ...state, phase: 'ready', restartRequired: true, busy: false, hostHealth: { instanceId: 'server', restart: 'restarting' } };
+    await view.flush(() => tick());
+    assert(view.button('下载，正在重启'));
+    await view.click('下载，正在重启');
+    assert.match(view.document.querySelector('.cmd-update-notice').textContent, /远端正在重启，连接恢复后会自动返回/);
+    assert.equal(view.calls.filter(call => call.action === 'install').length, 1);
+  } finally { await view.dispose(); }
+});
+
+test('managed server restart failure exposes one retry without another install request', async () => {
+  let state = { ...update(), installation: 'server', phase: 'ready', restartRequired: true, canInstall: false,
+    error: 'systemd 重启失败', hostHealth: { instanceId: 'server', restart: 'failed' },
+    decision: { action: 'restart', available: true, enabled: true, targetVersion: '0.1.2' } };
+  const view = await mount(({ action }) => {
+    if (action === 'restart') state = { ...state, error: '', hostHealth: { instanceId: 'server', restart: 'restarting' },
+      decision: { ...state.decision, enabled: false } };
+    return state;
+  });
+  try {
+    await view.click('下载，待重启');
+    assert.match(view.document.querySelector('[role="alert"]').textContent, /systemd 重启失败/);
+    assert.equal(view.button('重试'), undefined);
+    await view.click('重试重启');
+    assert.equal(view.calls.at(-1).action, 'restart');
+    assert.equal(view.calls.filter(call => call.action === 'install').length, 0);
+    assert.equal(view.document.querySelector('[role="alert"]'), null);
+    assert(view.button('下载，正在重启'));
+  } finally { await view.dispose(); }
+});
+
 test('one hold stages the feature package then updates the application with one native handoff', async () => {
   const sequence = [];
   let state = { ...update(), release: { ...update().release, app: { version: '0.2.0', available: true } } };

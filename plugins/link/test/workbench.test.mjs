@@ -14,6 +14,7 @@ import { loadIdentity } from '../src/transport/tls.mjs';
 import { createWorkbench } from '../src/transport/workbench.mjs';
 import { listen, validateConfig } from '../src/transport/server.mjs';
 import { mountProjectFiles } from '../../base/workbench/src/project-files.mjs';
+import { createRestartAdmission } from '../../base/src/server-restart.mjs';
 
 function request(f, path, { method = 'POST', body = {}, token, cookie, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
@@ -44,7 +45,7 @@ async function setup(t) {
   const store = await openStore(join(directory, 'state')), identity = await loadIdentity(directory);
   const calls = [], opened = [], disposed = [], voiceSockets = [], rendered = [];
   const ctx = {
-    get(name) { return name === 'voice' ? this.voice : undefined; },
+    get(name) { return this[name]; },
     voice: { acceptRealtimeSocket(ws) { voiceSockets.push(ws); ws.on('message', (data, binary) => ws.send(data, { binary })); } },
     connection: {
       createPeer(options) { return { principal: options.principal, id: 'peer-' + (calls.length + 1), async dispose() { disposed.push(this.id); } }; },
@@ -77,6 +78,49 @@ async function setup(t) {
   t.after(async () => { await server.close(); await store.flush(); await rm(directory, { recursive: true, force: true }); });
   return f;
 }
+
+test('restart admission rejects new work and keeps update status available', async t => {
+  const f = await setup(t), cookie = await login(f);
+  const admission = createRestartAdmission();
+  f.ctx.benchgo = { restartAdmission: admission };
+  await admission.lock(AbortSignal.timeout(1000));
+  for (const path of ['api/session/get', 'remote/open', 'remote/uplink']) {
+    assert.equal((await f.call('/link/workbench/' + path, { cookie })).status, 503, path);
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.call('/link/workbench/api/commander/updates', { cookie, body: { action: 'status' } })).status, 200);
+  admission.unlock();
+  assert.equal((await f.call('/link/workbench/api/session/get', { cookie })).status, 200);
+});
+
+test('restart drains stream initialization while an established subscription can remain open', { timeout: 10_000 }, async t => {
+  const f = await setup(t), cookie = await login(f);
+  const admission = createRestartAdmission();
+  f.ctx.benchgo = { restartAdmission: admission };
+  const opening = Promise.withResolvers(), initialized = Promise.withResolvers(), end = Promise.withResolvers();
+  f.ctx.typertGateway.wireStream.open = async () => {
+    opening.resolve();
+    await initialized.promise;
+    return { async *[Symbol.asyncIterator]() { await end.promise; } };
+  };
+  const request = f.call('/link/workbench/remote/open', { cookie, body: { id: 'initializing', endpoint: 'fixture/echo', payload: {} } });
+  try {
+    await opening.promise;
+    let drained = false;
+    const lock = admission.lock(AbortSignal.timeout(1000)).then(() => { drained = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(drained, false);
+    initialized.resolve();
+    await lock;
+    assert.equal(drained, true);
+    assert.throws(() => admission.check(), { status: 503 });
+  } finally {
+    initialized.resolve();
+    end.resolve();
+    admission.unlock();
+    await request;
+  }
+});
 
 test('one HTTP/2 connection carries eight subscriptions plus session navigation and uplinks', { timeout: 20_000 }, async t => {
   const f = await setup(t), cookie = await login(f);

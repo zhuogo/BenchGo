@@ -43,15 +43,38 @@ export function remoteAgent(target, { maxSockets = 64, maxFreeSockets = 2 } = {}
   const endpoint = new URL(target.url);
   const tunnel = upstreamOrigin(target) !== endpoint.origin ? endpoint : null;
   if (tunnel && !target.pin) throw new Error('缺少 SSH 隧道的主机公钥指纹');
+  const pending = new Set();
+  const destroy = agent.destroy.bind(agent);
+  agent.destroy = () => {
+    for (const finish of [...pending]) finish(Object.assign(new Error('设备连接已关闭'), { code: 'ECONNRESET' }));
+    destroy();
+  };
   if (target.pin) agent.createConnection = (options, callback) => {
     const socket = connect({ ...options, ...(tunnel && { host: tunnel.hostname, port: Number(tunnel.port || 443) }), rejectUnauthorized: false, servername: undefined });
-    const error = value => { socket.destroy(); callback(value); };
-    socket.once('error', error);
+    const signal = options.linkConnectSignal;
+    let finished = false;
+    const finish = error => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(deadline);
+      signal?.removeEventListener('abort', abort);
+      pending.delete(finish);
+      if (error) socket.destroy();
+      callback(error, error ? undefined : socket);
+    };
+    const abort = () => finish(signal.reason);
+    const deadline = setTimeout(() => finish(Object.assign(new Error('连接超时，请检查主机是否在线'), { code: 'ETIMEDOUT' })), options.linkConnectTimeout ?? 20000);
+    deadline.unref();
+    pending.add(finish);
+    socket.once('error', finish);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
     socket.once('secureConnect', () => {
+      if (finished) return;
       try {
         verifyPinnedPeer(socket, target.pin);
-        socket.removeListener('error', error); callback(null, socket);
-      } catch (reason) { error(reason); }
+        socket.removeListener('error', finish); finish();
+      } catch (reason) { finish(reason); }
     });
     return undefined;
   };
@@ -59,8 +82,10 @@ export function remoteAgent(target, { maxSockets = 64, maxFreeSockets = 2 } = {}
 }
 export function remoteJson(target, path, input, { agent, token = target.authorize?.() ?? target.token, cookie, signal, timeout = 20000 } = {}) {
   const own = !agent; agent ??= remoteAgent(target);
+  const cancellation = new AbortController();
+  const requestSignal = signal ? AbortSignal.any([signal, cancellation.signal]) : cancellation.signal;
   return new Promise((resolve, reject) => {
-    const req = request(new URL(path, upstreamOrigin(target)), { method: input === undefined ? 'GET' : 'POST', agent, signal, headers: { ...relayTargetHeaders(target), ...(input === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: 'Bearer ' + token } : {}), ...(cookie ? { cookie } : {}) } }, res => {
+    const req = request(new URL(path, upstreamOrigin(target)), { method: input === undefined ? 'GET' : 'POST', agent, signal: requestSignal, linkConnectSignal: requestSignal, linkConnectTimeout: timeout, headers: { ...relayTargetHeaders(target), ...(input === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: 'Bearer ' + token } : {}), ...(cookie ? { cookie } : {}) } }, res => {
       const chunks = []; let bytes = 0;
       res.on('data', chunk => { bytes += chunk.length; if (bytes > 1024 * 1024) req.destroy(new Error('主机响应过大')); else chunks.push(chunk); });
       res.on('error', reject);
@@ -75,7 +100,12 @@ export function remoteJson(target, path, input, { agent, token = target.authoriz
         resolve({ value, headers: res.headers });
       });
     });
-    const deadline = setTimeout(() => req.destroy(Object.assign(new Error('连接超时，请检查主机是否在线'), { code: 'ETIMEDOUT' })), timeout);
+    const deadline = setTimeout(() => {
+      const error = Object.assign(new Error('连接超时，请检查主机是否在线'), { code: 'ETIMEDOUT' });
+      reject(error);
+      cancellation.abort(error);
+      req.destroy(error);
+    }, timeout);
     deadline.unref();
     req.once('close', () => clearTimeout(deadline));
     req.on('error', reject);

@@ -1,0 +1,139 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T10:31:32.548Z",
+  "by": "codex",
+  "reason": "将聊天清理扩展到手动旁聊",
+  "base": "2521036fe063",
+  "result": "0b4b9ea39caa",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management.clear-main",
+      "fields": [
+        "body.steps",
+        "body.trigger",
+        "implementation.evidence",
+        "implementation.note",
+        "implementation.status",
+        "summary",
+        "title"
+      ],
+      "before": {
+        "id": "assistant.management.clear-main",
+        "type": "flow",
+        "title": "清理主聊天",
+        "summary": "立即显示清理状态，确认后优先打开新会话，再后台刷新资源。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "ai",
+        "body": {
+          "ends": [
+            "refresh"
+          ],
+          "start": "reset",
+          "steps": [
+            {
+              "action": "显示清理状态，保留旧记录，等待服务端确认。",
+              "failure": "保留旧聊天并显示失败原因。",
+              "id": "reset",
+              "title": "清理"
+            },
+            {
+              "action": "撤下旧记录，按新会话标识连接聊天。",
+              "failure": "保留已完成的清理，提供重新连接入口。",
+              "id": "open",
+              "title": "打开新会话"
+            },
+            {
+              "action": "补载历史与共享状态，通知其他面板同步。",
+              "id": "refresh",
+              "title": "后台刷新"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "reset",
+              "to": "open"
+            },
+            {
+              "from": "open",
+              "to": "refresh"
+            }
+          ],
+          "trigger": "用户在主聊天执行清理"
+        },
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T10:25:23.609Z",
+              "hash": "9be8d3768dc7f91965738b3161aaa85ed29a2398e038d8fd74352a3223bf716b",
+              "path": "plugins/superagent/client/index.jsx",
+              "symbol": "AssistantPage.clearMain"
+            },
+            {
+              "checkedAt": "2026-11-28T10:25:23.609Z",
+              "hash": "0cf42caf37150745c975cd061732f845633205fcf2276891bf393bad4c250d74",
+              "path": "plugins/superagent/client/conversation.jsx",
+              "symbol": "AssistantConversation"
+            },
+            {
+              "checkedAt": "2026-11-28T10:25:23.609Z",
+              "hash": "ee74265166869878e535acf27e76996076aa83872d68517f09261c856cccce2e",
+              "path": "plugins/superagent/src/engine.mjs",
+              "symbol": "ensureSession"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.clear-main-check",
+      "fields": [
+        "body.then",
+        "body.when",
+        "title"
+      ],
+      "before": {
+        "id": "assistant.management.clear-main-check",
+        "type": "acceptance",
+        "title": "清理主聊天可感知且可恢复",
+        "summary": "清理有即时反馈，新会话优先可用，失败路径可恢复。",
+        "parent": "assistant.management.clear-main",
+        "status": "accepted",
+        "origin": "ai",
+        "body": {
+          "then": [
+            "清理请求返回前显示状态，重复执行只提交一次。",
+            "新会话连接优先于状态与历史读取，迟到的旧历史不会回填。",
+            "清理失败时保留旧会话，清理后连接失败时可重试打开。"
+          ],
+          "when": "执行清理主聊天"
+        },
+        "verification": {
+          "checkedAt": "2026-11-28T10:25:23.609Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/ui.test.mjs",
+              "symbol": "clear is a main-chat slash action that resets once and opens the new session"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/engine.test.mjs",
+              "symbol": "clearing main while history refreshes releases the old writer before reopening"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/channel-quiet-chat-browser.test.mjs",
+              "symbol": "real assistant conversations display connection states, channel history and main chat recovery"
+            }
+          ],
+          "note": "ui.test.mjs 定向 5 项与 engine.test.mjs 定向 9 项通过。模拟状态及历史请求挂起、迟到旧历史、并发清理、失败重试和 JSONL 恢复。已有 Chromium 聊天恢复用例通过。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

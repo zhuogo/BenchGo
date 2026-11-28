@@ -1149,7 +1149,8 @@ test('paired workbench device center uses the target session without granting ac
   const a = await host(t, 'A', []), b = await host(t, 'B', []), c = await host(t, 'C', []);
   b.ctx.connection.createPeer = () => ({ dispose() {} });
   const device = await pair(a, b);
-  await pair(b, c);
+  const third = await pair(b, c);
+  await b.deviceApi({ action: 'setResourceScope', scope: { mode: 'selected', deviceIds: [third.id] } });
   await b.link.admin({ action: 'relay-pool-configure', operation: 'add', expected: { fingerprint: b.link.status().relay.fingerprint },
     id: 'relay', url: 'https://relay.example', token: 'private-relay-secret', enabled: false });
   const target = (JSON.parse(await readFile(join(a.directory, 'outgoing', 'connections.json'), 'utf8')).devices).find(row => row.id === device.id);
@@ -1177,11 +1178,30 @@ test('paired workbench device center uses the target session without granting ac
   assert.deepEqual(await call({ action: 'hostRelayOperation', requestId: change.requestId }), updated);
   assert.equal((await call({ ...change, token: 'forged-secret' })).status, 422);
   for (const action of ['select', 'pair', 'hostPairing', 'hostRevoke', 'callDevice', 'sshProbe']) assert.equal((await call({ action })).status, 403);
-  for (const action of ['devices', 'resourceScope', 'setResourceScope', 'resources', 'sessionAction']) assert.equal((await post('api/commander-devices', { action })).status, 403);
-  assert.equal((await post('api/group-resources', { action: 'devices' })).status, 403);
+  const page = await fetch(base).then(response => response.text());
+  assert.ok(page.includes('globalThis.__DSH_LINK_RESOURCES__=true'));
+  assert.ok(!page.includes('globalThis.__DSH_LINK_GROUP_RESOURCES__=true'));
+  for (const path of ['api/commander-devices', 'api/group-resources']) {
+    const directory = await post(path, { action: 'devices' });
+    assert.equal(directory.status, 200);
+    assert.deepEqual(directory.value.devices.map(row => row.name), ['B']);
+    assert.equal(directory.value.groupEnabled, false);
+    assert.deepEqual((await post(path, { action: 'resourceScope' })).value.scope, { mode: 'selected', deviceIds: [] });
+    for (const mode of ['current', 'all', 'selected']) {
+      const scope = { mode, deviceIds: ['local'] };
+      assert.deepEqual((await post(path, { action: 'setResourceScope', scope })).value.scope, scope);
+      assert.deepEqual((await post(path, { action: 'resourceScope' })).value.scope, scope);
+    }
+    assert.deepEqual((await b.deviceApi({ action: 'resourceScope' })).scope, { mode: 'selected', deviceIds: ['local', third.id] });
+    assert.equal((await post(path, { action: 'resources', deviceId: 'local', kind: 'projects' })).status, 200);
+    assert.equal((await post(path, { action: 'setResourceScope', scope: { mode: 'all', deviceIds: [third.id] } })).status, 403);
+    for (const action of ['resources', 'select', 'sessionAction']) assert.equal((await post(path, { action, deviceId: third.id, kind: 'projects' })).status, 403);
+    await b.deviceApi({ action: 'setResourceScope', scope: { mode: 'selected', deviceIds: [third.id] } });
+  }
   assert.equal((await post('api/commander-devices', { action: 'launch' })).status, 403);
   await b.link.admin({ action: 'revoke', id: directory.value.devices[1].id });
   assert.equal((await call({ action: 'list' })).status, 401);
+  assert.equal((await post('api/group-resources', { action: 'devices' })).status, 401);
 });
 
 test('group workbench lists and saves the target host resource scope without exposing independent devices', async t => {
@@ -1211,6 +1231,17 @@ test('group workbench lists and saves the target host resource scope without exp
   const legacy = await call({ action: 'devices' }, 'api/commander-devices');
   assert.equal(legacy.status, 200);
   assert.deepEqual(legacy.value.devices.map(row => row.name).sort(), ['A', 'B', 'C']);
+  const independentTarget = JSON.parse(await readFile(join(isolated.directory, 'outgoing', 'connections.json'), 'utf8')).devices.find(row => row.hostId === bId);
+  const independentProxy = await createDeviceProxy(independentTarget);
+  t.after(() => independentProxy.close());
+  const independentEntry = await fetch(await independentProxy.enter(), { redirect: 'manual' });
+  const independentBase = new URL(independentEntry.headers.get('location'), independentProxy.origin);
+  const independentCall = async input => {
+    const response = await fetch(new URL('api/group-resources', independentBase), { method: 'POST', headers: { 'content-type': 'application/json', origin: independentBase.origin }, body: JSON.stringify(input) });
+    return { status: response.status, value: await response.json() };
+  };
+  assert.deepEqual((await independentCall({ action: 'devices' })).value.devices.map(row => row.name), ['B']);
+  assert.equal((await independentCall({ action: 'resources', deviceId: cId, kind: 'projects', includeGroup: true })).status, 403);
   assert.deepEqual((await call({ action: 'resourceScope' })).value.scope, { mode: 'current', deviceIds: [] });
   const scope = { mode: 'selected', deviceIds: ['local', cId] };
   assert.deepEqual((await call({ action: 'setResourceScope', scope })).value.scope, scope);

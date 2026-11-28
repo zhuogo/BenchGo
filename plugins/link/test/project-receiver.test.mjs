@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { createProjectReceiver, projectInput, projectPickerActions } from '../client/project-receiver.mjs';
 
 const source = 'function installResourceReceiver' + readFileSync(new URL('../client/resource-navigation.jsx', import.meta.url), 'utf8').split('export function installResourceReceiver')[1];
 const origin = 'https://owner.example';
@@ -10,7 +11,7 @@ function fixture(projectApi, { host = {}, getDefaultProjectId } = {}) {
   const listeners = new Set(), messages = [], attributes = new Set();
   const parent = { postMessage: (value, target) => messages.push({ value: JSON.parse(JSON.stringify(value)), target }) };
   const window = { parent, addEventListener: (_, listener) => listeners.add(listener), removeEventListener: (_, listener) => listeners.delete(listener) };
-  const install = runInNewContext('(' + source + ')', { window, location: { hash: '#' + new URLSearchParams({ resourceParentOrigin: origin }) }, document: { documentElement: { setAttribute: name => attributes.add(name) } }, URL, URLSearchParams, setTimeout, clearTimeout });
+  const install = runInNewContext('(' + source + ')', { window, location: { hash: '#' + new URLSearchParams({ resourceParentOrigin: origin }) }, document: { documentElement: { setAttribute: name => attributes.add(name) } }, URL, URLSearchParams, setTimeout, clearTimeout, createProjectReceiver, projectInput, projectPickerActions });
   const dispose = install(host, { projectApi, getDefaultProjectId });
   const send = (data, source = parent, from = origin) => { for (const listener of listeners) listener({ data, source, origin: from }); };
   return { send, dispose, messages, listeners, parent, window, attributes };

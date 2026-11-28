@@ -1,0 +1,14 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T04:20:20.284Z",
+  "by": "用户",
+  "reason": "记录桌面工作台冷启动 10 秒目标及功能验收条件",
+  "base": "4e749f643701",
+  "result": "2082078406cf",
+  "changes": [
+    {
+      "op": "add",
+      "id": "workbench.official.cold-start"
+    }
+  ]
+}

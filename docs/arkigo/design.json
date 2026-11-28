@@ -36,18 +36,18 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:51:11.895Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "2daa17970a0bea8109689ee265eb10a60fa02f0f7c5a3acddfa6b8b6ebace5b7",
             "path": "plugins/superagent/src/plugin.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:51:11.895Z",
-            "hash": "aa8087cf929c00babb46bf6e5d1bee9551690eab2b0b6b7140f9cbca6a84ccd8",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "5dbe8f540eef493567f600f4f01e14838888487f38bc9724be8b2533004e5f3d",
             "path": "plugins/superagent/src/engine.mjs",
             "symbol": "createAssistantEngine"
           },
           {
-            "checkedAt": "2026-11-25T13:51:11.895Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "201e5444b84a2bc20375fa42c81bc619b4686585c8056640fed64649d735bad1",
             "path": "plugins/superagent/src/assignment-executor.mjs",
             "symbol": "createAssignmentExecutor"
@@ -117,6 +117,77 @@
       }
     },
     {
+      "id": "assistant.context.tool-refresh",
+      "type": "rule",
+      "title": "Router 工具限制刷新必须收敛",
+      "summary": "允许集合不变时复用限制，作用域关闭时停止刷新。",
+      "parent": "assistant.context",
+      "status": "accepted",
+      "origin": "code",
+      "body": {
+        "constraint": "按全局定义身份计算允许集合，集合不变时不发布限制变化；先安装新限制再释放旧限制，关闭中的作用域停止刷新。",
+        "when": "工具注册表发布变化或 Router 热加载"
+      },
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "docs/06-superagent/模型与上下文.md",
+          "symbol": "自有会话角色装配"
+        }
+      ],
+      "implementation": {
+        "evidence": [
+          {
+            "checkedAt": "2026-11-28T10:42:50.721Z",
+            "hash": "8405038d8ecb2e2d95b2c604864aed09635acc7323c896ac0d9c2b81e5885d53",
+            "path": "plugins/superagent/src/router-permissions.mjs",
+            "symbol": "installRouterPermissionGate"
+          }
+        ],
+        "status": "implemented"
+      }
+    },
+    {
+      "id": "assistant.context.tool-refresh-check",
+      "type": "acceptance",
+      "title": "真实工具发布与 Router 关闭正常收敛",
+      "summary": "真实 Cordis 和工具服务下，无关工具登记及作用域销毁可结束。",
+      "parent": "assistant.context",
+      "status": "accepted",
+      "origin": "code",
+      "body": {
+        "given": [
+          "真实 Cordis、官方工具服务及 dsh-ops 工具发布"
+        ],
+        "then": [
+          "不反复发布相同工具限制",
+          "保留定义身份核对与多个 Router 隔离"
+        ],
+        "when": "登记无关工具并关闭 Router 作用域"
+      },
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "plugins/superagent/test/router-permissions.test.mjs"
+        }
+      ],
+      "verification": {
+        "checkedAt": "2026-11-28T10:55:00.637Z",
+        "evidence": [
+          {
+            "kind": "file",
+            "ref": "plugins/superagent/test/router-permissions.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/base/test/sidebar-refresh.test.mjs"
+          }
+        ],
+        "note": "2026-11-28 真实 Cordis、官方工具服务和 dsh-ops 发布回归通过。远端与界面定向回归共 111 项通过。襄阳已加载修复并有序重启，485 次真实 SSH 隧道与工作台代理请求全部成功，第二轮 p50 为 255 毫秒、p95 为 443 毫秒，长连接收到 7 次心跳且角色查询返回 router/ready。服务观察约 11 分钟，无自动重启，最近十分钟日志未检出错误或警告。Engine 广测 164 项通过、3 项失败，三项失败在旧权限模块对照下同样复现。",
+        "status": "passed"
+      }
+    },
+    {
       "id": "assistant.delivery",
       "type": "rule",
       "title": "执行完成和消息送达独立",
@@ -148,22 +219,22 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T16:55:04.055Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "9c23299b92874916df09eb1d7528a15fabab7254b0a85e2d81256f96115ad7f9",
             "path": "plugins/superagent/src/result-commit.mjs"
           },
           {
-            "checkedAt": "2026-11-25T16:55:04.055Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "d784285b711667730d9cdc3e87aede115eac913cfd711b66d4466e96f3f2b281",
             "path": "plugins/superagent/src/message-inbox.mjs"
           },
           {
-            "checkedAt": "2026-11-25T16:55:04.055Z",
-            "hash": "58c30872d51bcf140f8274e804d4983808e10c12f9fba1a24a24427a99d95caa",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "5dbe8f540eef493567f600f4f01e14838888487f38bc9724be8b2533004e5f3d",
             "path": "plugins/superagent/src/engine.mjs"
           },
           {
-            "checkedAt": "2026-11-25T16:55:04.055Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "e0e24ee182743eeb54c42032c077dbebdb36e005aa5a6c7b7d179ef90077b36a",
             "path": "plugins/superagent/src/router-task-expression.mjs"
           }
@@ -326,10 +397,10 @@
         "start": "receive",
         "steps": [
           {
-            "action": "[[assistant.ingress]] 持久保存真人消息及来源，按请求标识去重。",
+            "action": "主聊和手动旁聊由官方会话入口接收、保存和去重。渠道等来源按 [[assistant.ingress]] 在授权范围内进入持久收件箱。确定的任务通知沿宿主收件箱交付。",
             "failure": "同标识不同内容拒绝，状态不明时核对实际回执。",
             "id": "receive",
-            "title": "写入原线程收件箱"
+            "title": "在原会话受理消息"
           },
           {
             "action": "问答当场答，产品内管理使用专属工具，环境工作交给 Worker。",
@@ -416,30 +487,36 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
-            "hash": "aa8087cf929c00babb46bf6e5d1bee9551690eab2b0b6b7140f9cbca6a84ccd8",
+            "checkedAt": "2026-11-28T13:03:37.268Z",
+            "hash": "5dbe8f540eef493567f600f4f01e14838888487f38bc9724be8b2533004e5f3d",
             "path": "plugins/superagent/src/engine.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
+            "checkedAt": "2026-11-28T13:03:37.268Z",
             "hash": "201e5444b84a2bc20375fa42c81bc619b4686585c8056640fed64649d735bad1",
             "path": "plugins/superagent/src/assignment-executor.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
+            "checkedAt": "2026-11-28T13:03:37.268Z",
             "hash": "9c23299b92874916df09eb1d7528a15fabab7254b0a85e2d81256f96115ad7f9",
             "path": "plugins/superagent/src/result-commit.mjs",
             "symbol": "commitWorkerResult"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
-            "hash": "0e87a84954389c2ddf279cd0fb592b091582bda3a5d5c61dd48358df59291e09",
+            "checkedAt": "2026-11-28T13:03:37.268Z",
+            "hash": "d784285b711667730d9cdc3e87aede115eac913cfd711b66d4466e96f3f2b281",
             "path": "plugins/superagent/src/message-inbox.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
+            "checkedAt": "2026-11-28T13:03:37.268Z",
             "hash": "0830f75301d96129c4e24d7c29045c0252a38b2b91f4f6c2e83db5b368dbafc6",
             "path": "plugins/superagent/src/result-delivery.mjs"
+          },
+          {
+            "checkedAt": "2026-11-28T13:03:37.268Z",
+            "hash": "c1e2cf5d53cc465a8d175dc32ff73984629f43f4079b22e99974e5bbebf4ebb0",
+            "path": "plugins/superagent/src/native-prompt-ingress.mjs",
+            "symbol": "registerNativePromptIngress"
           }
         ],
         "status": "implemented"
@@ -615,23 +692,97 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "4d7b133eed954e5ca9f818eb0bf2e174ab62eb4e1a21c29b78e3dd69c0212351",
             "path": "plugins/superagent/src/channel-ingress.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
-            "hash": "aa8087cf929c00babb46bf6e5d1bee9551690eab2b0b6b7140f9cbca6a84ccd8",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "5dbe8f540eef493567f600f4f01e14838888487f38bc9724be8b2533004e5f3d",
             "path": "plugins/superagent/src/engine.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
-            "hash": "0e87a84954389c2ddf279cd0fb592b091582bda3a5d5c61dd48358df59291e09",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "d784285b711667730d9cdc3e87aede115eac913cfd711b66d4466e96f3f2b281",
             "path": "plugins/superagent/src/message-inbox.mjs",
             "symbol": "createMessageInbox"
           }
         ],
         "status": "implemented"
+      }
+    },
+    {
+      "id": "assistant.ingress.router-steering",
+      "type": "rule",
+      "title": "Router 固定插队发送",
+      "summary": "主聊与手动旁聊固定插队，运行中切换模型在下一轮对话生效。",
+      "parent": "assistant.ingress",
+      "status": "accepted",
+      "origin": "user",
+      "body": {
+        "constraint": "发送按钮和快捷键使用插队模式。已经开始的回合继续使用原模型，下一轮读取新保存的模型配置。",
+        "when": "用户向主聊或手动旁聊发送消息。"
+      },
+      "implementation": {
+        "evidence": [
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "0cf42caf37150745c975cd061732f845633205fcf2276891bf393bad4c250d74",
+            "path": "plugins/superagent/client/conversation.jsx",
+            "symbol": "mountAssistantConversation"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "5dbe8f540eef493567f600f4f01e14838888487f38bc9724be8b2533004e5f3d",
+            "path": "plugins/superagent/src/engine.mjs",
+            "symbol": "nativePrompt"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "e46bb7c4522cf6f7788dfc7363891520d252ccaadaca9f10a7bd02dc2268e666",
+            "path": "plugins/superagent/src/router-session-setup.mjs",
+            "symbol": "createRouterSessionSetup"
+          }
+        ],
+        "status": "implemented"
+      }
+    },
+    {
+      "id": "assistant.ingress.router-steering-check",
+      "type": "acceptance",
+      "title": "插队发送与模型切换",
+      "summary": "运行中修改模型后可继续插队，下一轮使用新模型。",
+      "parent": "assistant.ingress.router-steering",
+      "status": "accepted",
+      "origin": "user",
+      "body": {
+        "given": [
+          "主聊或手动旁聊正在使用原模型生成回复。"
+        ],
+        "then": [
+          "发送按钮和快捷键固定使用插队模式。",
+          "补充消息进入当前回合并继续使用原模型，下一轮使用新保存的模型。"
+        ],
+        "when": "保存新的 Router 模型配置后发送补充消息，再发起下一轮。"
+      },
+      "verification": {
+        "checkedAt": "2026-11-28T04:30:05.872Z",
+        "evidence": [
+          {
+            "kind": "file",
+            "ref": "plugins/superagent/test/client-bootstrap.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/superagent/test/engine.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/superagent/test/native-prompt-ingress.test.mjs"
+          }
+        ],
+        "note": "Node 定向测试核对发送按键、官方入口插队、原模型及下一轮新模型的实际请求。",
+        "status": "passed"
       }
     },
     {
@@ -670,22 +821,22 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-26T06:30:35.299Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "9d03e60a18c382466da3c3b6238364d943e531b49c1adf5d15aeafb99164e6ed",
             "path": "plugins/superagent/src/desktop-task-access.mjs"
           },
           {
-            "checkedAt": "2026-11-26T06:30:35.299Z",
-            "hash": "2ba9c9a7acd11dd508574b410e1782e4035caa586e81eb9d37953d9783d7e6e3",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "056d0a68e37b7c6e8e8f892191cf3d0ee9dff68f35f2051febddd238cd75974e",
             "path": "plugins/superagent/src/router-tools.mjs"
           },
           {
-            "checkedAt": "2026-11-26T06:30:35.299Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "15b943ecf6dbc2e22db74b08ed5bfcd0a2ebd5eff066673996b5f1800f11fedc",
             "path": "plugins/superagent/src/task-cleanup-store.mjs"
           },
           {
-            "checkedAt": "2026-11-26T06:30:35.299Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "ec6508965224f72a86a2f448e7c12d314f7b3014615afc6522ada661362f9946",
             "path": "plugins/superagent/src/task-management.mjs"
           }
@@ -714,14 +865,14 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T15:14:41.601Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "fe5e0763d78d024e035217abe50ebf6cebb13540613b181252967b9593c74861",
             "path": "plugins/base/client/workspace-navigation.mjs",
             "symbol": "preservePanelOnSessionArchive"
           },
           {
-            "checkedAt": "2026-11-25T15:14:41.601Z",
-            "hash": "430051dd312677e276e5032d2821a25d9d80ddd26e144a8c7c80d5a35ffc9e8a",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "49f7d002c4c2e2c1dae3a67b43be7d49906590f530bfe57d4c8ec2f905782e9c",
             "path": "plugins/base/client/index.jsx",
             "symbol": "mountBaseUi"
           }
@@ -756,6 +907,115 @@
           }
         ],
         "note": "执行 node --import ./scripts/source-loader.mjs --test plugins/base/test/workspace-navigation.test.mjs。两项均通过，使用官方 Workspace 归档流投影与导航服务验证面板保留、主动导航和原生会话回退。",
+        "status": "passed"
+      }
+    },
+    {
+      "id": "assistant.management.clear-main",
+      "type": "flow",
+      "title": "清理主聊天与旁聊",
+      "summary": "主聊天与手动旁聊共用清理流程。当前聊天优先切换到新会话，再后台刷新。",
+      "parent": "assistant.management",
+      "status": "accepted",
+      "origin": "ai",
+      "body": {
+        "ends": [
+          "refresh"
+        ],
+        "start": "reset",
+        "steps": [
+          {
+            "action": "立即显示清理状态并等待服务端确认。手动旁聊保留标题、置顶和任务归属。",
+            "failure": "保留旧聊天并显示失败原因。旁聊有正在运行或排队的消息时提示先停止。",
+            "id": "reset",
+            "title": "清理"
+          },
+          {
+            "action": "撤下旧记录，按新会话标识连接聊天。",
+            "failure": "保留已完成的清理，提供重新连接入口。",
+            "id": "open",
+            "title": "打开新会话"
+          },
+          {
+            "action": "补载历史与共享状态，通知其他面板同步。",
+            "id": "refresh",
+            "title": "后台刷新"
+          }
+        ],
+        "transitions": [
+          {
+            "from": "reset",
+            "to": "open"
+          },
+          {
+            "from": "open",
+            "to": "refresh"
+          }
+        ],
+        "trigger": "用户在主聊天或未归档的手动旁聊执行 /clear"
+      },
+      "implementation": {
+        "evidence": [
+          {
+            "checkedAt": "2026-11-28T10:48:52.679Z",
+            "hash": "46f2c75211f14b30df0197dbf8dde1269b63a79702bea85c3601a77d9ac11232",
+            "path": "plugins/superagent/client/index.jsx",
+            "symbol": "AssistantPage.clearChat"
+          },
+          {
+            "checkedAt": "2026-11-28T10:48:52.679Z",
+            "hash": "5dbe8f540eef493567f600f4f01e14838888487f38bc9724be8b2533004e5f3d",
+            "path": "plugins/superagent/src/engine.mjs",
+            "symbol": "resetThreadSession"
+          },
+          {
+            "checkedAt": "2026-11-28T10:48:52.679Z",
+            "hash": "63efb9a05597520b946bebf627a9637bc689201bab0acf3957649830dc0b0cdf",
+            "path": "plugins/superagent/src/assistant-dispatch.mjs",
+            "symbol": "createAssistantDispatch"
+          }
+        ],
+        "note": "主聊天与手动旁聊共用清理反馈和新会话切换。旁聊沿用原有线程身份。",
+        "status": "implemented"
+      }
+    },
+    {
+      "id": "assistant.management.clear-main-check",
+      "type": "acceptance",
+      "title": "聊天清理可感知且可恢复",
+      "summary": "清理有即时反馈，新会话优先可用，失败路径可恢复。",
+      "parent": "assistant.management.clear-main",
+      "status": "accepted",
+      "origin": "ai",
+      "body": {
+        "then": [
+          "清理请求返回前显示状态，重复执行只提交一次。",
+          "新会话连接优先于状态与历史读取，迟到的旧历史不会回填。",
+          "清理失败时保留旧会话，清理后连接失败时可重试打开。",
+          "旁聊只更换自己的会话，保留标题、置顶和任务归属。归档、外部渠道或仍有活动的旁聊拒绝清理。"
+        ],
+        "when": "在主聊天或未归档的手动旁聊执行 /clear"
+      },
+      "verification": {
+        "checkedAt": "2026-11-28T10:48:52.679Z",
+        "evidence": [
+          {
+            "kind": "file",
+            "ref": "plugins/superagent/test/engine.test.mjs",
+            "symbol": "side chat clear replaces just its own session and preserves its identity and history on disk"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/superagent/test/ui.test.mjs",
+            "symbol": "clear resets side once and opens the new session before refreshing history"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/superagent/test/channel-quiet-chat-browser.test.mjs",
+            "symbol": "real assistant conversations display connection states, channel history and main chat recovery"
+          }
+        ],
+        "note": "engine.test.mjs 与 ui.test.mjs 清理相关定向用例共 15 项通过，覆盖并发清理、清理后换会话、保留旁聊元数据与磁盘历史、受限旁聊和失败重试。Chromium 聊天连接与恢复回归通过。",
         "status": "passed"
       }
     },
@@ -809,26 +1069,26 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-26T07:52:00.765Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "783a48fa939df133cfc9fb56a2461c5d29a50033480fe71e7c62dd6d2b432535",
             "path": "plugins/superagent/src/session-archive.mjs",
             "symbol": "registerSessionArchive"
           },
           {
-            "checkedAt": "2026-11-26T07:52:00.765Z",
-            "hash": "cacdd792885551b6b2a8be8dedbb4d3e55f92a801a1200ee55de5f1e5f37794f",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "8405038d8ecb2e2d95b2c604864aed09635acc7323c896ac0d9c2b81e5885d53",
             "path": "plugins/superagent/src/router-permissions.mjs",
             "symbol": "installRouterFailureConvergence"
           },
           {
-            "checkedAt": "2026-11-26T07:52:00.765Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "056d0a68e37b7c6e8e8f892191cf3d0ee9dff68f35f2051febddd238cd75974e",
             "path": "plugins/superagent/src/router-tools.mjs",
             "symbol": "createRouterTools"
           },
           {
-            "checkedAt": "2026-11-26T07:52:00.765Z",
-            "hash": "ead9533e10079dfc39541891db47e3d65ab149208515fd94ec37d4f805a3479c",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "e46bb7c4522cf6f7788dfc7363891520d252ccaadaca9f10a7bd02dc2268e666",
             "path": "plugins/superagent/src/router-session-setup.mjs",
             "symbol": "createRouterSessionSetup"
           }
@@ -915,18 +1175,18 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
-            "hash": "4148b597526cda7df4f0e5b2e7f67f20254bba2767f59bdf1a9c7815a12cec9c",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "7e7d257e99855427a236e29e22bf9b3b4aebfdea0c00cd61084fccfb8f3b0c22",
             "path": "plugins/superagent/src/orchestration-store.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
-            "hash": "56078abebb11cc19e4bec1a999051f17e40c2f05e4947916c88d8c9d578c3efe",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "788f629d5f0214b4ec0f6b015c049433f229dd2ec40c4fe42c0eb360d8b09b64",
             "path": "plugins/superagent/src/remote-assignment-executor.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
-            "hash": "d82e63b0975cda578da33ade01c9182bc856fc70edf137e31306b8417b9e2615",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "4ccb73f395a3f37e6599c0cf4f28cd0c40fef69169f740e733ef4c7875657f13",
             "path": "plugins/harness/src/remote-execution.mjs"
           }
         ],
@@ -977,7 +1237,7 @@
             "title": "A 逐页核对执行事实"
           },
           {
-            "action": "A 收取匹配结果与原执行引用，再由原 Router 交付。B 的展示会话只读，用户回 A 的工单输入。",
+            "action": "A 通过原 Router 交付匹配结果。可查看 B 的会话并返回 A 工单，任务输入仍由 A 受理。官方 Worker 的产物从原回复或任务详情经原 Link 会话预览或下载。",
             "id": "close",
             "title": "让 A 更新任务并交付"
           }
@@ -1008,7 +1268,7 @@
       },
       "notes": [
         {
-          "text": "Link v2 当前每次接受一个冻结的执行组合。远端执行会话直接输入、二级子代理委派与跨设备产物传输尚未接入。物理双机及实际供应商请求按专项验收。",
+          "text": "Link v2 每次接受一个冻结的执行组合。外部 Worker 产物预览与下载、远端执行会话直接输入和二级子代理委派待接入。物理双机和供应商按专项验收。",
           "tone": "warn",
           "type": "callout"
         }
@@ -1033,24 +1293,35 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T16:46:16.529Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "788f629d5f0214b4ec0f6b015c049433f229dd2ec40c4fe42c0eb360d8b09b64",
             "path": "plugins/superagent/src/remote-assignment-executor.mjs"
           },
           {
-            "checkedAt": "2026-11-25T16:46:16.529Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "b8af8e4bfbd559c99035e21447505adc02ff6f7fcbe70d65f5b1ebebe63a7d0a",
             "path": "plugins/superagent/src/worker-archive.mjs"
           },
           {
-            "checkedAt": "2026-11-25T16:46:16.529Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "4ccb73f395a3f37e6599c0cf4f28cd0c40fef69169f740e733ef4c7875657f13",
             "path": "plugins/harness/src/remote-execution.mjs"
           },
           {
-            "checkedAt": "2026-11-25T16:46:16.529Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "f7898dd9470990168c555c21f19e348cc83972f5115df2ce5c2a34a486a08230",
             "path": "plugins/link/src/devices/routes.mjs"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "fe3ad75609b55dfa7dd708645e2ba6e6aab142eb6b81a66eafc997e5e6ad42a8",
+            "path": "plugins/superagent/client/execution-session-navigation.mjs",
+            "symbol": "openRemoteExecutionFile"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "c2fffa7636a5b7d25390fc38b4724f58209c2ecbd4cc4a5bd4ea0f92ebb6442c",
+            "path": "plugins/superagent/client/reply-file-navigation.mjs"
           }
         ],
         "status": "implemented"
@@ -1261,17 +1532,17 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
-            "hash": "4148b597526cda7df4f0e5b2e7f67f20254bba2767f59bdf1a9c7815a12cec9c",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "7e7d257e99855427a236e29e22bf9b3b4aebfdea0c00cd61084fccfb8f3b0c22",
             "path": "plugins/superagent/src/orchestration-store.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "fe2cf67d9515ab7edb1310f503d64ec82a5a2a626c27dd3fe53cdada06c05645",
             "path": "plugins/superagent/src/task-lifecycle.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:53:53.723Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "2c1c8f40cb75765dade7dc92d08d1983afb412a1239ad2b8d861fd6b83001f12",
             "path": "plugins/superagent/src/task-archive.mjs"
           }
@@ -1365,14 +1636,14 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:51:11.895Z",
-            "hash": "b1a1976fccb7b81d9044cb6443e674affef167f7aa74f76ae60d6c7f1548c9a3",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "2c3495bf629006ca2d60c1b8c3ca3bcfa62c0f40734cfa883b34fc28473a231f",
             "path": "plugins/link/src/index.mjs",
             "symbol": "mountLink"
           },
           {
-            "checkedAt": "2026-11-25T13:51:11.895Z",
-            "hash": "3789bee7c7060c60c373ab33a624a71430f9fb00041b92b0fdeb62a7dfb3e3b6",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "ff90caa6ef1396c258a6ede5f5cd45695da699b5f6334f7a0ba78badc29ff441",
             "path": "plugins/base/src/link-plugin.mjs"
           }
         ],
@@ -1567,6 +1838,95 @@
       }
     },
     {
+      "id": "link.connect.tls-deadline",
+      "type": "rule",
+      "title": "TLS 握手受请求期限约束",
+      "summary": "握手挂起时按期结束请求，取消和连接池关闭同步回收连接。",
+      "parent": "link.connect",
+      "status": "accepted",
+      "origin": "code",
+      "body": {
+        "constraint": "请求期限覆盖 TLS 握手。桌面代理的 HTTP 和多路复用流将取消信号传至握手连接。取消、超时或连接池关闭时结束未交付 socket 的等待，完成指纹校验后才发送 HTTP 凭据。HTTP 与流的连接阶段均包含连接池排队，到期立即结算下游并取消上游。",
+        "when": "通过固定证书指纹访问远端 HTTPS"
+      },
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "docs/01-设备与远程连接/设计.md",
+          "symbol": "连接与信任模型"
+        }
+      ],
+      "implementation": {
+        "evidence": [
+          {
+            "checkedAt": "2026-11-28T12:13:43.398Z",
+            "hash": "d47c893ddf155db4ce70ab03761357c24e9d94b19c920f0739958872d0c83e47",
+            "path": "plugins/link/src/devices/remote.mjs",
+            "symbol": "remoteAgent / remoteJson"
+          },
+          {
+            "checkedAt": "2026-11-28T12:13:43.398Z",
+            "hash": "427a6658c5f9a46f77563c27a9eb152e49eb9046610a0ef30d4c9dd6dfa20d7c",
+            "path": "plugins/link/src/devices/proxy.mjs",
+            "symbol": "createDeviceProxy / forward"
+          }
+        ],
+        "note": "代理 HTTP、流取消会回收尚未交付的 TLS socket。HTTP 排队也受九十秒连接期限约束，主动结束下游以覆盖 Node 延迟分配 socket 的情况。",
+        "status": "implemented"
+      }
+    },
+    {
+      "id": "link.connect.tls-deadline-check",
+      "type": "acceptance",
+      "title": "挂起的 TLS 握手按期退出",
+      "summary": "TCP 已连接而 TLS 挂起时，请求超时与取消仍能结算。",
+      "parent": "link.connect",
+      "status": "accepted",
+      "origin": "code",
+      "body": {
+        "given": [
+          "测试服务接受 TCP 并挂起 TLS 握手",
+          "共享连接池已被六十四条长流占满"
+        ],
+        "then": [
+          "请求按期失败并回收连接",
+          "代理 HTTP 与流的主动取消在五百毫秒内释放握手连接",
+          "排队中的 HTTP 到期返回 502 且不抵达上游",
+          "指纹核对失败时不发送 HTTP 凭据"
+        ],
+        "when": "请求期限到达、主动取消或关闭共享连接池"
+      },
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "plugins/link/test/routes.test.mjs"
+        }
+      ],
+      "verification": {
+        "checkedAt": "2026-11-28T12:13:43.398Z",
+        "evidence": [
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/workbench-transport.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/routes.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/base/test/sidebar-refresh.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "artifacts/remote-followup-tests.log"
+          }
+        ],
+        "note": "2026-11-28 本轮定向测试七十二项全部通过，覆盖真实挂起 TLS 的 HTTP 和流取消、六十四条长流占满连接池后的 HTTP 排队到期、旧 WebSocket 关闭及迟到消息隔离。整理代码后重新运行四项新增回归全部通过。构建、npm run check 和 git diff --check 通过。真实模型首条回复和长期稳定性尚未验收。 ???????????????????????????????????? 280 ???p95 ? 808 ????? 1931 ???????? 175 ????????????????????????????????????????????????",
+        "status": "passed"
+      }
+    },
+    {
       "id": "link.connect.workbench-recovery",
       "type": "rule",
       "title": "工作台会话失效后恢复",
@@ -1575,23 +1935,30 @@
       "status": "accepted",
       "origin": "user",
       "body": {
-        "constraint": "桌面代理沿已核验路线重新签发失效会话，并合并并发续签。只读首屏请求可重试一次，写操作由用户决定是否重试。已撤销配对仍须重新配对。"
+        "constraint": "桌面代理沿已核验路线重新签发失效会话，并合并并发续签。只读首屏请求可重试一次，写操作由用户决定是否重试。已撤销配对仍须重新配对。浏览器按 WebSocket 归属处理消息和关闭事件，旧连接的迟到事件仅影响原连接上的流。"
       },
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-26T10:02:26.232Z",
-            "hash": "2c3a5f0301dcb55195d3ab2795f2d32564c2a023619a68a23cd27d0df8e5f41c",
+            "checkedAt": "2026-11-28T12:13:43.398Z",
+            "hash": "427a6658c5f9a46f77563c27a9eb152e49eb9046610a0ef30d4c9dd6dfa20d7c",
             "path": "plugins/link/src/devices/proxy.mjs",
-            "symbol": "createDeviceProxy"
+            "symbol": "createDeviceProxy / recover"
           },
           {
-            "checkedAt": "2026-11-26T10:02:26.232Z",
-            "hash": "46f6d6627d0963049bc6495b3ffb98d31c0f2a95ddad62eb54efaa4af099e165",
+            "checkedAt": "2026-11-28T12:13:43.398Z",
+            "hash": "de8678ea5bb038b45f54b2c8040f11afd026a2dc2ce96ff45b41695cea07f579",
             "path": "plugins/link/src/transport/workbench.mjs",
             "symbol": "createWorkbench"
+          },
+          {
+            "checkedAt": "2026-11-28T12:13:43.398Z",
+            "hash": "8913509b894f63f74d59deb3a0f72673a8d23567a7f347ca4017bbac01b97e97",
+            "path": "plugins/link/client/workbench-bridge.mjs",
+            "symbol": "localConnection / localLines"
           }
         ],
+        "note": "HTTP 与多路复用流共享会话恢复。仅在开流前明确会话过期时恢复并重开一次，取消后停止执行，应用 401 原样保留。续签网络失败保留状态并冷却五秒。代理连接阶段有含排队在内的九十秒上限。浏览器流记录所属 WebSocket 并隔离旧连接消息与关闭事件。",
         "status": "implemented"
       }
     },
@@ -1620,7 +1987,7 @@
         }
       ],
       "verification": {
-        "checkedAt": "2026-11-26T10:02:26.232Z",
+        "checkedAt": "2026-11-28T12:13:43.398Z",
         "evidence": [
           {
             "kind": "file",
@@ -1628,10 +1995,22 @@
           },
           {
             "kind": "file",
-            "ref": "plugins/link/test/relay.test.mjs"
+            "ref": "plugins/link/test/workbench-transport.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/device-switch-browser.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/workbench-recovery-browser.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "artifacts/remote-followup-tests.log"
           }
         ],
-        "note": "本地 TLS 回归覆盖 8 个新会话淘汰旧会话、旧版 401、并发合并、写操作和撤销。隔离中继回归通过。",
+        "note": "2026-11-28 本轮七十二项定向测试全部通过。包含十一项会话续签测试、浏览器真实设备切换与恢复测试、侧栏刷新与性能、Router 权限回归和四项新增传输回归。旧 WebSocket 关闭及迟到帧不再中断新流。 ???????????????????????????????????? 280 ???p95 ? 808 ????? 1931 ???????? 175 ????????????????????????????????????????????????",
         "status": "passed"
       }
     },
@@ -1646,26 +2025,45 @@
       "body": {
         "constraint": "远端先发出项目与总助手状态请求。推迟非首屏功能与字体，首屏可先用系统字体。"
       },
+      "notes": [
+        {
+          "text": "桌面代理复用安装包内通过内容哈希核验的 FangYuan 分片，缺失或损坏时回退目标字体。字体仍经本机工作台会话认证，内容哈希字体采用私有不可变缓存，普通 API 禁止缓存。字体命中保持远端健康状态的真实性。",
+          "type": "text"
+        }
+      ],
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-26T10:02:26.232Z",
-            "hash": "102953a1839020a4cf171fa5c35870fb99dcb0d63b478ea027754185e6b569de",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "49f7d002c4c2e2c1dae3a67b43be7d49906590f530bfe57d4c8ec2f905782e9c",
             "path": "plugins/base/client/index.jsx",
             "symbol": "apply"
           },
           {
-            "checkedAt": "2026-11-26T10:02:26.232Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "8cccf6b52845907705c15bd5d7f644560a30445dcf92a55043c043298c61fa57",
             "path": "plugins/base/scripts/build-client.mjs"
           },
           {
-            "checkedAt": "2026-11-26T10:02:26.232Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "418e3155c7d2e4bb1309498ba65198de25c46c0e20af330c455b64060ac27a01",
             "path": "plugins/base/workbench/client/index.jsx",
             "symbol": "mountWorkbenchClient"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "ff90caa6ef1396c258a6ede5f5cd45695da699b5f6334f7a0ba78badc29ff441",
+            "path": "plugins/base/src/link-plugin.mjs",
+            "symbol": "apply"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "427a6658c5f9a46f77563c27a9eb152e49eb9046610a0ef30d4c9dd6dfa20d7c",
+            "path": "plugins/link/src/devices/proxy.mjs",
+            "symbol": "createDeviceProxy"
           }
         ],
+        "note": "首屏优先读取与惰性装配继续由原入口负责。桌面代理补充本机字体复用，避免远端字体占满同源连接。安装产物已同步并请求官方 HMR，当前用户窗口是否载入最新脚本待验。",
         "status": "implemented"
       }
     },
@@ -1694,27 +2092,31 @@
         }
       ],
       "verification": {
-        "checkedAt": "2026-11-26T10:02:26.232Z",
+        "checkedAt": "2026-11-28T09:38:04.956Z",
         "evidence": [
           {
             "kind": "file",
             "ref": "plugins/base/test/client-discovery.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/workbench-sessions.test.mjs"
           }
         ],
-        "note": "襄阳目标的无头 Chromium 同会话对照，浏览器侧替换候选插件脚本。连接握手前字体请求由 23 降至 0，项目和总助手状态均先于字体完成。官方客户端注册和分包测试通过。",
+        "note": "已执行 client-discovery.test.mjs 三项通过，workbench-sessions.test.mjs 十一项通过，覆盖字体精确内容、HEAD、会话认证、普通 API 缓存、未知字体与缺失损坏回退。真实襄阳中继受控对照，先排三十个字体 GET 再排三个状态 POST，状态请求由 8173–8461 毫秒降至 519–738 毫秒，本机字体最长 80 毫秒。完整工作台采样无页面异常，存在更新状态 3524 毫秒长尾。真实首发消息和目标端部署待验。",
         "status": "passed"
       }
     },
     {
       "id": "link.group-resource-relay",
       "type": "interface",
-      "title": "中继上的设备组资源入口",
-      "summary": "配对工作台使用独立的设备组资源路径。",
+      "title": "远端工作台侧栏资源入口",
+      "summary": "远端复用本机显示范围菜单，按配对和设备组授权提供目录并持久化选择。",
       "parent": "link",
       "status": "accepted",
       "origin": "doc",
       "body": {
-        "auth": "目标主机验证配对会话、当前组成员与操作范围。",
+        "auth": "目标主机核验配对会话。独立配对可选择所属主机，组成员可选择所属主机与组内设备。每项操作核验目标授权，保存时保留当前目录外已有的设备选择。",
         "kind": "http",
         "signature": "POST /link/workbench/api/group-resources"
       },
@@ -1722,30 +2124,46 @@
         {
           "kind": "file",
           "ref": "docs/01-设备与远程连接/自建中继.md"
+        },
+        {
+          "kind": "conversation",
+          "ref": "2026-11-28 用户要求远端服务器提供与本机相同的侧栏顶部显示设备范围功能"
         }
       ],
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-26T08:41:07.421Z",
-            "hash": "db652613824a80f6356dfc022298ddefc3fed77cf7ce7032b5b38dc9c188e13f",
+            "checkedAt": "2026-11-28T09:59:41.851Z",
+            "hash": "de8678ea5bb038b45f54b2c8040f11afd026a2dc2ce96ff45b41695cea07f579",
             "path": "plugins/link/src/transport/workbench.mjs",
             "symbol": "createWorkbench"
           },
           {
-            "checkedAt": "2026-11-26T08:41:07.421Z",
-            "hash": "a59eb417216ccc57738317845421dbce902d2e15abc0d95e610e7866ac7669bd",
+            "checkedAt": "2026-11-28T09:59:41.851Z",
+            "hash": "2c3495bf629006ca2d60c1b8c3ca3bcfa62c0f40734cfa883b34fc28473a231f",
             "path": "plugins/link/src/index.mjs",
             "symbol": "pairedResourceNavigation"
           },
           {
-            "checkedAt": "2026-11-26T08:41:07.421Z",
-            "hash": "5f396c30ddd3bebaa5343f0d21831feca2275d74c31f5a49eb95394d543005a0",
+            "checkedAt": "2026-11-28T09:59:41.851Z",
+            "hash": "f0bfe021e7fcc8947cdc450a817709ac97aa51cec6f5ba69666a3f22a24a16f4",
+            "path": "plugins/link/src/devices/center.mjs",
+            "symbol": "groupResourceApi"
+          },
+          {
+            "checkedAt": "2026-11-28T09:59:41.851Z",
+            "hash": "8cfcb9cea6a4ca1dba25f65e6627758eb74ef64c7625d3a703c46b88c010560d",
+            "path": "plugins/link/client/resource-navigation.jsx",
+            "symbol": "useResourceNavigation"
+          },
+          {
+            "checkedAt": "2026-11-28T09:59:41.851Z",
+            "hash": "3db6cbed0431cb85568c7649231a14e48c8f5b0a85c3c10416999bf84ccd190a",
             "path": "plugins/link/client/resource-state.mjs",
             "symbol": "deviceRequest"
           }
         ],
-        "note": "跨设备集成 24 项通过，复测真实 TLS 中继的目录读取、独立配对隔离和旧路径直连兼容。",
+        "note": "普通配对与设备组工作台统一注入资源导航能力，复用现有菜单和保存接口。真实服务器部署与界面生效待核验。",
         "status": "implemented"
       }
     },
@@ -1782,48 +2200,48 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-26T14:17:51.396Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
             "path": "plugins/link/src/devices/resources.mjs",
             "symbol": "createDeviceResources"
           },
           {
-            "checkedAt": "2026-11-26T14:17:51.396Z",
-            "hash": "a59eb417216ccc57738317845421dbce902d2e15abc0d95e610e7866ac7669bd",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "2c3495bf629006ca2d60c1b8c3ca3bcfa62c0f40734cfa883b34fc28473a231f",
             "path": "plugins/link/src/index.mjs"
           },
           {
-            "checkedAt": "2026-11-26T14:17:51.396Z",
-            "hash": "235327a47cba58ab27f414b9c81a9683dfbe360d946a8278b48bb9dea5793e75",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "8665f30461abb2c2fee5d34ebc93573285defc44893cd2091c015973a9e55e9e",
             "path": "plugins/link/src/server/manager.mjs",
             "symbol": "createServerManager"
           },
           {
-            "checkedAt": "2026-11-26T14:17:51.396Z",
-            "hash": "01780f264261aa0c5c464172ccf4f2121c5213a238e5a28b722c6b77056f3c84",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "f0bfe021e7fcc8947cdc450a817709ac97aa51cec6f5ba69666a3f22a24a16f4",
             "path": "plugins/link/src/devices/center.mjs",
             "symbol": "createDeviceCenter"
           },
           {
-            "checkedAt": "2026-11-26T14:17:51.396Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "aa6d6cf6e4a3b37ade52c7797774eec0bc442a275c44d30331ddd452a3b61d2d",
             "path": "plugins/link/src/devices/registry.mjs",
             "symbol": "openDeviceRegistry"
           },
           {
-            "checkedAt": "2026-11-26T14:17:51.396Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "7933b7045dbabdb85b7c7d292c582ebdccf03ac2c00c2150c6b424dd293cc706",
             "path": "plugins/link/client/device-center.jsx",
             "symbol": "DeviceCenter"
           },
           {
-            "checkedAt": "2026-11-26T14:17:51.396Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "d62ee79a8c43bf93c0c974bec9b2b0748b8f542b7d433ecf85fbef9bdb73f7e5",
             "path": "plugins/link/client/device-launcher.jsx",
             "symbol": "DeviceLauncher"
           },
           {
-            "checkedAt": "2026-11-26T14:17:51.396Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "19f72f84075f63f1c2a61138199db75fda75cbce9411451dd0800979b147f39b",
             "path": "plugins/base/workbench/src/ssh-trust.mjs"
           }
@@ -1859,7 +2277,7 @@
         "kind": "http",
         "request": [
           {
-            "description": "执行包括 catalog、submit、get、input、control、ack、archive、archives",
+            "description": "执行操作包括 catalog、submit、get、input、control、ack、archive、unarchive、archives。",
             "name": "operation",
             "type": "string"
           }
@@ -1886,13 +2304,13 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:51:12.410Z",
-            "hash": "b1a1976fccb7b81d9044cb6443e674affef167f7aa74f76ae60d6c7f1548c9a3",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "2c3495bf629006ca2d60c1b8c3ca3bcfa62c0f40734cfa883b34fc28473a231f",
             "path": "plugins/link/src/index.mjs",
             "symbol": "mountLink"
           },
           {
-            "checkedAt": "2026-11-25T13:51:12.410Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
             "path": "plugins/link/src/devices/resources.mjs",
             "symbol": "createDeviceResources"
@@ -1951,6 +2369,45 @@
           }
         ],
         "status": "implemented"
+      }
+    },
+    {
+      "id": "link.workbench-scope-check",
+      "type": "acceptance",
+      "title": "远端侧栏显示范围与授权隔离",
+      "summary": "本机、独立配对及组工作台的范围菜单可保存恢复，目录遵循当前会话授权。",
+      "parent": "link",
+      "status": "accepted",
+      "origin": "user",
+      "body": {
+        "then": [
+          "与本机复用同一显示范围菜单，保存后重载恢复",
+          "独立配对列出所属主机，组成员列出所属主机与组内设备",
+          "保存保留当前授权目录外已有的选择",
+          "越权目标和伪造 includeGroup 参数被拒绝，配对撤销后资源接口返回未授权"
+        ],
+        "when": "打开远端工作台，依次切换当前、全部、指定设备并重新加载"
+      },
+      "sources": [
+        {
+          "kind": "conversation",
+          "ref": "2026-11-28 用户确认远端需要本机侧栏顶部显示设备范围功能"
+        }
+      ],
+      "verification": {
+        "checkedAt": "2026-11-28T10:03:09.206Z",
+        "evidence": [
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/cross-device-integration.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/resource-refresh-browser.test.mjs"
+          }
+        ],
+        "note": "cross-device-integration 的配对和设备组工作台路径通过真实 TLS 代理验证，resource-refresh-browser 使用真实共享菜单验证本机、新版配对及旧版组标记下的选择、保存和页面重载。襄阳目标端部署和实机界面生效仍待验证。",
+        "status": "passed"
       }
     },
     {
@@ -2292,17 +2749,17 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "9ea14525a99b3bcb59a053b038d0d503855106f20f5ef9f009d2dde6996105df",
             "path": "plugins/harness/src/selection.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
-            "hash": "86f9b5fb699f8f84facfb58a21cbbf9783cc436c1c2a24c45c45cf43ef52a6f0",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "e4e2df73cd9abefcbeed70f2b0256e2934d4300cd066d68beff25da76d299a11",
             "path": "plugins/harness/src/runtime.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "8aa9525b55c34ba8d2505e8427e1fe179e230e28af6adbaff3d0852e570bf505",
             "path": "plugins/base/src/model-providers.mjs"
           }
@@ -2384,17 +2841,17 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
-            "hash": "86f9b5fb699f8f84facfb58a21cbbf9783cc436c1c2a24c45c45cf43ef52a6f0",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "e4e2df73cd9abefcbeed70f2b0256e2934d4300cd066d68beff25da76d299a11",
             "path": "plugins/harness/src/runtime.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "d3ca38d616b157cfe36948356de4e3d1fbc7f282611c67febd6e3d43308209ce",
             "path": "plugins/harness/src/store.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "9ea14525a99b3bcb59a053b038d0d503855106f20f5ef9f009d2dde6996105df",
             "path": "plugins/harness/src/selection.mjs"
           }
@@ -2471,23 +2928,23 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "8aa9525b55c34ba8d2505e8427e1fe179e230e28af6adbaff3d0852e570bf505",
             "path": "plugins/base/src/model-providers.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "9ea14525a99b3bcb59a053b038d0d503855106f20f5ef9f009d2dde6996105df",
             "path": "plugins/harness/src/selection.mjs",
             "symbol": "harnessSelection"
           },
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
-            "hash": "86f9b5fb699f8f84facfb58a21cbbf9783cc436c1c2a24c45c45cf43ef52a6f0",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "e4e2df73cd9abefcbeed70f2b0256e2934d4300cd066d68beff25da76d299a11",
             "path": "plugins/harness/src/runtime.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "b3419a52ec87ee08d96b6e616654550827ab64ca05c7fba952776ef430accb29",
             "path": "plugins/harness/src/plugin.mjs"
           }
@@ -2526,18 +2983,18 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "869b4384ad17cc086a425cc83952cf7c5b49959251829f0c800cea09eb8c525e",
             "path": "plugins/base/src/skills.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "38c165fb1e5f1ba20052713887ad2734e5b47928ce22c15513b0f0982480c8a7",
             "path": "plugins/base/src/skill-deck.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:52:23.725Z",
-            "hash": "68a73a4d8c9527c4413a52a9dbbb9261183ed19608ee33ac102c12ffe651240c",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "406e951b8391c9f4d17057f37528541dc30a65f550f78c66b7d748621343cf5d",
             "path": "plugins/base/src/plugin.mjs"
           }
         ],
@@ -2577,19 +3034,19 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-26T05:51:29.689Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "22d62c5bc083dfc33b7644621d3930af1cd02851fc9dc1198e5596e6b5a3b791",
             "path": "scripts/release/plan.mjs",
             "symbol": "createReleasePlan"
           },
           {
-            "checkedAt": "2026-11-26T05:51:29.689Z",
-            "hash": "3214016c08e4b6b0aa1de5e4649fa20f6443a02051395377db4adff05cb18285",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "370a48ba5a329032654e5e8849dc47abe5c76b6b5efe632cd2abf2175b15d6dd",
             "path": "plugins/base/src/updates.mjs",
             "symbol": "createUpdates"
           },
           {
-            "checkedAt": "2026-11-26T05:51:29.689Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "40d988e9b16621f7e38d30616cd3d01311e3d0ea4c3ba7325079b3bae34402b8",
             "path": "packages/benchgo-cli/src/installer.mjs",
             "symbol": "installWorkbench"
@@ -2602,7 +3059,7 @@
       "id": "release.activate",
       "type": "flow",
       "title": "主机验签并激活更新",
-      "summary": "通过下载清单确认兼容性，锁内切换插件版本重启后由宿主解析。",
+      "summary": "验签并激活兼容功能包，受管 Linux 自动重启，客户端确认目标版本就绪后恢复连接。",
       "parent": "release",
       "status": "accepted",
       "origin": "doc",
@@ -2619,8 +3076,8 @@
             "title": "验签并核对主机兼容"
           },
           {
-            "action": "校验下载包并准备不可变版本目录，协调活跃任务和更新互斥。",
-            "failure": "安装前发现任务或不兼容状态时留在当前版本。",
+            "action": "校验下载包并准备不可变版本目录。受管 Linux 可在任务运行时准备，任务结束后再激活。Windows 在安装前检查任务。",
+            "failure": "不兼容或校验失败时保留当前版本。任务未结束时保留准备结果并等待。",
             "id": "prepare",
             "title": "准备已验证插件"
           },
@@ -2631,7 +3088,8 @@
             "title": "锁内切换激活指针"
           },
           {
-            "action": "官方解析器实际加载新版本后才确认新的统一发行版。桌面壳及 Android 走平台入口。",
+            "action": "受管 Linux 在任务空闲时自动重启。校验实际加载的版本、Link、工作台及原先可用的总助手，连接恢复后返回原页面。桌面壳和 Android 沿用平台入口。",
+            "failure": "保留准备结果并展示服务启动或模块就绪失败。只有主机确认正在重启或实例已变化时才进入更新恢复；状态探测临时失败时保留当前工作台。",
             "id": "restart",
             "title": "按重启后版本确认"
           }
@@ -2662,29 +3120,51 @@
           "kind": "file",
           "ref": "docs/05-更新与发布/设计.md",
           "symbol": "更新入口与状态"
+        },
+        {
+          "kind": "conversation",
+          "ref": "2026-11-28 用户确认落实更新后自动重启、就绪核验与重连。"
         }
       ],
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-26T05:50:51.370Z",
-            "hash": "3214016c08e4b6b0aa1de5e4649fa20f6443a02051395377db4adff05cb18285",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "370a48ba5a329032654e5e8849dc47abe5c76b6b5efe632cd2abf2175b15d6dd",
             "path": "plugins/base/src/updates.mjs",
             "symbol": "createUpdates"
           },
           {
-            "checkedAt": "2026-11-26T05:50:51.370Z",
-            "hash": "623f44352c39ef26201a7478a46d40846b9a43343be74b3b9ef8f691cf491b8e",
-            "path": "plugins/base/client/updates.jsx",
-            "symbol": "UpdateLauncher"
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "7e61754a1e7a2f9b25eb7a7addb02f3d91aab7253ebc53178c6738b0ef32e61b",
+            "path": "plugins/base/src/server-restart.mjs",
+            "symbol": "managedServerRestart"
           },
           {
-            "checkedAt": "2026-11-26T05:50:51.370Z",
-            "hash": "abab79b18720bcd2cee3a011b7454bb78de0953545434894b4f3d9585df31d3e",
-            "path": "scripts/desktop/package-plugin-update.mjs"
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "8665f30461abb2c2fee5d34ebc93573285defc44893cd2091c015973a9e55e9e",
+            "path": "plugins/link/src/server/manager.mjs",
+            "symbol": "waitForServer"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "de8678ea5bb038b45f54b2c8040f11afd026a2dc2ce96ff45b41695cea07f579",
+            "path": "plugins/link/src/transport/workbench.mjs",
+            "symbol": "createWorkbench"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "17548606ca19a429325a4f7fee9fcf31cff3c1c8c6d6be18cf2d929c4090d637",
+            "path": "plugins/link/client/workbench-recovery.mjs",
+            "symbol": "watchWorkbench"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "3839747586ae92e5f3a4d91b5263142c6c32a584f576da29c66a3cd9cbd835d7",
+            "path": "scripts/server/bootstrap.mjs"
           }
         ],
-        "note": "95 项更新服务、面板和原生桥接测试通过，覆盖安装器检查失败时功能包更新仍能安全重启。",
+        "note": "已实现受管 Linux 更新准备、任务等待、业务准入排空、持久重启收据、失败复用和按新实例及组件就绪恢复。定向与浏览器回归通过。真实 Linux systemd 和跨版本自动更新仍待发行实机验收。",
         "status": "implemented"
       }
     },
@@ -2887,7 +3367,7 @@
             "title": "比较签名基线"
           },
           {
-            "action": "统一 Actions 构建受影响的桌面、Android、插件和服务端归档。插件变化时同步原生种子。",
+            "action": "统一 Actions 按需构建插件、Windows、macOS、Linux 和 Android。插件版本变化时同步 macOS 与 Linux 原生种子。",
             "failure": "组件任务失败时按实际 Actions 日志排查。",
             "id": "build",
             "title": "更新需要变化的组件"
@@ -2936,28 +3416,91 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:52:25.046Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "22d62c5bc083dfc33b7644621d3930af1cd02851fc9dc1198e5596e6b5a3b791",
             "path": "scripts/release/plan.mjs",
             "symbol": "createReleasePlan"
           },
           {
-            "checkedAt": "2026-11-25T13:52:25.046Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "974971d17dde84686104f3ba24dacf4a5f50e9115bc4f3e572c32901d27566bc",
             "path": "scripts/release/update.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:52:25.046Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "a7559c7b31e36f61599e0ae0ff449480d7dda7ac316c7400aef1cd3d1a11712e",
             "path": ".github/workflows/unified-release.yml"
           },
           {
-            "checkedAt": "2026-11-25T13:52:25.046Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "54bedf02202203a8679448e80620524a59047c9a2009f0792420578355891deb",
             "path": "scripts/release/publish.mjs"
           }
         ],
         "status": "implemented"
+      }
+    },
+    {
+      "id": "release.restart-protocol-check",
+      "type": "acceptance",
+      "title": "更新自动重启与连接恢复协议回归",
+      "summary": "验证任务等待、请求排空、重启失败复用及浏览器按目标就绪恢复。",
+      "parent": "release.activate",
+      "status": "accepted",
+      "origin": "doc",
+      "body": {
+        "given": [
+          "受管服务测试载体、SSH 与 HTTPS 连接测试载体及浏览器"
+        ],
+        "then": [
+          "任务运行时先准备，空闲后激活并发出服务重启请求",
+          "已接收请求及流初始化完成后复查任务，失败释放准入并保留准备结果",
+          "状态探测临时失败时保持工作台可操作",
+          "确认重启或实例变化后等待目标版本及必要组件就绪并原址恢复",
+          "超时提供重试，授权失效交由连接入口处理"
+        ],
+        "when": "运行更新、远端管理、请求准入与浏览器恢复定向回归"
+      },
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "docs/05-更新与发布/设计.md"
+        },
+        {
+          "kind": "conversation",
+          "ref": "2026-11-28 用户要求落实更新后自动重启与远端恢复，并同步设计。"
+        }
+      ],
+      "verification": {
+        "checkedAt": "2026-11-28T09:06:40.028Z",
+        "evidence": [
+          {
+            "kind": "file",
+            "ref": "plugins/base/test/updates.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/server-manager.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/owner-command.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/workbench.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/workbench-recovery-browser.test.mjs"
+          },
+          {
+            "kind": "file",
+            "ref": "scripts/server/smoke-linux.test.mjs"
+          }
+        ],
+        "note": "node --test 更新、SSH 管理、工作台及浏览器等 13 个测试文件的合并回归共 179 项通过，0 失败、0 跳过，包含流初始化排空回归。npm run reload:plus、npm run check、git diff --check 和语法检查通过。真实 Linux systemd 与跨版本更新须另行实机验收。",
+        "status": "passed"
       }
     },
     {
@@ -2981,7 +3524,7 @@
       },
       "notes": [
         {
-          "text": "服务器与 HTTP 定向回归 46 项通过，设备切换及浏览器回归 31 项通过。已在 Linux 发布流水线加入系统服务安装、空锁恢复及原配对重开总助手检查，真实 Linux 安装包尚待流水线执行。",
+          "text": "Linux 发布冒烟已包含真实 systemd 安装、restart-host、新服务实例、目标版本与助手就绪、原配对工作台重开、安装器升级及空锁恢复。该验收须使用对应 Linux 发行产物执行。Windows 定向与浏览器回归结果记录在 [[release.restart-protocol-check]]。",
           "tone": "info",
           "type": "callout"
         }
@@ -3387,12 +3930,12 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:51:11.895Z",
-            "hash": "68a73a4d8c9527c4413a52a9dbbb9261183ed19608ee33ac102c12ffe651240c",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "406e951b8391c9f4d17057f37528541dc30a65f550f78c66b7d748621343cf5d",
             "path": "plugins/base/src/plugin.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:51:11.895Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "6094f5618fbe89d796654ce1e03731cb6446f41ebcd1cdd8f0acf2f49d8b2a2c",
             "path": "plugins/base/workbench/src/project-files.mjs",
             "symbol": "mountProjectFiles"
@@ -3437,17 +3980,17 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:51:12.949Z",
-            "hash": "38da94237847f576ac71076c2911f9764d8b3071b3c559e0d2f4cb6bbccf4a3a",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "3278a852005ffafa6f9d90b323e74129ef68cfff5a754449409426715e049a0d",
             "path": "plugins/base/package.json"
           },
           {
-            "checkedAt": "2026-11-25T13:51:12.949Z",
-            "hash": "68a73a4d8c9527c4413a52a9dbbb9261183ed19608ee33ac102c12ffe651240c",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "406e951b8391c9f4d17057f37528541dc30a65f550f78c66b7d748621343cf5d",
             "path": "plugins/base/src/plugin.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:51:12.949Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "271bb8acfcafd07981d0344be71559c05dfca276baf14c40636e02a66a15abcf",
             "path": "plugins/base/cordis.patch.yml"
           }
@@ -3484,31 +4027,19 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "804b2bdae73bad88c6925d8e241a6dabc13c7551090a5c0a5fb456941576b2e9",
-            "path": "plugins/base/src/fault-feedback.mjs",
-            "symbol": "createFaultFeedback"
-          },
-          {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+            "checkedAt": "2026-11-27T05:40:36.586Z",
+            "hash": "1d821e84a2343a8bc135fa2fdee2fcca12d268ce4db3fb7e8da750a12897150c",
             "path": "benchgo-web/services/feedback/main.go",
-            "symbol": "submitFault"
+            "symbol": "dispatchFault"
           },
           {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
-            "path": "benchgo-web/services/feedback/executor.mjs",
-            "symbol": "localAssistant"
-          },
-          {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
-            "path": "benchgo-web/services/feedback/executor.mjs",
-            "symbol": "tick"
+            "checkedAt": "2026-11-27T05:40:36.586Z",
+            "hash": "befbe0b9e6bd29a3b70177bc2db6508b818d93c766745ce284848de7a2d837e4",
+            "path": "benchgo-web/services/feedback/worker.mjs",
+            "symbol": "report"
           }
         ],
-        "note": "测试工单 #12 完成上报、领单、襄阳现有 SuperAgent API 与 Codex Worker 只读核实、证据不足关单、重复回执和队列空闲回读。本轮用验收脚本转交实际回执。已在本地外部执行器补上从已完成任务读取关单结果，实测可读取 #12 的结论。常驻执行器未启用，确认缺陷后的审批、试点、PR 尚未端到端验收。",
+        "note": "反馈服务 v12 已上线。测试工单 #15 约 1.2 秒确认上报，后台任务派给襄阳 Router 和 Worker，24 项侧栏测试通过，原工单自动按证据不足关闭。旧领单入口和轮询脚本已移除。真实缺陷候选和审批后试点尚待端到端验收。",
         "status": "partial"
       }
     },
@@ -3532,19 +4063,19 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-27T03:33:44.298Z",
-            "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+            "checkedAt": "2026-11-27T05:40:36.586Z",
+            "hash": "1d821e84a2343a8bc135fa2fdee2fcca12d268ce4db3fb7e8da750a12897150c",
             "path": "benchgo-web/services/feedback/main.go",
             "symbol": "approveWorkflow"
           },
           {
-            "checkedAt": "2026-11-27T03:33:44.298Z",
-            "hash": "efd6d6a27e4af644c6e8b7f903abeeed786ca5629062627d0275a1509a76b8ed",
+            "checkedAt": "2026-11-27T05:40:36.586Z",
+            "hash": "4957a52ece269ddec89428c056fa2426a452d4e8822f045bce0d3c2a6e2bd001",
             "path": "benchgo-web/.draftgo/worktree/pages/page_24.html",
             "symbol": "refreshFaultReview"
           }
         ],
-        "note": "在线测试工单验证管理员权限、审批幂等、候选 SHA 不符拒绝、失败回填。浏览器使用模拟数据验证三块内容、取消审批、提交与试点绑定、证据不足时隐藏审批。真实候选的成功试点及 PR 回填还未验收。",
+        "note": "管理页 v7 已回读，保留三块审核和提交绑定，增加试点通过状态。真实候选审批和试点待验收。",
         "status": "partial"
       }
     },
@@ -3572,25 +4103,19 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
+            "checkedAt": "2026-11-27T05:40:36.586Z",
+            "hash": "1d821e84a2343a8bc135fa2fdee2fcca12d268ce4db3fb7e8da750a12897150c",
             "path": "benchgo-web/services/feedback/main.go",
-            "symbol": "applyExecutionResult"
+            "symbol": "recordWorkflowResult"
           },
           {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "cce27fde929e82208c17b15ad6853648c4c9cb6b9e42c3b476809465056c29ab",
-            "path": "benchgo-web/services/feedback/main.go",
-            "symbol": "syncTicket"
-          },
-          {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
-            "path": "benchgo-web/services/feedback/executor.mjs",
-            "symbol": "readTaskClosure"
+            "checkedAt": "2026-11-27T05:40:36.586Z",
+            "hash": "befbe0b9e6bd29a3b70177bc2db6508b818d93c766745ce284848de7a2d837e4",
+            "path": "benchgo-web/services/feedback/worker.mjs",
+            "symbol": "triage"
           }
         ],
-        "note": "在襄阳现有 API 上对测试工单 #12 执行 24 项定向测试，全部通过且未复现。原单回读为已关闭，保留证据不足原因。重复结果幂等，关单后不再领出。外部执行器新增读取已完成任务的关单结果，验证了来源请求校验。常驻执行器和确认缺陷分支仍待联调。",
+        "note": "测试工单 #14 和 #15 自动回执后均为已关闭 · 证据不足。确认缺陷分支沿用现有状态机，尚缺真实案例验收。",
         "status": "partial"
       }
     },
@@ -3603,7 +4128,7 @@
       "status": "accepted",
       "origin": "user",
       "body": {
-        "constraint": "从登记的仓库拉取并记录基准提交。Worker 为每张工单准备独立 worktree 和修复分支。同一工单在后续试点继续使用该 worktree。Web 批准试点后按已审批提交验证。通过后推送候选、创建 PR 并回填链接。GitHub 由维护者合并，正式发布沿现有流程。"
+        "constraint": "从登记的仓库拉取并记录基准提交。每张工单有自己的 worktree 和分支。Web 按批准的候选提交派发试点。通过后由维护者创建并合并 PR，正式发布沿现有流程。"
       },
       "sources": [
         {
@@ -3614,25 +4139,13 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
-            "path": "benchgo-web/services/feedback/executor.mjs",
-            "symbol": "worktree"
-          },
-          {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
-            "path": "benchgo-web/services/feedback/executor.mjs",
-            "symbol": "triage"
-          },
-          {
-            "checkedAt": "2026-11-27T03:27:47.942Z",
-            "hash": "2ce7a8546a80f65c86dda2507fbd7ba7030109fec84de7336f4f34d74d2deaf6",
-            "path": "benchgo-web/services/feedback/executor.mjs",
-            "symbol": "pilotResult"
+            "checkedAt": "2026-11-27T05:40:36.586Z",
+            "hash": "befbe0b9e6bd29a3b70177bc2db6508b818d93c766745ce284848de7a2d837e4",
+            "path": "benchgo-web/services/feedback/worker.mjs",
+            "symbol": "prepare"
           }
         ],
-        "note": "只读探针从指定 worktree 返回随机标记与基准提交，测试工单 #12 在单独分支的 worktree 执行 24 项侧栏测试。现有 SuperAgent 任务没有系统级绑定工作区，实际执行用提示词指定路径。验收分支、worktree 和模拟工单已清理。修改候选、审批后试点和 PR 回填待验收。",
+        "note": "三个验收工单分别创建独立 worktree 和分支，验收后已清理。真实候选试点待验收。",
         "status": "partial"
       }
     },
@@ -3687,6 +4200,48 @@
           }
         ],
         "status": "implemented"
+      }
+    },
+    {
+      "id": "workbench.official.cold-start",
+      "type": "acceptance",
+      "title": "已初始化桌面工作台冷启动在 10 秒内",
+      "summary": "从启动桌面进程到工作台可交互不超过 10 秒，现有功能完整可用。",
+      "parent": "workbench.official",
+      "status": "accepted",
+      "origin": "user",
+      "body": {
+        "given": [
+          "已安装并初始化的桌面工作台",
+          "桌面主进程与 Host 均已退出"
+        ],
+        "then": [
+          "从创建桌面进程到正常操作工作台不超过 10 秒",
+          "插件、会话、配置保护和后台任务能力完整",
+          "首次安装和升级单独计时"
+        ],
+        "when": "启动 BenchGo 并实测到工作台可交互"
+      },
+      "sources": [
+        {
+          "kind": "conversation",
+          "ref": "2026-11-28 用户确认冷启动以 10 秒内为目标，且不得影响功能。"
+        }
+      ],
+      "verification": {
+        "checkedAt": "2026-11-28T06:16:08.700Z",
+        "evidence": [
+          {
+            "kind": "file",
+            "ref": "artifacts/benchgo-startup-20261128.json"
+          },
+          {
+            "kind": "file",
+            "ref": "plugins/base/test/settings-official.test.mjs"
+          }
+        ],
+        "note": "Windows 隔离副本按进程创建至实际点开设置计时。相同桌面壳与插件负载下，机械盘中位数由 15.36 秒降至 14.45 秒，SSD 由 15.17 秒降至 14.32 秒。两种介质均验证新建会话，SSD 验证会话改名跨重启保留。56 项桌面和配置定向测试通过。已安装版本曾测到 39.45 秒才显示工作台，其中 Host 占 35.38 秒。10 秒目标未通过。",
+        "status": "failed"
       }
     },
     {
@@ -3773,13 +4328,13 @@
         "steps": [
           {
             "action": "使用当前设备、全部设备或指定设备显示范围。跨设备列表通过 [[link.resources]] 查询。",
-            "failure": "加载失败或目标离线时保留来源并报告失败，避免把离线解释为空列表。",
+            "failure": "加载失败或目标离线时保留来源并报告失败。项目登记成功后立即刷新所属设备的项目目录，打开新会话无需先等待完整侧栏状态。",
             "id": "find",
             "title": "定位项目与会话"
           },
           {
-            "action": "按资源所属设备进入会话。远端任务执行会话允许查看，并提供返回 A 工单的入口。",
-            "failure": "目标能力不足时保留解释，任务输入与控制从原工单办理。",
+            "action": "按资源所属设备进入会话。可查看远端执行会话并返回 A 工单。配对用户在授权范围内可归档与恢复会话，归档运行中的会话需确认并请求停止。",
+            "failure": "权限或目标能力不足时显示原因。补充、修订和问题答复通过原工单办理，退出状态取实际执行事实。",
             "id": "open",
             "title": "打开真实会话"
           },
@@ -3790,7 +4345,7 @@
             "title": "发送、审批或继续"
           },
           {
-            "action": "按会话最新工作目录校验文件授权，再按类型加载预览。本机文件操作和终端按 owner 权限挂载。",
+            "action": "按会话工作目录校验文件授权后加载预览。本机项目文件和终端受 owner 权限约束，远端官方 Worker 产物经原 Link 会话读取。",
             "failure": "路径越界、内容超限或格式不支持时说明，保留合规的下载或其他入口。",
             "id": "preview",
             "title": "查看项目文件与产物"
@@ -3833,32 +4388,73 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-25T13:51:12.949Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "59add8afb6bd61550ee26687413b28e2744a1cdbc7455222eba2eab999b89f5e",
             "path": "plugins/link/src/devices/resources.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:51:12.949Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "b3419a52ec87ee08d96b6e616654550827ab64ca05c7fba952776ef430accb29",
             "path": "plugins/harness/src/plugin.mjs"
           },
           {
-            "checkedAt": "2026-11-25T13:51:12.949Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "6094f5618fbe89d796654ce1e03731cb6446f41ebcd1cdd8f0acf2f49d8b2a2c",
             "path": "plugins/base/workbench/src/project-files.mjs",
             "symbol": "mountProjectFiles"
           },
           {
-            "checkedAt": "2026-11-25T13:51:12.949Z",
+            "checkedAt": "2026-11-28T13:01:59.097Z",
             "hash": "0ebf22cdc8fabd263bad36202ca5260481c622f9b0429ef62abbc1ee8aededda",
             "path": "plugins/base/workbench/src/media.mjs"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "8cfcb9cea6a4ca1dba25f65e6627758eb74ef64c7625d3a703c46b88c010560d",
+            "path": "plugins/link/client/resource-navigation.jsx",
+            "symbol": "useResourceNavigation"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "49f7d002c4c2e2c1dae3a67b43be7d49906590f530bfe57d4c8ec2f905782e9c",
+            "path": "plugins/base/client/index.jsx",
+            "symbol": "Projects / refresh"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "427a6658c5f9a46f77563c27a9eb152e49eb9046610a0ef30d4c9dd6dfa20d7c",
+            "path": "plugins/link/src/devices/proxy.mjs",
+            "symbol": "createDeviceProxy"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "77e96081e20d331800d27e5a483e04d91a67fa6167c4e9f320184640df7bbda7",
+            "path": "plugins/link/client/project-bridge.mjs",
+            "symbol": "createProjectBridge"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "552c4d217397c33c36132320df2f88a96bc0e0c1a347279e96a2d47305e2003d",
+            "path": "plugins/link/src/session/actions.mjs"
+          },
+          {
+            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "hash": "fe3ad75609b55dfa7dd708645e2ba6e6aab142eb6b81a66eafc997e5e6ad42a8",
+            "path": "plugins/superagent/client/execution-session-navigation.mjs",
+            "symbol": "openRemoteExecutionFile"
           }
         ],
+        "note": "项目登记确认后立即关闭添加等待，并行准备新会话与刷新所属设备项目。项目刷新独立于慢最近列表与设备读取，同类在途完成后补读；旧状态失败或取消不会覆盖新快照。襄阳轻量目录入口 468–660 毫秒，完整入口对照 5095 毫秒。字体同源排队对照中的状态请求由 8173–8461 毫秒降至 519–738 毫秒。新一轮完整页面采样中默认工作区初始化 878 毫秒、ensureRecent 1497 毫秒，更新状态仍有 3524 毫秒长尾。真实模型发送与目标端部署仍待验。",
         "status": "implemented"
       }
     }
   ],
   "relations": [
+    {
+      "from": "assistant.context.tool-refresh-check",
+      "to": "assistant.context.tool-refresh",
+      "type": "verifies"
+    },
     {
       "from": "assistant.delivery-check",
       "to": "assistant.delivery",
@@ -3935,6 +4531,11 @@
       "type": "verifies"
     },
     {
+      "from": "assistant.ingress.router-steering-check",
+      "to": "assistant.ingress.router-steering",
+      "type": "verifies"
+    },
+    {
       "from": "assistant.management",
       "to": "assistant.management.session-archive",
       "type": "calls"
@@ -3948,6 +4549,11 @@
     {
       "from": "assistant.management.archive-navigation-check",
       "to": "assistant.management.archive-navigation",
+      "type": "verifies"
+    },
+    {
+      "from": "assistant.management.clear-main-check",
+      "to": "assistant.management.clear-main",
       "type": "verifies"
     },
     {
@@ -4009,6 +4615,11 @@
       "type": "verifies"
     },
     {
+      "from": "link.connect.tls-deadline-check",
+      "to": "link.connect.tls-deadline",
+      "type": "verifies"
+    },
+    {
       "from": "link.connect.workbench-recovery-check",
       "to": "link.connect.workbench-recovery",
       "type": "verifies"
@@ -4023,6 +4634,11 @@
       "to": "link.resources",
       "type": "calls",
       "label": "按设备查询与管理"
+    },
+    {
+      "from": "link.workbench-scope-check",
+      "to": "link.group-resource-relay",
+      "type": "verifies"
     },
     {
       "from": "models.commander.attachments.check",
@@ -4090,6 +4706,11 @@
       "from": "release.publish#plan",
       "to": "release.components",
       "type": "governed_by"
+    },
+    {
+      "from": "release.restart-protocol-check",
+      "to": "release.activate",
+      "type": "verifies"
     },
     {
       "from": "user",

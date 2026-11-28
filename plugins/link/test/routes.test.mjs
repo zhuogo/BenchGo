@@ -4,10 +4,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:https';
+import { createServer as createTcpServer } from 'node:net';
 import { X509Certificate } from 'node:crypto';
 import { openDeviceRegistry, normalizeRoutes } from '../src/devices/registry.mjs';
 import { orderRoutes, selectRoute } from '../src/devices/routes.mjs';
-import { probeRemote, remoteJson } from '../src/devices/remote.mjs';
+import { probeRemote, remoteAgent, remoteJson } from '../src/devices/remote.mjs';
 import { loadIdentity } from '../src/transport/tls.mjs';
 
 const pin = Buffer.alloc(32, 1).toString('base64');
@@ -317,4 +318,41 @@ test('new Link certificates tolerate small clock skew and still enforce their va
   clock.mock.mockImplementation(() => Date.parse(certificate.validTo));
   await assert.rejects(probeRemote(target), { code: 'ERR_LINK_CERTIFICATE', message: /已过期/ });
   assert.equal(requests, 1);
+});
+
+test('Link JSON deadlines include a stalled pinned TLS handshake', async t => {
+  const sockets = new Set();
+  let connected;
+  const server = createTcpServer(socket => {
+    sockets.add(socket);
+    socket.resume();
+    socket.on('close', () => sockets.delete(socket));
+    connected?.(socket);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const target = { url: `https://127.0.0.1:${server.address().port}`, pin };
+  const agent = remoteAgent(target, { maxSockets: 1 });
+  t.after(() => {
+    agent.destroy();
+    for (const socket of sockets) socket.destroy();
+    return new Promise(resolve => server.close(resolve));
+  });
+  let watchdog;
+  try {
+    await Promise.race([
+      assert.rejects(remoteJson(target, '/link/api/info', undefined, { agent, timeout: 50 }), { code: 'ETIMEDOUT' }),
+      new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('TLS handshake outlived the JSON deadline')), 1000); }),
+    ]);
+  } finally { clearTimeout(watchdog); }
+
+  for (const cancel of [controller => controller.abort(), () => agent.destroy()]) {
+    const accepted = new Promise(resolve => { connected = resolve; });
+    const controller = new AbortController();
+    const result = remoteJson(target, '/link/api/info', undefined, { agent, signal: controller.signal, timeout: 1000 });
+    const socket = await accepted;
+    const closed = new Promise(resolve => socket.once('close', resolve));
+    const rejected = assert.rejects(result, error => ['ABORT_ERR', 'ECONNRESET', 20].includes(error.code));
+    cancel(controller);
+    await Promise.all([rejected, closed]);
+  }
 });

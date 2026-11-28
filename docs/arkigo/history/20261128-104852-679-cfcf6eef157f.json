@@ -1,0 +1,125 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T10:48:52.679Z",
+  "by": "codex",
+  "reason": "记录旁聊清理实现与验收结果",
+  "base": "d5ab07be4648",
+  "result": "cfcf6eef157f",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management.clear-main",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note",
+        "implementation.status"
+      ],
+      "before": {
+        "id": "assistant.management.clear-main",
+        "type": "flow",
+        "title": "清理主聊天与旁聊",
+        "summary": "主聊天与手动旁聊共用清理流程。当前聊天优先切换到新会话，再后台刷新。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "ai",
+        "body": {
+          "ends": [
+            "refresh"
+          ],
+          "start": "reset",
+          "steps": [
+            {
+              "action": "立即显示清理状态并等待服务端确认。手动旁聊保留标题、置顶和任务归属。",
+              "failure": "保留旧聊天并显示失败原因。旁聊有正在运行或排队的消息时提示先停止。",
+              "id": "reset",
+              "title": "清理"
+            },
+            {
+              "action": "撤下旧记录，按新会话标识连接聊天。",
+              "failure": "保留已完成的清理，提供重新连接入口。",
+              "id": "open",
+              "title": "打开新会话"
+            },
+            {
+              "action": "补载历史与共享状态，通知其他面板同步。",
+              "id": "refresh",
+              "title": "后台刷新"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "reset",
+              "to": "open"
+            },
+            {
+              "from": "open",
+              "to": "refresh"
+            }
+          ],
+          "trigger": "用户在主聊天或未归档的手动旁聊执行 /clear"
+        },
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T10:31:32.548Z",
+              "hash": "9be8d3768dc7f91965738b3161aaa85ed29a2398e038d8fd74352a3223bf716b",
+              "path": "plugins/superagent/client/index.jsx",
+              "symbol": "AssistantPage.clearMain"
+            }
+          ],
+          "note": "主聊天已实现，手动旁聊待接入相同流程。",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.clear-main-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "assistant.management.clear-main-check",
+        "type": "acceptance",
+        "title": "聊天清理可感知且可恢复",
+        "summary": "清理有即时反馈，新会话优先可用，失败路径可恢复。",
+        "parent": "assistant.management.clear-main",
+        "status": "accepted",
+        "origin": "ai",
+        "body": {
+          "then": [
+            "清理请求返回前显示状态，重复执行只提交一次。",
+            "新会话连接优先于状态与历史读取，迟到的旧历史不会回填。",
+            "清理失败时保留旧会话，清理后连接失败时可重试打开。",
+            "旁聊只更换自己的会话，保留标题、置顶和任务归属。归档、外部渠道或仍有活动的旁聊拒绝清理。"
+          ],
+          "when": "在主聊天或未归档的手动旁聊执行 /clear"
+        },
+        "verification": {
+          "checkedAt": "2026-11-28T10:25:23.609Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/ui.test.mjs",
+              "symbol": "clear is a main-chat slash action that resets once and opens the new session"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/engine.test.mjs",
+              "symbol": "clearing main while history refreshes releases the old writer before reopening"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/superagent/test/channel-quiet-chat-browser.test.mjs",
+              "symbol": "real assistant conversations display connection states, channel history and main chat recovery"
+            }
+          ],
+          "note": "ui.test.mjs 定向 5 项与 engine.test.mjs 定向 9 项通过。模拟状态及历史请求挂起、迟到旧历史、并发清理、失败重试和 JSONL 恢复。已有 Chromium 聊天恢复用例通过。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

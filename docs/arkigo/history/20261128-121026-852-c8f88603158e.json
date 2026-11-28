@@ -1,0 +1,201 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T12:10:26.852Z",
+  "by": "ai",
+  "reason": "补齐代理取消与排队期限，隔离重连后旧 WebSocket 事件，并回写定向回归",
+  "base": "2aeff99aedc0",
+  "result": "c8f88603158e",
+  "changes": [
+    {
+      "op": "update",
+      "id": "link.connect.tls-deadline",
+      "fields": [
+        "body.constraint",
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "link.connect.tls-deadline",
+        "type": "rule",
+        "title": "TLS 握手受请求期限约束",
+        "summary": "握手挂起时按期结束请求，取消和连接池关闭同步回收连接。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "code",
+        "body": {
+          "constraint": "请求期限覆盖 TLS 握手；取消、超时或连接池关闭时结束未交付 socket 的等待，完成指纹校验后才发送 HTTP 凭据。",
+          "when": "通过固定证书指纹访问远端 HTTPS"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/设计.md",
+            "symbol": "连接与信任模型"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T10:42:50.721Z",
+              "hash": "d47c893ddf155db4ce70ab03761357c24e9d94b19c920f0739958872d0c83e47",
+              "path": "plugins/link/src/devices/remote.mjs",
+              "symbol": "remoteAgent / remoteJson"
+            }
+          ],
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.tls-deadline-check",
+      "fields": [
+        "body.given",
+        "body.then",
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "link.connect.tls-deadline-check",
+        "type": "acceptance",
+        "title": "挂起的 TLS 握手按期退出",
+        "summary": "TCP 已连接而 TLS 挂起时，请求超时与取消仍能结算。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "code",
+        "body": {
+          "given": [
+            "测试服务接受 TCP 并挂起 TLS 握手"
+          ],
+          "then": [
+            "请求按期失败并回收连接",
+            "指纹核对失败时不发送 HTTP 凭据"
+          ],
+          "when": "请求期限到达、主动取消或关闭共享连接池"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "plugins/link/test/routes.test.mjs"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-28T10:55:00.637Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/routes.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/resource-refresh-browser.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/base/test/sidebar-refresh.test.mjs"
+            }
+          ],
+          "note": "2026-11-28 routes.test.mjs 23 项通过，覆盖挂起握手到期、主动取消、连接池关闭及连接回收。真实襄阳工作台临时项目登记耗时 53 毫秒，状态读取 116 毫秒，重复登记 39 毫秒且复用相同身份，已清理测试登记、目录并恢复目录选择偏好。浏览器与回归覆盖添加结束、侧栏在途补刷、设备显示范围、断线恢复及草稿保留。真实模型首次回复和长期稳定性尚未验收。",
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.workbench-recovery",
+      "fields": [
+        "body.constraint",
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "link.connect.workbench-recovery",
+        "type": "rule",
+        "title": "工作台会话失效后恢复",
+        "summary": "配对有效时自动恢复当前工作台会话。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "user",
+        "body": {
+          "constraint": "桌面代理沿已核验路线重新签发失效会话，并合并并发续签。只读首屏请求可重试一次，写操作由用户决定是否重试。已撤销配对仍须重新配对。"
+        },
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "39fa8668b136d30516e6f6da136b68e9a0e786cb5d2b04ffcca34d123e840a86",
+              "path": "plugins/link/src/devices/proxy.mjs",
+              "symbol": "createDeviceProxy / recover"
+            },
+            {
+              "checkedAt": "2026-11-28T09:38:04.956Z",
+              "hash": "23e5d2fad4c84715be943734ab627e3a7986505aca6ed6839e402e1e3c7f24f7",
+              "path": "plugins/link/src/transport/workbench.mjs",
+              "symbol": "createWorkbench"
+            }
+          ],
+          "note": "HTTP 与多路复用流共享会话恢复。仅在开流前明确会话过期时恢复并重开一次，取消后不再执行，应用 401 原样保留。续签网络失败保留状态并冷却五秒，开流阶段有含排队在内的九十秒上限。",
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "link.connect.workbench-recovery-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "link.connect.workbench-recovery-check",
+        "type": "acceptance",
+        "title": "验证工作台续签",
+        "summary": "确认有效配对可以恢复，撤销仍然生效。",
+        "parent": "link.connect",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "已配对桌面代理持有失效工作台会话"
+          ],
+          "then": [
+            "只发起一次续签，读取恢复",
+            "写入不自动重新发送，撤销配对后返回授权失败"
+          ],
+          "when": "同时读项目、总助手和工作台入口"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/02-工作台与Agent/跨设备资源导航.md"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-28T09:38:04.956Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-sessions.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-recovery.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-recovery-browser.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/base/test/sidebar-refresh.test.mjs"
+            }
+          ],
+          "note": "实际运行 workbench-sessions.test.mjs，十一项通过。覆盖 HTTP 与流的新旧失效响应、并发单次续签、撤销后拒绝、写操作不重放、续签中取消、502 状态及冷却、应用 401 不触发续签。服务与浏览器恢复专项同时验证短暂失败保留同一页面及草稿。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}

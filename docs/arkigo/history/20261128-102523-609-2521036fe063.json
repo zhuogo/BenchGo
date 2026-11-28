@@ -1,0 +1,86 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T10:25:23.609Z",
+  "by": "ai",
+  "reason": "回写主聊天清理实现与验收",
+  "base": "baf8d4fe1657",
+  "result": "2521036fe063",
+  "changes": [
+    {
+      "op": "update",
+      "id": "assistant.management.clear-main",
+      "fields": [
+        "implementation"
+      ],
+      "before": {
+        "id": "assistant.management.clear-main",
+        "type": "flow",
+        "title": "清理主聊天",
+        "summary": "立即显示清理状态，确认后优先打开新会话，再后台刷新资源。",
+        "parent": "assistant.management",
+        "status": "accepted",
+        "origin": "ai",
+        "body": {
+          "ends": [
+            "refresh"
+          ],
+          "start": "reset",
+          "steps": [
+            {
+              "action": "显示清理状态，保留旧记录，等待服务端确认。",
+              "failure": "保留旧聊天并显示失败原因。",
+              "id": "reset",
+              "title": "清理"
+            },
+            {
+              "action": "撤下旧记录，按新会话标识连接聊天。",
+              "failure": "保留已完成的清理，提供重新连接入口。",
+              "id": "open",
+              "title": "打开新会话"
+            },
+            {
+              "action": "补载历史与共享状态，通知其他面板同步。",
+              "id": "refresh",
+              "title": "后台刷新"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "reset",
+              "to": "open"
+            },
+            {
+              "from": "open",
+              "to": "refresh"
+            }
+          ],
+          "trigger": "用户在主聊天执行清理"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "assistant.management.clear-main-check",
+      "fields": [
+        "verification"
+      ],
+      "before": {
+        "id": "assistant.management.clear-main-check",
+        "type": "acceptance",
+        "title": "清理主聊天可感知且可恢复",
+        "summary": "清理有即时反馈，新会话优先可用，失败路径可恢复。",
+        "parent": "assistant.management.clear-main",
+        "status": "accepted",
+        "origin": "ai",
+        "body": {
+          "then": [
+            "清理请求返回前显示状态，重复执行只提交一次。",
+            "新会话连接优先于状态与历史读取，迟到的旧历史不会回填。",
+            "清理失败时保留旧会话，清理后连接失败时可重试打开。"
+          ],
+          "when": "执行清理主聊天"
+        }
+      }
+    }
+  ]
+}

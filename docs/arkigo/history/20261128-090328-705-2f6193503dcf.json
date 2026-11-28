@@ -1,0 +1,166 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T09:03:28.705Z",
+  "by": "codex",
+  "reason": "落实受管服务更新后自动重启和工作台恢复，记录定向验证及 Linux 实机验收边界",
+  "base": "8752fcbb5bef",
+  "result": "2f6193503dcf",
+  "changes": [
+    {
+      "op": "update",
+      "id": "release.activate",
+      "fields": [
+        "body.steps",
+        "implementation.evidence",
+        "implementation.note",
+        "implementation.status"
+      ],
+      "before": {
+        "id": "release.activate",
+        "type": "flow",
+        "title": "主机验签并激活更新",
+        "summary": "验签并激活兼容功能包，受管 Linux 自动重启，客户端确认目标版本就绪后恢复连接。",
+        "parent": "release",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "restart"
+          ],
+          "start": "check",
+          "steps": [
+            {
+              "action": "按选择的分发源取带签名的清单，核对引擎、应用及功能包版本。",
+              "failure": "检查失败时保留此前已确认版本并报告；缺少应用版本信息时不推断。",
+              "id": "check",
+              "title": "验签并核对主机兼容"
+            },
+            {
+              "action": "校验下载包并准备不可变版本目录，协调活跃任务和更新互斥。",
+              "failure": "安装前发现任务或不兼容状态时留在当前版本。",
+              "id": "prepare",
+              "title": "准备已验证插件"
+            },
+            {
+              "action": "经官方 profile 约束切换，并记录重启所需状态。",
+              "failure": "锁冲突或校验失败应保留当前可用版本。",
+              "id": "activate",
+              "title": "锁内切换激活指针"
+            },
+            {
+              "action": "受管 Linux 在任务空闲时自动重启。校验实际加载的版本、Link、工作台及原先可用的总助手，连接恢复后返回原页面。桌面壳和 Android 沿用平台入口。",
+              "failure": "保留准备结果并展示服务启动或模块就绪失败。只有主机确认正在重启或实例已变化时才进入更新恢复；状态探测临时失败时保留当前工作台。",
+              "id": "restart",
+              "title": "按重启后版本确认"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "check",
+              "to": "prepare"
+            },
+            {
+              "from": "prepare",
+              "to": "activate"
+            },
+            {
+              "from": "activate",
+              "to": "restart"
+            }
+          ],
+          "trigger": "用户在工作台执行检查或更新。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "插件安装与激活"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "更新入口与状态"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-28 用户确认落实更新后自动重启、就绪核验与重连。"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T08:47:44.676Z",
+              "hash": "370a48ba5a329032654e5e8849dc47abe5c76b6b5efe632cd2abf2175b15d6dd",
+              "path": "plugins/base/src/updates.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T08:47:44.676Z",
+              "hash": "3839747586ae92e5f3a4d91b5263142c6c32a584f576da29c66a3cd9cbd835d7",
+              "path": "scripts/server/bootstrap.mjs"
+            },
+            {
+              "checkedAt": "2026-11-28T08:47:44.676Z",
+              "hash": "a1bb324598d9cbec9afc087772a2929ebbb664bfaf4039315a6be0ae0235f1e3",
+              "path": "plugins/link/client/workbench-recovery.mjs",
+              "symbol": "watchWorkbench"
+            }
+          ],
+          "note": "已核对客户端按确认的重启或实例变化等待目标就绪，状态探测失败不打断工作台，定向测试通过。真实 Linux 自动重启与恢复仍待实机核验。",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "op": "add",
+      "id": "release.restart-protocol-check"
+    },
+    {
+      "op": "update",
+      "id": "release.server-recovery-check",
+      "fields": [
+        "notes"
+      ],
+      "before": {
+        "id": "release.server-recovery-check",
+        "type": "acceptance",
+        "title": "服务器升级后恢复总助手与工作台",
+        "summary": "检查遗留空锁、模块就绪与重新打开。",
+        "parent": "release.install",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "受管 Linux 服务器存在已退出进程留下的空写锁"
+          ],
+          "then": [
+            "归档可核验的空写锁，保留数据与配对",
+            "总助手与工作台就绪后报告成功",
+            "重新打开使用新入口"
+          ],
+          "when": "通过设备中心更新服务器插件并重新打开工作台"
+        },
+        "notes": [
+          {
+            "text": "服务器与 HTTP 定向回归 46 项通过，设备切换及浏览器回归 31 项通过。已在 Linux 发布流水线加入系统服务安装、空锁恢复及原配对重开总助手检查，真实 Linux 安装包尚待流水线执行。",
+            "tone": "info",
+            "type": "callout"
+          }
+        ],
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/01-设备与远程连接/SSH服务器运维.md"
+          }
+        ]
+      }
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "release.restart-protocol-check",
+        "to": "release.activate",
+        "type": "verifies"
+      }
+    }
+  ]
+}

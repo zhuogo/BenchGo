@@ -1,0 +1,26 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T10:16:28.948Z",
+  "by": "ai",
+  "reason": "优化主聊天清理体验",
+  "base": "37c70ce61842",
+  "result": "baf8d4fe1657",
+  "changes": [
+    {
+      "op": "add",
+      "id": "assistant.management.clear-main"
+    },
+    {
+      "op": "add",
+      "id": "assistant.management.clear-main-check"
+    },
+    {
+      "op": "link",
+      "relation": {
+        "from": "assistant.management.clear-main-check",
+        "to": "assistant.management.clear-main",
+        "type": "verifies"
+      }
+    }
+  ]
+}

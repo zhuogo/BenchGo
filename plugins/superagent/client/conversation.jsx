@@ -26,6 +26,7 @@ const HomeContext = createContext(null);
 const PetErrorContext = createContext('');
 const EMPTY_PET_STATUSES = new Map();
 const playedPetEvents = new Set();
+const useSteeringMode = select => select('steer');
 
 export const ASSISTANT_CONVERSATION_SLOT = 'benchgo.assistant.conversation';
 export const assistantConversationChildren = {
@@ -160,7 +161,7 @@ function OfficialConversation({ useSession, useConversation, renderFactorySlot, 
 }
 
 /** The official renderer supplies both props through the host's session child declaration. */
-export function AssistantConversation({ ctx, sessionId, SessionProvider, renderSlot, api, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, channel, history, onLoadEarlier, onRefresh, loadError, onRetryLoad, onDismissLoadError, onClear, onConfigureModel, execution = false, active = true }) {
+export function AssistantConversation({ ctx, sessionId, SessionProvider, renderSlot, api, assistantName, assistantConfig, petExpression, onOpenResources, onOpenExecution, threadId, channel, history, onLoadEarlier, onRefresh, loadError, onRetryLoad, onDismissLoadError, onClear, clearPending = false, onConfigureModel, execution = false, active = true }) {
   const [retained, setRetained] = useState(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
@@ -192,7 +193,7 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
     ? <div className="ba-resource-initial"><ResourceState kind="error" title="执行会话暂未连接" description={error} actionLabel="重新连接" onAction={reconnect} /></div>
     : <ChatNoticeFeed message="聊天暂未连接" onRetry={reconnect} />;
   if (!retained || retained.sessionId !== sessionId) return <div className="ba-resource-initial"><ResourceState kind="loading" title={execution ? "正在连接执行会话" : "正在连接聊天"} /></div>;
-  return <div className="ba-official-conversation" data-assistant-chat="" data-assistant-notebook={execution ? undefined : ''} style={{ display: 'flex', flex: '1 1 0', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
+  return <div className="ba-official-conversation" inert={clearPending ? '' : undefined} data-assistant-chat="" data-assistant-notebook={execution ? undefined : ''} style={{ display: 'flex', flex: '1 1 0', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
     <style>{notebookCss}</style>
     <SuperAgentSurfaceContext.Provider value={true}><HomeContext.Provider value={home}><SessionProvider session={retained.reference}>
       {renderSlot(ASSISTANT_CONVERSATION_SLOT, {})}
@@ -201,6 +202,40 @@ export function AssistantConversation({ ctx, sessionId, SessionProvider, renderS
 }
 
 export function mountAssistantConversation(ctx) {
+  ctx.effect(() => {
+    const name = 'conversation.composer.bar';
+    let current, restore;
+    function update() {
+      const entry = ctx.slots.entries(name).find(item => item.children?.['conversation.input.attachments']);
+      if (entry === current) return;
+      restore?.();
+      current = entry;
+      restore = undefined;
+      if (!entry) return;
+      const OfficialComposer = entry.component;
+      function RouterComposer(props) {
+        const home = useContext(HomeContext);
+        const router = !!home && !home.channel;
+        const keyboard = useMemo(() => {
+          if (!router || !props.keyboard) return props.keyboard;
+          const submit = (_mode, source) => props.keyboard.submit('steer', source);
+          return new Proxy(props.keyboard, {
+            get(target, key) {
+              if (key === 'submit') return submit;
+              const value = Reflect.get(target, key, target);
+              return typeof value === 'function' ? value.bind(target) : value;
+            },
+          });
+        }, [router, props.keyboard]);
+        return <OfficialComposer {...props} keyboard={keyboard} useBusyEnter={router ? useSteeringMode : props.useBusyEnter} />;
+      }
+      entry.component = RouterComposer;
+      restore = () => { if (entry.component === RouterComposer) entry.component = OfficialComposer; };
+    }
+    const unsubscribe = ctx.slots.subscribe(name, update);
+    update();
+    return () => { unsubscribe(); restore?.(); };
+  });
   ctx.effect(() => ctx.slots.inject(ASSISTANT_CONVERSATION_SLOT, () => ctx.slots.register({
     name: ASSISTANT_CONVERSATION_SLOT,
     children: workbenchSessionSurfaceChildren,

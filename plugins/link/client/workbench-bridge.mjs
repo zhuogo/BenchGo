@@ -1,9 +1,35 @@
 /* Installed before the shared Harness shell. The paired cookie is HttpOnly. */
 import { inheritWorkbenchTheme } from './device-theme.mjs';
-
-inheritWorkbenchTheme();
+import { watchWorkbench } from './workbench-recovery.mjs';
+import { createProjectReceiver, projectInput, projectPickerActions } from './project-receiver.mjs';
+import { readJsonResponse } from '../../base/client/http-response.mjs';
 
 (() => {
+  if (document.currentScript?.hasAttribute('data-project-picker')) {
+    const origin = new URLSearchParams(location.hash.slice(1)).get('resourceParentOrigin');
+    if (!origin || window.parent === window) return;
+    try {
+      const url = new URL(origin);
+      if (!['http:', 'https:', 'dsh-app:'].includes(url.protocol) || (url.origin !== origin && 'dsh-app://' + url.host !== origin)) return;
+    } catch { return; }
+    const ready = () => window.parent.postMessage({ type: 'benchgo:resource:ready', projectActions: projectPickerActions }, origin);
+    const api = new URL('./api/commander', location.href);
+    const receive = createProjectReceiver(projectPickerActions, async (action, args) => {
+      const response = await fetch(api, {
+        method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action, ...projectInput(action, args) }),
+      });
+      return readJsonResponse(response, api);
+    }, result => window.parent.postMessage(result, origin));
+    window.addEventListener('message', event => {
+      if (event.source !== window.parent || event.origin !== origin) return;
+      if (event.data?.type === 'benchgo:resource:probe') ready();
+      if (event.data?.type === 'benchgo:project:call') receive(event.data);
+    });
+    ready();
+    return;
+  }
+  inheritWorkbenchTheme();
   const base = new URL(document.baseURI);
   const originalFetch = globalThis.fetch.bind(globalThis);
   const route = path => new URL(path, base);
@@ -25,9 +51,25 @@ inheritWorkbenchTheme();
     const url = new URL('../../socket', base); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = localSocket = new WebSocket(url);
     socket.addEventListener('message', event => {
-      try { const frame = JSON.parse(event.data), stream = localStreams.get(frame.id); if (!stream) return; if (stream.items.length >= 128) { stream.error = new Error('工作台流消费过慢'); socket.close(); } else { stream.items.push(frame); stream.wake?.(); } } catch { socket.close(); }
+      try {
+        const frame = JSON.parse(event.data), stream = localStreams.get(frame.id);
+        if (!stream || stream.socket !== socket) return;
+        if (stream.items.length >= 128) {
+          stream.error = new Error('工作台流消费过慢');
+          socket.close();
+        } else {
+          stream.items.push(frame);
+          stream.wake?.();
+        }
+      } catch { socket.close(); }
     });
-    socket.addEventListener('close', () => { for (const stream of localStreams.values()) { stream.error = new Error('主机连接已断开，请重试'); stream.wake?.(); } });
+    socket.addEventListener('close', () => {
+      for (const stream of localStreams.values()) {
+        if (stream.socket !== socket) continue;
+        stream.error = new Error('主机连接已断开，请重试');
+        stream.wake?.();
+      }
+    });
     socket.addEventListener('error', () => {});
     return socket;
   };
@@ -39,7 +81,7 @@ inheritWorkbenchTheme();
     socket.addEventListener('open', opened, { once: true }); socket.addEventListener('close', failed, { once: true }); signal.addEventListener('abort', failed, { once: true });
   });
   async function* localLines(payload, signal) {
-    const socket = localConnection(), stream = { items: [], wake: undefined, error: null }, id = payload.id;
+    const socket = localConnection(), stream = { socket, items: [], wake: undefined, error: null }, id = payload.id;
     await waitSocket(socket, signal); localStreams.set(id, stream);
     const abort = () => { stream.error = signal.reason || new Error('已取消'); stream.wake?.(); };
     signal.addEventListener('abort', abort, { once: true });
@@ -109,6 +151,15 @@ inheritWorkbenchTheme();
   }
   globalThis.__DSH_LINK_WORKBENCH__ = true;
   globalThis.__DSH_TRANSPORT__ = { fetch: apiFetch, openStream };
+  watchWorkbench(async () => {
+    const response = await apiFetch(route('api/commander/updates'), {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'status' }), signal: AbortSignal.timeout(4000),
+    });
+    if ([401, 403, 404].includes(response.status)) return null;
+    if (!response.ok) throw new Error('工作台状态暂不可用');
+    return response.json();
+  });
   // Direct feature fetches (voice, preset editor, uploads) already resolve
   // document.baseURI and carry the same cookie. Keep that path rooted here.
   globalThis.addEventListener('dsh-link-authorization-expired', () => {

@@ -18,6 +18,7 @@ export async function apply(ctx, config = {}) {
     ...ctx.get('benchgo').config.link,
     ...config,
     webRoot: new URL('../lib/link-web/', import.meta.url),
+    fontRoot: new URL('../assets/fonts/', import.meta.url),
   });
   ctx.provide('benchgoLink', link);
   registerOrdinaryServerSshTool(ctx, link);
