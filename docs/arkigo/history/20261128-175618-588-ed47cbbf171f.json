@@ -1,0 +1,203 @@
+{
+  "format": "arkigo-change/1",
+  "at": "2026-11-28T17:56:18.588Z",
+  "by": "codex",
+  "reason": "记录 v0.1.24 Linux 服务重启与恢复验收",
+  "base": "e6c112bc5563",
+  "result": "ed47cbbf171f",
+  "changes": [
+    {
+      "op": "update",
+      "id": "release.activate",
+      "fields": [
+        "implementation.evidence",
+        "implementation.note"
+      ],
+      "before": {
+        "id": "release.activate",
+        "type": "flow",
+        "title": "主机验签并激活更新",
+        "summary": "验签并激活兼容功能包，受管 Linux 自动重启，客户端确认目标版本就绪后恢复连接。",
+        "parent": "release",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "ends": [
+            "restart"
+          ],
+          "start": "check",
+          "steps": [
+            {
+              "action": "按选择的分发源取带签名的清单，核对引擎、应用及功能包版本。",
+              "failure": "检查失败时保留此前已确认版本并报告；缺少应用版本信息时不推断。",
+              "id": "check",
+              "title": "验签并核对主机兼容"
+            },
+            {
+              "action": "校验下载包并准备不可变版本目录。受管 Linux 可在任务运行时准备，任务结束后再激活。Windows 在安装前检查任务。",
+              "failure": "不兼容或校验失败时保留当前版本。任务未结束时保留准备结果并等待。",
+              "id": "prepare",
+              "title": "准备已验证插件"
+            },
+            {
+              "action": "经官方 profile 约束切换，并记录重启所需状态。",
+              "failure": "锁冲突或校验失败应保留当前可用版本。",
+              "id": "activate",
+              "title": "锁内切换激活指针"
+            },
+            {
+              "action": "受管 Linux 在任务空闲时自动重启。校验实际加载的版本、Link、工作台及原先可用的总助手，连接恢复后返回原页面。桌面壳和 Android 沿用平台入口。",
+              "failure": "保留准备结果并展示服务启动或模块就绪失败。只有主机确认正在重启或实例已变化时才进入更新恢复；状态探测临时失败时保留当前工作台。",
+              "id": "restart",
+              "title": "按重启后版本确认"
+            }
+          ],
+          "transitions": [
+            {
+              "from": "check",
+              "to": "prepare"
+            },
+            {
+              "from": "prepare",
+              "to": "activate"
+            },
+            {
+              "from": "activate",
+              "to": "restart"
+            }
+          ],
+          "trigger": "用户在工作台执行检查或更新。"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "插件安装与激活"
+          },
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md",
+            "symbol": "更新入口与状态"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-28 用户确认落实更新后自动重启、就绪核验与重连。"
+          }
+        ],
+        "implementation": {
+          "evidence": [
+            {
+              "checkedAt": "2026-11-28T16:27:17.587Z",
+              "hash": "370a48ba5a329032654e5e8849dc47abe5c76b6b5efe632cd2abf2175b15d6dd",
+              "path": "plugins/base/src/updates.mjs",
+              "symbol": "createUpdates"
+            },
+            {
+              "checkedAt": "2026-11-28T16:27:17.587Z",
+              "hash": "efdf62ce885c160fcf97e4a420d070ede320f0ec3ae2fb672ec0bc9d20d5477a",
+              "path": "plugins/base/src/server-restart.mjs",
+              "symbol": "managedServerRestart"
+            },
+            {
+              "checkedAt": "2026-11-28T16:27:17.587Z",
+              "hash": "8665f30461abb2c2fee5d34ebc93573285defc44893cd2091c015973a9e55e9e",
+              "path": "plugins/link/src/server/manager.mjs",
+              "symbol": "waitForServer"
+            },
+            {
+              "checkedAt": "2026-11-28T16:27:17.587Z",
+              "hash": "de8678ea5bb038b45f54b2c8040f11afd026a2dc2ce96ff45b41695cea07f579",
+              "path": "plugins/link/src/transport/workbench.mjs",
+              "symbol": "createWorkbench"
+            },
+            {
+              "checkedAt": "2026-11-28T16:27:17.587Z",
+              "hash": "17548606ca19a429325a4f7fee9fcf31cff3c1c8c6d6be18cf2d929c4090d637",
+              "path": "plugins/link/client/workbench-recovery.mjs",
+              "symbol": "watchWorkbench"
+            },
+            {
+              "checkedAt": "2026-11-28T16:27:17.587Z",
+              "hash": "3839747586ae92e5f3a4d91b5263142c6c32a584f576da29c66a3cd9cbd835d7",
+              "path": "scripts/server/bootstrap.mjs"
+            }
+          ],
+          "note": "受管 Linux 重启使用服务所属 UID 的固定运行目录与用户总线，避免继承其他登录用户的总线。已验证任务等待、请求排空、持久收据和失败释放。真实 systemd 发行验收仍在进行。",
+          "status": "implemented"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "id": "release.restart-protocol-check",
+      "fields": [
+        "verification.checkedAt",
+        "verification.evidence",
+        "verification.note"
+      ],
+      "before": {
+        "id": "release.restart-protocol-check",
+        "type": "acceptance",
+        "title": "更新自动重启与连接恢复协议回归",
+        "summary": "验证任务等待、请求排空、重启失败复用及浏览器按目标就绪恢复。",
+        "parent": "release.activate",
+        "status": "accepted",
+        "origin": "doc",
+        "body": {
+          "given": [
+            "受管服务测试载体、SSH 与 HTTPS 连接测试载体及浏览器"
+          ],
+          "then": [
+            "任务运行时先准备，空闲后激活并发出服务重启请求",
+            "已接收请求及流初始化完成后复查任务，失败释放准入并保留准备结果",
+            "状态探测临时失败时保持工作台可操作",
+            "确认重启或实例变化后等待目标版本及必要组件就绪并原址恢复",
+            "超时提供重试，授权失效交由连接入口处理"
+          ],
+          "when": "运行更新、远端管理、请求准入与浏览器恢复定向回归"
+        },
+        "sources": [
+          {
+            "kind": "file",
+            "ref": "docs/05-更新与发布/设计.md"
+          },
+          {
+            "kind": "conversation",
+            "ref": "2026-11-28 用户要求落实更新后自动重启与远端恢复，并同步设计。"
+          }
+        ],
+        "verification": {
+          "checkedAt": "2026-11-28T09:06:40.028Z",
+          "evidence": [
+            {
+              "kind": "file",
+              "ref": "plugins/base/test/updates.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/server-manager.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/owner-command.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "plugins/link/test/workbench-recovery-browser.test.mjs"
+            },
+            {
+              "kind": "file",
+              "ref": "scripts/server/smoke-linux.test.mjs"
+            }
+          ],
+          "note": "node --test 更新、SSH 管理、工作台及浏览器等 13 个测试文件的合并回归共 179 项通过，0 失败、0 跳过，包含流初始化排空回归。npm run reload:plus、npm run check、git diff --check 和语法检查通过。真实 Linux systemd 与跨版本更新须另行实机验收。",
+          "status": "passed"
+        }
+      }
+    }
+  ]
+}
