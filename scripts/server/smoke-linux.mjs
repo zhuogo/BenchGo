@@ -187,6 +187,12 @@ export async function smokeLinuxServer({ directory = join(root, 'artifacts/linux
     }
     if (!restarted) {
       console.error(`Managed restart final health: reachable=${!!lastHealth} ready=${lastHealth?.ready === true} assistant=${lastHealth?.assistant === true} busy=${lastHealth?.busy === true} instanceChanged=${!!lastHealth?.instanceId && lastHealth.instanceId !== beforeRestart.instanceId} versionMatches=${lastHealth?.version === receipt.pluginVersion}`);
+      const update = await owner({ action: 'updates', operation: 'status' }).catch(() => null);
+      const message = String(update?.error ?? '');
+      const category = message.includes('Failed to connect to bus') ? 'bus-unavailable'
+        : message.includes('Permission denied') || message.includes('Access denied') ? 'permission-denied'
+        : message.includes('重启超时') ? 'restart-timeout' : safeSmokeDiagnostic(message) || 'other';
+      console.error(`Managed restart update: error=${!!message} category=${category} phase=${JSON.stringify(update?.phase)}`);
       const saved = await userJson(join(installation.dataDir, 'update-restart.json'), ['requested', 'instanceId']).catch(() => null);
       console.error(`Managed restart receipt: exists=${!!saved} requested=${saved?.requested === true} previousInstance=${saved?.instanceId === beforeRestart.instanceId}`);
       throw new Error('Managed server restart did not restore the target workbench and assistant');
