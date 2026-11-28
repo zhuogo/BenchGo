@@ -155,7 +155,7 @@ test('Linux restart matches the owning user unit and installation profile', asyn
   for (const group of ['/user.slice/user-0.slice/user@0.service/app.slice/benchgo.service', '/user.slice/user-0.slice/user@0.service/benchgo.service']) {
     let called;
     const restart = await managedServerRestart('/profile', 'linux', {
-      home: '/home', env: {}, uid: () => 0,
+      home: '/home', env: { XDG_RUNTIME_DIR: '/run/user/1001', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1001/bus' }, uid: () => 0,
       read: async path => path === '/proc/self/cgroup' ? '0::' + group : JSON.stringify({ schemaVersion: 1, profile: '/profile', dataDir: '/data' }),
       execute: async (...args) => { called = args; },
     });
@@ -164,6 +164,7 @@ test('Linux restart matches the owning user unit and installation profile', asyn
     await restart.request();
     assert.deepEqual(called.slice(0, 2), ['systemctl', ['--user', '--no-block', 'restart', 'benchgo.service']]);
     assert.equal(called[2].env.DBUS_SESSION_BUS_ADDRESS, 'unix:path=/run/user/0/bus');
+    assert.equal(called[2].env.XDG_RUNTIME_DIR, '/run/user/0');
   }
   for (const [profile, group] of [['/other', '/user@0.service/app.slice/benchgo.service'], ['/profile', '/system.slice/other.service']]) {
     assert.equal(await managedServerRestart(profile, 'linux', {

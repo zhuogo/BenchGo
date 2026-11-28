@@ -55,10 +55,12 @@ export async function managedServerRestart(profile, platform = process.platform,
     receiptPath = join(installation.dataDir, 'update-restart.json');
   } catch { return; }
   const request = async () => {
-    const runtime = env.XDG_RUNTIME_DIR || '/run/user/' + uid();
+    // The inherited login environment may refer to a different user's bus.
+    // This unit and its restart must always belong to the effective service user.
+    const runtime = '/run/user/' + uid();
     await execute('systemctl', ['--user', '--no-block', 'restart', 'benchgo.service'], {
       timeout: 10_000,
-      env: { ...env, XDG_RUNTIME_DIR: runtime, DBUS_SESSION_BUS_ADDRESS: env.DBUS_SESSION_BUS_ADDRESS || 'unix:path=' + runtime + '/bus' },
+      env: { ...env, XDG_RUNTIME_DIR: runtime, DBUS_SESSION_BUS_ADDRESS: 'unix:path=' + runtime + '/bus' },
     });
   };
   return { request, receiptPath };

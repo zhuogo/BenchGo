@@ -3129,42 +3129,42 @@
       "implementation": {
         "evidence": [
           {
-            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "checkedAt": "2026-11-28T16:27:17.587Z",
             "hash": "370a48ba5a329032654e5e8849dc47abe5c76b6b5efe632cd2abf2175b15d6dd",
             "path": "plugins/base/src/updates.mjs",
             "symbol": "createUpdates"
           },
           {
-            "checkedAt": "2026-11-28T13:01:59.097Z",
-            "hash": "7e61754a1e7a2f9b25eb7a7addb02f3d91aab7253ebc53178c6738b0ef32e61b",
+            "checkedAt": "2026-11-28T16:27:17.587Z",
+            "hash": "efdf62ce885c160fcf97e4a420d070ede320f0ec3ae2fb672ec0bc9d20d5477a",
             "path": "plugins/base/src/server-restart.mjs",
             "symbol": "managedServerRestart"
           },
           {
-            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "checkedAt": "2026-11-28T16:27:17.587Z",
             "hash": "8665f30461abb2c2fee5d34ebc93573285defc44893cd2091c015973a9e55e9e",
             "path": "plugins/link/src/server/manager.mjs",
             "symbol": "waitForServer"
           },
           {
-            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "checkedAt": "2026-11-28T16:27:17.587Z",
             "hash": "de8678ea5bb038b45f54b2c8040f11afd026a2dc2ce96ff45b41695cea07f579",
             "path": "plugins/link/src/transport/workbench.mjs",
             "symbol": "createWorkbench"
           },
           {
-            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "checkedAt": "2026-11-28T16:27:17.587Z",
             "hash": "17548606ca19a429325a4f7fee9fcf31cff3c1c8c6d6be18cf2d929c4090d637",
             "path": "plugins/link/client/workbench-recovery.mjs",
             "symbol": "watchWorkbench"
           },
           {
-            "checkedAt": "2026-11-28T13:01:59.097Z",
+            "checkedAt": "2026-11-28T16:27:17.587Z",
             "hash": "3839747586ae92e5f3a4d91b5263142c6c32a584f576da29c66a3cd9cbd835d7",
             "path": "scripts/server/bootstrap.mjs"
           }
         ],
-        "note": "已实现受管 Linux 更新准备、任务等待、业务准入排空、持久重启收据、失败复用和按新实例及组件就绪恢复。定向与浏览器回归通过。真实 Linux systemd 和跨版本自动更新仍待发行实机验收。",
+        "note": "受管 Linux 重启使用服务所属 UID 的固定运行目录与用户总线，避免继承其他登录用户的总线。已验证任务等待、请求排空、持久收据和失败释放。真实 systemd 发行验收仍在进行。",
         "status": "implemented"
       }
     },
