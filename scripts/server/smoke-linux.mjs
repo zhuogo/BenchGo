@@ -193,6 +193,11 @@ export async function smokeLinuxServer({ directory = join(root, 'artifacts/linux
         : message.includes('Permission denied') || message.includes('Access denied') ? 'permission-denied'
         : message.includes('重启超时') ? 'restart-timeout' : safeSmokeDiagnostic(message) || 'other';
       console.error(`Managed restart update: error=${!!message} category=${category} phase=${JSON.stringify(update?.phase)}`);
+      // Restart task failures contain filesystem/systemctl diagnostics, never the private owner response.
+      const restartError = message.replaceAll(connection.token, '[redacted]')
+        .replace(/([?&](?:token|code)=)[^\s&]+/gi, '$1[redacted]')
+        .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, '$1[redacted]');
+      console.error(`Managed restart task failure: ${JSON.stringify(restartError.slice(0, 2000))}`);
       const saved = await userJson(join(installation.dataDir, 'update-restart.json'), ['requested', 'instanceId']).catch(() => null);
       console.error(`Managed restart receipt: exists=${!!saved} requested=${saved?.requested === true} previousInstance=${saved?.instanceId === beforeRestart.instanceId}`);
       throw new Error('Managed server restart did not restore the target workbench and assistant');
